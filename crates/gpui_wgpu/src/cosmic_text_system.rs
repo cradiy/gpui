@@ -49,6 +49,8 @@ struct CosmicTextSystemState {
     /// Caches the `FontId`s associated with a specific family to avoid iterating the font database
     /// for every font face in a family.
     font_ids_by_family_cache: HashMap<FontKey, SmallVec<[FontId; 4]>>,
+    /// Caches fully resolved font requests so repeated calls return the same `FontId`.
+    resolved_font_cache: HashMap<Font, FontId>,
     system_font_fallback: String,
 }
 
@@ -72,6 +74,7 @@ impl CosmicTextSystem {
             swash_scale_context: ScaleContext::new(),
             loaded_fonts: Vec::new(),
             font_ids_by_family_cache: HashMap::default(),
+            resolved_font_cache: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
         }))
     }
@@ -88,6 +91,7 @@ impl CosmicTextSystem {
             swash_scale_context: ScaleContext::new(),
             loaded_fonts: Vec::new(),
             font_ids_by_family_cache: HashMap::default(),
+            resolved_font_cache: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
         }))
     }
@@ -114,6 +118,10 @@ impl PlatformTextSystem for CosmicTextSystem {
 
     fn font_id(&self, font: &Font) -> Result<FontId> {
         let mut state = self.0.write();
+        if let Some(font_id) = state.resolved_font_cache.get(font) {
+            return Ok(*font_id);
+        }
+
         let key = FontKey::new(
             font.family.clone(),
             font.features.clone(),
@@ -156,6 +164,7 @@ impl PlatformTextSystem for CosmicTextSystem {
             is_known_emoji_font,
             user_fallback_chain,
         });
+        state.resolved_font_cache.insert(font.clone(), resolved_id);
 
         Ok(resolved_id)
     }
@@ -249,6 +258,8 @@ impl CosmicTextSystemState {
                 }
             }
         }
+        self.font_ids_by_family_cache.clear();
+        self.resolved_font_cache.clear();
         Ok(())
     }
 
@@ -911,6 +922,9 @@ fn check_is_known_emoji_font(postscript_name: &str) -> bool {
 mod tests {
     use super::*;
 
+    const LILEX_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
+    const LILEX_BOLD: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf");
+
     fn fid(i: usize) -> FontId {
         FontId(i)
     }
@@ -928,6 +942,43 @@ mod tests {
             slot,
             font_id,
         }
+    }
+
+    #[test]
+    fn repeated_font_requests_reuse_the_resolved_font() {
+        let system = CosmicTextSystem::new_without_system_fonts("Lilex");
+        system
+            .add_fonts(vec![Cow::Borrowed(LILEX_REGULAR)])
+            .expect("test font should load");
+        let font = gpui::font("Lilex");
+
+        let first_id = system.font_id(&font).expect("font should resolve");
+        let loaded_font_count = system.0.read().loaded_fonts.len();
+        let second_id = system.font_id(&font).expect("font should resolve");
+
+        assert_eq!(first_id, second_id);
+        assert_eq!(system.0.read().loaded_fonts.len(), loaded_font_count);
+    }
+
+    #[test]
+    fn adding_fonts_invalidates_font_caches() {
+        let system = CosmicTextSystem::new_without_system_fonts("Lilex");
+        system
+            .add_fonts(vec![Cow::Borrowed(LILEX_REGULAR)])
+            .expect("test font should load");
+        system
+            .font_id(&gpui::font("Lilex"))
+            .expect("font should resolve");
+
+        assert!(!system.0.read().font_ids_by_family_cache.is_empty());
+        assert!(!system.0.read().resolved_font_cache.is_empty());
+
+        system
+            .add_fonts(vec![Cow::Borrowed(LILEX_BOLD)])
+            .expect("additional test font should load");
+
+        assert!(system.0.read().font_ids_by_family_cache.is_empty());
+        assert!(system.0.read().resolved_font_cache.is_empty());
     }
 
     #[test]

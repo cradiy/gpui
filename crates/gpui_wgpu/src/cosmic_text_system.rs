@@ -59,6 +59,7 @@ struct LoadedFont {
     /// resolved at load time so `layout_line` shares one chain across faces.
     /// `Arc` keeps clone cheap on the per-run hot path.
     user_fallback_chain: Arc<[(FontId, SharedString)]>,
+    weight: cosmic_text::Weight,
 }
 
 impl CosmicTextSystem {
@@ -119,17 +120,44 @@ impl PlatformTextSystem for CosmicTextSystem {
             font.fallbacks.clone(),
         );
         let candidates = if let Some(font_ids) = state.font_ids_by_family_cache.get(&key) {
-            font_ids.as_slice()
+            font_ids.clone()
         } else {
             let font_ids =
                 state.load_family(&font.family, &font.features, font.fallbacks.as_ref())?;
-            state.font_ids_by_family_cache.insert(key.clone(), font_ids);
-            state.font_ids_by_family_cache[&key].as_ref()
+            state.font_ids_by_family_cache.insert(key, font_ids.clone());
+            font_ids
         };
 
-        let ix = find_best_match(font, candidates, &state)?;
+        let ix = find_best_match(font, &candidates, &state)?;
+        let candidate_id = candidates[ix];
+        let (database_id, features, is_known_emoji_font, user_fallback_chain) = {
+            let candidate = state.loaded_font(candidate_id);
 
-        Ok(candidates[ix])
+            (
+                candidate.font.id(),
+                candidate.features.clone(),
+                candidate.is_known_emoji_font,
+                Arc::clone(&candidate.user_fallback_chain),
+            )
+        };
+
+        let requested_weight = cosmic_text::Weight(font.weight.0.clamp(1.0, 1000.0).round() as u16);
+        let loaded = state
+            .font_system
+            .get_font(database_id, requested_weight)
+            .context("Could not load requested font weight")?;
+
+        let resolved_id = FontId(state.loaded_fonts.len());
+
+        state.loaded_fonts.push(LoadedFont {
+            font: loaded,
+            weight: requested_weight,
+            features,
+            is_known_emoji_font,
+            user_fallback_chain,
+        });
+
+        Ok(resolved_id)
     }
 
     fn font_metrics(&self, font_id: FontId) -> FontMetrics {
@@ -280,9 +308,16 @@ impl CosmicTextSystemState {
 
         let mut loaded_font_ids = SmallVec::new();
         for (font_id, postscript_name) in families {
+            let weight = self
+                .font_system
+                .db()
+                .face(font_id)
+                .map(|face| face.weight)
+                .unwrap_or(cosmic_text::Weight::NORMAL);
+
             let font = self
                 .font_system
-                .get_font(font_id, cosmic_text::Weight::NORMAL)
+                .get_font(font_id, weight)
                 .context("Could not load font")?;
 
             // HACK: To let the storybook run and render Windows caption icons. We should actually do better font fallback.
@@ -302,6 +337,7 @@ impl CosmicTextSystemState {
             loaded_font_ids.push(font_id);
             self.loaded_fonts.push(LoadedFont {
                 font,
+                weight,
                 features: cosmic_features.clone(),
                 is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
                 user_fallback_chain: Arc::clone(&user_fallback_chain),
@@ -380,11 +416,12 @@ impl CosmicTextSystemState {
             params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32 / params.scale_factor,
             params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
         );
-
+        let weight = loaded_font.weight.0 as f32;
         let mut scaler = self
             .swash_scale_context
             .builder(font_ref)
             .size(pixel_size * params.scale_factor)
+            .variations([("wght", weight)])
             .hint(true)
             .build();
 
@@ -430,9 +467,16 @@ impl CosmicTextSystemState {
         {
             Ok(FontId(ix))
         } else {
+            let weight = self
+                .font_system
+                .db()
+                .face(id)
+                .map(|face| face.weight)
+                .unwrap_or(cosmic_text::Weight::NORMAL);
+
             let font = self
                 .font_system
-                .get_font(id, cosmic_text::Weight::NORMAL)
+                .get_font(id, weight)
                 .context("failed to get fallback font from cosmic-text font system")?;
             let face = self
                 .font_system
@@ -443,6 +487,7 @@ impl CosmicTextSystemState {
             let font_id = FontId(self.loaded_fonts.len());
             self.loaded_fonts.push(LoadedFont {
                 font,
+                weight,
                 features: CosmicFontFeatures::new(),
                 is_known_emoji_font: check_is_known_emoji_font(&face.post_script_name),
                 user_fallback_chain: Arc::from(Vec::new()),
@@ -480,7 +525,7 @@ impl CosmicTextSystemState {
             let primary_family_name: SharedString = first_family.0.clone().into();
             let primary_stretch = face.stretch;
             let primary_style = face.style;
-            let primary_weight = face.weight;
+            let primary_weight = loaded_font.weight;
             let primary_features = loaded_font.features.clone();
             let fallback_chain = Arc::clone(&loaded_font.user_fallback_chain);
 

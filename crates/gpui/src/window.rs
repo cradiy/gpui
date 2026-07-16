@@ -4,21 +4,21 @@ use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AvailableSpace, Background, BorderGradient, BorderStyle, Bounds, BoxShadow,
     Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
-    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
-    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-    Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
-    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
-    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
-    Priority, PromptButton, PromptLevel, Quad, Render, RenderColorSvgParams, RenderGlyphParams,
-    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
-    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
-    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle,
-    TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
-    WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size,
-    transparent_black,
+    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, EffectQuad,
+    Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId,
+    GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
+    Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
+    MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, PaintEffect, Path,
+    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
+    Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
+    RenderColorSvgParams, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
+    Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
+    ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
+    SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
+    TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
+    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    point, prelude::*, profiler, px, rems, size, transparent_black,
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -3779,6 +3779,56 @@ impl Window {
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
         });
+    }
+
+    /// Paints a custom fragment effect into the scene for the next frame.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_effect(&mut self, effect: PaintEffect) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let image_tile = if effect.shader.uses_image() {
+            let (image, frame_index) = effect.image.as_ref().ok_or_else(|| {
+                anyhow!("image effect shaders require an image before they can be painted")
+            })?;
+            if *frame_index >= image.frame_count() {
+                return Err(anyhow!("image effect frame index is out of bounds"));
+            }
+            let params = RenderImageParams {
+                image_id: image.id,
+                frame_index: *frame_index,
+            };
+            Some(
+                self.sprite_atlas
+                    .get_or_insert_with(&params.into(), &mut || {
+                        Ok(Some((
+                            image.size(*frame_index),
+                            Cow::Borrowed(
+                                image
+                                    .as_bytes(*frame_index)
+                                    .expect("frame index was checked above"),
+                            ),
+                        )))
+                    })?
+                    .expect("image effect atlas callback always returns a tile"),
+            )
+        } else {
+            None
+        };
+        let opacity = self.element_opacity() * effect.opacity;
+        let snapped_bounds = self.snap_bounds(effect.bounds);
+        self.next_frame.scene.insert_primitive(EffectQuad {
+            order: 0,
+            bounds: snapped_bounds,
+            content_mask: self.snapped_content_mask(),
+            shader: effect.shader,
+            uniforms: effect.uniforms,
+            time: effect.time,
+            corner_radii: effect.corner_radii.scale(self.scale_factor()),
+            opacity,
+            image_tile,
+        });
+        Ok(())
     }
 
     /// Paint the given `Path` into the scene for the next frame at the current z-index.

@@ -7,9 +7,9 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use gpui::{
-    AtlasTextureId, Background, Bounds, ContentMask, DevicePixels, MonochromeSprite, PaintSurface,
-    Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size,
-    Surface, Underline, point, size,
+    AtlasTextureId, Background, Bounds, ContentMask, DevicePixels, EffectQuad, EffectShader,
+    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
 };
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
@@ -21,13 +21,20 @@ use core_video::{
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
 use metal::{
-    CAMetalLayer, CommandQueue, MTLGPUFamily, MTLPixelFormat, MTLResourceOptions, NSRange,
-    RenderPassColorAttachmentDescriptorRef,
+    CAMetalLayer, CommandQueue, MTLGPUFamily, MTLPixelFormat, MTLResourceOptions,
+    MTLSamplerAddressMode, MTLSamplerMinMagFilter, NSRange, RenderPassColorAttachmentDescriptorRef,
+    SamplerDescriptor,
 };
 use objc::{self, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
-use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    ffi::c_void,
+    mem, ptr,
+    sync::Arc,
+};
 
 // Exported to metal
 pub(crate) type PointF = gpui::Point<f32>;
@@ -121,6 +128,9 @@ pub(crate) struct MetalRenderer {
     path_sprites_pipeline_state: metal::RenderPipelineState,
     shadows_pipeline_state: metal::RenderPipelineState,
     quads_pipeline_state: metal::RenderPipelineState,
+    effect_pipeline_states: HashMap<u64, metal::RenderPipelineState>,
+    failed_effect_pipeline_states: HashSet<u64>,
+    effect_sampler: metal::SamplerState,
     underlines_pipeline_state: metal::RenderPipelineState,
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
@@ -145,6 +155,50 @@ pub struct PathRasterizationVertex {
     pub st_position: Point<f32>,
     pub color: Background,
     pub bounds: Bounds<ScaledPixels>,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct EffectInstance {
+    bounds: Bounds<ScaledPixels>,
+    content_mask: Bounds<ScaledPixels>,
+    corner_radii: [f32; 4],
+    image_bounds: Bounds<ScaledPixels>,
+    opacity: f32,
+    time: f32,
+    pad: [f32; 2],
+    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
+}
+
+impl From<&EffectQuad> for EffectInstance {
+    fn from(effect: &EffectQuad) -> Self {
+        Self {
+            bounds: effect.bounds,
+            content_mask: effect.content_mask.bounds,
+            corner_radii: [
+                effect.corner_radii.top_left.0,
+                effect.corner_radii.top_right.0,
+                effect.corner_radii.bottom_right.0,
+                effect.corner_radii.bottom_left.0,
+            ],
+            image_bounds: effect
+                .image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
+                .unwrap_or_default(),
+            opacity: effect.opacity,
+            time: effect.time,
+            pad: [0.0; 2],
+            uniforms: *effect.uniforms.slots(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct EffectGlobalParams {
+    viewport_size: [f32; 2],
+    premultiplied_alpha: u32,
+    pad: u32,
 }
 
 impl MetalRenderer {
@@ -327,6 +381,12 @@ impl MetalRenderer {
         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
         let core_video_texture_cache =
             CVMetalTextureCache::new(None, device.clone(), None).unwrap();
+        let effect_sampler_descriptor = SamplerDescriptor::new();
+        effect_sampler_descriptor.set_min_filter(MTLSamplerMinMagFilter::Linear);
+        effect_sampler_descriptor.set_mag_filter(MTLSamplerMinMagFilter::Linear);
+        effect_sampler_descriptor.set_address_mode_s(MTLSamplerAddressMode::ClampToEdge);
+        effect_sampler_descriptor.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
+        let effect_sampler = device.new_sampler(&effect_sampler_descriptor);
 
         Self {
             device,
@@ -340,6 +400,9 @@ impl MetalRenderer {
             path_sprites_pipeline_state,
             shadows_pipeline_state,
             quads_pipeline_state,
+            effect_pipeline_states: HashMap::default(),
+            failed_effect_pipeline_states: HashSet::default(),
+            effect_sampler,
             underlines_pipeline_state,
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
@@ -832,6 +895,7 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
+        self.ensure_effect_pipelines(scene);
         let command_queue = self.command_queue.clone();
         let command_buffer = command_queue.new_command_buffer();
         let alpha = if self.opaque { 1. } else { 0. };
@@ -858,6 +922,13 @@ impl MetalRenderer {
                 ),
                 PrimitiveBatch::Quads(range) => self.draw_quads(
                     &scene.quads[range],
+                    instance_buffer,
+                    &mut instance_offset,
+                    viewport_size,
+                    command_encoder,
+                ),
+                PrimitiveBatch::Effects(range) => self.draw_effects(
+                    &scene.effects[range],
                     instance_buffer,
                     &mut instance_offset,
                     viewport_size,
@@ -1163,6 +1234,156 @@ impl MetalRenderer {
             quads.len() as u64,
         );
         *instance_offset = next_offset;
+        true
+    }
+
+    fn ensure_effect_pipelines(&mut self, scene: &Scene) {
+        let shaders = scene
+            .effects
+            .iter()
+            .map(|effect| effect.shader.clone())
+            .collect::<Vec<_>>();
+
+        for shader in shaders {
+            let key = shader.id().as_u64();
+            if self.effect_pipeline_states.contains_key(&key)
+                || self.failed_effect_pipeline_states.contains(&key)
+            {
+                continue;
+            }
+
+            let source = match shader.msl_source() {
+                Some(source) => Ok(source.to_owned()),
+                None => translate_effect_to_msl(&shader),
+            };
+            let result = source.and_then(|source| {
+                let library = self
+                    .device
+                    .new_library_with_source(&source, &metal::CompileOptions::new())
+                    .map_err(|error| anyhow::anyhow!("MSL compile error: {error}"))?;
+                try_build_effect_pipeline_state(
+                    &self.device,
+                    &library,
+                    "gpui_effect",
+                    "vs_effect",
+                    "fs_effect",
+                    MTLPixelFormat::BGRA8Unorm,
+                )
+            });
+
+            match result {
+                Ok(pipeline) => {
+                    self.effect_pipeline_states.insert(key, pipeline);
+                }
+                Err(error) => {
+                    log::error!("failed to compile GPUI Metal effect {key:016x}: {error:#}");
+                    self.failed_effect_pipeline_states.insert(key);
+                }
+            }
+        }
+    }
+
+    fn draw_effects(
+        &self,
+        effects: &[EffectQuad],
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+        viewport_size: Size<DevicePixels>,
+        command_encoder: &metal::RenderCommandEncoderRef,
+    ) -> bool {
+        let mut start = 0;
+        while start < effects.len() {
+            let shader_id = effects[start].shader.id().as_u64();
+            let texture_id = effects[start].image_tile.map(|tile| tile.texture_id);
+            let mut end = start + 1;
+            while end < effects.len()
+                && effects[end].shader.id().as_u64() == shader_id
+                && effects[end].image_tile.map(|tile| tile.texture_id) == texture_id
+            {
+                end += 1;
+            }
+
+            let Some(pipeline) = self.effect_pipeline_states.get(&shader_id) else {
+                start = end;
+                continue;
+            };
+            let instances = effects[start..end]
+                .iter()
+                .map(EffectInstance::from)
+                .collect::<Vec<_>>();
+            align_offset(instance_offset);
+            let bytes_len = mem::size_of_val(instances.as_slice());
+            let next_offset = *instance_offset + bytes_len;
+            if next_offset > instance_buffer.size {
+                return false;
+            }
+
+            let buffer_contents = unsafe {
+                (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset)
+            };
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    instances.as_ptr() as *const u8,
+                    buffer_contents,
+                    bytes_len,
+                );
+            }
+
+            let globals = EffectGlobalParams {
+                viewport_size: [viewport_size.width.0 as f32, viewport_size.height.0 as f32],
+                premultiplied_alpha: 0,
+                pad: 0,
+            };
+            let buffer_sizes = [bytes_len as u32];
+            command_encoder.set_render_pipeline_state(pipeline);
+            command_encoder.set_vertex_bytes(
+                0,
+                mem::size_of_val(&globals) as u64,
+                &globals as *const EffectGlobalParams as *const _,
+            );
+            command_encoder.set_fragment_bytes(
+                0,
+                mem::size_of_val(&globals) as u64,
+                &globals as *const EffectGlobalParams as *const _,
+            );
+            command_encoder.set_vertex_buffer(
+                1,
+                Some(&instance_buffer.metal_buffer),
+                *instance_offset as u64,
+            );
+            command_encoder.set_fragment_buffer(
+                1,
+                Some(&instance_buffer.metal_buffer),
+                *instance_offset as u64,
+            );
+            command_encoder.set_vertex_bytes(
+                2,
+                mem::size_of_val(&buffer_sizes) as u64,
+                buffer_sizes.as_ptr() as *const _,
+            );
+            command_encoder.set_fragment_bytes(
+                2,
+                mem::size_of_val(&buffer_sizes) as u64,
+                buffer_sizes.as_ptr() as *const _,
+            );
+            if effects[start].shader.uses_image() {
+                let Some(texture_id) = texture_id else {
+                    start = end;
+                    continue;
+                };
+                let texture = self.sprite_atlas.metal_texture(texture_id);
+                command_encoder.set_fragment_texture(0, Some(&texture));
+                command_encoder.set_fragment_sampler_state(0, Some(&self.effect_sampler));
+            }
+            command_encoder.draw_primitives_instanced(
+                metal::MTLPrimitiveType::TriangleStrip,
+                0,
+                4,
+                instances.len() as u64,
+            );
+            *instance_offset = next_offset;
+            start = end;
+        }
         true
     }
 
@@ -1592,6 +1813,117 @@ fn new_command_encoder_for_texture<'a>(
         zfar: 1.0,
     });
     command_encoder
+}
+
+fn translate_effect_to_msl(shader: &EffectShader) -> Result<String> {
+    let source = gpui::compose_effect_shader_wgsl(shader);
+    let module = naga::front::wgsl::parse_str(&source)
+        .map_err(|error| anyhow::anyhow!("WGSL parse error: {error}"))?;
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .map_err(|error| anyhow::anyhow!("WGSL validation error: {error}"))?;
+
+    let mut resources = naga::back::msl::EntryPointResources::default();
+    resources.resources.insert(
+        naga::ResourceBinding {
+            group: 0,
+            binding: 0,
+        },
+        naga::back::msl::BindTarget {
+            buffer: Some(0),
+            ..Default::default()
+        },
+    );
+    if shader.uses_image() {
+        resources.resources.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 1,
+            },
+            naga::back::msl::BindTarget {
+                texture: Some(0),
+                ..Default::default()
+            },
+        );
+    }
+    resources.resources.insert(
+        naga::ResourceBinding {
+            group: 1,
+            binding: 0,
+        },
+        naga::back::msl::BindTarget {
+            buffer: Some(1),
+            ..Default::default()
+        },
+    );
+    resources.sizes_buffer = Some(2);
+
+    let mut options = naga::back::msl::Options {
+        lang_version: (2, 0),
+        fake_missing_bindings: false,
+        ..Default::default()
+    };
+    options
+        .per_entry_point_map
+        .insert("vs_effect".to_owned(), resources.clone());
+    options
+        .per_entry_point_map
+        .insert("fs_effect".to_owned(), resources);
+    let (source, translation) = naga::back::msl::write_string(
+        &module,
+        &info,
+        &options,
+        &naga::back::msl::PipelineOptions::default(),
+    )
+    .map_err(|error| anyhow::anyhow!("MSL generation error: {error}"))?;
+    if translation
+        .entry_point_names
+        .iter()
+        .any(|name| name.is_err())
+    {
+        anyhow::bail!(
+            "MSL entry point generation failed: {:?}",
+            translation.entry_point_names
+        );
+    }
+    Ok(source)
+}
+
+fn try_build_effect_pipeline_state(
+    device: &metal::DeviceRef,
+    library: &metal::LibraryRef,
+    label: &str,
+    vertex_fn_name: &str,
+    fragment_fn_name: &str,
+    pixel_format: metal::MTLPixelFormat,
+) -> Result<metal::RenderPipelineState> {
+    let vertex_fn = library
+        .get_function(vertex_fn_name, None)
+        .map_err(|error| anyhow::anyhow!("missing vertex function: {error}"))?;
+    let fragment_fn = library
+        .get_function(fragment_fn_name, None)
+        .map_err(|error| anyhow::anyhow!("missing fragment function: {error}"))?;
+
+    let descriptor = metal::RenderPipelineDescriptor::new();
+    descriptor.set_label(label);
+    descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+    descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
+    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    color_attachment.set_pixel_format(pixel_format);
+    color_attachment.set_blending_enabled(true);
+    color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+    color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+    color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
+    color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
+    color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+
+    device
+        .new_render_pipeline_state(&descriptor)
+        .map_err(|error| anyhow::anyhow!("Metal pipeline error: {error}"))
 }
 
 fn build_pipeline_state(

@@ -5,6 +5,11 @@ publish.workspace = true
 edition.workspace = true
 
 [dependencies]
+gpui.workspace = true
+refineable.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }

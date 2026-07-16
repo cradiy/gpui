@@ -2620,6 +2620,11 @@ dependencies = [
 [[package]]
 name = "gpui_effects"
 version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui_platform",
+ "refineable",
+]
 
 [[package]]
 name = "gpui_linux"
@@ -2703,6 +2708,7 @@ dependencies = [
  "mach2",
  "media",
  "metal",
+ "naga",
  "objc",
  "objc2 0.6.3",
  "objc2-app-kit 0.3.2",
@@ -2802,10 +2808,12 @@ dependencies = [
  "criterion",
  "etagere",
  "gpui",
+ "gpui_effects",
  "gpui_util",
  "itertools 0.14.0",
  "js-sys",
  "log",
+ "naga",
  "parking_lot",
  "pollster 0.4.0",
  "profiling",
@@ -2836,6 +2844,7 @@ dependencies = [
  "image",
  "itertools 0.14.0",
  "log",
+ "naga",
  "parking_lot",
  "rand 0.9.4",
  "raw-window-handle",

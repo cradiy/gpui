@@ -530,7 +530,8 @@ impl IntoElement for Img {
 impl StatefulInteractiveElement for Img {}
 
 impl ImageSource {
-    pub(crate) fn use_data(
+    /// Loads or retrieves renderable image data through GPUI's asset system.
+    pub fn use_data(
         &self,
         cache: Option<AnyImageCache>,
         window: &mut Window,

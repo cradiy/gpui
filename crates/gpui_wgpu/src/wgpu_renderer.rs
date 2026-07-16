@@ -1,14 +1,15 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
-    AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point,
-    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, SubpixelSprite,
-    Underline, get_gamma_correction_ratios,
+    AtlasTextureId, Background, Bounds, DevicePixels, EffectQuad, EffectShader, GpuSpecs,
+    MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene,
+    Shadow, Size, SubpixelSprite, Underline, get_gamma_correction_ratios,
 };
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -52,6 +53,42 @@ struct GammaParams {
     subpixel_enhanced_contrast: f32,
     is_bgr: u32,
     _pad: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(super) struct EffectInstance {
+    bounds: PodBounds,
+    content_mask: PodBounds,
+    corner_radii: [f32; 4],
+    image_bounds: PodBounds,
+    opacity: f32,
+    time: f32,
+    pad: [f32; 2],
+    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
+}
+
+impl From<&EffectQuad> for EffectInstance {
+    fn from(effect: &EffectQuad) -> Self {
+        Self {
+            bounds: effect.bounds.into(),
+            content_mask: effect.content_mask.bounds.into(),
+            corner_radii: [
+                effect.corner_radii.top_left.0,
+                effect.corner_radii.top_right.0,
+                effect.corner_radii.bottom_right.0,
+                effect.corner_radii.bottom_left.0,
+            ],
+            image_bounds: effect
+                .image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
+                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
+            opacity: effect.opacity,
+            time: effect.time,
+            pad: [0.0; 2],
+            uniforms: *effect.uniforms.slots(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +147,8 @@ struct WgpuResources {
     queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
     pipelines: WgpuPipelines,
+    effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
+    failed_effect_pipelines: HashSet<u64>,
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
     globals_buffer: wgpu::Buffer,
@@ -451,6 +490,8 @@ impl WgpuRenderer {
             queue,
             surface,
             pipelines,
+            effect_pipelines: HashMap::default(),
+            failed_effect_pipelines: HashSet::default(),
             bind_group_layouts,
             atlas_sampler,
             globals_buffer,
@@ -612,6 +653,115 @@ impl WgpuRenderer {
             instances,
             instances_with_texture,
             surfaces,
+        }
+    }
+
+    fn create_effect_pipeline(
+        device: &wgpu::Device,
+        layouts: &WgpuBindGroupLayouts,
+        surface_format: wgpu::TextureFormat,
+        alpha_mode: wgpu::CompositeAlphaMode,
+        shader: &EffectShader,
+    ) -> anyhow::Result<wgpu::RenderPipeline> {
+        let source = gpui::compose_effect_shader_wgsl(shader);
+        let module = wgpu::naga::front::wgsl::parse_str(&source)
+            .map_err(|error| anyhow::anyhow!("WGSL parse error: {error}"))?;
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .map_err(|error| anyhow::anyhow!("WGSL validation error: {error}"))?;
+
+        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gpui_effect_shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
+        });
+        let effect_instances_layout = if shader.uses_image() {
+            &layouts.instances_with_texture
+        } else {
+            &layouts.instances
+        };
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gpui_effect_pipeline_layout"),
+            bind_group_layouts: &[Some(&layouts.globals), Some(effect_instances_layout)],
+            immediate_size: 0,
+        });
+        let blend = match alpha_mode {
+            wgpu::CompositeAlphaMode::PreMultiplied => {
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING
+            }
+            _ => wgpu::BlendState::ALPHA_BLENDING,
+        };
+
+        Ok(
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("gpui_effect_pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader_module,
+                    entry_point: Some("vs_effect"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader_module,
+                    entry_point: Some("fs_effect"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            }),
+        )
+    }
+
+    fn ensure_effect_pipelines(&mut self, scene: &Scene) {
+        let shaders = scene
+            .effects
+            .iter()
+            .map(|effect| effect.shader.clone())
+            .collect::<Vec<_>>();
+
+        for shader in shaders {
+            let key = shader.id().as_u64();
+            if self.resources().effect_pipelines.contains_key(&key)
+                || self.resources().failed_effect_pipelines.contains(&key)
+            {
+                continue;
+            }
+
+            let result = Self::create_effect_pipeline(
+                &self.resources().device,
+                &self.resources().bind_group_layouts,
+                self.surface_config.format,
+                self.surface_config.alpha_mode,
+                &shader,
+            );
+            match result {
+                Ok(pipeline) => {
+                    self.resources_mut().effect_pipelines.insert(key, pipeline);
+                }
+                Err(error) => {
+                    log::error!("failed to compile GPUI effect {key:016x}: {error:#}");
+                    self.resources_mut().failed_effect_pipelines.insert(key);
+                }
+            }
         }
     }
 
@@ -1051,6 +1201,8 @@ impl WgpuRenderer {
                 path_sample_count,
                 dual_source_blending,
             );
+            resources.effect_pipelines.clear();
+            resources.failed_effect_pipelines.clear();
         }
     }
 
@@ -1117,6 +1269,7 @@ impl WgpuRenderer {
         }
 
         self.atlas.before_frame();
+        self.ensure_effect_pipelines(scene);
 
         let frame = match self.resources().surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -1234,6 +1387,11 @@ impl WgpuRenderer {
                         PrimitiveBatch::Quads(range) => {
                             self.draw_quads(&scene.quads[range], &mut instance_offset, &mut pass)
                         }
+                        PrimitiveBatch::Effects(range) => self.draw_effects(
+                            &scene.effects[range],
+                            &mut instance_offset,
+                            &mut pass,
+                        ),
                         PrimitiveBatch::Shadows(range) => self.draw_shadows(
                             &scene.shadows[range],
                             &mut instance_offset,
@@ -1353,6 +1511,63 @@ impl WgpuRenderer {
             instance_offset,
             pass,
         )
+    }
+
+    fn draw_effects(
+        &self,
+        effects: &[EffectQuad],
+        instance_offset: &mut u64,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) -> bool {
+        let mut start = 0;
+        while start < effects.len() {
+            let shader_id = effects[start].shader.id().as_u64();
+            let texture_id = effects[start].image_tile.map(|tile| tile.texture_id);
+            let mut end = start + 1;
+            while end < effects.len()
+                && effects[end].shader.id().as_u64() == shader_id
+                && effects[end].image_tile.map(|tile| tile.texture_id) == texture_id
+            {
+                end += 1;
+            }
+
+            let Some(pipeline) = self.resources().effect_pipelines.get(&shader_id) else {
+                start = end;
+                continue;
+            };
+            let instances = effects[start..end]
+                .iter()
+                .map(EffectInstance::from)
+                .collect::<Vec<_>>();
+            let drawn = if effects[start].shader.uses_image() {
+                let Some(texture_id) = texture_id else {
+                    start = end;
+                    continue;
+                };
+                let texture = self.atlas.get_texture_info(texture_id);
+                self.draw_instances_with_texture(
+                    bytemuck::cast_slice(&instances),
+                    instances.len() as u32,
+                    &texture.view,
+                    pipeline,
+                    instance_offset,
+                    pass,
+                )
+            } else {
+                self.draw_instances(
+                    bytemuck::cast_slice(&instances),
+                    instances.len() as u32,
+                    pipeline,
+                    instance_offset,
+                    pass,
+                )
+            };
+            if !drawn {
+                return false;
+            }
+            start = end;
+        }
+        true
     }
 
     fn draw_shadows(

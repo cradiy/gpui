@@ -47,6 +47,7 @@ gpui_shared_string = { path = "crates/gpui_shared_string" }
 gpui_linux = { path = "crates/gpui_linux", default-features = false }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
 gpui_macros = { path = "crates/gpui_macros" }
+gpui_effects = { path = "crates/gpui_effects" }
 gpui_platform = { path = "crates/gpui_platform", default-features = false }
 gpui_web = { path = "crates/gpui_web" }
 gpui_wgpu = { path = "crates/gpui_wgpu" }
@@ -59,6 +60,7 @@ sum_tree = { path = "crates/sum_tree" }
 http_client_tls = { path = "crates/http_client_tls" }
 media = { path = "crates/media" }
 mime = "0.3.17"
+naga = { version = "29.0.4", features = ["wgsl-in", "msl-out", "hlsl-out"] }
 util_macros = { path = "crates/util_macros" }
 util = { path = "crates/util" }
 oauth_callback_server = { path = "crates/oauth_callback_server" }

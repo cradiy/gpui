@@ -1,5 +1,7 @@
 use std::{
-    slice,
+    collections::{HashMap, HashSet},
+    ffi::CString,
+    mem, slice,
     sync::{Arc, OnceLock},
 };
 
@@ -42,6 +44,8 @@ pub(crate) struct DirectXRenderer {
     resources: Option<DirectXResources>,
     globals: DirectXGlobalElements,
     pipelines: DirectXRenderPipelines,
+    effect_pipelines: HashMap<u64, EffectPipeline>,
+    failed_effect_pipelines: HashSet<u64>,
     direct_composition: Option<DirectComposition>,
     font_info: &'static FontInfo,
 
@@ -94,6 +98,7 @@ struct DirectXRenderPipelines {
 
 struct DirectXGlobalElements {
     global_params_buffer: Option<ID3D11Buffer>,
+    effect_global_params_buffer: Option<ID3D11Buffer>,
     sampler: Option<ID3D11SamplerState>,
 }
 
@@ -169,6 +174,8 @@ impl DirectXRenderer {
             resources: Some(resources),
             globals,
             pipelines,
+            effect_pipelines: HashMap::default(),
+            failed_effect_pipelines: HashSet::default(),
             direct_composition,
             font_info: Self::get_font_info(),
             width: 1,
@@ -198,6 +205,15 @@ impl DirectXRenderer {
                 subpixel_enhanced_contrast: self.font_info.subpixel_enhanced_contrast,
                 is_bgr: self.font_info.is_bgr as u32,
                 _pad: [0; 3],
+            }],
+        )?;
+        update_buffer(
+            device_context,
+            self.globals.effect_global_params_buffer.as_ref().unwrap(),
+            &[EffectGlobalParams {
+                viewport_size: [resources.viewport.Width, resources.viewport.Height],
+                premultiplied_alpha: 0,
+                pad: 0,
             }],
         )?;
         unsafe {
@@ -296,6 +312,8 @@ impl DirectXRenderer {
         self.resources = Some(resources);
         self.globals = globals;
         self.pipelines = pipelines;
+        self.effect_pipelines.clear();
+        self.failed_effect_pipelines.clear();
         self.direct_composition = direct_composition;
         self.skip_draws = true;
         Ok(())
@@ -316,12 +334,14 @@ impl DirectXRenderer {
             _ => [0.0f32; 4],
         })?;
 
+        self.ensure_effect_pipelines(scene)?;
         self.upload_scene_buffers(scene)?;
 
         for batch in scene.batches() {
             match batch {
                 PrimitiveBatch::Shadows(range) => self.draw_shadows(range.start, range.len()),
                 PrimitiveBatch::Quads(range) => self.draw_quads(range.start, range.len()),
+                PrimitiveBatch::Effects(range) => self.draw_effects(&scene.effects[range]),
                 PrimitiveBatch::Paths(range) => {
                     let paths = &scene.paths[range];
                     self.draw_paths_to_intermediate(paths)?;
@@ -341,10 +361,11 @@ impl DirectXRenderer {
             }
             .context(format!(
                 "scene too large:\
-                {} paths, {} shadows, {} quads, {} underlines, {} mono, {} subpixel, {} poly, {} surfaces",
+                {} paths, {} shadows, {} quads, {} effects, {} underlines, {} mono, {} subpixel, {} poly, {} surfaces",
                 scene.paths.len(),
                 scene.shadows.len(),
                 scene.quads.len(),
+                scene.effects.len(),
                 scene.underlines.len(),
                 scene.monochrome_sprites.len(),
                 scene.subpixel_sprites.len(),
@@ -495,6 +516,94 @@ impl DirectXRenderer {
             start as u32,
             len as u32,
         )
+    }
+
+    fn ensure_effect_pipelines(&mut self, scene: &Scene) -> Result<()> {
+        let shaders = scene
+            .effects
+            .iter()
+            .map(|effect| effect.shader.clone())
+            .collect::<Vec<_>>();
+        for shader in shaders {
+            let key = shader.id().as_u64();
+            if self.effect_pipelines.contains_key(&key)
+                || self.failed_effect_pipelines.contains(&key)
+            {
+                continue;
+            }
+
+            let (source, model) = match shader.hlsl_source() {
+                Some(source) => (Ok(source.source().to_owned()), source.model()),
+                None => (translate_effect_to_hlsl(&shader), HlslShaderModel::Sm5_0),
+            };
+            let result = source.and_then(|source| {
+                EffectPipeline::new(
+                    &self.devices.as_ref().context("devices missing")?.device,
+                    &source,
+                    model,
+                )
+            });
+            match result {
+                Ok(pipeline) => {
+                    self.effect_pipelines.insert(key, pipeline);
+                }
+                Err(error) => {
+                    log::error!("failed to compile GPUI DirectX effect {key:016x}: {error:#}");
+                    self.failed_effect_pipelines.insert(key);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_effects(&mut self, effects: &[EffectQuad]) -> Result<()> {
+        let mut start = 0;
+        while start < effects.len() {
+            let shader_id = effects[start].shader.id().as_u64();
+            let texture_id = effects[start].image_tile.map(|tile| tile.texture_id);
+            let mut end = start + 1;
+            while end < effects.len()
+                && effects[end].shader.id().as_u64() == shader_id
+                && effects[end].image_tile.map(|tile| tile.texture_id) == texture_id
+            {
+                end += 1;
+            }
+            let instances = effects[start..end]
+                .iter()
+                .map(EffectInstance::from)
+                .collect::<Vec<_>>();
+            let texture = if effects[start].shader.uses_image() {
+                let Some(texture_id) = texture_id else {
+                    start = end;
+                    continue;
+                };
+                Some(self.atlas.get_texture_view(texture_id))
+            } else {
+                None
+            };
+            let Some(pipeline) = self.effect_pipelines.get_mut(&shader_id) else {
+                start = end;
+                continue;
+            };
+            let devices = self.devices.as_ref().context("devices missing")?;
+            pipeline.update_buffer(&devices.device, &devices.device_context, &instances)?;
+            pipeline.draw(
+                &devices.device_context,
+                slice::from_ref(
+                    &self
+                        .resources
+                        .as_ref()
+                        .context("resources missing")?
+                        .viewport,
+                ),
+                slice::from_ref(&self.globals.effect_global_params_buffer),
+                texture.as_ref().map(|texture| texture.as_slice()),
+                slice::from_ref(&self.globals.sampler),
+                instances.len() as u32,
+            );
+            start = end;
+        }
+        Ok(())
     }
 
     fn draw_paths_to_intermediate(&mut self, paths: &[Path<ScaledPixels>]) -> Result<()> {
@@ -932,6 +1041,18 @@ impl DirectXGlobalElements {
             device.CreateBuffer(&desc, None, Some(&mut buffer))?;
             buffer
         };
+        let effect_global_params_buffer = unsafe {
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: std::mem::size_of::<EffectGlobalParams>() as u32,
+                Usage: D3D11_USAGE_DYNAMIC,
+                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            device.CreateBuffer(&desc, None, Some(&mut buffer))?;
+            buffer
+        };
 
         let sampler = unsafe {
             let desc = D3D11_SAMPLER_DESC {
@@ -953,6 +1074,7 @@ impl DirectXGlobalElements {
 
         Ok(Self {
             global_params_buffer,
+            effect_global_params_buffer,
             sampler,
         })
     }
@@ -967,6 +1089,59 @@ struct GlobalParams {
     subpixel_enhanced_contrast: f32,
     is_bgr: u32,
     _pad: [u32; 3],
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct EffectGlobalParams {
+    viewport_size: [f32; 2],
+    premultiplied_alpha: u32,
+    pad: u32,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct EffectInstance {
+    bounds: Bounds<ScaledPixels>,
+    content_mask: Bounds<ScaledPixels>,
+    corner_radii: [f32; 4],
+    image_bounds: Bounds<ScaledPixels>,
+    opacity: f32,
+    time: f32,
+    pad: [f32; 2],
+    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
+}
+
+impl From<&EffectQuad> for EffectInstance {
+    fn from(effect: &EffectQuad) -> Self {
+        Self {
+            bounds: effect.bounds,
+            content_mask: effect.content_mask.bounds,
+            corner_radii: [
+                effect.corner_radii.top_left.0,
+                effect.corner_radii.top_right.0,
+                effect.corner_radii.bottom_right.0,
+                effect.corner_radii.bottom_left.0,
+            ],
+            image_bounds: effect
+                .image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
+                .unwrap_or_default(),
+            opacity: effect.opacity,
+            time: effect.time,
+            pad: [0.0; 2],
+            uniforms: *effect.uniforms.slots(),
+        }
+    }
+}
+
+struct EffectPipeline {
+    vertex: ID3D11VertexShader,
+    fragment: ID3D11PixelShader,
+    buffer: ID3D11Buffer,
+    buffer_size: usize,
+    view: Option<ID3D11ShaderResourceView>,
+    blend_state: ID3D11BlendState,
 }
 
 struct PipelineState<T> {
@@ -1145,6 +1320,210 @@ impl<T> PipelineState<T> {
         }
         Ok(())
     }
+}
+
+impl EffectPipeline {
+    fn new(device: &ID3D11Device, source: &str, shader_model: HlslShaderModel) -> Result<Self> {
+        let (vertex_target, fragment_target) = match shader_model {
+            HlslShaderModel::Sm4_1 => ("vs_4_1", "ps_4_1"),
+            HlslShaderModel::Sm5_0 => ("vs_5_0", "ps_5_0"),
+        };
+        let vertex_blob = compile_hlsl(source, "vs_effect", vertex_target)?;
+        let fragment_blob = compile_hlsl(source, "fs_effect", fragment_target)?;
+        let vertex = unsafe {
+            let bytes = std::slice::from_raw_parts(
+                vertex_blob.GetBufferPointer() as *const u8,
+                vertex_blob.GetBufferSize(),
+            );
+            create_vertex_shader(device, bytes)?
+        };
+        let fragment = unsafe {
+            let bytes = std::slice::from_raw_parts(
+                fragment_blob.GetBufferPointer() as *const u8,
+                fragment_blob.GetBufferSize(),
+            );
+            create_fragment_shader(device, bytes)?
+        };
+        let (buffer, view) = create_effect_buffer(device, 4)?;
+        Ok(Self {
+            vertex,
+            fragment,
+            buffer,
+            buffer_size: 4,
+            view,
+            blend_state: create_blend_state(device)?,
+        })
+    }
+
+    fn update_buffer(
+        &mut self,
+        device: &ID3D11Device,
+        device_context: &ID3D11DeviceContext,
+        data: &[EffectInstance],
+    ) -> Result<()> {
+        if self.buffer_size < data.len() {
+            self.buffer_size = data.len().next_power_of_two();
+            let (buffer, view) = create_effect_buffer(device, self.buffer_size)?;
+            self.buffer = buffer;
+            self.view = view;
+        }
+        update_buffer(device_context, &self.buffer, data)
+    }
+
+    fn draw(
+        &self,
+        device_context: &ID3D11DeviceContext,
+        viewport: &[D3D11_VIEWPORT],
+        global_params: &[Option<ID3D11Buffer>],
+        texture: Option<&[Option<ID3D11ShaderResourceView>]>,
+        sampler: &[Option<ID3D11SamplerState>],
+        instance_count: u32,
+    ) {
+        set_pipeline_state(
+            device_context,
+            slice::from_ref(&self.view),
+            D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+            viewport,
+            &self.vertex,
+            &self.fragment,
+            global_params,
+            &self.blend_state,
+        );
+        unsafe {
+            if let Some(texture) = texture {
+                device_context.PSSetSamplers(0, Some(sampler));
+                device_context.VSSetShaderResources(0, Some(texture));
+                device_context.PSSetShaderResources(0, Some(texture));
+            }
+            device_context.DrawInstanced(4, instance_count, 0, 0);
+        }
+    }
+}
+
+fn translate_effect_to_hlsl(shader: &EffectShader) -> Result<String> {
+    let source = gpui::compose_effect_shader_wgsl(shader);
+    let module = naga::front::wgsl::parse_str(&source)
+        .map_err(|error| anyhow::anyhow!("WGSL parse error: {error}"))?;
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .map_err(|error| anyhow::anyhow!("WGSL validation error: {error}"))?;
+    let mut options = naga::back::hlsl::Options {
+        shader_model: naga::back::hlsl::ShaderModel::V5_0,
+        fake_missing_bindings: false,
+        ..Default::default()
+    };
+    options.binding_map.insert(
+        naga::ResourceBinding {
+            group: 0,
+            binding: 0,
+        },
+        naga::back::hlsl::BindTarget {
+            space: 0,
+            register: 0,
+            ..Default::default()
+        },
+    );
+    if shader.uses_image() {
+        options.binding_map.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 1,
+            },
+            naga::back::hlsl::BindTarget {
+                space: 0,
+                register: 0,
+                ..Default::default()
+            },
+        );
+    }
+    options.binding_map.insert(
+        naga::ResourceBinding {
+            group: 1,
+            binding: 0,
+        },
+        naga::back::hlsl::BindTarget {
+            space: 0,
+            register: 1,
+            ..Default::default()
+        },
+    );
+    let pipeline_options = naga::back::hlsl::PipelineOptions::default();
+    let mut output = String::new();
+    naga::back::hlsl::Writer::new(&mut output, &options, &pipeline_options)
+        .write(&module, &info, None)
+        .map_err(|error| anyhow::anyhow!("HLSL generation error: {error}"))?;
+    Ok(output)
+}
+
+fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<ID3DBlob> {
+    use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+    use windows::core::PCSTR;
+
+    let entry = CString::new(entry)?;
+    let target = CString::new(target)?;
+    let mut compiled = None;
+    let mut errors = None;
+    let result = unsafe {
+        D3DCompile(
+            source.as_ptr() as *const _,
+            source.len(),
+            PCSTR::null(),
+            None,
+            None::<ID3DInclude>,
+            PCSTR::from_raw(entry.as_ptr() as *const u8),
+            PCSTR::from_raw(target.as_ptr() as *const u8),
+            0,
+            0,
+            &mut compiled,
+            Some(&mut errors),
+        )
+    };
+    if let Err(error) = result {
+        let details = errors
+            .map(|blob| unsafe {
+                std::ffi::CStr::from_ptr(blob.GetBufferPointer() as *const i8)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_else(|| error.to_string());
+        anyhow::bail!("HLSL compile error: {details}");
+    }
+    compiled.context("D3DCompile returned no shader")
+}
+
+fn create_effect_buffer(
+    device: &ID3D11Device,
+    instance_count: usize,
+) -> Result<(ID3D11Buffer, Option<ID3D11ShaderResourceView>)> {
+    let byte_width = mem::size_of::<EffectInstance>() * instance_count;
+    let desc = D3D11_BUFFER_DESC {
+        ByteWidth: byte_width as u32,
+        Usage: D3D11_USAGE_DYNAMIC,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+        MiscFlags: D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS.0 as u32,
+        StructureByteStride: 0,
+    };
+    let mut buffer = None;
+    unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer))? };
+    let buffer = buffer.context("CreateBuffer returned no effect buffer")?;
+    let view_desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+        Format: DXGI_FORMAT_R32_TYPELESS,
+        ViewDimension: D3D11_SRV_DIMENSION_BUFFEREX,
+        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+            BufferEx: D3D11_BUFFEREX_SRV {
+                FirstElement: 0,
+                NumElements: (byte_width / 4) as u32,
+                Flags: D3D11_BUFFEREX_SRV_FLAG_RAW.0 as u32,
+            },
+        },
+    };
+    let mut view = None;
+    unsafe { device.CreateShaderResourceView(&buffer, Some(&view_desc), Some(&mut view))? };
+    Ok((buffer, view))
 }
 
 #[derive(Clone, Copy)]

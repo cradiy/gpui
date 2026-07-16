@@ -132,6 +132,19 @@ struct BorderColors {
     left: Hsla,
 }
 
+struct BorderColorStop {
+    color: Hsla,
+    position: f32,
+}
+
+struct BorderGradient {
+    stops: array<BorderColorStop, 4>,
+    stop_count: u32,
+    color_space: u32,
+    phase: f32,
+    pad: u32,
+}
+
 struct LinearColorStop {
     color: Hsla,
     percentage: f32,
@@ -530,6 +543,7 @@ struct Quad {
     content_mask: Bounds,
     background: Background,
     border_colors: BorderColors,
+    border_gradient: BorderGradient,
     corner_radii: Corners,
     border_widths: Edges,
 }
@@ -541,12 +555,16 @@ struct QuadVarying {
     @location(1) @interpolate(flat) border_color_right: vec4<f32>,
     @location(2) @interpolate(flat) border_color_bottom: vec4<f32>,
     @location(3) @interpolate(flat) border_color_left: vec4<f32>,
-    @location(4) @interpolate(flat) quad_id: u32,
+    @location(4) @interpolate(flat) border_gradient_color0: vec4<f32>,
+    @location(5) @interpolate(flat) border_gradient_color1: vec4<f32>,
+    @location(6) @interpolate(flat) border_gradient_color2: vec4<f32>,
+    @location(7) @interpolate(flat) border_gradient_color3: vec4<f32>,
+    @location(8) @interpolate(flat) quad_id: u32,
     // TODO: use `clip_distance` once Naga supports it
-    @location(5) clip_distances: vec4<f32>,
-    @location(6) @interpolate(flat) background_solid: vec4<f32>,
-    @location(7) @interpolate(flat) background_color0: vec4<f32>,
-    @location(8) @interpolate(flat) background_color1: vec4<f32>,
+    @location(9) clip_distances: vec4<f32>,
+    @location(10) @interpolate(flat) background_solid: vec4<f32>,
+    @location(11) @interpolate(flat) background_color0: vec4<f32>,
+    @location(12) @interpolate(flat) background_color1: vec4<f32>,
 }
 
 @vertex
@@ -570,9 +588,103 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.border_color_right = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.right));
     out.border_color_bottom = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.bottom));
     out.border_color_left = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.left));
+    var gradient_colors = array<vec4<f32>, 4>();
+    for (var ix = 0u; ix < 4u; ix += 1u) {
+        let color = hsla_to_rgba(quad.border_gradient.stops[ix].color);
+        gradient_colors[ix] = select(
+            linear_to_srgba(color),
+            linear_srgb_to_oklab(color),
+            quad.border_gradient.color_space == 1u,
+        );
+    }
+    out.border_gradient_color0 = gradient_colors[0];
+    out.border_gradient_color1 = gradient_colors[1];
+    out.border_gradient_color2 = gradient_colors[2];
+    out.border_gradient_color3 = gradient_colors[3];
     out.quad_id = instance_id;
     out.clip_distances = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
     return out;
+}
+
+fn border_perimeter_position(
+    point: vec2<f32>,
+    size: vec2<f32>,
+    center_to_point: vec2<f32>,
+    corner_center_to_point: vec2<f32>,
+    is_near_rounded_corner: bool,
+    radii: Corners,
+) -> f32 {
+    let top = max(0.0, size.x - radii.top_left - radii.top_right);
+    let right = max(0.0, size.y - radii.top_right - radii.bottom_right);
+    let bottom = max(0.0, size.x - radii.bottom_right - radii.bottom_left);
+    let left = max(0.0, size.y - radii.bottom_left - radii.top_left);
+    let arc_tr = radii.top_right * M_PI_F / 2.0;
+    let arc_br = radii.bottom_right * M_PI_F / 2.0;
+    let arc_bl = radii.bottom_left * M_PI_F / 2.0;
+    let arc_tl = radii.top_left * M_PI_F / 2.0;
+    let upto_right = top + arc_tr;
+    let upto_bottom = upto_right + right + arc_br;
+    let upto_left = upto_bottom + bottom + arc_bl;
+    let perimeter = max(0.001, upto_left + left + arc_tl);
+
+    var position = 0.0;
+    if (is_near_rounded_corner) {
+        let angle = atan2(corner_center_to_point.y, corner_center_to_point.x);
+        if (center_to_point.x >= 0.0) {
+            if (center_to_point.y < 0.0) {
+                position = top + radii.top_right * (M_PI_F / 2.0 - angle);
+            } else {
+                position = upto_right + right + radii.bottom_right * angle;
+            }
+        } else if (center_to_point.y >= 0.0) {
+            position = upto_bottom + bottom + radii.bottom_left * (M_PI_F / 2.0 - angle);
+        } else {
+            position = upto_left + left + radii.top_left * angle;
+        }
+    } else if (corner_center_to_point.x < corner_center_to_point.y) {
+        if (center_to_point.y < 0.0) {
+            position = clamp(point.x - radii.top_left, 0.0, top);
+        } else {
+            position = upto_bottom + clamp(size.x - radii.bottom_right - point.x, 0.0, bottom);
+        }
+    } else if (center_to_point.x >= 0.0) {
+        position = upto_right + clamp(point.y - radii.top_right, 0.0, right);
+    } else {
+        position = upto_left + clamp(size.y - radii.bottom_left - point.y, 0.0, left);
+    }
+
+    return position / perimeter;
+}
+
+fn sample_border_gradient(
+    gradient: BorderGradient,
+    position: f32,
+    colors: array<vec4<f32>, 4>,
+) -> vec4<f32> {
+    let count = gradient.stop_count;
+    var left_ix = count - 1u;
+    var right_ix = 0u;
+    var sample_position = position;
+    var left_position = gradient.stops[left_ix].position;
+    var right_position = gradient.stops[0].position + 1.0;
+
+    for (var ix = 0u; ix < 3u; ix += 1u) {
+        if (ix + 1u < count
+            && position >= gradient.stops[ix].position
+            && position < gradient.stops[ix + 1u].position) {
+            left_ix = ix;
+            right_ix = ix + 1u;
+            left_position = gradient.stops[left_ix].position;
+            right_position = gradient.stops[right_ix].position;
+        }
+    }
+    if (right_ix == 0u && sample_position < gradient.stops[0].position) {
+        sample_position += 1.0;
+    }
+
+    let delta = max(0.0001, right_position - left_position);
+    let t = clamp((sample_position - left_position) / delta, 0.0, 1.0);
+    return mix(colors[left_ix], colors[right_ix], t);
 }
 
 @fragment
@@ -745,6 +857,33 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             }
         }
         border_color = oklab_to_linear_srgb(border_color);
+
+        if (quad.border_gradient.stop_count >= 2u) {
+            let perimeter_position = border_perimeter_position(
+                point,
+                size,
+                center_to_point,
+                corner_center_to_point,
+                is_near_rounded_corner,
+                quad.corner_radii,
+            );
+            let gradient_position = fract(perimeter_position + quad.border_gradient.phase);
+            let gradient_color = sample_border_gradient(
+                quad.border_gradient,
+                gradient_position,
+                array<vec4<f32>, 4>(
+                    input.border_gradient_color0,
+                    input.border_gradient_color1,
+                    input.border_gradient_color2,
+                    input.border_gradient_color3,
+                ),
+            );
+            border_color = select(
+                srgba_to_linear(gradient_color),
+                oklab_to_linear_srgb(gradient_color),
+                quad.border_gradient.color_space == 1u,
+            );
+        }
 
         // Dashed border logic when border_style == 1
         if (quad.border_style == 1) {

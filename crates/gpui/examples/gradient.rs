@@ -1,8 +1,11 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 
+use std::time::Duration;
+
 use gpui::{
-    App, Bounds, ColorSpace, Context, Half, Render, Window, WindowOptions, canvas, div,
-    linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    Animation, AnimationExt, App, Bounds, ColorSpace, Context, Half, Render, Window, WindowOptions,
+    border_color_stop, border_gradient, canvas, div, linear_color_stop, linear_gradient, point,
+    prelude::*, px, size,
 };
 use gpui_platform::application;
 
@@ -208,17 +211,46 @@ impl Render for GradientViewer {
             )
             .child(
                 div()
-                    .h_24()
-                    .rounded_xl()
-                    .border_4()
-                    .border_top_color(gpui::red())
-                    .border_right_color(gpui::blue())
-                    .border_bottom_color(gpui::green())
-                    .border_left_color(gpui::yellow())
                     .flex()
-                    .items_center()
-                    .justify_center()
-                    .child("Per-side border colors with automatic corner transitions"),
+                    .gap_3()
+                    .h_24()
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .rounded_xl()
+                            .border_4()
+                            .border_top_color(gpui::red())
+                            .border_right_color(gpui::blue())
+                            .border_bottom_color(gpui::green())
+                            .border_left_color(gpui::yellow())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child("Per-side border colors"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .rounded_xl()
+                            .border_4()
+                            .border_gradient(border_gradient([
+                                border_color_stop(gpui::red(), 0.0),
+                                border_color_stop(gpui::blue(), 0.25),
+                                border_color_stop(gpui::green(), 0.5),
+                                border_color_stop(gpui::yellow(), 0.75),
+                            ]))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child("Animated perimeter gradient")
+                            .with_animation(
+                                "border-gradient-flow",
+                                Animation::new(Duration::from_secs(3)).repeat(),
+                                |this, delta| this.border_gradient_phase(delta),
+                            ),
+                    ),
             )
             .child(div().h_24().child(canvas(
                 move |_, _, _| {},

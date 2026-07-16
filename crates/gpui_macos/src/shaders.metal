@@ -51,6 +51,10 @@ struct QuadVertexOutput {
   float4 border_color_right [[flat]];
   float4 border_color_bottom [[flat]];
   float4 border_color_left [[flat]];
+  float4 border_gradient_color0 [[flat]];
+  float4 border_gradient_color1 [[flat]];
+  float4 border_gradient_color2 [[flat]];
+  float4 border_gradient_color3 [[flat]];
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
@@ -64,6 +68,10 @@ struct QuadFragmentInput {
   float4 border_color_right [[flat]];
   float4 border_color_bottom [[flat]];
   float4 border_color_left [[flat]];
+  float4 border_gradient_color0 [[flat]];
+  float4 border_gradient_color1 [[flat]];
+  float4 border_gradient_color2 [[flat]];
+  float4 border_gradient_color3 [[flat]];
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
@@ -87,6 +95,13 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
   float4 border_color_right = srgb_to_oklab(hsla_to_rgba(quad.border_colors.right));
   float4 border_color_bottom = srgb_to_oklab(hsla_to_rgba(quad.border_colors.bottom));
   float4 border_color_left = srgb_to_oklab(hsla_to_rgba(quad.border_colors.left));
+  float4 border_gradient_colors[4];
+  for (uint ix = 0; ix < 4; ix++) {
+    float4 color = hsla_to_rgba(quad.border_gradient.stops[ix].color);
+    border_gradient_colors[ix] = quad.border_gradient.color_space == 1
+      ? srgb_to_oklab(color)
+      : color;
+  }
 
   GradientColor gradient = prepare_fill_color(
     quad.background.tag,
@@ -103,10 +118,91 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       border_color_right,
       border_color_bottom,
       border_color_left,
+      border_gradient_colors[0],
+      border_gradient_colors[1],
+      border_gradient_colors[2],
+      border_gradient_colors[3],
       gradient.solid,
       gradient.color0,
       gradient.color1,
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
+}
+
+float border_perimeter_position(
+    float2 point,
+    float2 size,
+    float2 center_to_point,
+    float2 corner_center_to_point,
+    bool is_near_rounded_corner,
+    Corners_ScaledPixels radii) {
+  float top = max(0.0, size.x - radii.top_left - radii.top_right);
+  float right = max(0.0, size.y - radii.top_right - radii.bottom_right);
+  float bottom = max(0.0, size.x - radii.bottom_right - radii.bottom_left);
+  float left = max(0.0, size.y - radii.bottom_left - radii.top_left);
+  float arc_tr = radii.top_right * M_PI_F / 2.0;
+  float arc_br = radii.bottom_right * M_PI_F / 2.0;
+  float arc_bl = radii.bottom_left * M_PI_F / 2.0;
+  float arc_tl = radii.top_left * M_PI_F / 2.0;
+  float upto_right = top + arc_tr;
+  float upto_bottom = upto_right + right + arc_br;
+  float upto_left = upto_bottom + bottom + arc_bl;
+  float perimeter = max(0.001, upto_left + left + arc_tl);
+
+  float position;
+  if (is_near_rounded_corner) {
+    float angle = atan2(corner_center_to_point.y, corner_center_to_point.x);
+    if (center_to_point.x >= 0.0) {
+      position = center_to_point.y < 0.0
+        ? top + radii.top_right * (M_PI_F / 2.0 - angle)
+        : upto_right + right + radii.bottom_right * angle;
+    } else {
+      position = center_to_point.y >= 0.0
+        ? upto_bottom + bottom + radii.bottom_left * (M_PI_F / 2.0 - angle)
+        : upto_left + left + radii.top_left * angle;
+    }
+  } else if (corner_center_to_point.x < corner_center_to_point.y) {
+    position = center_to_point.y < 0.0
+      ? clamp(point.x - radii.top_left, 0.0, top)
+      : upto_bottom + clamp(size.x - radii.bottom_right - point.x, 0.0, bottom);
+  } else {
+    position = center_to_point.x >= 0.0
+      ? upto_right + clamp(point.y - radii.top_right, 0.0, right)
+      : upto_left + clamp(size.y - radii.bottom_left - point.y, 0.0, left);
+  }
+  return position / perimeter;
+}
+
+float4 sample_border_gradient(
+    BorderGradient gradient,
+    float position,
+    float4 color0,
+    float4 color1,
+    float4 color2,
+    float4 color3) {
+  float4 colors[4] = {color0, color1, color2, color3};
+  uint count = gradient.stop_count;
+  uint left_ix = count - 1;
+  uint right_ix = 0;
+  float sample_position = position;
+  float left_position = gradient.stops[left_ix].position;
+  float right_position = gradient.stops[0].position + 1.0;
+  for (uint ix = 0; ix < 3; ix++) {
+    if (ix + 1 < count && position >= gradient.stops[ix].position
+        && position < gradient.stops[ix + 1].position) {
+      left_ix = ix;
+      right_ix = ix + 1;
+      left_position = gradient.stops[left_ix].position;
+      right_position = gradient.stops[right_ix].position;
+    }
+  }
+  if (right_ix == 0 && sample_position < gradient.stops[0].position) {
+    sample_position += 1.0;
+  }
+  float t = clamp(
+    (sample_position - left_position) / max(0.0001, right_position - left_position),
+    0.0,
+    1.0);
+  return mix(colors[left_ix], colors[right_ix], t);
 }
 
 fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
@@ -252,6 +348,23 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
       }
     }
     border_color = oklab_to_srgb(border_color);
+
+    if (quad.border_gradient.stop_count >= 2) {
+      float perimeter_position = border_perimeter_position(
+        point, size, center_to_point, corner_center_to_point,
+        is_near_rounded_corner, quad.corner_radii);
+      float gradient_position = fract(perimeter_position + quad.border_gradient.phase);
+      border_color = sample_border_gradient(
+        quad.border_gradient,
+        gradient_position,
+        input.border_gradient_color0,
+        input.border_gradient_color1,
+        input.border_gradient_color2,
+        input.border_gradient_color3);
+      if (quad.border_gradient.color_space == 1) {
+        border_color = oklab_to_srgb(border_color);
+      }
+    }
 
     // Dashed border logic when border_style == 1
     if (quad.border_style == 1) {

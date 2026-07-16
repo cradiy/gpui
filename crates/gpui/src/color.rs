@@ -764,6 +764,107 @@ pub enum ColorSpace {
     Oklab = 1,
 }
 
+/// A color stop in a gradient that follows the perimeter of a border.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[repr(C)]
+pub struct BorderColorStop {
+    /// The color at this stop.
+    pub color: Hsla,
+    /// The position along the border perimeter, in the range `0.0..=1.0`.
+    pub position: f32,
+}
+
+/// Creates a color stop for a border gradient.
+pub fn border_color_stop(color: impl Into<Hsla>, position: f32) -> BorderColorStop {
+    BorderColorStop {
+        color: color.into(),
+        position,
+    }
+}
+
+/// A gradient sampled clockwise along a border's perimeter.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[repr(C)]
+pub struct BorderGradient {
+    pub(crate) stops: [BorderColorStop; 4],
+    pub(crate) stop_count: u32,
+    pub(crate) color_space: ColorSpace,
+    pub(crate) phase: f32,
+    pad: u32,
+}
+
+impl Default for BorderGradient {
+    fn default() -> Self {
+        Self {
+            stops: [BorderColorStop::default(); 4],
+            stop_count: 0,
+            color_space: ColorSpace::Oklab,
+            phase: 0.0,
+            pad: 0,
+        }
+    }
+}
+
+/// Creates a gradient that follows a border's perimeter clockwise.
+pub fn border_gradient<const N: usize>(stops: [BorderColorStop; N]) -> BorderGradient {
+    assert!(
+        (2..=4).contains(&N),
+        "border gradients require 2 to 4 stops"
+    );
+    for stop in &stops {
+        assert!(
+            (0.0..=1.0).contains(&stop.position),
+            "border gradient stop positions must be between 0 and 1"
+        );
+    }
+    for pair in stops.windows(2) {
+        assert!(
+            pair[0].position < pair[1].position,
+            "border gradient stop positions must be strictly increasing"
+        );
+    }
+
+    let mut padded_stops = [BorderColorStop::default(); 4];
+    for (target, stop) in padded_stops.iter_mut().zip(stops) {
+        *target = stop;
+    }
+
+    BorderGradient {
+        stops: padded_stops,
+        stop_count: N as u32,
+        ..Default::default()
+    }
+}
+
+impl BorderGradient {
+    /// Selects the color space used to interpolate between stops.
+    pub fn color_space(mut self, color_space: ColorSpace) -> Self {
+        self.color_space = color_space;
+        self
+    }
+
+    /// Offsets the gradient around the perimeter. Values wrap into `0.0..1.0`.
+    pub fn phase(mut self, phase: f32) -> Self {
+        self.phase = phase.rem_euclid(1.0);
+        self
+    }
+
+    /// Returns true when every gradient stop is fully transparent.
+    pub fn is_transparent(&self) -> bool {
+        self.stops[..self.stop_count as usize]
+            .iter()
+            .all(|stop| stop.color.is_transparent())
+    }
+
+    pub(crate) fn opacity(&self, factor: f32) -> Self {
+        let mut gradient = *self;
+        for stop in &mut gradient.stops[..gradient.stop_count as usize] {
+            stop.color = stop.color.opacity(factor);
+        }
+        gradient
+    }
+}
+
 impl Display for ColorSpace {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -1041,6 +1142,22 @@ mod tests {
         assert_eq!(background.opacity(0.5).colors[1], to.opacity(0.5));
         assert!(!background.is_transparent());
         assert!(background.opacity(0.0).is_transparent());
+    }
+
+    #[test]
+    fn test_border_gradient_stops_and_phase() {
+        let gradient = border_gradient([
+            border_color_stop(red(), 0.0),
+            border_color_stop(blue(), 0.5),
+        ])
+        .phase(1.25)
+        .color_space(ColorSpace::Oklab);
+
+        assert_eq!(gradient.stop_count, 2);
+        assert_eq!(gradient.stops[0].color, red());
+        assert_eq!(gradient.stops[1].position, 0.5);
+        assert_eq!(gradient.phase, 0.25);
+        assert_eq!(gradient.color_space, ColorSpace::Oklab);
     }
 
     #[test]

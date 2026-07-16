@@ -2,8 +2,8 @@
 use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
-    Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    AsyncWindowContext, AvailableSpace, Background, BorderGradient, BorderStyle, Bounds, BoxShadow,
+    Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
     Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
@@ -3774,6 +3774,7 @@ impl Window {
             content_mask: self.snapped_content_mask(),
             background: quad.background.opacity(opacity),
             border_colors: quad.border_colors.map(|color| color.opacity(opacity)),
+            border_gradient: quad.border_gradient.opacity(opacity),
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
@@ -6246,6 +6247,8 @@ pub struct PaintQuad {
     pub border_widths: Edges<Pixels>,
     /// The colors of the quad's borders.
     pub border_colors: Edges<Hsla>,
+    /// A gradient sampled along the quad's border perimeter.
+    pub border_gradient: BorderGradient,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
 }
@@ -6283,6 +6286,14 @@ impl PaintQuad {
         }
     }
 
+    /// Sets a gradient sampled clockwise along the quad's border perimeter.
+    pub fn border_gradient(self, border_gradient: BorderGradient) -> Self {
+        PaintQuad {
+            border_gradient,
+            ..self
+        }
+    }
+
     /// Sets the background color of the quad.
     pub fn background(self, background: impl Into<Background>) -> Self {
         PaintQuad {
@@ -6307,6 +6318,7 @@ pub fn quad(
         background: background.into(),
         border_widths: border_widths.into(),
         border_colors: border_colors.into(),
+        border_gradient: BorderGradient::default(),
         border_style,
     }
 }
@@ -6319,6 +6331,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         background: background.into(),
         border_widths: (0.).into(),
         border_colors: Edges::all(transparent_black()),
+        border_gradient: BorderGradient::default(),
         border_style: BorderStyle::default(),
     }
 }
@@ -6335,6 +6348,7 @@ pub fn outline(
         background: transparent_black().into(),
         border_widths: (1.).into(),
         border_colors: Edges::all(border_color.into()),
+        border_gradient: BorderGradient::default(),
         border_style,
     }
 }

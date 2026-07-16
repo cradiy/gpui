@@ -1,9 +1,9 @@
 use std::{fs, path::Path, sync::Arc};
 
 use crate::{
-    App, Asset, Bounds, Element, GlobalElementId, Hitbox, InspectorElementId, InteractiveElement,
-    Interactivity, IntoElement, LayoutId, Pixels, Point, Radians, SharedString, Size,
-    StyleRefinement, Styled, TransformationMatrix, Window, point, px, radians, size,
+    App, Asset, Bounds, Element, GlobalElementId, Hitbox, Hsla, InspectorElementId,
+    InteractiveElement, Interactivity, IntoElement, LayoutId, Pixels, Point, Radians, SharedString,
+    Size, StyleRefinement, Styled, TransformationMatrix, Window, point, px, radians, size,
 };
 use gpui_util::ResultExt;
 
@@ -23,6 +23,199 @@ pub fn svg() -> Svg {
         transformation: None,
         path: None,
         external_path: None,
+    }
+}
+
+/// A colored SVG element that preserves the source SVG's paints.
+pub struct ColorSvg {
+    interactivity: Interactivity,
+    transformation: Option<Transformation>,
+    path: Option<SharedString>,
+    external_path: Option<SharedString>,
+    current_color: Option<Hsla>,
+    fill_color: Option<Hsla>,
+}
+
+/// Creates an SVG element that preserves and optionally overrides source colors.
+#[track_caller]
+pub fn color_svg() -> ColorSvg {
+    ColorSvg {
+        interactivity: Interactivity::new(),
+        transformation: None,
+        path: None,
+        external_path: None,
+        current_color: None,
+        fill_color: None,
+    }
+}
+
+impl ColorSvg {
+    /// Sets the asset path of the SVG.
+    pub fn path(mut self, path: impl Into<SharedString>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    /// Sets an external filesystem path of the SVG.
+    pub fn external_path(mut self, path: impl Into<SharedString>) -> Self {
+        self.external_path = Some(path.into());
+        self
+    }
+
+    /// Sets the CSS `currentColor` used by the SVG.
+    pub fn current_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.current_color = Some(color.into());
+        self
+    }
+
+    /// Overrides fills on SVG shape elements while leaving other paints intact.
+    pub fn fill_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.fill_color = Some(color.into());
+        self
+    }
+
+    /// Applies a GPU transformation without changing layout or the raster cache key.
+    pub fn with_transformation(mut self, transformation: Transformation) -> Self {
+        self.transformation = Some(transformation);
+        self
+    }
+}
+
+impl Element for ColorSvg {
+    type RequestLayoutState = ();
+    type PrepaintState = Option<Hitbox>;
+
+    fn id(&self) -> Option<crate::ElementId> {
+        self.interactivity.element_id.clone()
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.interactivity.source_location()
+    }
+
+    fn request_layout(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let layout_id = self.interactivity.request_layout(
+            global_id,
+            inspector_id,
+            window,
+            cx,
+            |style, window, cx| window.request_layout(style, None, cx),
+        );
+        (layout_id, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.interactivity.prepaint(
+            global_id,
+            inspector_id,
+            bounds,
+            bounds.size,
+            window,
+            cx,
+            |_, _, hitbox, _, _| hitbox,
+        )
+    }
+
+    fn paint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        hitbox: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.interactivity.paint(
+            global_id,
+            inspector_id,
+            bounds,
+            hitbox.as_ref(),
+            window,
+            cx,
+            |style, window, cx| {
+                let transformation = self
+                    .transformation
+                    .map(|transformation| {
+                        transformation.into_matrix(bounds.center(), window.scale_factor())
+                    })
+                    .unwrap_or_default();
+                let corner_radii = style
+                    .corner_radii
+                    .to_pixels(window.rem_size())
+                    .clamp_radii_for_quad_size(bounds.size);
+
+                if let Some(path) = self.path.as_ref() {
+                    window
+                        .paint_color_svg(
+                            bounds,
+                            path.clone(),
+                            None,
+                            transformation,
+                            corner_radii,
+                            self.current_color,
+                            self.fill_color,
+                            style.text.color,
+                            cx,
+                        )
+                        .log_err();
+                } else if let Some(path) = self.external_path.as_ref() {
+                    let Some(bytes) = window
+                        .use_asset::<SvgAsset>(path, cx)
+                        .and_then(|asset| asset.log_err())
+                    else {
+                        return;
+                    };
+                    window
+                        .paint_color_svg(
+                            bounds,
+                            path.clone(),
+                            Some(&bytes),
+                            transformation,
+                            corner_radii,
+                            self.current_color,
+                            self.fill_color,
+                            style.text.color,
+                            cx,
+                        )
+                        .log_err();
+                }
+            },
+        )
+    }
+}
+
+impl IntoElement for ColorSvg {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Styled for ColorSvg {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.interactivity.base_style
+    }
+}
+
+impl InteractiveElement for ColorSvg {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        &mut self.interactivity
     }
 }
 

@@ -10,8 +10,8 @@ use crate::{
     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
     MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
     PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
-    Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+    Priority, PromptButton, PromptLevel, Quad, Render, RenderColorSvgParams, RenderGlyphParams,
+    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
     StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle,
@@ -4025,6 +4025,7 @@ impl Window {
                 content_mask,
                 tile,
                 opacity,
+                transformation: TransformationMatrix::default(),
             });
         }
         Ok(())
@@ -4095,6 +4096,75 @@ impl Window {
         Ok(())
     }
 
+    /// Paints a colored SVG into the scene for the next frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_color_svg(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        path: SharedString,
+        mut data: Option<&[u8]>,
+        transformation: TransformationMatrix,
+        corner_radii: Corners<Pixels>,
+        current_color: Option<Hsla>,
+        fill_color: Option<Hsla>,
+        text_color: Option<Hsla>,
+        cx: &App,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let element_opacity = self.element_opacity();
+        let bounds = self.snap_bounds(bounds);
+        let params = RenderColorSvgParams {
+            path,
+            size: bounds.size.map(|pixels| {
+                DevicePixels::from((pixels.0 * SMOOTH_SVG_SCALE_FACTOR).ceil() as i32)
+            }),
+            current_color,
+            fill_color,
+            text_color,
+        };
+        let Some(tile) =
+            self.sprite_atlas
+                .get_or_insert_with(&params.clone().into(), &mut || {
+                    let Some((size, bytes)) = cx.svg_renderer.render_color_image(&params, data)?
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(Some((size, Cow::Owned(bytes))))
+                })?
+        else {
+            return Ok(());
+        };
+
+        let svg_bounds = Bounds {
+            origin: bounds.center()
+                - Point::new(
+                    ScaledPixels(tile.bounds.size.width.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
+                    ScaledPixels(tile.bounds.size.height.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
+                ),
+            size: tile
+                .bounds
+                .size
+                .map(|value| ScaledPixels(value.0 as f32 / SMOOTH_SVG_SCALE_FACTOR)),
+        };
+        let final_bounds = svg_bounds
+            .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
+            .map_size(|size| size.ceil());
+
+        self.next_frame.scene.insert_primitive(PolychromeSprite {
+            order: 0,
+            pad: 0,
+            grayscale: false.into(),
+            bounds: final_bounds,
+            content_mask: self.snapped_content_mask(),
+            corner_radii: corner_radii.scale(self.scale_factor()),
+            tile,
+            opacity: element_opacity,
+            transformation,
+        });
+        Ok(())
+    }
+
     /// Paint an image into the scene for the next frame at the current z-index.
     /// This method will panic if the frame_index is not valid
     ///
@@ -4140,6 +4210,7 @@ impl Window {
             corner_radii,
             tile,
             opacity,
+            transformation: TransformationMatrix::default(),
         });
         Ok(())
     }

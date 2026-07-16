@@ -38,9 +38,9 @@ use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, Font, FontId, FontMetrics,
     FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource, Keymap, LineLayout, Pixels,
-    PlatformGestures, PlatformInput, Point, Priority, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Scene, ShapedGlyph, ShapedRun, SharedString, Size,
-    SvgRenderer, SystemWindowTab, Task, Window, WindowControlArea, hash, point, px, size,
+    PlatformGestures, PlatformInput, Point, Priority, RenderColorSvgParams, RenderGlyphParams,
+    RenderImage, RenderImageParams, RenderSvgParams, Scene, ShapedGlyph, ShapedRun, SharedString,
+    Size, SvgRenderer, SystemWindowTab, Task, Window, WindowControlArea, hash, point, px, size,
 };
 use anyhow::Result;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -1143,6 +1143,7 @@ pub fn get_gamma_correction_ratios(gamma: f32) -> [f32; 4] {
 pub enum AtlasKey {
     Glyph(RenderGlyphParams),
     Svg(RenderSvgParams),
+    ColorSvg(RenderColorSvgParams),
     Image(RenderImageParams),
 }
 
@@ -1167,6 +1168,7 @@ impl AtlasKey {
                 }
             }
             AtlasKey::Svg(_) => AtlasTextureKind::Monochrome,
+            AtlasKey::ColorSvg(_) => AtlasTextureKind::Polychrome,
             AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
         }
     }
@@ -1181,6 +1183,12 @@ impl From<RenderGlyphParams> for AtlasKey {
 impl From<RenderSvgParams> for AtlasKey {
     fn from(params: RenderSvgParams) -> Self {
         Self::Svg(params)
+    }
+}
+
+impl From<RenderColorSvgParams> for AtlasKey {
+    fn from(params: RenderColorSvgParams) -> Self {
+        Self::ColorSvg(params)
     }
 }
 

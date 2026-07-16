@@ -35,14 +35,13 @@ float blur_along_x(float x, float y, float sigma, float corner,
 float4 over(float4 below, float4 above);
 float radians(float degrees);
 float4 fill_color(Background background, float2 position, Bounds_ScaledPixels bounds,
-  float4 solid_color, float4 color0, float4 color1);
+  float4 solid_color, thread const float4 colors[4]);
 
 struct GradientColor {
   float4 solid;
-  float4 color0;
-  float4 color1;
+  float4 colors[4];
 };
-GradientColor prepare_fill_color(uint tag, uint color_space, Hsla solid, Hsla color0, Hsla color1);
+GradientColor prepare_fill_color(Background background);
 
 struct QuadVertexOutput {
   uint quad_id [[flat]];
@@ -58,6 +57,8 @@ struct QuadVertexOutput {
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
+  float4 background_color2 [[flat]];
+  float4 background_color3 [[flat]];
   float clip_distance [[clip_distance]][4];
 };
 
@@ -75,6 +76,8 @@ struct QuadFragmentInput {
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
+  float4 background_color2 [[flat]];
+  float4 background_color3 [[flat]];
 };
 
 vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
@@ -103,13 +106,7 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       : color;
   }
 
-  GradientColor gradient = prepare_fill_color(
-    quad.background.tag,
-    quad.background.color_space,
-    quad.background.solid,
-    quad.background.colors[0].color,
-    quad.background.colors[1].color
-  );
+  GradientColor gradient = prepare_fill_color(quad.background);
 
   return QuadVertexOutput{
       quad_id,
@@ -123,8 +120,10 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       border_gradient_colors[2],
       border_gradient_colors[3],
       gradient.solid,
-      gradient.color0,
-      gradient.color1,
+      gradient.colors[0],
+      gradient.colors[1],
+      gradient.colors[2],
+      gradient.colors[3],
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
 
@@ -209,8 +208,14 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                               constant Quad *quads
                               [[buffer(QuadInputIndex_Quads)]]) {
   Quad quad = quads[input.quad_id];
+  float4 background_colors[4] = {
+    input.background_color0,
+    input.background_color1,
+    input.background_color2,
+    input.background_color3
+  };
   float4 background_color = fill_color(quad.background, input.position.xy, quad.bounds,
-    input.background_solid, input.background_color0, input.background_color1);
+    input.background_solid, background_colors);
 
   bool unrounded = quad.corner_radii.top_left == 0.0 &&
     quad.corner_radii.bottom_left == 0.0 &&
@@ -950,21 +955,14 @@ fragment float4 path_rasterization_fragment(
     alpha = saturate(0.5 - distance);
   }
 
-  GradientColor gradient_color = prepare_fill_color(
-    background.tag,
-    background.color_space,
-    background.solid,
-    background.colors[0].color,
-    background.colors[1].color
-  );
+  GradientColor gradient_color = prepare_fill_color(background);
 
   float4 color = fill_color(
     background,
     input.position.xy,
     path_bounds,
     gradient_color.solid,
-    gradient_color.color0,
-    gradient_color.color1
+    gradient_color.colors
   );
   return float4(color.rgb * color.a * alpha, alpha * color.a);
 }
@@ -1308,25 +1306,94 @@ float4 over(float4 below, float4 above) {
   return result;
 }
 
-GradientColor prepare_fill_color(uint tag, uint color_space, Hsla solid,
-                                     Hsla color0, Hsla color1) {
-  GradientColor out;
-  if (tag == 0 || tag == 2 || tag == 3) {
-    out.solid = hsla_to_rgba(solid);
-  } else if (tag == 1) {
-    out.color0 = hsla_to_rgba(color0);
-    out.color1 = hsla_to_rgba(color1);
-
-    // Prepare color space in vertex for avoid conversion
-    // in fragment shader for performance reasons
-    if (color_space == 1) {
-      // Oklab
-      out.color0 = srgb_to_oklab(out.color0);
-      out.color1 = srgb_to_oklab(out.color1);
+GradientColor prepare_fill_color(Background background) {
+  GradientColor out = {};
+  if (background.tag == 0 || background.tag == 2 || background.tag == 3) {
+    out.solid = hsla_to_rgba(background.solid);
+  } else if (background.tag == 1) {
+    for (uint ix = 0; ix < 4; ix++) {
+      float4 color = hsla_to_rgba(background.colors[ix].color);
+      out.colors[ix] = background.color_space == 1
+        ? srgb_to_oklab(color)
+        : color;
     }
   }
 
   return out;
+}
+
+float4 sample_linear_gradient(
+    Background background,
+    float position,
+    thread const float4 colors[4]) {
+  uint count = max(background.stop_count, 2u);
+  float sample_position = clamp(position, 0.0, 1.0);
+  uint left_ix = 0;
+  uint right_ix = 0;
+  float left_position = background.colors[0].percentage;
+  float right_position = left_position;
+
+  if (background.gradient_repeating != 0) {
+    sample_position = fract(position + background.gradient_phase);
+    left_ix = count - 1;
+    right_ix = 0;
+    left_position = background.colors[left_ix].percentage;
+    right_position = background.colors[0].percentage + 1.0;
+    for (uint ix = 0; ix + 1 < count; ix++) {
+      if (sample_position >= background.colors[ix].percentage
+          && sample_position < background.colors[ix + 1].percentage) {
+        left_ix = ix;
+        right_ix = ix + 1;
+        left_position = background.colors[left_ix].percentage;
+        right_position = background.colors[right_ix].percentage;
+      }
+    }
+    if (right_ix == 0 && sample_position < background.colors[0].percentage) {
+      sample_position += 1.0;
+    }
+  } else if (sample_position <= background.colors[0].percentage) {
+    left_ix = 0;
+    right_ix = 0;
+  } else if (sample_position >= background.colors[count - 1].percentage) {
+    left_ix = count - 1;
+    right_ix = count - 1;
+    left_position = background.colors[left_ix].percentage;
+    right_position = left_position;
+  } else {
+    for (uint ix = 0; ix + 1 < count; ix++) {
+      if (sample_position >= background.colors[ix].percentage
+          && sample_position < background.colors[ix + 1].percentage) {
+        left_ix = ix;
+        right_ix = ix + 1;
+        left_position = background.colors[left_ix].percentage;
+        right_position = background.colors[right_ix].percentage;
+      }
+    }
+  }
+
+  float segment = max(right_position - left_position, 0.000001);
+  float t = clamp((sample_position - left_position) / segment, 0.0, 1.0);
+  float4 color = mix(colors[left_ix], colors[right_ix], t);
+  if (background.gradient_repeating != 0) {
+    uint before_ix = left_ix > 0 ? left_ix - 1 : count - 1;
+    uint after_ix = right_ix + 1 < count ? right_ix + 1 : 0;
+
+    // Treat the stops as periodic cubic B-spline control points. Four
+    // neighboring colors influence every sample, avoiding visible bands
+    // centered on exact stop colors while keeping the curve C2-continuous.
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float one_minus_t = 1.0 - t;
+    float weight0 = one_minus_t * one_minus_t * one_minus_t / 6.0;
+    float weight1 = (3.0 * t3 - 6.0 * t2 + 4.0) / 6.0;
+    float weight2 = (-3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0) / 6.0;
+    float weight3 = t3 / 6.0;
+    color = weight0 * colors[before_ix]
+      + weight1 * colors[left_ix]
+      + weight2 * colors[right_ix]
+      + weight3 * colors[after_ix];
+  }
+  return background.color_space == 1 ? oklab_to_srgb(color) : color;
 }
 
 float2x2 rotate2d(float angle) {
@@ -1338,7 +1405,7 @@ float2x2 rotate2d(float angle) {
 float4 fill_color(Background background,
                       float2 position,
                       Bounds_ScaledPixels bounds,
-                      float4 solid_color, float4 color0, float4 color1) {
+                      float4 solid_color, thread const float4 colors[4]) {
   float4 color;
 
   switch (background.tag) {
@@ -1370,22 +1437,7 @@ float4 fill_color(Background background,
           t = (t + half_size.y) / bounds.size.height;
       }
 
-      // Adjust t based on the stop percentages
-      t = (t - background.colors[0].percentage)
-        / (background.colors[1].percentage
-        - background.colors[0].percentage);
-      t = clamp(t, 0.0, 1.0);
-
-      switch (background.color_space) {
-        case 0:
-          color = mix(color0, color1, t);
-          break;
-        case 1: {
-          float4 oklab_color = mix(color0, color1, t);
-          color = oklab_to_srgb(oklab_color);
-          break;
-        }
-      }
+      color = sample_linear_gradient(background, t, colors);
 
       // Dither to reduce banding in gradients (especially dark/alpha).
       // Triangular-distributed noise breaks up 8-bit quantization steps.

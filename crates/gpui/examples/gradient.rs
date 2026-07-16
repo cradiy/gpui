@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, App, Bounds, ColorSpace, Context, Half, Render, Window, WindowOptions,
-    border_color_stop, border_gradient, canvas, div, linear_color_stop, linear_gradient, point,
-    prelude::*, px, size,
+    border_color_stop, border_gradient, canvas, div, linear_color_stop, linear_gradient,
+    multi_linear_gradient, point, prelude::*, px, size,
 };
 use gpui_platform::application;
 
@@ -24,6 +24,16 @@ impl GradientViewer {
 impl Render for GradientViewer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let color_space = self.color_space;
+        let flowing_background = multi_linear_gradient(
+            90.0,
+            [
+                linear_color_stop(gpui::rgb(0xff1744), 0.0),
+                linear_color_stop(gpui::rgb(0x2979ff), 0.25),
+                linear_color_stop(gpui::rgb(0x00e676), 0.5),
+                linear_color_stop(gpui::rgb(0xffea00), 0.75),
+            ],
+        )
+        .color_space(color_space);
 
         div()
             .bg(gpui::white())
@@ -252,6 +262,26 @@ impl Render for GradientViewer {
                             ),
                     ),
             )
+            .child(
+                div()
+                    .h_24()
+                    .rounded_xl()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(gpui::white())
+                    .child("Animated multi-stop background")
+                    .with_animation(
+                        "background-gradient-flow",
+                        Animation::new(Duration::from_secs(3)).repeat(),
+                        move |this, delta| this.bg(flowing_background.phase(delta)),
+                    ),
+            )
+            .child(div().h_2().rounded_full().with_animation(
+                "background-gradient-flow-thin",
+                Animation::new(Duration::from_secs(3)).repeat(),
+                move |this, delta| this.bg(flowing_background.phase(delta)),
+            ))
             .child(div().h_24().child(canvas(
                 move |_, _, _| {},
                 move |bounds, _, window, _| {
@@ -279,10 +309,14 @@ impl Render for GradientViewer {
                     let path = builder.build().unwrap();
                     window.paint_path(
                         path,
-                        linear_gradient(
+                        multi_linear_gradient(
                             180.,
-                            linear_color_stop(gpui::red(), 0.),
-                            linear_color_stop(gpui::blue(), 1.),
+                            [
+                                linear_color_stop(gpui::red(), 0.),
+                                linear_color_stop(gpui::yellow(), 0.33),
+                                linear_color_stop(gpui::green(), 0.66),
+                                linear_color_stop(gpui::blue(), 1.),
+                            ],
                         )
                         .color_space(color_space),
                     );

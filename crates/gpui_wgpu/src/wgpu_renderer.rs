@@ -62,7 +62,7 @@ struct PathSprite {
 
 #[derive(Clone, Debug)]
 #[repr(C)]
-struct PathRasterizationVertex {
+pub(super) struct PathRasterizationVertex {
     xy_position: Point<ScaledPixels>,
     st_position: Point<f32>,
     color: Background,

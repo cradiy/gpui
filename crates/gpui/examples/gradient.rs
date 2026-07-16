@@ -206,6 +206,20 @@ impl Render for GradientViewer {
                         .color_space(color_space)),
                     ),
             )
+            .child(
+                div()
+                    .h_24()
+                    .rounded_xl()
+                    .border_4()
+                    .border_top_color(gpui::red())
+                    .border_right_color(gpui::blue())
+                    .border_bottom_color(gpui::green())
+                    .border_left_color(gpui::yellow())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child("Per-side border colors with automatic corner transitions"),
+            )
             .child(div().h_24().child(canvas(
                 move |_, _, _| {},
                 move |bounds, _, window, _| {

@@ -125,6 +125,13 @@ struct Hsla {
     a: f32,
 }
 
+struct BorderColors {
+    top: Hsla,
+    right: Hsla,
+    bottom: Hsla,
+    left: Hsla,
+}
+
 struct LinearColorStop {
     color: Hsla,
     percentage: f32,
@@ -522,7 +529,7 @@ struct Quad {
     bounds: Bounds,
     content_mask: Bounds,
     background: Background,
-    border_color: Hsla,
+    border_colors: BorderColors,
     corner_radii: Corners,
     border_widths: Edges,
 }
@@ -530,13 +537,16 @@ struct Quad {
 
 struct QuadVarying {
     @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) border_color: vec4<f32>,
-    @location(1) @interpolate(flat) quad_id: u32,
+    @location(0) @interpolate(flat) border_color_top: vec4<f32>,
+    @location(1) @interpolate(flat) border_color_right: vec4<f32>,
+    @location(2) @interpolate(flat) border_color_bottom: vec4<f32>,
+    @location(3) @interpolate(flat) border_color_left: vec4<f32>,
+    @location(4) @interpolate(flat) quad_id: u32,
     // TODO: use `clip_distance` once Naga supports it
-    @location(2) clip_distances: vec4<f32>,
-    @location(3) @interpolate(flat) background_solid: vec4<f32>,
-    @location(4) @interpolate(flat) background_color0: vec4<f32>,
-    @location(5) @interpolate(flat) background_color1: vec4<f32>,
+    @location(5) clip_distances: vec4<f32>,
+    @location(6) @interpolate(flat) background_solid: vec4<f32>,
+    @location(7) @interpolate(flat) background_color0: vec4<f32>,
+    @location(8) @interpolate(flat) background_color1: vec4<f32>,
 }
 
 @vertex
@@ -556,7 +566,10 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.background_solid = gradient.solid;
     out.background_color0 = gradient.color0;
     out.background_color1 = gradient.color1;
-    out.border_color = hsla_to_rgba(quad.border_color);
+    out.border_color_top = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.top));
+    out.border_color_right = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.right));
+    out.border_color_bottom = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.bottom));
+    out.border_color_left = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.left));
     out.quad_id = instance_id;
     out.clip_distances = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
     return out;
@@ -687,7 +700,51 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     var color = background_color;
     if (border_sdf < antialias_threshold) {
-        var border_color = input.border_color;
+        var border_color: vec4<f32>;
+        let transition_extent = max(
+            0.001,
+            min(
+                min(half_size.x, half_size.y),
+                max(corner_radius, 6.0 * max(border.x, border.y)),
+            ),
+        );
+        if (center_to_point.x < 0.0) {
+            if (center_to_point.y < 0.0) {
+                let corner_t = smoothstep(
+                    0.0,
+                    1.0,
+                    0.5 + (point.x - point.y) / (2.0 * transition_extent),
+                );
+                border_color = mix(input.border_color_left, input.border_color_top, corner_t);
+            } else {
+                let bottom_distance = size.y - point.y;
+                let corner_t = smoothstep(
+                    0.0,
+                    1.0,
+                    0.5 + (point.x - bottom_distance) / (2.0 * transition_extent),
+                );
+                border_color = mix(input.border_color_left, input.border_color_bottom, corner_t);
+            }
+        } else {
+            let right_distance = size.x - point.x;
+            if (center_to_point.y < 0.0) {
+                let corner_t = smoothstep(
+                    0.0,
+                    1.0,
+                    0.5 + (right_distance - point.y) / (2.0 * transition_extent),
+                );
+                border_color = mix(input.border_color_right, input.border_color_top, corner_t);
+            } else {
+                let bottom_distance = size.y - point.y;
+                let corner_t = smoothstep(
+                    0.0,
+                    1.0,
+                    0.5 + (right_distance - bottom_distance) / (2.0 * transition_extent),
+                );
+                border_color = mix(input.border_color_right, input.border_color_bottom, corner_t);
+            }
+        }
+        border_color = oklab_to_linear_srgb(border_color);
 
         // Dashed border logic when border_style == 1
         if (quad.border_style == 1) {

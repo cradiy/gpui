@@ -2618,6 +2618,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_effects"
+version = "0.1.0"
+
+[[package]]
 name = "gpui_linux"
 version = "0.1.0"
 dependencies = [

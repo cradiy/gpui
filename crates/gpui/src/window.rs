@@ -3773,7 +3773,7 @@ impl Window {
             bounds: snapped_bounds,
             content_mask: self.snapped_content_mask(),
             background: quad.background.opacity(opacity),
-            border_color: quad.border_color.opacity(opacity),
+            border_colors: quad.border_colors.map(|color| color.opacity(opacity)),
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
@@ -6244,8 +6244,8 @@ pub struct PaintQuad {
     pub background: Background,
     /// The widths of the quad's borders.
     pub border_widths: Edges<Pixels>,
-    /// The color of the quad's borders.
-    pub border_color: Hsla,
+    /// The colors of the quad's borders.
+    pub border_colors: Edges<Hsla>,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
 }
@@ -6270,7 +6270,15 @@ impl PaintQuad {
     /// Sets the border color of the quad.
     pub fn border_color(self, border_color: impl Into<Hsla>) -> Self {
         PaintQuad {
-            border_color: border_color.into(),
+            border_colors: Edges::all(border_color.into()),
+            ..self
+        }
+    }
+
+    /// Sets the colors of the quad's four borders.
+    pub fn border_colors(self, border_colors: Edges<Hsla>) -> Self {
+        PaintQuad {
+            border_colors,
             ..self
         }
     }
@@ -6290,7 +6298,7 @@ pub fn quad(
     corner_radii: impl Into<Corners<Pixels>>,
     background: impl Into<Background>,
     border_widths: impl Into<Edges<Pixels>>,
-    border_color: impl Into<Hsla>,
+    border_colors: impl Into<Edges<Hsla>>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {
@@ -6298,7 +6306,7 @@ pub fn quad(
         corner_radii: corner_radii.into(),
         background: background.into(),
         border_widths: border_widths.into(),
-        border_color: border_color.into(),
+        border_colors: border_colors.into(),
         border_style,
     }
 }
@@ -6310,7 +6318,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         corner_radii: (0.).into(),
         background: background.into(),
         border_widths: (0.).into(),
-        border_color: transparent_black(),
+        border_colors: Edges::all(transparent_black()),
         border_style: BorderStyle::default(),
     }
 }
@@ -6326,7 +6334,7 @@ pub fn outline(
         corner_radii: (0.).into(),
         background: transparent_black().into(),
         border_widths: (1.).into(),
-        border_color: border_color.into(),
+        border_colors: Edges::all(border_color.into()),
         border_style,
     }
 }

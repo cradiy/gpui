@@ -47,7 +47,10 @@ GradientColor prepare_fill_color(uint tag, uint color_space, Hsla solid, Hsla co
 struct QuadVertexOutput {
   uint quad_id [[flat]];
   float4 position [[position]];
-  float4 border_color [[flat]];
+  float4 border_color_top [[flat]];
+  float4 border_color_right [[flat]];
+  float4 border_color_bottom [[flat]];
+  float4 border_color_left [[flat]];
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
@@ -57,7 +60,10 @@ struct QuadVertexOutput {
 struct QuadFragmentInput {
   uint quad_id [[flat]];
   float4 position [[position]];
-  float4 border_color [[flat]];
+  float4 border_color_top [[flat]];
+  float4 border_color_right [[flat]];
+  float4 border_color_bottom [[flat]];
+  float4 border_color_left [[flat]];
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
@@ -77,7 +83,10 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       to_device_position(unit_vertex, quad.bounds, viewport_size);
   float4 clip_distance = distance_from_clip_rect(unit_vertex, quad.bounds,
                                                  quad.content_mask.bounds);
-  float4 border_color = hsla_to_rgba(quad.border_color);
+  float4 border_color_top = srgb_to_oklab(hsla_to_rgba(quad.border_colors.top));
+  float4 border_color_right = srgb_to_oklab(hsla_to_rgba(quad.border_colors.right));
+  float4 border_color_bottom = srgb_to_oklab(hsla_to_rgba(quad.border_colors.bottom));
+  float4 border_color_left = srgb_to_oklab(hsla_to_rgba(quad.border_colors.left));
 
   GradientColor gradient = prepare_fill_color(
     quad.background.tag,
@@ -90,7 +99,10 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
   return QuadVertexOutput{
       quad_id,
       device_position,
-      border_color,
+      border_color_top,
+      border_color_right,
+      border_color_bottom,
+      border_color_left,
       gradient.solid,
       gradient.color0,
       gradient.color1,
@@ -210,7 +222,36 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   float4 color = background_color;
   if (border_sdf < antialias_threshold) {
-    float4 border_color = input.border_color;
+    float4 border_color;
+    float transition_extent = max(
+      0.001,
+      min(min(half_size.x, half_size.y),
+          max(corner_radius, 6.0 * max(border.x, border.y))));
+    if (center_to_point.x < 0.0) {
+      if (center_to_point.y < 0.0) {
+        float corner_t = smoothstep(
+          0.0, 1.0, 0.5 + (point.x - point.y) / (2.0 * transition_extent));
+        border_color = mix(input.border_color_left, input.border_color_top, corner_t);
+      } else {
+        float bottom_distance = size.y - point.y;
+        float corner_t = smoothstep(
+          0.0, 1.0, 0.5 + (point.x - bottom_distance) / (2.0 * transition_extent));
+        border_color = mix(input.border_color_left, input.border_color_bottom, corner_t);
+      }
+    } else {
+      float right_distance = size.x - point.x;
+      if (center_to_point.y < 0.0) {
+        float corner_t = smoothstep(
+          0.0, 1.0, 0.5 + (right_distance - point.y) / (2.0 * transition_extent));
+        border_color = mix(input.border_color_right, input.border_color_top, corner_t);
+      } else {
+        float bottom_distance = size.y - point.y;
+        float corner_t = smoothstep(
+          0.0, 1.0, 0.5 + (right_distance - bottom_distance) / (2.0 * transition_extent));
+        border_color = mix(input.border_color_right, input.border_color_bottom, corner_t);
+      }
+    }
+    border_color = oklab_to_srgb(border_color);
 
     // Dashed border logic when border_style == 1
     if (quad.border_style == 1) {

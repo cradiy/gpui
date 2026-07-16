@@ -883,3 +883,24 @@ pub trait Styled: Sized {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{Styled as _, blue, div, green, red, yellow};
+
+    #[test]
+    fn border_side_colors_override_the_uniform_color() {
+        let mut element = div()
+            .border_color(red())
+            .border_top_color(blue())
+            .border_right_color(green())
+            .border_bottom_color(yellow());
+
+        let style = element.style();
+        assert_eq!(style.border_color, Some(red()));
+        assert_eq!(style.border_top_color, Some(blue()));
+        assert_eq!(style.border_right_color, Some(green()));
+        assert_eq!(style.border_bottom_color, Some(yellow()));
+        assert_eq!(style.border_left_color, None);
+    }
+}

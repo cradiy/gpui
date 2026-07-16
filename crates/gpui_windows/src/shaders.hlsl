@@ -43,6 +43,13 @@ struct Hsla {
     float a;
 };
 
+struct BorderColors {
+    Hsla top;
+    Hsla right;
+    Hsla bottom;
+    Hsla left;
+};
+
 struct LinearColorStop {
     Hsla color;
     float percentage;
@@ -499,7 +506,7 @@ struct Quad {
     Bounds bounds;
     Bounds content_mask;
     Background background;
-    Hsla border_color;
+    BorderColors border_colors;
     Corners corner_radii;
     Edges border_widths;
 };
@@ -507,20 +514,26 @@ struct Quad {
 struct QuadVertexOutput {
     nointerpolation uint quad_id: TEXCOORD0;
     float4 position: SV_Position;
-    nointerpolation float4 border_color: COLOR0;
-    nointerpolation float4 background_solid: COLOR1;
-    nointerpolation float4 background_color0: COLOR2;
-    nointerpolation float4 background_color1: COLOR3;
+    nointerpolation float4 border_color_top: COLOR0;
+    nointerpolation float4 border_color_right: COLOR1;
+    nointerpolation float4 border_color_bottom: COLOR2;
+    nointerpolation float4 border_color_left: COLOR3;
+    nointerpolation float4 background_solid: COLOR4;
+    nointerpolation float4 background_color0: COLOR5;
+    nointerpolation float4 background_color1: COLOR6;
     float4 clip_distance: SV_ClipDistance;
 };
 
 struct QuadFragmentInput {
     nointerpolation uint quad_id: TEXCOORD0;
     float4 position: SV_Position;
-    nointerpolation float4 border_color: COLOR0;
-    nointerpolation float4 background_solid: COLOR1;
-    nointerpolation float4 background_color0: COLOR2;
-    nointerpolation float4 background_color1: COLOR3;
+    nointerpolation float4 border_color_top: COLOR0;
+    nointerpolation float4 border_color_right: COLOR1;
+    nointerpolation float4 border_color_bottom: COLOR2;
+    nointerpolation float4 border_color_left: COLOR3;
+    nointerpolation float4 background_solid: COLOR4;
+    nointerpolation float4 background_color0: COLOR5;
+    nointerpolation float4 background_color1: COLOR6;
 };
 
 StructuredBuffer<Quad> quads: register(t1);
@@ -537,11 +550,17 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint quad_id: SV_Insta
         quad.background.colors
     );
     float4 clip_distance = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
-    float4 border_color = hsla_to_rgba(quad.border_color);
+    float4 border_color_top = srgb_to_oklab(hsla_to_rgba(quad.border_colors.top));
+    float4 border_color_right = srgb_to_oklab(hsla_to_rgba(quad.border_colors.right));
+    float4 border_color_bottom = srgb_to_oklab(hsla_to_rgba(quad.border_colors.bottom));
+    float4 border_color_left = srgb_to_oklab(hsla_to_rgba(quad.border_colors.left));
 
     QuadVertexOutput output;
     output.position = device_position;
-    output.border_color = border_color;
+    output.border_color_top = border_color_top;
+    output.border_color_right = border_color_right;
+    output.border_color_bottom = border_color_bottom;
+    output.border_color_left = border_color_left;
     output.quad_id = quad_id;
     output.background_solid = gradient.solid;
     output.background_color0 = gradient.color0;
@@ -660,7 +679,36 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
 
     float4 color = background_color;
     if (border_sdf < antialias_threshold) {
-        float4 border_color = input.border_color;
+        float4 border_color;
+        float transition_extent = max(
+            0.001,
+            min(min(half_size.x, half_size.y),
+                max(corner_radius, 6.0 * max(border.x, border.y))));
+        if (center_to_point.x < 0.0) {
+            if (center_to_point.y < 0.0) {
+                float corner_t = smoothstep(
+                    0.0, 1.0, 0.5 + (point.x - point.y) / (2.0 * transition_extent));
+                border_color = lerp(input.border_color_left, input.border_color_top, corner_t);
+            } else {
+                float bottom_distance = size.y - point.y;
+                float corner_t = smoothstep(
+                    0.0, 1.0, 0.5 + (point.x - bottom_distance) / (2.0 * transition_extent));
+                border_color = lerp(input.border_color_left, input.border_color_bottom, corner_t);
+            }
+        } else {
+            float right_distance = size.x - point.x;
+            if (center_to_point.y < 0.0) {
+                float corner_t = smoothstep(
+                    0.0, 1.0, 0.5 + (right_distance - point.y) / (2.0 * transition_extent));
+                border_color = lerp(input.border_color_right, input.border_color_top, corner_t);
+            } else {
+                float bottom_distance = size.y - point.y;
+                float corner_t = smoothstep(
+                    0.0, 1.0, 0.5 + (right_distance - bottom_distance) / (2.0 * transition_extent));
+                border_color = lerp(input.border_color_right, input.border_color_bottom, corner_t);
+            }
+        }
+        border_color = oklab_to_srgb(border_color);
         // Dashed border logic when border_style == 1
         if (quad.border_style == 1) {
             // Position along the perimeter in "dash space", where each dash

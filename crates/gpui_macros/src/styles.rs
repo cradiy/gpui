@@ -375,6 +375,30 @@ pub fn border_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
+        /// Sets the top border color of the element.
+        #visibility fn border_top_color<C: Into<gpui::Hsla>>(mut self, color: C) -> Self where Self: Sized {
+            self.style().border_top_color = Some(color.into());
+            self
+        }
+
+        /// Sets the right border color of the element.
+        #visibility fn border_right_color<C: Into<gpui::Hsla>>(mut self, color: C) -> Self where Self: Sized {
+            self.style().border_right_color = Some(color.into());
+            self
+        }
+
+        /// Sets the bottom border color of the element.
+        #visibility fn border_bottom_color<C: Into<gpui::Hsla>>(mut self, color: C) -> Self where Self: Sized {
+            self.style().border_bottom_color = Some(color.into());
+            self
+        }
+
+        /// Sets the left border color of the element.
+        #visibility fn border_left_color<C: Into<gpui::Hsla>>(mut self, color: C) -> Self where Self: Sized {
+            self.style().border_left_color = Some(color.into());
+            self
+        }
+
         #(#methods)*
     };
 

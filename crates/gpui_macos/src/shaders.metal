@@ -858,7 +858,7 @@ fragment float4 monochrome_sprite_fragment(
       sprite.background_bounds,
       input.background_solid,
       colors);
-  color.a *= sample.a;
+  color.a *= sample.r;
   return color;
 }
 

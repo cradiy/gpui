@@ -51,6 +51,10 @@ pub struct Effect {
 impl Effect {
     /// Creates an effect element from a portable shader.
     pub fn new(shader: EffectShader) -> Self {
+        assert!(
+            !shader.is_mask(),
+            "mask shaders must be used with masked_effect, effect_text, or effect_svg"
+        );
         Self {
             shader,
             uniforms: EffectUniforms::default(),

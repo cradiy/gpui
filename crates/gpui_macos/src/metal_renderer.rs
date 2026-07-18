@@ -161,6 +161,8 @@ pub struct PathRasterizationVertex {
 #[repr(C)]
 struct EffectInstance {
     bounds: Bounds<ScaledPixels>,
+    effect_bounds: Bounds<ScaledPixels>,
+    transformation: TransformationMatrix,
     content_mask: Bounds<ScaledPixels>,
     corner_radii: [f32; 4],
     image_bounds: Bounds<ScaledPixels>,
@@ -170,6 +172,7 @@ struct EffectInstance {
     opacity: f32,
     time: f32,
     pad: [f32; 2],
+    alignment_pad: [f32; 2],
     uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
 }
 
@@ -177,6 +180,8 @@ impl From<&EffectQuad> for EffectInstance {
     fn from(effect: &EffectQuad) -> Self {
         Self {
             bounds: effect.bounds,
+            effect_bounds: effect.effect_bounds,
+            transformation: effect.transformation,
             content_mask: effect.content_mask.bounds,
             corner_radii: [
                 effect.corner_radii.top_left.0,
@@ -203,6 +208,7 @@ impl From<&EffectQuad> for EffectInstance {
             opacity: effect.opacity,
             time: effect.time,
             pad: [0.0; 2],
+            alignment_pad: [0.0; 2],
             uniforms: *effect.uniforms.slots(),
         }
     }

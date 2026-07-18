@@ -57,8 +57,26 @@ struct GammaParams {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct PodTransformationMatrix {
+    rotation_scale: [[f32; 2]; 2],
+    translation: [f32; 2],
+}
+
+impl From<gpui::TransformationMatrix> for PodTransformationMatrix {
+    fn from(value: gpui::TransformationMatrix) -> Self {
+        Self {
+            rotation_scale: value.rotation_scale,
+            translation: value.translation,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 pub(super) struct EffectInstance {
     bounds: PodBounds,
+    effect_bounds: PodBounds,
+    transformation: PodTransformationMatrix,
     content_mask: PodBounds,
     corner_radii: [f32; 4],
     image_bounds: PodBounds,
@@ -68,6 +86,7 @@ pub(super) struct EffectInstance {
     opacity: f32,
     time: f32,
     pad: [f32; 2],
+    alignment_pad: [f32; 2],
     uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
 }
 
@@ -75,6 +94,8 @@ impl From<&EffectQuad> for EffectInstance {
     fn from(effect: &EffectQuad) -> Self {
         Self {
             bounds: effect.bounds.into(),
+            effect_bounds: effect.effect_bounds.into(),
+            transformation: effect.transformation.into(),
             content_mask: effect.content_mask.bounds.into(),
             corner_radii: [
                 effect.corner_radii.top_left.0,
@@ -101,6 +122,7 @@ impl From<&EffectQuad> for EffectInstance {
             opacity: effect.opacity,
             time: effect.time,
             pad: [0.0; 2],
+            alignment_pad: [0.0; 2],
             uniforms: *effect.uniforms.slots(),
         }
     }

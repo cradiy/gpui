@@ -12,6 +12,7 @@ const EFFECT_SOURCE_MARKER: &str = "// __GPUI_EFFECT_SOURCE__";
 const EFFECT_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_IMAGE_SOURCE__";
 const EFFECT_SECOND_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_SECOND_IMAGE_SOURCE__";
 const EFFECT_ADDITIONAL_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_ADDITIONAL_IMAGE_SOURCE__";
+const EFFECT_MASK_SOURCE_MARKER: &str = "// __GPUI_EFFECT_MASK_SOURCE__";
 
 /// Composes a complete portable WGSL module around an effect function.
 ///
@@ -19,22 +20,22 @@ const EFFECT_ADDITIONAL_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_ADDITIONAL
 /// `effect` function through [`EffectShader::wgsl`].
 #[doc(hidden)]
 pub fn compose_effect_wgsl(effect_source: &str) -> String {
-    compose_effect_wgsl_impl(effect_source, 0)
+    compose_effect_wgsl_impl(effect_source, 0, false)
 }
 
 /// Composes a complete portable WGSL module around an image effect function.
 #[doc(hidden)]
 pub fn compose_image_effect_wgsl(effect_source: &str) -> String {
-    compose_effect_wgsl_impl(effect_source, 1)
+    compose_effect_wgsl_impl(effect_source, 1, false)
 }
 
 /// Composes the complete WGSL module represented by an effect shader.
 #[doc(hidden)]
 pub fn compose_effect_shader_wgsl(shader: &EffectShader) -> String {
-    compose_effect_wgsl_impl(shader.wgsl_source(), shader.image_count())
+    compose_effect_wgsl_impl(shader.wgsl_source(), shader.image_count(), shader.is_mask())
 }
 
-fn compose_effect_wgsl_impl(effect_source: &str, image_count: u8) -> String {
+fn compose_effect_wgsl_impl(effect_source: &str, image_count: u8, is_mask: bool) -> String {
     include_str!("effect.wgsl")
         .replace(
             EFFECT_IMAGE_SOURCE_MARKER,
@@ -58,6 +59,14 @@ fn compose_effect_wgsl_impl(effect_source: &str, image_count: u8) -> String {
                 include_str!("effect_additional_images.wgsl")
             } else {
                 ""
+            },
+        )
+        .replace(
+            EFFECT_MASK_SOURCE_MARKER,
+            if is_mask {
+                include_str!("effect_mask.wgsl")
+            } else {
+                "fn effect_mask_coverage(input: EffectInput) -> f32 { return 1.0; }"
             },
         )
         .replace(EFFECT_SOURCE_MARKER, effect_source)
@@ -127,6 +136,7 @@ struct EffectShaderInner {
     msl: Option<Arc<str>>,
     hlsl: Option<HlslEffectSource>,
     image_count: u8,
+    is_mask: bool,
 }
 
 /// Portable fragment-effect source with optional native backend overrides.
@@ -139,7 +149,7 @@ pub struct EffectShader(Arc<EffectShaderInner>);
 impl EffectShader {
     /// Creates an effect shader from its canonical WGSL `effect` function.
     pub fn wgsl(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 0)
+        Self::from_sources(source.into(), None, None, 0, false)
     }
 
     /// Creates an image-sampling effect from its canonical WGSL `effect` function.
@@ -147,7 +157,16 @@ impl EffectShader {
     /// Image effects may call `sample_effect_image` or
     /// `sample_effect_image_cover` from their WGSL implementation.
     pub fn wgsl_image(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 1)
+        Self::from_sources(source.into(), None, None, 1, false)
+    }
+
+    /// Creates an effect whose output is clipped through a monochrome atlas mask.
+    ///
+    /// Mask effects are used by text glyphs and monochrome SVGs. Their `effect`
+    /// function receives coordinates relative to the shared masked element,
+    /// while GPUI samples and applies each glyph or SVG mask automatically.
+    pub fn wgsl_mask(source: impl Into<Arc<str>>) -> Self {
+        Self::from_sources(source.into(), None, None, 1, true)
     }
 
     /// Creates an effect that samples separate front and back images.
@@ -155,12 +174,12 @@ impl EffectShader {
     /// Two-image effects may additionally call `sample_effect_second_image`
     /// or `sample_effect_second_image_cover` from WGSL.
     pub fn wgsl_two_images(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 2)
+        Self::from_sources(source.into(), None, None, 2, false)
     }
 
     /// Creates an effect that samples four independent image textures.
     pub fn wgsl_four_images(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 4)
+        Self::from_sources(source.into(), None, None, 4, false)
     }
 
     /// Adds a complete manually implemented Metal pipeline override.
@@ -173,6 +192,7 @@ impl EffectShader {
             Some(source.into()),
             self.0.hlsl.clone(),
             self.0.image_count,
+            self.0.is_mask,
         )
     }
 
@@ -183,6 +203,7 @@ impl EffectShader {
             self.0.msl.clone(),
             Some(source),
             self.0.image_count,
+            self.0.is_mask,
         )
     }
 
@@ -216,17 +237,24 @@ impl EffectShader {
         self.0.image_count
     }
 
+    /// Returns whether this shader is evaluated through a monochrome mask.
+    pub fn is_mask(&self) -> bool {
+        self.0.is_mask
+    }
+
     fn from_sources(
         wgsl: Arc<str>,
         msl: Option<Arc<str>>,
         hlsl: Option<HlslEffectSource>,
         image_count: u8,
+        is_mask: bool,
     ) -> Self {
         let mut hasher = DefaultHasher::new();
         wgsl.hash(&mut hasher);
         msl.hash(&mut hasher);
         hlsl.hash(&mut hasher);
         image_count.hash(&mut hasher);
+        is_mask.hash(&mut hasher);
         let id = EffectShaderId(hasher.finish());
         Self(Arc::new(EffectShaderInner {
             id,
@@ -234,6 +262,7 @@ impl EffectShader {
             msl,
             hlsl,
             image_count,
+            is_mask,
         }))
     }
 }

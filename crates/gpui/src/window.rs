@@ -5,12 +5,12 @@ use crate::{
     AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderGradient, BorderStyle, Bounds,
     BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, EffectQuad,
-    Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId,
-    GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
-    Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
-    MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, PaintEffect, Path,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
-    Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
+    EffectShader, EffectUniforms, Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global,
+    GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext,
+    KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers,
+    ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent,
+    PaintEffect, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
+    PlatformWindow, Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
     RenderColorSvgParams, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
     Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
     ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
@@ -985,6 +985,21 @@ enum InputModality {
     Touch,
 }
 
+#[derive(Clone)]
+enum MaskedPaint {
+    Fill {
+        background: Background,
+        bounds: Bounds<Pixels>,
+    },
+    Effect {
+        bounds: Bounds<Pixels>,
+        shader: EffectShader,
+        uniforms: EffectUniforms,
+        time: f32,
+        opacity: f32,
+    },
+}
+
 /// Holds the state for a specific window.
 pub struct Window {
     pub(crate) handle: AnyWindowHandle,
@@ -1006,7 +1021,7 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
-    masked_fill_stack: Vec<(Background, Bounds<Pixels>)>,
+    masked_paint_stack: Vec<MaskedPaint>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -1718,7 +1733,7 @@ impl Window {
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
-            masked_fill_stack: Vec::new(),
+            masked_paint_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -3236,9 +3251,47 @@ impl Window {
         F: FnOnce(&mut Self) -> R,
     {
         self.invalidator.debug_assert_paint();
-        self.masked_fill_stack.push((background.into(), bounds));
+        self.masked_paint_stack.push(MaskedPaint::Fill {
+            background: background.into(),
+            bounds,
+        });
         let result = f(self);
-        self.masked_fill_stack.pop();
+        self.masked_paint_stack.pop();
+        result
+    }
+
+    /// Evaluates a custom fragment effect through monochrome content painted by `f`.
+    ///
+    /// `bounds` defines one shared coordinate system for every glyph or SVG
+    /// mask produced by the closure. The shader must have been created with
+    /// [`EffectShader::wgsl_mask`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_masked_effect<F, R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        shader: EffectShader,
+        uniforms: EffectUniforms,
+        time: f32,
+        opacity: f32,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.invalidator.debug_assert_paint();
+        assert!(
+            shader.is_mask(),
+            "masked effects require EffectShader::wgsl_mask"
+        );
+        self.masked_paint_stack.push(MaskedPaint::Effect {
+            bounds,
+            shader,
+            uniforms,
+            time,
+            opacity: opacity.clamp(0.0, 1.0),
+        });
+        let result = f(self);
+        self.masked_paint_stack.pop();
         result
     }
 
@@ -3865,6 +3918,8 @@ impl Window {
         self.next_frame.scene.insert_primitive(EffectQuad {
             order: 0,
             bounds: snapped_bounds,
+            effect_bounds: snapped_bounds,
+            transformation: TransformationMatrix::unit(),
             content_mask: self.snapped_content_mask(),
             shader: effect.shader,
             uniforms: effect.uniforms,
@@ -3996,7 +4051,7 @@ impl Window {
         let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
         // Arbitrary per-pixel fills are incompatible with LCD subpixel text,
         // whose three coverage channels assume one constant foreground color.
-        let subpixel_rendering = self.masked_fill_stack.is_empty()
+        let subpixel_rendering = self.masked_paint_stack.is_empty()
             && self.should_use_subpixel_rendering(font_id, font_size);
         let dilation = self.text_system().glyph_dilation_for_color(color);
         let params = RenderGlyphParams {
@@ -4024,17 +4079,43 @@ impl Window {
                 size: tile.bounds.size.map(Into::into),
             };
             let content_mask = self.snapped_content_mask();
-            let (background, background_bounds) = self
-                .masked_fill_stack
-                .last()
-                .copied()
-                .map(|(background, background_bounds)| {
-                    (
-                        background.opacity(element_opacity),
-                        self.snap_bounds(background_bounds),
-                    )
-                })
-                .unwrap_or_else(|| (Background::from(color.opacity(element_opacity)), bounds));
+            let masked_paint = self.masked_paint_stack.last().cloned();
+            if let Some(MaskedPaint::Effect {
+                bounds: effect_bounds,
+                shader,
+                uniforms,
+                time,
+                opacity,
+            }) = masked_paint.as_ref()
+            {
+                self.next_frame.scene.insert_primitive(EffectQuad {
+                    order: 0,
+                    bounds,
+                    effect_bounds: self.snap_bounds(*effect_bounds),
+                    transformation: TransformationMatrix::unit(),
+                    content_mask,
+                    shader: shader.clone(),
+                    uniforms: *uniforms,
+                    time: *time,
+                    corner_radii: Corners::default(),
+                    opacity: element_opacity * *opacity,
+                    image_tile: Some(tile),
+                    second_image_tile: None,
+                    third_image_tile: None,
+                    fourth_image_tile: None,
+                });
+                return Ok(());
+            }
+            let (background, background_bounds) = match masked_paint {
+                Some(MaskedPaint::Fill {
+                    background,
+                    bounds: background_bounds,
+                }) => (
+                    background.opacity(element_opacity),
+                    self.snap_bounds(background_bounds),
+                ),
+                _ => (Background::from(color.opacity(element_opacity)), bounds),
+            };
 
             if subpixel_rendering {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
@@ -4196,22 +4277,46 @@ impl Window {
         let final_bounds = svg_bounds
             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
             .map_size(|size| size.ceil());
-        let (background, background_bounds) = self
-            .masked_fill_stack
-            .last()
-            .copied()
-            .map(|(background, background_bounds)| {
-                (
-                    background.opacity(element_opacity),
-                    self.snap_bounds(background_bounds),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    Background::from(color.opacity(element_opacity)),
-                    final_bounds,
-                )
+        let masked_paint = self.masked_paint_stack.last().cloned();
+        if let Some(MaskedPaint::Effect {
+            bounds: effect_bounds,
+            shader,
+            uniforms,
+            time,
+            opacity,
+        }) = masked_paint.as_ref()
+        {
+            self.next_frame.scene.insert_primitive(EffectQuad {
+                order: 0,
+                bounds: final_bounds,
+                effect_bounds: self.snap_bounds(*effect_bounds),
+                transformation,
+                content_mask,
+                shader: shader.clone(),
+                uniforms: *uniforms,
+                time: *time,
+                corner_radii: Corners::default(),
+                opacity: element_opacity * *opacity,
+                image_tile: Some(tile),
+                second_image_tile: None,
+                third_image_tile: None,
+                fourth_image_tile: None,
             });
+            return Ok(());
+        }
+        let (background, background_bounds) = match masked_paint {
+            Some(MaskedPaint::Fill {
+                background,
+                bounds: background_bounds,
+            }) => (
+                background.opacity(element_opacity),
+                self.snap_bounds(background_bounds),
+            ),
+            _ => (
+                Background::from(color.opacity(element_opacity)),
+                final_bounds,
+            ),
+        };
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,

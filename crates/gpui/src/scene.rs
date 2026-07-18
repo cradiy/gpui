@@ -558,6 +558,10 @@ pub struct EffectQuad {
     pub order: DrawOrder,
     /// Device-scaled bounds covered by the effect.
     pub bounds: Bounds<ScaledPixels>,
+    /// Device-scaled coordinate bounds exposed to the effect function.
+    pub effect_bounds: Bounds<ScaledPixels>,
+    /// GPU transformation applied without changing layout.
+    pub transformation: TransformationMatrix,
     /// Device-scaled rectangular content mask.
     pub content_mask: ContentMask<ScaledPixels>,
     /// Shader used to evaluate each pixel.

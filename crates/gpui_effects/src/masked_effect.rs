@@ -1,74 +1,79 @@
 use gpui::{
-    A11ySubtreeBuilder, App, Background, Bounds, Element, ElementId, GlobalElementId,
-    InspectorElementId, InteractiveElement, IntoElement, LayoutId, ParentElement, Pixels,
-    SharedString, StyleRefinement, Styled, Svg, Transformation, Window, div, svg,
+    A11ySubtreeBuilder, AnyElement, App, Bounds, EffectShader, EffectUniforms, Element, ElementId,
+    GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, LayoutId, ParentElement,
+    Pixels, SharedString, StyleRefinement, Styled, Svg, Transformation, Window, div, svg,
 };
 
-/// Applies a GPU-evaluated fill to monochrome content painted by an element.
-///
-/// Text glyphs and monochrome SVGs contribute only their alpha coverage. Emoji,
-/// images, and colored SVGs keep their original colors.
-pub fn masked_fill<E>(element: E, background: impl Into<Background>) -> MaskedFill<E::Element>
+/// Applies a custom mask shader to monochrome content painted by an element.
+pub fn masked_effect<E>(element: E, shader: EffectShader) -> MaskedEffect<E::Element>
 where
     E: IntoElement,
 {
-    MaskedFill::new(element.into_element(), background)
+    MaskedEffect::new(element.into_element(), shader)
 }
 
-/// Creates a styled text container whose glyphs are filled by `background`.
-///
-/// The returned element forwards styling to its inner `Div`, so text size,
-/// weight, layout, and interaction methods remain available.
-pub fn gradient_text(
-    text: impl Into<SharedString>,
-    background: impl Into<Background>,
-) -> MaskedFill<gpui::Div> {
-    masked_fill(div().child(text.into()), background)
+/// Creates a styled text container rendered through a custom mask shader.
+pub fn effect_text(text: impl Into<SharedString>, shader: EffectShader) -> MaskedEffect<gpui::Div> {
+    masked_effect(div().child(text.into()), shader)
 }
 
-/// Creates a monochrome SVG whose alpha mask is filled by `background`.
-pub fn gradient_svg(
-    path: impl Into<SharedString>,
-    background: impl Into<Background>,
-) -> MaskedFill<Svg> {
-    // The existing monochrome SVG element uses text color as its opt-in paint
-    // signal. The actual color is replaced by the masked fill during paint.
-    masked_fill(svg().path(path).text_color(gpui::white()), background)
+/// Creates a monochrome SVG rendered through a custom mask shader.
+pub fn effect_svg(path: impl Into<SharedString>, shader: EffectShader) -> MaskedEffect<Svg> {
+    masked_effect(svg().path(path).text_color(gpui::white()), shader)
 }
 
-/// An element wrapper that replaces solid monochrome paint with a shared fill.
-pub struct MaskedFill<E: Element> {
+/// An element wrapper that evaluates a fragment shader through alpha masks.
+pub struct MaskedEffect<E: Element> {
     element: E,
-    background: Background,
+    shader: EffectShader,
+    uniforms: EffectUniforms,
+    time: f32,
+    opacity: f32,
 }
 
-impl<E: Element> MaskedFill<E> {
-    /// Creates a masked-fill wrapper around an element.
-    pub fn new(element: E, background: impl Into<Background>) -> Self {
+impl<E: Element> MaskedEffect<E> {
+    /// Creates a masked effect around an element.
+    pub fn new(element: E, shader: EffectShader) -> Self {
+        assert!(
+            shader.is_mask(),
+            "masked effects require EffectShader::wgsl_mask"
+        );
         Self {
             element,
-            background: background.into(),
+            shader,
+            uniforms: EffectUniforms::default(),
+            time: 0.0,
+            opacity: 1.0,
         }
     }
 
-    /// Replaces the fill sampled through the element's monochrome masks.
-    pub fn fill(mut self, background: impl Into<Background>) -> Self {
-        self.background = background.into();
+    /// Replaces all shader uniform slots.
+    pub fn uniforms(mut self, uniforms: EffectUniforms) -> Self {
+        self.uniforms = uniforms;
         self
     }
 
-    /// Advances a repeating gradient around its cycle.
-    ///
-    /// This is intended for use from GPUI's `with_animation` callback.
-    pub fn phase(mut self, phase: f32) -> Self {
-        self.background = self.background.phase(phase);
+    /// Sets one four-component shader uniform slot.
+    pub fn uniform(mut self, index: usize, value: [f32; 4]) -> Self {
+        self.uniforms.set_slot(index, value);
         self
     }
 
-    /// Applies opacity to every color in the fill.
-    pub fn fill_opacity(mut self, opacity: f32) -> Self {
-        self.background = self.background.opacity(opacity.clamp(0.0, 1.0));
+    /// Sets the animation time supplied to the shader.
+    pub fn time(mut self, time: f32) -> Self {
+        self.time = time;
         self
+    }
+
+    /// Sets the opacity applied after mask coverage.
+    pub fn effect_opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Returns the shader backing this masked effect.
+    pub fn shader(&self) -> &EffectShader {
+        &self.shader
     }
 
     /// Returns the wrapped element.
@@ -77,7 +82,7 @@ impl<E: Element> MaskedFill<E> {
     }
 }
 
-impl MaskedFill<Svg> {
+impl MaskedEffect<Svg> {
     /// Applies a GPU transformation to the masked SVG.
     pub fn with_transformation(mut self, transformation: Transformation) -> Self {
         self.element = self.element.with_transformation(transformation);
@@ -85,7 +90,7 @@ impl MaskedFill<Svg> {
     }
 }
 
-impl<E: Element> IntoElement for MaskedFill<E> {
+impl<E: Element> IntoElement for MaskedEffect<E> {
     type Element = Self;
 
     fn into_element(self) -> Self::Element {
@@ -93,7 +98,7 @@ impl<E: Element> IntoElement for MaskedFill<E> {
     }
 }
 
-impl<E: Element> Element for MaskedFill<E> {
+impl<E: Element> Element for MaskedEffect<E> {
     type RequestLayoutState = E::RequestLayoutState;
     type PrepaintState = E::PrepaintState;
 
@@ -154,8 +159,11 @@ impl<E: Element> Element for MaskedFill<E> {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let background = self.background;
-        window.with_masked_fill(bounds, background, |window| {
+        let shader = self.shader.clone();
+        let uniforms = self.uniforms;
+        let time = self.time;
+        let opacity = self.opacity;
+        window.with_masked_effect(bounds, shader, uniforms, time, opacity, |window| {
             self.element.paint(
                 id,
                 inspector_id,
@@ -169,7 +177,7 @@ impl<E: Element> Element for MaskedFill<E> {
     }
 }
 
-impl<E> Styled for MaskedFill<E>
+impl<E> Styled for MaskedEffect<E>
 where
     E: Element + Styled,
 {
@@ -178,7 +186,7 @@ where
     }
 }
 
-impl<E> InteractiveElement for MaskedFill<E>
+impl<E> InteractiveElement for MaskedEffect<E>
 where
     E: Element + InteractiveElement,
 {
@@ -187,11 +195,11 @@ where
     }
 }
 
-impl<E> ParentElement for MaskedFill<E>
+impl<E> ParentElement for MaskedEffect<E>
 where
     E: Element + ParentElement,
 {
-    fn extend(&mut self, elements: impl IntoIterator<Item = gpui::AnyElement>) {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.element.extend(elements);
     }
 }

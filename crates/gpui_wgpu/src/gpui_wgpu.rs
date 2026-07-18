@@ -96,6 +96,7 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
             gpui_effects::plasma_shader(),
             gpui_effects::color_orbs_shader(),
             gpui_effects::album_glow_shader(),
+            gpui_effects::spectrum_mask_shader(),
         ] {
             let source = gpui::compose_effect_shader_wgsl(&shader);
             let module =
@@ -109,20 +110,7 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
         }
     }
 
-    #[test]
-    fn built_in_effect_translates_to_msl_and_hlsl() {
-        let shader = gpui::EffectShader::wgsl_four_images(
-            r#"
-fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
-    return (
-        sample_effect_image(input, input.uv)
-        + sample_effect_second_image(input, input.uv)
-        + sample_effect_third_image(input, input.uv)
-        + sample_effect_fourth_image(input, input.uv)
-    ) * 0.25;
-}
-"#,
-        );
+    fn assert_effect_translates_to_msl_and_hlsl(shader: gpui::EffectShader) {
         let source = gpui::compose_effect_shader_wgsl(&shader);
         let module = naga::front::wgsl::parse_str(&source).expect("effect should parse");
         let info = naga::valid::Validator::new(
@@ -303,6 +291,25 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
         assert!(hlsl.contains("vs_effect"));
         assert!(hlsl.contains("fs_effect"));
         assert!(hlsl.contains("Texture2D"), "{hlsl}");
+    }
+
+    #[test]
+    fn built_in_effect_translates_to_msl_and_hlsl() {
+        let four_image_shader = gpui::EffectShader::wgsl_four_images(
+            r#"
+fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
+    return (
+        sample_effect_image(input, input.uv)
+        + sample_effect_second_image(input, input.uv)
+        + sample_effect_third_image(input, input.uv)
+        + sample_effect_fourth_image(input, input.uv)
+    ) * 0.25;
+}
+"#,
+        );
+        for shader in [four_image_shader, gpui_effects::spectrum_mask_shader()] {
+            assert_effect_translates_to_msl_and_hlsl(shader);
+        }
     }
 
     #[test]

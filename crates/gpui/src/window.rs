@@ -1006,6 +1006,7 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
+    masked_fill_stack: Vec<(Background, Bounds<Pixels>)>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -1717,6 +1718,7 @@ impl Window {
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
+            masked_fill_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -3215,6 +3217,31 @@ impl Window {
         }
     }
 
+    /// Overrides the fill used by monochrome content painted by `f`.
+    ///
+    /// Text glyphs and monochrome SVGs use their alpha atlas as a mask for the
+    /// supplied background. The background is sampled relative to `bounds`, so
+    /// separate glyph sprites share one continuous gradient instead of
+    /// restarting it for every glyph.
+    ///
+    /// Polychrome content such as emoji, images, and [`ColorSvg`](crate::ColorSvg)
+    /// is intentionally unaffected.
+    pub fn with_masked_fill<F, R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        background: impl Into<Background>,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.invalidator.debug_assert_paint();
+        self.masked_fill_stack.push((background.into(), bounds));
+        let result = f(self);
+        self.masked_fill_stack.pop();
+        result
+    }
+
     /// Updates the cursor style at the platform level. This method should only be called
     /// during the paint phase of element drawing.
     pub fn set_cursor_style(&mut self, style: CursorStyle, hitbox: &Hitbox) {
@@ -3967,7 +3994,10 @@ impl Window {
             (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
         );
         let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
-        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
+        // Arbitrary per-pixel fills are incompatible with LCD subpixel text,
+        // whose three coverage channels assume one constant foreground color.
+        let subpixel_rendering = self.masked_fill_stack.is_empty()
+            && self.should_use_subpixel_rendering(font_id, font_size);
         let dilation = self.text_system().glyph_dilation_for_color(color);
         let params = RenderGlyphParams {
             font_id,
@@ -3994,6 +4024,17 @@ impl Window {
                 size: tile.bounds.size.map(Into::into),
             };
             let content_mask = self.snapped_content_mask();
+            let (background, background_bounds) = self
+                .masked_fill_stack
+                .last()
+                .copied()
+                .map(|(background, background_bounds)| {
+                    (
+                        background.opacity(element_opacity),
+                        self.snap_bounds(background_bounds),
+                    )
+                })
+                .unwrap_or_else(|| (Background::from(color.opacity(element_opacity)), bounds));
 
             if subpixel_rendering {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
@@ -4001,7 +4042,8 @@ impl Window {
                     pad: 0,
                     bounds,
                     content_mask,
-                    color: color.opacity(element_opacity),
+                    background,
+                    background_bounds,
                     tile,
                     transformation: TransformationMatrix::unit(),
                 });
@@ -4011,7 +4053,8 @@ impl Window {
                     pad: 0,
                     bounds,
                     content_mask,
-                    color: color.opacity(element_opacity),
+                    background,
+                    background_bounds,
                     tile,
                     transformation: TransformationMatrix::unit(),
                 });
@@ -4153,13 +4196,30 @@ impl Window {
         let final_bounds = svg_bounds
             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
             .map_size(|size| size.ceil());
+        let (background, background_bounds) = self
+            .masked_fill_stack
+            .last()
+            .copied()
+            .map(|(background, background_bounds)| {
+                (
+                    background.opacity(element_opacity),
+                    self.snap_bounds(background_bounds),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    Background::from(color.opacity(element_opacity)),
+                    final_bounds,
+                )
+            });
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
             pad: 0,
             bounds: final_bounds,
             content_mask,
-            color: color.opacity(element_opacity),
+            background,
+            background_bounds,
             tile,
             transformation,
         });

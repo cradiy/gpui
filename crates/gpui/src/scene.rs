@@ -750,7 +750,8 @@ pub struct MonochromeSprite {
     pub pad: u32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: Hsla,
+    pub background: Background,
+    pub background_bounds: Bounds<ScaledPixels>,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
 }
@@ -769,7 +770,8 @@ pub struct SubpixelSprite {
     pub pad: u32, // align to 8 bytes
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: Hsla,
+    pub background: Background,
+    pub background_bounds: Bounds<ScaledPixels>,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
 }

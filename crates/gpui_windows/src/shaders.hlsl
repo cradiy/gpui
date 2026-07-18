@@ -1367,22 +1367,35 @@ struct MonochromeSprite {
     uint pad;
     Bounds bounds;
     Bounds content_mask;
-    Hsla color;
+    Background background;
+    Bounds background_bounds;
     AtlasTile tile;
     TransformationMatrix transformation;
 };
 
 struct MonochromeSpriteVertexOutput {
+    nointerpolation uint sprite_id: TEXCOORD0;
     float4 position: SV_Position;
-    float2 tile_position: POSITION;
-    nointerpolation float4 color: COLOR;
+    float2 tile_position: TEXCOORD1;
+    float2 local_position: TEXCOORD2;
+    nointerpolation float4 background_solid: COLOR0;
+    nointerpolation float4 background_color0: COLOR1;
+    nointerpolation float4 background_color1: COLOR2;
+    nointerpolation float4 background_color2: COLOR3;
+    nointerpolation float4 background_color3: COLOR4;
     float4 clip_distance: SV_ClipDistance;
 };
 
 struct MonochromeSpriteFragmentInput {
+    nointerpolation uint sprite_id: TEXCOORD0;
     float4 position: SV_Position;
-    float2 tile_position: POSITION;
-    nointerpolation float4 color: COLOR;
+    float2 tile_position: TEXCOORD1;
+    float2 local_position: TEXCOORD2;
+    nointerpolation float4 background_solid: COLOR0;
+    nointerpolation float4 background_color0: COLOR1;
+    nointerpolation float4 background_color1: COLOR2;
+    nointerpolation float4 background_color2: COLOR3;
+    nointerpolation float4 background_color3: COLOR4;
     float4 clip_distance: SV_ClipDistance;
 };
 
@@ -1395,20 +1408,46 @@ MonochromeSpriteVertexOutput monochrome_sprite_vertex(uint vertex_id: SV_VertexI
         to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
     float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
     float2 tile_position = to_tile_position(unit_vertex, sprite.tile);
-    float4 color = hsla_to_rgba(sprite.color);
+    float2 local_position = unit_vertex * sprite.bounds.size + sprite.bounds.origin;
+    GradientColor gradient = prepare_gradient_color(
+        sprite.background.tag,
+        sprite.background.color_space,
+        sprite.background.solid,
+        sprite.background.colors
+    );
 
     MonochromeSpriteVertexOutput output;
+    output.sprite_id = sprite_id;
     output.position = device_position;
     output.tile_position = tile_position;
-    output.color = color;
+    output.local_position = local_position;
+    output.background_solid = gradient.solid;
+    output.background_color0 = gradient.colors[0];
+    output.background_color1 = gradient.colors[1];
+    output.background_color2 = gradient.colors[2];
+    output.background_color3 = gradient.colors[3];
     output.clip_distance = clip_distance;
     return output;
 }
 
 float4 monochrome_sprite_fragment(MonochromeSpriteFragmentInput input): SV_Target {
+    MonochromeSprite sprite = mono_sprites[input.sprite_id];
+    float4 colors[4] = {
+        input.background_color0,
+        input.background_color1,
+        input.background_color2,
+        input.background_color3
+    };
+    float4 color = gradient_color(
+        sprite.background,
+        input.local_position,
+        sprite.background_bounds,
+        input.background_solid,
+        colors
+    );
     float sample = t_sprite.Sample(s_sprite, input.tile_position).r;
-    float alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
-    return float4(input.color.rgb, input.color.a * alpha_corrected);
+    float alpha_corrected = apply_contrast_and_gamma_correction(sample, color.rgb, grayscale_enhanced_contrast, gamma_ratios);
+    return float4(color.rgb, color.a * alpha_corrected);
 }
 
 MonochromeSpriteVertexOutput subpixel_sprite_vertex(uint vertex_id: SV_VertexID, uint sprite_id: SV_InstanceID) {
@@ -1420,11 +1459,11 @@ SubpixelSpriteFragmentOutput subpixel_sprite_fragment(MonochromeSpriteFragmentIn
     if (is_bgr) {
         sample = sample.bgr;
     }
-    float3 alpha_corrected = apply_contrast_and_gamma_correction3(sample, input.color.rgb, subpixel_enhanced_contrast, gamma_ratios);
+    float3 alpha_corrected = apply_contrast_and_gamma_correction3(sample, input.background_solid.rgb, subpixel_enhanced_contrast, gamma_ratios);
 
     SubpixelSpriteFragmentOutput output;
-    output.foreground = float4(input.color.rgb, 1.0f);
-    output.alpha = float4(input.color.a * alpha_corrected, 1.0f);
+    output.foreground = float4(input.background_solid.rgb, 1.0f);
+    output.alpha = float4(input.background_solid.a * alpha_corrected, 1.0f);
     return output;
 }
 

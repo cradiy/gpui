@@ -5,7 +5,8 @@ struct SubpixelSprite {
     pad: u32,
     bounds: Bounds,
     content_mask: Bounds,
-    color: Hsla,
+    background: Background,
+    background_bounds: Bounds,
     tile: AtlasTile,
     transformation: TransformationMatrix,
 }
@@ -31,7 +32,7 @@ fn vs_subpixel_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_i
     var out = SubpixelSpriteOutput();
     out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
-    out.color = hsla_to_rgba(sprite.color);
+    out.color = hsla_to_rgba(sprite.background.solid);
     out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
     return out;
 }

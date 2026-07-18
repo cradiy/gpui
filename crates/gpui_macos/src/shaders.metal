@@ -780,14 +780,26 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
 struct MonochromeSpriteVertexOutput {
   float4 position [[position]];
   float2 tile_position;
-  float4 color [[flat]];
+  uint sprite_id [[flat]];
+  float2 local_position;
+  float4 background_solid [[flat]];
+  float4 background_color0 [[flat]];
+  float4 background_color1 [[flat]];
+  float4 background_color2 [[flat]];
+  float4 background_color3 [[flat]];
   float4 clip_distance;
 };
 
 struct MonochromeSpriteFragmentInput {
   float4 position [[position]];
   float2 tile_position;
-  float4 color [[flat]];
+  uint sprite_id [[flat]];
+  float2 local_position;
+  float4 background_solid [[flat]];
+  float4 background_color0 [[flat]];
+  float4 background_color1 [[flat]];
+  float4 background_color2 [[flat]];
+  float4 background_color3 [[flat]];
   float4 clip_distance;
 };
 
@@ -806,11 +818,18 @@ vertex MonochromeSpriteVertexOutput monochrome_sprite_vertex(
   float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds,
                                                  sprite.content_mask.bounds, sprite.transformation);
   float2 tile_position = to_tile_position(unit_vertex, sprite.tile, atlas_size);
-  float4 color = hsla_to_rgba(sprite.color);
+  float2 local_position = unit_vertex * sprite.bounds.size + sprite.bounds.origin;
+  GradientColor gradient = prepare_fill_color(sprite.background);
   return MonochromeSpriteVertexOutput{
       device_position,
       tile_position,
-      color,
+      sprite_id,
+      local_position,
+      gradient.solid,
+      gradient.colors[0],
+      gradient.colors[1],
+      gradient.colors[2],
+      gradient.colors[3],
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
 
@@ -826,7 +845,19 @@ fragment float4 monochrome_sprite_fragment(
                                           min_filter::linear);
   float4 sample =
       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
-  float4 color = input.color;
+  MonochromeSprite sprite = sprites[input.sprite_id];
+  float4 colors[4] = {
+      input.background_color0,
+      input.background_color1,
+      input.background_color2,
+      input.background_color3,
+  };
+  float4 color = fill_color(
+      sprite.background,
+      input.local_position,
+      sprite.background_bounds,
+      input.background_solid,
+      colors);
   color.a *= sample.a;
   return color;
 }

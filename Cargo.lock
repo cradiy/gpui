@@ -2621,6 +2621,8 @@ dependencies = [
 name = "gpui_effects"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
+ "anyhow",
  "gpui",
  "gpui_platform",
  "refineable",

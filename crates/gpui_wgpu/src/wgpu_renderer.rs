@@ -62,6 +62,9 @@ pub(super) struct EffectInstance {
     content_mask: PodBounds,
     corner_radii: [f32; 4],
     image_bounds: PodBounds,
+    second_image_bounds: PodBounds,
+    third_image_bounds: PodBounds,
+    fourth_image_bounds: PodBounds,
     opacity: f32,
     time: f32,
     pad: [f32; 2],
@@ -81,6 +84,18 @@ impl From<&EffectQuad> for EffectInstance {
             ],
             image_bounds: effect
                 .image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
+                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
+            second_image_bounds: effect
+                .second_image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
+                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
+            third_image_bounds: effect
+                .third_image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
+                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
+            fourth_image_bounds: effect
+                .fourth_image_tile
                 .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
                 .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
             opacity: effect.opacity,
@@ -135,6 +150,8 @@ struct WgpuBindGroupLayouts {
     globals: wgpu::BindGroupLayout,
     instances: wgpu::BindGroupLayout,
     instances_with_texture: wgpu::BindGroupLayout,
+    instances_with_two_textures: wgpu::BindGroupLayout,
+    instances_with_four_textures: wgpu::BindGroupLayout,
     surfaces: wgpu::BindGroupLayout,
 }
 
@@ -604,6 +621,94 @@ impl WgpuRenderer {
                 ],
             });
 
+        let instances_with_two_textures =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("instances_with_two_textures_layout"),
+                entries: &[
+                    storage_buffer_entry(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let instances_with_four_textures =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("instances_with_four_textures_layout"),
+                entries: &[
+                    storage_buffer_entry(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
         let surfaces = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("surfaces_layout"),
             entries: &[
@@ -652,6 +757,8 @@ impl WgpuRenderer {
             globals,
             instances,
             instances_with_texture,
+            instances_with_two_textures,
+            instances_with_four_textures,
             surfaces,
         }
     }
@@ -677,10 +784,11 @@ impl WgpuRenderer {
             label: Some("gpui_effect_shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
         });
-        let effect_instances_layout = if shader.uses_image() {
-            &layouts.instances_with_texture
-        } else {
-            &layouts.instances
+        let effect_instances_layout = match shader.image_count() {
+            0 => &layouts.instances,
+            1 => &layouts.instances_with_texture,
+            2 => &layouts.instances_with_two_textures,
+            _ => &layouts.instances_with_four_textures,
         };
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("gpui_effect_pipeline_layout"),
@@ -1523,10 +1631,16 @@ impl WgpuRenderer {
         while start < effects.len() {
             let shader_id = effects[start].shader.id().as_u64();
             let texture_id = effects[start].image_tile.map(|tile| tile.texture_id);
+            let second_texture_id = effects[start].second_image_tile.map(|tile| tile.texture_id);
+            let third_texture_id = effects[start].third_image_tile.map(|tile| tile.texture_id);
+            let fourth_texture_id = effects[start].fourth_image_tile.map(|tile| tile.texture_id);
             let mut end = start + 1;
             while end < effects.len()
                 && effects[end].shader.id().as_u64() == shader_id
                 && effects[end].image_tile.map(|tile| tile.texture_id) == texture_id
+                && effects[end].second_image_tile.map(|tile| tile.texture_id) == second_texture_id
+                && effects[end].third_image_tile.map(|tile| tile.texture_id) == third_texture_id
+                && effects[end].fourth_image_tile.map(|tile| tile.texture_id) == fourth_texture_id
             {
                 end += 1;
             }
@@ -1539,7 +1653,57 @@ impl WgpuRenderer {
                 .iter()
                 .map(EffectInstance::from)
                 .collect::<Vec<_>>();
-            let drawn = if effects[start].shader.uses_image() {
+            let drawn = if effects[start].shader.image_count() >= 4 {
+                let (
+                    Some(texture_id),
+                    Some(second_texture_id),
+                    Some(third_texture_id),
+                    Some(fourth_texture_id),
+                ) = (
+                    texture_id,
+                    second_texture_id,
+                    third_texture_id,
+                    fourth_texture_id,
+                )
+                else {
+                    start = end;
+                    continue;
+                };
+                let texture = self.atlas.get_texture_info(texture_id);
+                let second_texture = self.atlas.get_texture_info(second_texture_id);
+                let third_texture = self.atlas.get_texture_info(third_texture_id);
+                let fourth_texture = self.atlas.get_texture_info(fourth_texture_id);
+                self.draw_instances_with_four_textures(
+                    bytemuck::cast_slice(&instances),
+                    instances.len() as u32,
+                    [
+                        &texture.view,
+                        &second_texture.view,
+                        &third_texture.view,
+                        &fourth_texture.view,
+                    ],
+                    pipeline,
+                    instance_offset,
+                    pass,
+                )
+            } else if effects[start].shader.image_count() >= 2 {
+                let (Some(texture_id), Some(second_texture_id)) = (texture_id, second_texture_id)
+                else {
+                    start = end;
+                    continue;
+                };
+                let texture = self.atlas.get_texture_info(texture_id);
+                let second_texture = self.atlas.get_texture_info(second_texture_id);
+                self.draw_instances_with_two_textures(
+                    bytemuck::cast_slice(&instances),
+                    instances.len() as u32,
+                    &texture.view,
+                    &second_texture.view,
+                    pipeline,
+                    instance_offset,
+                    pass,
+                )
+            } else if effects[start].shader.uses_image() {
                 let Some(texture_id) = texture_id else {
                     start = end;
                     continue;
@@ -1730,6 +1894,109 @@ impl WgpuRenderer {
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: wgpu::BindingResource::Sampler(&resources.atlas_sampler),
+                    },
+                ],
+            });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &resources.globals_bind_group, &[]);
+        pass.set_bind_group(1, &bind_group, &[]);
+        pass.draw(0..4, 0..instance_count);
+        true
+    }
+
+    fn draw_instances_with_two_textures(
+        &self,
+        data: &[u8],
+        instance_count: u32,
+        texture_view: &wgpu::TextureView,
+        second_texture_view: &wgpu::TextureView,
+        pipeline: &wgpu::RenderPipeline,
+        instance_offset: &mut u64,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) -> bool {
+        if instance_count == 0 {
+            return true;
+        }
+        let Some((offset, size)) = self.write_to_instance_buffer(instance_offset, data) else {
+            return false;
+        };
+        let resources = self.resources();
+        let bind_group = resources
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &resources.bind_group_layouts.instances_with_two_textures,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.instance_binding(offset, size),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(texture_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&resources.atlas_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(second_texture_view),
+                    },
+                ],
+            });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &resources.globals_bind_group, &[]);
+        pass.set_bind_group(1, &bind_group, &[]);
+        pass.draw(0..4, 0..instance_count);
+        true
+    }
+
+    fn draw_instances_with_four_textures(
+        &self,
+        data: &[u8],
+        instance_count: u32,
+        texture_views: [&wgpu::TextureView; 4],
+        pipeline: &wgpu::RenderPipeline,
+        instance_offset: &mut u64,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) -> bool {
+        if instance_count == 0 {
+            return true;
+        }
+        let Some((offset, size)) = self.write_to_instance_buffer(instance_offset, data) else {
+            return false;
+        };
+        let resources = self.resources();
+        let bind_group = resources
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &resources.bind_group_layouts.instances_with_four_textures,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.instance_binding(offset, size),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(texture_views[0]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&resources.atlas_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(texture_views[1]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(texture_views[2]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(texture_views[3]),
                     },
                 ],
             });

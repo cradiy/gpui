@@ -572,6 +572,12 @@ pub struct EffectQuad {
     pub opacity: f32,
     /// Optional atlas tile sampled by an image effect.
     pub image_tile: Option<AtlasTile>,
+    /// Optional second atlas tile sampled by a two-image effect.
+    pub second_image_tile: Option<AtlasTile>,
+    /// Optional third atlas tile sampled by a four-image effect.
+    pub third_image_tile: Option<AtlasTile>,
+    /// Optional fourth atlas tile sampled by a four-image effect.
+    pub fourth_image_tile: Option<AtlasTile>,
 }
 
 impl From<EffectQuad> for Primitive {

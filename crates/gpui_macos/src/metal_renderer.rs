@@ -164,6 +164,9 @@ struct EffectInstance {
     content_mask: Bounds<ScaledPixels>,
     corner_radii: [f32; 4],
     image_bounds: Bounds<ScaledPixels>,
+    second_image_bounds: Bounds<ScaledPixels>,
+    third_image_bounds: Bounds<ScaledPixels>,
+    fourth_image_bounds: Bounds<ScaledPixels>,
     opacity: f32,
     time: f32,
     pad: [f32; 2],
@@ -183,6 +186,18 @@ impl From<&EffectQuad> for EffectInstance {
             ],
             image_bounds: effect
                 .image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
+                .unwrap_or_default(),
+            second_image_bounds: effect
+                .second_image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
+                .unwrap_or_default(),
+            third_image_bounds: effect
+                .third_image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
+                .unwrap_or_default(),
+            fourth_image_bounds: effect
+                .fourth_image_tile
                 .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
                 .unwrap_or_default(),
             opacity: effect.opacity,
@@ -1295,10 +1310,16 @@ impl MetalRenderer {
         while start < effects.len() {
             let shader_id = effects[start].shader.id().as_u64();
             let texture_id = effects[start].image_tile.map(|tile| tile.texture_id);
+            let second_texture_id = effects[start].second_image_tile.map(|tile| tile.texture_id);
+            let third_texture_id = effects[start].third_image_tile.map(|tile| tile.texture_id);
+            let fourth_texture_id = effects[start].fourth_image_tile.map(|tile| tile.texture_id);
             let mut end = start + 1;
             while end < effects.len()
                 && effects[end].shader.id().as_u64() == shader_id
                 && effects[end].image_tile.map(|tile| tile.texture_id) == texture_id
+                && effects[end].second_image_tile.map(|tile| tile.texture_id) == second_texture_id
+                && effects[end].third_image_tile.map(|tile| tile.texture_id) == third_texture_id
+                && effects[end].fourth_image_tile.map(|tile| tile.texture_id) == fourth_texture_id
             {
                 end += 1;
             }
@@ -1374,6 +1395,26 @@ impl MetalRenderer {
                 let texture = self.sprite_atlas.metal_texture(texture_id);
                 command_encoder.set_fragment_texture(0, Some(&texture));
                 command_encoder.set_fragment_sampler_state(0, Some(&self.effect_sampler));
+            }
+            if effects[start].shader.image_count() >= 2 {
+                let Some(second_texture_id) = second_texture_id else {
+                    start = end;
+                    continue;
+                };
+                let texture = self.sprite_atlas.metal_texture(second_texture_id);
+                command_encoder.set_fragment_texture(1, Some(&texture));
+            }
+            if effects[start].shader.image_count() >= 4 {
+                let (Some(third_texture_id), Some(fourth_texture_id)) =
+                    (third_texture_id, fourth_texture_id)
+                else {
+                    start = end;
+                    continue;
+                };
+                let third_texture = self.sprite_atlas.metal_texture(third_texture_id);
+                let fourth_texture = self.sprite_atlas.metal_texture(fourth_texture_id);
+                command_encoder.set_fragment_texture(2, Some(&third_texture));
+                command_encoder.set_fragment_texture(3, Some(&fourth_texture));
             }
             command_encoder.draw_primitives_instanced(
                 metal::MTLPrimitiveType::TriangleStrip,
@@ -1845,6 +1886,40 @@ fn translate_effect_to_msl(shader: &EffectShader) -> Result<String> {
             },
             naga::back::msl::BindTarget {
                 texture: Some(0),
+                ..Default::default()
+            },
+        );
+    }
+    if shader.image_count() >= 2 {
+        resources.resources.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 3,
+            },
+            naga::back::msl::BindTarget {
+                texture: Some(1),
+                ..Default::default()
+            },
+        );
+    }
+    if shader.image_count() >= 4 {
+        resources.resources.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 4,
+            },
+            naga::back::msl::BindTarget {
+                texture: Some(2),
+                ..Default::default()
+            },
+        );
+        resources.resources.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 5,
+            },
+            naga::back::msl::BindTarget {
+                texture: Some(3),
                 ..Default::default()
             },
         );

@@ -111,7 +111,19 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
 
     #[test]
     fn built_in_effect_translates_to_msl_and_hlsl() {
-        let source = gpui::compose_effect_shader_wgsl(&gpui_effects::album_glow_shader());
+        let shader = gpui::EffectShader::wgsl_four_images(
+            r#"
+fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
+    return (
+        sample_effect_image(input, input.uv)
+        + sample_effect_second_image(input, input.uv)
+        + sample_effect_third_image(input, input.uv)
+        + sample_effect_fourth_image(input, input.uv)
+    ) * 0.25;
+}
+"#,
+        );
+        let source = gpui::compose_effect_shader_wgsl(&shader);
         let module = naga::front::wgsl::parse_str(&source).expect("effect should parse");
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
@@ -128,6 +140,36 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
             },
             naga::back::msl::BindTarget {
                 buffer: Some(0),
+                ..Default::default()
+            },
+        );
+        resources.resources.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 3,
+            },
+            naga::back::msl::BindTarget {
+                texture: Some(1),
+                ..Default::default()
+            },
+        );
+        resources.resources.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 4,
+            },
+            naga::back::msl::BindTarget {
+                texture: Some(2),
+                ..Default::default()
+            },
+        );
+        resources.resources.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 5,
+            },
+            naga::back::msl::BindTarget {
+                texture: Some(3),
                 ..Default::default()
             },
         );
@@ -192,6 +234,39 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
             naga::back::hlsl::BindTarget {
                 space: 0,
                 register: 0,
+                ..Default::default()
+            },
+        );
+        hlsl_options.binding_map.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 3,
+            },
+            naga::back::hlsl::BindTarget {
+                space: 0,
+                register: 2,
+                ..Default::default()
+            },
+        );
+        hlsl_options.binding_map.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 4,
+            },
+            naga::back::hlsl::BindTarget {
+                space: 0,
+                register: 3,
+                ..Default::default()
+            },
+        );
+        hlsl_options.binding_map.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 5,
+            },
+            naga::back::hlsl::BindTarget {
+                space: 0,
+                register: 4,
                 ..Default::default()
             },
         );

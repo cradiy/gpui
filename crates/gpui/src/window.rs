@@ -2,8 +2,8 @@
 use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AvailableSpace, Background, BorderGradient, BorderStyle, Bounds, BoxShadow,
-    Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderGradient, BorderStyle, Bounds,
+    BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, EffectQuad,
     Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId,
     GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
@@ -3787,19 +3787,20 @@ impl Window {
     pub fn paint_effect(&mut self, effect: PaintEffect) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
-        let image_tile = if effect.shader.uses_image() {
-            let (image, frame_index) = effect.image.as_ref().ok_or_else(|| {
-                anyhow!("image effect shaders require an image before they can be painted")
-            })?;
-            if *frame_index >= image.frame_count() {
-                return Err(anyhow!("image effect frame index is out of bounds"));
-            }
-            let params = RenderImageParams {
-                image_id: image.id,
-                frame_index: *frame_index,
-            };
-            Some(
-                self.sprite_atlas
+        let mut insert_effect_image =
+            |source: &Option<(Arc<RenderImage>, usize)>, label: &str| -> Result<AtlasTile> {
+                let (image, frame_index) = source.as_ref().ok_or_else(|| {
+                    anyhow!("{label} image is required before this effect can be painted")
+                })?;
+                if *frame_index >= image.frame_count() {
+                    return Err(anyhow!("{label} image frame index is out of bounds"));
+                }
+                let params = RenderImageParams {
+                    image_id: image.id,
+                    frame_index: *frame_index,
+                };
+                Ok(self
+                    .sprite_atlas
                     .get_or_insert_with(&params.into(), &mut || {
                         Ok(Some((
                             image.size(*frame_index),
@@ -3810,8 +3811,25 @@ impl Window {
                             ),
                         )))
                     })?
-                    .expect("image effect atlas callback always returns a tile"),
-            )
+                    .expect("image effect atlas callback always returns a tile"))
+            };
+        let image_tile = if effect.shader.image_count() >= 1 {
+            Some(insert_effect_image(&effect.image, "primary")?)
+        } else {
+            None
+        };
+        let second_image_tile = if effect.shader.image_count() >= 2 {
+            Some(insert_effect_image(&effect.second_image, "second")?)
+        } else {
+            None
+        };
+        let third_image_tile = if effect.shader.image_count() >= 4 {
+            Some(insert_effect_image(&effect.third_image, "third")?)
+        } else {
+            None
+        };
+        let fourth_image_tile = if effect.shader.image_count() >= 4 {
+            Some(insert_effect_image(&effect.fourth_image, "fourth")?)
         } else {
             None
         };
@@ -3827,6 +3845,9 @@ impl Window {
             corner_radii: effect.corner_radii.scale(self.scale_factor()),
             opacity,
             image_tile,
+            second_image_tile,
+            third_image_tile,
+            fourth_image_tile,
         });
         Ok(())
     }

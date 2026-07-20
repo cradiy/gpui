@@ -27,11 +27,19 @@ struct EffectInput {
     time: f32,
     image_origin: vec2<f32>,
     image_size: vec2<f32>,
+    second_image_origin: vec2<f32>,
+    second_image_size: vec2<f32>,
+    third_image_origin: vec2<f32>,
+    third_image_size: vec2<f32>,
+    fourth_image_origin: vec2<f32>,
+    fourth_image_size: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> globals: GlobalParams;
 
 // __GPUI_EFFECT_IMAGE_SOURCE__
+// __GPUI_EFFECT_SECOND_IMAGE_SOURCE__
+// __GPUI_EFFECT_ADDITIONAL_IMAGE_SOURCE__
 
 fn effect_to_device_position(unit_vertex: vec2<f32>, bounds: Bounds) -> vec4<f32> {
     let position = unit_vertex * bounds.size + bounds.origin;
@@ -77,6 +85,9 @@ struct EffectInstance {
     content_mask: Bounds,
     corner_radii: Corners,
     image_bounds: Bounds,
+    second_image_bounds: Bounds,
+    third_image_bounds: Bounds,
+    fourth_image_bounds: Bounds,
     opacity: f32,
     time: f32,
     pad: vec2<f32>,
@@ -125,6 +136,12 @@ fn fs_effect(input: EffectVarying) -> @location(0) vec4<f32> {
         instance.time,
         instance.image_bounds.origin,
         instance.image_bounds.size,
+        instance.second_image_bounds.origin,
+        instance.second_image_bounds.size,
+        instance.third_image_bounds.origin,
+        instance.third_image_bounds.size,
+        instance.fourth_image_bounds.origin,
+        instance.fourth_image_bounds.size,
     );
     let raw_color = effect(effect_input, instance.uniforms);
     let color = vec4<f32>(raw_color.rgb, clamp(raw_color.a, 0.0, 1.0));

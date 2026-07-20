@@ -561,10 +561,16 @@ impl DirectXRenderer {
         while start < effects.len() {
             let shader_id = effects[start].shader.id().as_u64();
             let texture_id = effects[start].image_tile.map(|tile| tile.texture_id);
+            let second_texture_id = effects[start].second_image_tile.map(|tile| tile.texture_id);
+            let third_texture_id = effects[start].third_image_tile.map(|tile| tile.texture_id);
+            let fourth_texture_id = effects[start].fourth_image_tile.map(|tile| tile.texture_id);
             let mut end = start + 1;
             while end < effects.len()
                 && effects[end].shader.id().as_u64() == shader_id
                 && effects[end].image_tile.map(|tile| tile.texture_id) == texture_id
+                && effects[end].second_image_tile.map(|tile| tile.texture_id) == second_texture_id
+                && effects[end].third_image_tile.map(|tile| tile.texture_id) == third_texture_id
+                && effects[end].fourth_image_tile.map(|tile| tile.texture_id) == fourth_texture_id
             {
                 end += 1;
             }
@@ -574,6 +580,33 @@ impl DirectXRenderer {
                 .collect::<Vec<_>>();
             let texture = if effects[start].shader.uses_image() {
                 let Some(texture_id) = texture_id else {
+                    start = end;
+                    continue;
+                };
+                Some(self.atlas.get_texture_view(texture_id))
+            } else {
+                None
+            };
+            let second_texture = if effects[start].shader.image_count() >= 2 {
+                let Some(texture_id) = second_texture_id else {
+                    start = end;
+                    continue;
+                };
+                Some(self.atlas.get_texture_view(texture_id))
+            } else {
+                None
+            };
+            let third_texture = if effects[start].shader.image_count() >= 4 {
+                let Some(texture_id) = third_texture_id else {
+                    start = end;
+                    continue;
+                };
+                Some(self.atlas.get_texture_view(texture_id))
+            } else {
+                None
+            };
+            let fourth_texture = if effects[start].shader.image_count() >= 4 {
+                let Some(texture_id) = fourth_texture_id else {
                     start = end;
                     continue;
                 };
@@ -598,6 +631,9 @@ impl DirectXRenderer {
                 ),
                 slice::from_ref(&self.globals.effect_global_params_buffer),
                 texture.as_ref().map(|texture| texture.as_slice()),
+                second_texture.as_ref().map(|texture| texture.as_slice()),
+                third_texture.as_ref().map(|texture| texture.as_slice()),
+                fourth_texture.as_ref().map(|texture| texture.as_slice()),
                 slice::from_ref(&self.globals.sampler),
                 instances.len() as u32,
             );
@@ -1106,6 +1142,9 @@ struct EffectInstance {
     content_mask: Bounds<ScaledPixels>,
     corner_radii: [f32; 4],
     image_bounds: Bounds<ScaledPixels>,
+    second_image_bounds: Bounds<ScaledPixels>,
+    third_image_bounds: Bounds<ScaledPixels>,
+    fourth_image_bounds: Bounds<ScaledPixels>,
     opacity: f32,
     time: f32,
     pad: [f32; 2],
@@ -1125,6 +1164,18 @@ impl From<&EffectQuad> for EffectInstance {
             ],
             image_bounds: effect
                 .image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
+                .unwrap_or_default(),
+            second_image_bounds: effect
+                .second_image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
+                .unwrap_or_default(),
+            third_image_bounds: effect
+                .third_image_tile
+                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
+                .unwrap_or_default(),
+            fourth_image_bounds: effect
+                .fourth_image_tile
                 .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
                 .unwrap_or_default(),
             opacity: effect.opacity,
@@ -1376,6 +1427,9 @@ impl EffectPipeline {
         viewport: &[D3D11_VIEWPORT],
         global_params: &[Option<ID3D11Buffer>],
         texture: Option<&[Option<ID3D11ShaderResourceView>]>,
+        second_texture: Option<&[Option<ID3D11ShaderResourceView>]>,
+        third_texture: Option<&[Option<ID3D11ShaderResourceView>]>,
+        fourth_texture: Option<&[Option<ID3D11ShaderResourceView>]>,
         sampler: &[Option<ID3D11SamplerState>],
         instance_count: u32,
     ) {
@@ -1394,6 +1448,18 @@ impl EffectPipeline {
                 device_context.PSSetSamplers(0, Some(sampler));
                 device_context.VSSetShaderResources(0, Some(texture));
                 device_context.PSSetShaderResources(0, Some(texture));
+            }
+            if let Some(texture) = second_texture {
+                device_context.VSSetShaderResources(2, Some(texture));
+                device_context.PSSetShaderResources(2, Some(texture));
+            }
+            if let Some(texture) = third_texture {
+                device_context.VSSetShaderResources(3, Some(texture));
+                device_context.PSSetShaderResources(3, Some(texture));
+            }
+            if let Some(texture) = fourth_texture {
+                device_context.VSSetShaderResources(4, Some(texture));
+                device_context.PSSetShaderResources(4, Some(texture));
             }
             device_context.DrawInstanced(4, instance_count, 0, 0);
         }
@@ -1435,6 +1501,43 @@ fn translate_effect_to_hlsl(shader: &EffectShader) -> Result<String> {
             naga::back::hlsl::BindTarget {
                 space: 0,
                 register: 0,
+                ..Default::default()
+            },
+        );
+    }
+    if shader.image_count() >= 2 {
+        options.binding_map.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 3,
+            },
+            naga::back::hlsl::BindTarget {
+                space: 0,
+                register: 2,
+                ..Default::default()
+            },
+        );
+    }
+    if shader.image_count() >= 4 {
+        options.binding_map.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 4,
+            },
+            naga::back::hlsl::BindTarget {
+                space: 0,
+                register: 3,
+                ..Default::default()
+            },
+        );
+        options.binding_map.insert(
+            naga::ResourceBinding {
+                group: 1,
+                binding: 5,
+            },
+            naga::back::hlsl::BindTarget {
+                space: 0,
+                register: 4,
                 ..Default::default()
             },
         );

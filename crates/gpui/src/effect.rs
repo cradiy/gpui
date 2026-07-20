@@ -10,6 +10,8 @@ pub const EFFECT_UNIFORM_SLOTS: usize = 8;
 
 const EFFECT_SOURCE_MARKER: &str = "// __GPUI_EFFECT_SOURCE__";
 const EFFECT_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_IMAGE_SOURCE__";
+const EFFECT_SECOND_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_SECOND_IMAGE_SOURCE__";
+const EFFECT_ADDITIONAL_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_ADDITIONAL_IMAGE_SOURCE__";
 
 /// Composes a complete portable WGSL module around an effect function.
 ///
@@ -17,27 +19,43 @@ const EFFECT_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_IMAGE_SOURCE__";
 /// `effect` function through [`EffectShader::wgsl`].
 #[doc(hidden)]
 pub fn compose_effect_wgsl(effect_source: &str) -> String {
-    compose_effect_wgsl_impl(effect_source, false)
+    compose_effect_wgsl_impl(effect_source, 0)
 }
 
 /// Composes a complete portable WGSL module around an image effect function.
 #[doc(hidden)]
 pub fn compose_image_effect_wgsl(effect_source: &str) -> String {
-    compose_effect_wgsl_impl(effect_source, true)
+    compose_effect_wgsl_impl(effect_source, 1)
 }
 
 /// Composes the complete WGSL module represented by an effect shader.
 #[doc(hidden)]
 pub fn compose_effect_shader_wgsl(shader: &EffectShader) -> String {
-    compose_effect_wgsl_impl(shader.wgsl_source(), shader.uses_image())
+    compose_effect_wgsl_impl(shader.wgsl_source(), shader.image_count())
 }
 
-fn compose_effect_wgsl_impl(effect_source: &str, uses_image: bool) -> String {
+fn compose_effect_wgsl_impl(effect_source: &str, image_count: u8) -> String {
     include_str!("effect.wgsl")
         .replace(
             EFFECT_IMAGE_SOURCE_MARKER,
-            if uses_image {
+            if image_count >= 1 {
                 include_str!("effect_image.wgsl")
+            } else {
+                ""
+            },
+        )
+        .replace(
+            EFFECT_SECOND_IMAGE_SOURCE_MARKER,
+            if image_count >= 2 {
+                include_str!("effect_second_image.wgsl")
+            } else {
+                ""
+            },
+        )
+        .replace(
+            EFFECT_ADDITIONAL_IMAGE_SOURCE_MARKER,
+            if image_count >= 4 {
+                include_str!("effect_additional_images.wgsl")
             } else {
                 ""
             },
@@ -108,7 +126,7 @@ struct EffectShaderInner {
     wgsl: Arc<str>,
     msl: Option<Arc<str>>,
     hlsl: Option<HlslEffectSource>,
-    uses_image: bool,
+    image_count: u8,
 }
 
 /// Portable fragment-effect source with optional native backend overrides.
@@ -121,7 +139,7 @@ pub struct EffectShader(Arc<EffectShaderInner>);
 impl EffectShader {
     /// Creates an effect shader from its canonical WGSL `effect` function.
     pub fn wgsl(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, false)
+        Self::from_sources(source.into(), None, None, 0)
     }
 
     /// Creates an image-sampling effect from its canonical WGSL `effect` function.
@@ -129,7 +147,20 @@ impl EffectShader {
     /// Image effects may call `sample_effect_image` or
     /// `sample_effect_image_cover` from their WGSL implementation.
     pub fn wgsl_image(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, true)
+        Self::from_sources(source.into(), None, None, 1)
+    }
+
+    /// Creates an effect that samples separate front and back images.
+    ///
+    /// Two-image effects may additionally call `sample_effect_second_image`
+    /// or `sample_effect_second_image_cover` from WGSL.
+    pub fn wgsl_two_images(source: impl Into<Arc<str>>) -> Self {
+        Self::from_sources(source.into(), None, None, 2)
+    }
+
+    /// Creates an effect that samples four independent image textures.
+    pub fn wgsl_four_images(source: impl Into<Arc<str>>) -> Self {
+        Self::from_sources(source.into(), None, None, 4)
     }
 
     /// Adds a complete manually implemented Metal pipeline override.
@@ -141,7 +172,7 @@ impl EffectShader {
             self.0.wgsl.clone(),
             Some(source.into()),
             self.0.hlsl.clone(),
-            self.0.uses_image,
+            self.0.image_count,
         )
     }
 
@@ -151,7 +182,7 @@ impl EffectShader {
             self.0.wgsl.clone(),
             self.0.msl.clone(),
             Some(source),
-            self.0.uses_image,
+            self.0.image_count,
         )
     }
 
@@ -177,27 +208,32 @@ impl EffectShader {
 
     /// Returns whether this shader samples an image texture.
     pub fn uses_image(&self) -> bool {
-        self.0.uses_image
+        self.0.image_count != 0
+    }
+
+    /// Returns the number of image textures required by this shader.
+    pub fn image_count(&self) -> u8 {
+        self.0.image_count
     }
 
     fn from_sources(
         wgsl: Arc<str>,
         msl: Option<Arc<str>>,
         hlsl: Option<HlslEffectSource>,
-        uses_image: bool,
+        image_count: u8,
     ) -> Self {
         let mut hasher = DefaultHasher::new();
         wgsl.hash(&mut hasher);
         msl.hash(&mut hasher);
         hlsl.hash(&mut hasher);
-        uses_image.hash(&mut hasher);
+        image_count.hash(&mut hasher);
         let id = EffectShaderId(hasher.finish());
         Self(Arc::new(EffectShaderInner {
             id,
             wgsl,
             msl,
             hlsl,
-            uses_image,
+            image_count,
         }))
     }
 }
@@ -260,6 +296,12 @@ pub struct PaintEffect {
     pub opacity: f32,
     /// Optional image and frame sampled by an image effect.
     pub image: Option<(Arc<RenderImage>, usize)>,
+    /// Optional second image and frame sampled by a two-image effect.
+    pub second_image: Option<(Arc<RenderImage>, usize)>,
+    /// Optional third image and frame sampled by a four-image effect.
+    pub third_image: Option<(Arc<RenderImage>, usize)>,
+    /// Optional fourth image and frame sampled by a four-image effect.
+    pub fourth_image: Option<(Arc<RenderImage>, usize)>,
 }
 
 impl PaintEffect {
@@ -273,6 +315,9 @@ impl PaintEffect {
             corner_radii: Corners::default(),
             opacity: 1.0,
             image: None,
+            second_image: None,
+            third_image: None,
+            fourth_image: None,
         }
     }
 
@@ -305,6 +350,24 @@ impl PaintEffect {
         self.image = Some((image, frame_index));
         self
     }
+
+    /// Sets the second image frame sampled by this effect.
+    pub fn second_image(mut self, image: Arc<RenderImage>, frame_index: usize) -> Self {
+        self.second_image = Some((image, frame_index));
+        self
+    }
+
+    /// Sets the third image frame sampled by this effect.
+    pub fn third_image(mut self, image: Arc<RenderImage>, frame_index: usize) -> Self {
+        self.third_image = Some((image, frame_index));
+        self
+    }
+
+    /// Sets the fourth image frame sampled by this effect.
+    pub fn fourth_image(mut self, image: Arc<RenderImage>, frame_index: usize) -> Self {
+        self.fourth_image = Some((image, frame_index));
+        self
+    }
 }
 
 #[cfg(test)]
@@ -319,12 +382,18 @@ mod tests {
             .clone()
             .with_hlsl(HlslEffectSource::new("float4 effect() {}"));
         let image = EffectShader::wgsl_image("fn effect() {}");
+        let two_images = EffectShader::wgsl_two_images("fn effect() {}");
+        let four_images = EffectShader::wgsl_four_images("fn effect() {}");
 
         assert_eq!(wgsl.id(), EffectShader::wgsl("fn effect() {}").id());
         assert_ne!(wgsl.id(), msl.id());
         assert_ne!(wgsl.id(), hlsl.id());
         assert_ne!(wgsl.id(), image.id());
+        assert_ne!(image.id(), two_images.id());
         assert!(image.uses_image());
+        assert_eq!(two_images.image_count(), 2);
+        assert_eq!(four_images.image_count(), 4);
+        assert_ne!(two_images.id(), four_images.id());
     }
 
     #[test]

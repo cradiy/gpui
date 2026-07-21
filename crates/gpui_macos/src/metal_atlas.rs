@@ -140,7 +140,9 @@ impl MetalAtlasState {
         let usage;
         match kind {
             AtlasTextureKind::Monochrome => {
-                pixel_format = metal::MTLPixelFormat::A8Unorm;
+                // Match WGPU and DirectX so portable mask effects can always
+                // read monochrome coverage from the red channel.
+                pixel_format = metal::MTLPixelFormat::R8Unorm;
                 usage = metal::MTLTextureUsage::ShaderRead;
             }
             AtlasTextureKind::Polychrome => {

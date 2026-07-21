@@ -764,6 +764,107 @@ pub enum ColorSpace {
     Oklab = 1,
 }
 
+/// A color stop in a gradient that follows the perimeter of a border.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[repr(C)]
+pub struct BorderColorStop {
+    /// The color at this stop.
+    pub color: Hsla,
+    /// The position along the border perimeter, in the range `0.0..=1.0`.
+    pub position: f32,
+}
+
+/// Creates a color stop for a border gradient.
+pub fn border_color_stop(color: impl Into<Hsla>, position: f32) -> BorderColorStop {
+    BorderColorStop {
+        color: color.into(),
+        position,
+    }
+}
+
+/// A gradient sampled clockwise along a border's perimeter.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[repr(C)]
+pub struct BorderGradient {
+    pub(crate) stops: [BorderColorStop; 4],
+    pub(crate) stop_count: u32,
+    pub(crate) color_space: ColorSpace,
+    pub(crate) phase: f32,
+    pad: u32,
+}
+
+impl Default for BorderGradient {
+    fn default() -> Self {
+        Self {
+            stops: [BorderColorStop::default(); 4],
+            stop_count: 0,
+            color_space: ColorSpace::Oklab,
+            phase: 0.0,
+            pad: 0,
+        }
+    }
+}
+
+/// Creates a gradient that follows a border's perimeter clockwise.
+pub fn border_gradient<const N: usize>(stops: [BorderColorStop; N]) -> BorderGradient {
+    assert!(
+        (2..=4).contains(&N),
+        "border gradients require 2 to 4 stops"
+    );
+    for stop in &stops {
+        assert!(
+            (0.0..=1.0).contains(&stop.position),
+            "border gradient stop positions must be between 0 and 1"
+        );
+    }
+    for pair in stops.windows(2) {
+        assert!(
+            pair[0].position < pair[1].position,
+            "border gradient stop positions must be strictly increasing"
+        );
+    }
+
+    let mut padded_stops = [BorderColorStop::default(); 4];
+    for (target, stop) in padded_stops.iter_mut().zip(stops) {
+        *target = stop;
+    }
+
+    BorderGradient {
+        stops: padded_stops,
+        stop_count: N as u32,
+        ..Default::default()
+    }
+}
+
+impl BorderGradient {
+    /// Selects the color space used to interpolate between stops.
+    pub fn color_space(mut self, color_space: ColorSpace) -> Self {
+        self.color_space = color_space;
+        self
+    }
+
+    /// Offsets the gradient around the perimeter. Values wrap into `0.0..1.0`.
+    pub fn phase(mut self, phase: f32) -> Self {
+        self.phase = phase.rem_euclid(1.0);
+        self
+    }
+
+    /// Returns true when every gradient stop is fully transparent.
+    pub fn is_transparent(&self) -> bool {
+        self.stops[..self.stop_count as usize]
+            .iter()
+            .all(|stop| stop.color.is_transparent())
+    }
+
+    pub(crate) fn opacity(&self, factor: f32) -> Self {
+        let mut gradient = *self;
+        for stop in &mut gradient.stops[..gradient.stop_count as usize] {
+            stop.color = stop.color.opacity(factor);
+        }
+        gradient
+    }
+}
+
 impl Display for ColorSpace {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -781,9 +882,12 @@ pub struct Background {
     pub(crate) color_space: ColorSpace,
     pub(crate) solid: Hsla,
     pub(crate) gradient_angle_or_pattern_height: f32,
-    pub(crate) colors: [LinearColorStop; 2],
-    /// Padding for alignment for repr(C) layout.
-    pad: u32,
+    pub(crate) colors: [LinearColorStop; 4],
+    pub(crate) stop_count: u32,
+    pub(crate) gradient_phase: f32,
+    pub(crate) gradient_repeating: u32,
+    /// Padding for alignment for repr(C) layout and containing GPU arrays.
+    pad: [u32; 2],
 }
 
 impl std::fmt::Debug for Background {
@@ -792,8 +896,11 @@ impl std::fmt::Debug for Background {
             BackgroundTag::Solid => write!(f, "Solid({:?})", self.solid),
             BackgroundTag::LinearGradient => write!(
                 f,
-                "LinearGradient({}, {:?}, {:?})",
-                self.gradient_angle_or_pattern_height, self.colors[0], self.colors[1]
+                "LinearGradient({}, {:?}, phase: {}, repeating: {})",
+                self.gradient_angle_or_pattern_height,
+                &self.colors[..self.stop_count as usize],
+                self.gradient_phase,
+                self.gradient_repeating != 0,
             ),
             BackgroundTag::PatternSlash => write!(
                 f,
@@ -817,8 +924,11 @@ impl Default for Background {
             solid: Hsla::default(),
             color_space: ColorSpace::default(),
             gradient_angle_or_pattern_height: 0.0,
-            colors: [LinearColorStop::default(), LinearColorStop::default()],
-            pad: 0,
+            colors: [LinearColorStop::default(); 4],
+            stop_count: 0,
+            gradient_phase: 0.0,
+            gradient_repeating: 0,
+            pad: [0; 2],
         }
     }
 }
@@ -867,10 +977,60 @@ pub fn linear_gradient(
     from: impl Into<LinearColorStop>,
     to: impl Into<LinearColorStop>,
 ) -> Background {
+    let from = from.into();
+    let to = to.into();
+    let mut colors = [LinearColorStop::default(); 4];
+    if from.percentage <= to.percentage {
+        colors[0] = from;
+        colors[1] = to;
+    } else {
+        colors[0] = to;
+        colors[1] = from;
+    }
     Background {
         tag: BackgroundTag::LinearGradient,
         gradient_angle_or_pattern_height: angle,
-        colors: [from.into(), to.into()],
+        colors,
+        stop_count: 2,
+        ..Default::default()
+    }
+}
+
+/// Creates a linear gradient background with between two and four color stops.
+///
+/// Stop percentages must be in the range `0.0..=1.0` and ordered from low to
+/// high. Equal adjacent percentages are allowed to create hard color edges.
+pub fn multi_linear_gradient<const N: usize>(
+    angle: f32,
+    stops: [LinearColorStop; N],
+) -> Background {
+    assert!(
+        (2..=4).contains(&N),
+        "linear gradients require 2 to 4 stops"
+    );
+    for stop in &stops {
+        assert!(
+            (0.0..=1.0).contains(&stop.percentage),
+            "linear gradient stop percentages must be between 0 and 1"
+        );
+    }
+    for pair in stops.windows(2) {
+        assert!(
+            pair[0].percentage <= pair[1].percentage,
+            "linear gradient stop percentages must be ordered"
+        );
+    }
+
+    let mut colors = [LinearColorStop::default(); 4];
+    for (target, stop) in colors.iter_mut().zip(stops) {
+        *target = stop;
+    }
+
+    Background {
+        tag: BackgroundTag::LinearGradient,
+        gradient_angle_or_pattern_height: angle,
+        colors,
+        stop_count: N as u32,
         ..Default::default()
     }
 }
@@ -925,14 +1085,24 @@ impl Background {
         self
     }
 
+    /// Offsets a repeating linear gradient along its gradient line.
+    ///
+    /// Calling this method enables repeating sampling. Values wrap into
+    /// `0.0..1.0`, and stops are treated as periodic B-spline control points
+    /// to avoid visible stop-centered bands during looping animations.
+    pub fn phase(mut self, phase: f32) -> Self {
+        self.gradient_phase = phase.rem_euclid(1.0);
+        self.gradient_repeating = 1;
+        self
+    }
+
     /// Returns a new background color with the same hue, saturation, and lightness, but with a modified alpha value.
     pub fn opacity(&self, factor: f32) -> Self {
         let mut background = *self;
         background.solid = background.solid.opacity(factor);
-        background.colors = [
-            self.colors[0].opacity(factor),
-            self.colors[1].opacity(factor),
-        ];
+        for color in &mut background.colors[..self.stop_count as usize] {
+            *color = color.opacity(factor);
+        }
         background
     }
 
@@ -940,7 +1110,9 @@ impl Background {
     pub fn is_transparent(&self) -> bool {
         match self.tag {
             BackgroundTag::Solid => self.solid.is_transparent(),
-            BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.is_transparent()),
+            BackgroundTag::LinearGradient => self.colors[..self.stop_count as usize]
+                .iter()
+                .all(|c| c.color.is_transparent()),
             BackgroundTag::PatternSlash => self.solid.is_transparent(),
             BackgroundTag::Checkerboard => self.solid.is_transparent(),
         }
@@ -1034,6 +1206,7 @@ mod tests {
         let to = linear_color_stop(rgba(0x00ff99ff), 1.0);
         let background = linear_gradient(90.0, from, to);
         assert_eq!(background.tag, BackgroundTag::LinearGradient);
+        assert_eq!(background.stop_count, 2);
         assert_eq!(background.colors[0], from);
         assert_eq!(background.colors[1], to);
 
@@ -1041,6 +1214,61 @@ mod tests {
         assert_eq!(background.opacity(0.5).colors[1], to.opacity(0.5));
         assert!(!background.is_transparent());
         assert!(background.opacity(0.0).is_transparent());
+    }
+
+    #[test]
+    fn test_background_multi_linear_gradient_and_phase() {
+        let stops = [
+            linear_color_stop(red(), 0.0),
+            linear_color_stop(blue(), 0.25),
+            linear_color_stop(green(), 0.5),
+            linear_color_stop(yellow(), 0.75),
+        ];
+        let background = multi_linear_gradient(45.0, stops)
+            .phase(1.25)
+            .color_space(ColorSpace::Oklab);
+
+        assert_eq!(background.tag, BackgroundTag::LinearGradient);
+        assert_eq!(background.stop_count, 4);
+        assert_eq!(background.colors, stops);
+        assert_eq!(background.gradient_phase, 0.25);
+        assert_eq!(background.gradient_repeating, 1);
+        assert_eq!(background.color_space, ColorSpace::Oklab);
+
+        let faded = background.opacity(0.5);
+        for (actual, expected) in faded.colors.iter().zip(stops) {
+            assert_eq!(*actual, expected.opacity(0.5));
+        }
+        assert!(!background.is_transparent());
+        assert!(background.opacity(0.0).is_transparent());
+    }
+
+    #[test]
+    #[should_panic(expected = "linear gradient stop percentages must be ordered")]
+    fn test_background_multi_linear_gradient_rejects_unordered_stops() {
+        multi_linear_gradient(
+            0.0,
+            [
+                linear_color_stop(red(), 0.75),
+                linear_color_stop(blue(), 0.25),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_border_gradient_stops_and_phase() {
+        let gradient = border_gradient([
+            border_color_stop(red(), 0.0),
+            border_color_stop(blue(), 0.5),
+        ])
+        .phase(1.25)
+        .color_space(ColorSpace::Oklab);
+
+        assert_eq!(gradient.stop_count, 2);
+        assert_eq!(gradient.stops[0].color, red());
+        assert_eq!(gradient.stops[1].position, 0.5);
+        assert_eq!(gradient.phase, 0.25);
+        assert_eq!(gradient.color_space, ColorSpace::Oklab);
     }
 
     #[test]

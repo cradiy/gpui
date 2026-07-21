@@ -372,6 +372,49 @@ pub fn border_style_methods(input: TokenStream) -> TokenStream {
             Self: Sized,
         {
             self.style().border_color = Some(border_color.into());
+            self.style().border_gradient = None;
+            self
+        }
+
+        /// Sets the top border color of the element.
+        #visibility fn border_top_color<C: Into<gpui::Hsla>>(mut self, color: C) -> Self where Self: Sized {
+            self.style().border_top_color = Some(color.into());
+            self.style().border_gradient = None;
+            self
+        }
+
+        /// Sets the right border color of the element.
+        #visibility fn border_right_color<C: Into<gpui::Hsla>>(mut self, color: C) -> Self where Self: Sized {
+            self.style().border_right_color = Some(color.into());
+            self.style().border_gradient = None;
+            self
+        }
+
+        /// Sets the bottom border color of the element.
+        #visibility fn border_bottom_color<C: Into<gpui::Hsla>>(mut self, color: C) -> Self where Self: Sized {
+            self.style().border_bottom_color = Some(color.into());
+            self.style().border_gradient = None;
+            self
+        }
+
+        /// Sets the left border color of the element.
+        #visibility fn border_left_color<C: Into<gpui::Hsla>>(mut self, color: C) -> Self where Self: Sized {
+            self.style().border_left_color = Some(color.into());
+            self.style().border_gradient = None;
+            self
+        }
+
+        /// Sets a gradient sampled clockwise along the border perimeter.
+        #visibility fn border_gradient(mut self, gradient: gpui::BorderGradient) -> Self where Self: Sized {
+            self.style().border_gradient = Some(gradient);
+            self
+        }
+
+        /// Offsets the border gradient around the perimeter.
+        #visibility fn border_gradient_phase(mut self, phase: f32) -> Self where Self: Sized {
+            if let Some(gradient) = &mut self.style().border_gradient {
+                *gradient = gradient.phase(phase);
+            }
             self
         }
 

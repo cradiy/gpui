@@ -1,5 +1,5 @@
 use crate::{
-    AssetSource, DevicePixels, IsZero, RenderImage, Result, SharedString, Size,
+    AssetSource, DevicePixels, Hsla, IsZero, RenderImage, Result, Rgba, SharedString, Size,
     swap_rgba_pa_to_bgra,
 };
 use image::Frame;
@@ -87,11 +87,26 @@ pub struct RenderSvgParams {
     pub size: Size<DevicePixels>,
 }
 
+/// Parameters used to rasterize and cache a colored SVG.
+#[derive(Clone, PartialEq, Hash, Eq)]
+pub struct RenderColorSvgParams {
+    /// The asset path of the SVG.
+    pub path: SharedString,
+    /// The target raster size.
+    pub size: Size<DevicePixels>,
+    /// The CSS `currentColor` value.
+    pub current_color: Option<Hsla>,
+    /// An optional override for shape fills.
+    pub fill_color: Option<Hsla>,
+    /// An optional override for SVG text and tspan elements.
+    pub text_color: Option<Hsla>,
+}
+
 #[derive(Clone)]
 /// A struct holding everything necessary to render SVGs.
 pub struct SvgRenderer {
     asset_source: Arc<dyn AssetSource>,
-    usvg_options: Arc<usvg::Options<'static>>,
+    enriched_fontdb: Arc<OnceLock<Arc<usvg::fontdb::Database>>>,
 }
 
 /// The size in which to render the SVG.
@@ -105,21 +120,29 @@ pub enum SvgSize {
 impl SvgRenderer {
     /// Creates a new SVG renderer with the provided asset source.
     pub fn new(asset_source: Arc<dyn AssetSource>) -> Self {
+        // Build the enriched font DB lazily on first SVG render rather than
+        // eagerly at construction time. This avoids the expensive deep-clone
+        // of the system font database for code paths that never render SVGs
+        // (e.g. tests).
+        let enriched_fontdb = Arc::new(OnceLock::new());
+
+        Self {
+            asset_source,
+            enriched_fontdb,
+        }
+    }
+
+    fn options(&self, style_sheet: Option<String>) -> usvg::Options<'static> {
         static SYSTEM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
             Arc::new(db)
         });
 
-        // Build the enriched font DB lazily on first SVG render rather than
-        // eagerly at construction time. This avoids the expensive deep-clone
-        // of the system font database for code paths that never render SVGs
-        // (e.g. tests).
-        let enriched_fontdb: Arc<OnceLock<Arc<usvg::fontdb::Database>>> = Arc::new(OnceLock::new());
-
         let default_font_resolver = usvg::FontResolver::default_font_selector();
         let font_resolver = Box::new({
-            let asset_source = asset_source.clone();
+            let asset_source = self.asset_source.clone();
+            let enriched_fontdb = self.enriched_fontdb.clone();
             move |font: &usvg::Font, db: &mut Arc<usvg::fontdb::Database>| {
                 if db.is_empty() {
                     let fontdb = enriched_fontdb.get_or_init(|| {
@@ -156,16 +179,13 @@ impl SvgRenderer {
                 default_fallback_selection(ch, fonts, db)
             },
         );
-        let options = usvg::Options {
+        usvg::Options {
             font_resolver: usvg::FontResolver {
                 select_font: font_resolver,
                 select_fallback: fallback_selection,
             },
+            style_sheet,
             ..Default::default()
-        };
-        Self {
-            asset_source,
-            usvg_options: Arc::new(options),
         }
     }
 
@@ -178,6 +198,7 @@ impl SvgRenderer {
         self.render_pixmap(
             bytes,
             SvgSize::ScaleFactor(scale_factor * SMOOTH_SVG_SCALE_FACTOR),
+            None,
         )
         .map(|pixmap| {
             let mut buffer =
@@ -202,7 +223,7 @@ impl SvgRenderer {
         anyhow::ensure!(!params.size.is_zero(), "can't render at a zero size");
 
         let render_pixmap = |bytes| {
-            let pixmap = self.render_pixmap(bytes, SvgSize::Size(params.size))?;
+            let pixmap = self.render_pixmap(bytes, SvgSize::Size(params.size), None)?;
 
             // Convert the pixmap's pixels into an alpha mask.
             let size = Size::new(
@@ -227,12 +248,51 @@ impl SvgRenderer {
         }
     }
 
-    fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
+    pub(crate) fn render_color_image(
+        &self,
+        params: &RenderColorSvgParams,
+        bytes: Option<&[u8]>,
+    ) -> Result<Option<(Size<DevicePixels>, Vec<u8>)>> {
+        anyhow::ensure!(!params.size.is_zero(), "can't render at a zero size");
+        let style_sheet = color_svg_style_sheet(params);
+        let render_pixmap = |bytes| {
+            let pixmap = self.render_pixmap(
+                bytes,
+                SvgSize::Size(params.size),
+                (!style_sheet.is_empty()).then(|| style_sheet.clone()),
+            )?;
+            let size = Size::new(
+                DevicePixels(pixmap.width() as i32),
+                DevicePixels(pixmap.height() as i32),
+            );
+            let mut bytes = pixmap.take();
+            for pixel in bytes.chunks_exact_mut(4) {
+                swap_rgba_pa_to_bgra(pixel);
+            }
+            Ok(Some((size, bytes)))
+        };
+
+        if let Some(bytes) = bytes {
+            render_pixmap(bytes)
+        } else if let Some(bytes) = self.asset_source.load(&params.path)? {
+            render_pixmap(&bytes)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn render_pixmap(
+        &self,
+        bytes: &[u8],
+        size: SvgSize,
+        style_sheet: Option<String>,
+    ) -> Result<Pixmap, usvg::Error> {
         // Cap the size of the rendered pixmap to avoid texture allocation panics
         // Related issue: #56466
         const MAX_SIZE: f32 = 8192.0;
 
-        let tree = usvg::Tree::from_data(bytes, &self.usvg_options)?;
+        let options = self.options(style_sheet);
+        let tree = usvg::Tree::from_data(bytes, &options)?;
         let svg_size = tree.size();
         let mut scale = match size {
             SvgSize::Size(size) => size.width.0 as f32 / svg_size.width(),
@@ -265,6 +325,33 @@ impl SvgRenderer {
 
         Ok(pixmap)
     }
+}
+
+fn color_svg_style_sheet(params: &RenderColorSvgParams) -> String {
+    fn css_color(color: Hsla) -> String {
+        format!("#{:08x}", u32::from(Rgba::from(color)))
+    }
+
+    let mut style_sheet = String::new();
+    if let Some(color) = params.current_color {
+        style_sheet.push_str(&format!(
+            "svg, svg * {{ color: {} !important; }}\n",
+            css_color(color)
+        ));
+    }
+    if let Some(color) = params.fill_color {
+        style_sheet.push_str(&format!(
+            "path, rect, circle, ellipse, polygon, polyline {{ fill: {} !important; }}\n",
+            css_color(color)
+        ));
+    }
+    if let Some(color) = params.text_color {
+        let color = css_color(color);
+        style_sheet.push_str(&format!(
+            "text, tspan {{ color: {color} !important; fill: {color} !important; }}\n"
+        ));
+    }
+    style_sheet
 }
 
 fn load_bundled_fonts(asset_source: &dyn AssetSource, db: &mut usvg::fontdb::Database) {
@@ -317,6 +404,7 @@ fn fix_generic_font_families(db: &mut usvg::fontdb::Database) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{blue, green, red};
     use usvg::fontdb::{Database, Family, Query};
 
     const IBM_PLEX_REGULAR: &[u8] =
@@ -453,6 +541,78 @@ mod tests {
             face.families.iter().any(|(name, _)| name.contains("Lilex")),
             "Monospace should map to Lilex, got {:?}",
             face.families
+        );
+    }
+
+    fn color_svg_params() -> RenderColorSvgParams {
+        RenderColorSvgParams {
+            path: "test.svg".into(),
+            size: Size::new(DevicePixels(20), DevicePixels(10)),
+            current_color: None,
+            fill_color: None,
+            text_color: None,
+        }
+    }
+
+    fn pixel_at(bytes: &[u8], width: usize, x: usize, y: usize) -> [u8; 4] {
+        bytes[(y * width + x) * 4..][..4].try_into().unwrap()
+    }
+
+    #[test]
+    fn color_svg_preserves_source_colors_and_applies_current_color() {
+        let svg = br##"<svg width="20" height="10" xmlns="http://www.w3.org/2000/svg">
+            <rect width="10" height="10" fill="#ff0000"/>
+            <rect x="10" width="10" height="10" fill="currentColor" style="color: #00ff00"/>
+        </svg>"##;
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let mut params = color_svg_params();
+        params.current_color = Some(blue());
+
+        let (_, bytes) = renderer
+            .render_color_image(&params, Some(svg))
+            .unwrap()
+            .unwrap();
+
+        // Polychrome atlas pixels use unpremultiplied BGRA byte order.
+        assert_eq!(pixel_at(&bytes, 20, 5, 5), [0, 0, 255, 255]);
+        assert_eq!(pixel_at(&bytes, 20, 15, 5), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn color_svg_fill_override_replaces_attributes_and_inline_styles() {
+        let svg = br##"<svg width="20" height="10" xmlns="http://www.w3.org/2000/svg">
+            <rect width="10" height="10" fill="#ff0000"/>
+            <rect x="10" width="10" height="10" style="fill: #0000ff"/>
+        </svg>"##;
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let mut params = color_svg_params();
+        params.fill_color = Some(green());
+
+        let (_, bytes) = renderer
+            .render_color_image(&params, Some(svg))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(pixel_at(&bytes, 20, 5, 5), [0, 127, 0, 255]);
+        assert_eq!(pixel_at(&bytes, 20, 15, 5), [0, 127, 0, 255]);
+    }
+
+    #[test]
+    fn color_svg_style_sheet_keeps_text_color_separate_from_fill_override() {
+        let mut params = color_svg_params();
+        params.current_color = Some(red());
+        params.fill_color = Some(green());
+        params.text_color = Some(blue());
+
+        let style_sheet = color_svg_style_sheet(&params);
+
+        assert!(style_sheet.contains("svg, svg * { color: #ff0000ff !important; }"));
+        assert!(style_sheet.contains("path, rect, circle, ellipse, polygon, polyline"));
+        assert!(style_sheet.contains("fill: #007f00ff !important;"));
+        assert!(
+            style_sheet.contains(
+                "text, tspan { color: #0000ffff !important; fill: #0000ffff !important; }"
+            )
         );
     }
 }

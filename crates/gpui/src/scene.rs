@@ -5,8 +5,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
-    Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    AtlasTextureId, AtlasTile, Background, BorderGradient, Bounds, ContentMask, Corners, Edges,
+    EffectShader, EffectUniforms, Hsla, Pixels, Point, Radians, ScaledPixels, Size,
+    bounds_tree::BoundsTree, point,
 };
 use std::{
     fmt::Debug,
@@ -44,6 +45,7 @@ pub struct Scene {
     layer_stack: Vec<DrawOrder>,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
+    pub effects: Vec<EffectQuad>,
     pub paths: Vec<Path<ScaledPixels>>,
     pub underlines: Vec<Underline>,
     pub monochrome_sprites: Vec<MonochromeSprite>,
@@ -61,6 +63,7 @@ impl Scene {
         self.paths.clear();
         self.shadows.clear();
         self.quads.clear();
+        self.effects.clear();
         self.underlines.clear();
         self.monochrome_sprites.clear();
         self.subpixel_sprites.clear();
@@ -108,6 +111,10 @@ impl Scene {
                 quad.order = order;
                 self.quads.push(*quad);
             }
+            Primitive::Effect(effect) => {
+                effect.order = order;
+                self.effects.push(effect.clone());
+            }
             Primitive::Path(path) => {
                 path.order = order;
                 path.id = PathId(self.paths.len());
@@ -151,6 +158,7 @@ impl Scene {
     pub fn finish(&mut self) {
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
+        self.effects.sort_by_key(|effect| effect.order);
         self.paths.sort_by_key(|path| path.order);
         self.underlines.sort_by_key(|underline| underline.order);
         self.monochrome_sprites
@@ -175,6 +183,8 @@ impl Scene {
             shadows_iter: self.shadows.iter().peekable(),
             quads_start: 0,
             quads_iter: self.quads.iter().peekable(),
+            effects_start: 0,
+            effects_iter: self.effects.iter().peekable(),
             paths_start: 0,
             paths_iter: self.paths.iter().peekable(),
             underlines_start: 0,
@@ -203,6 +213,7 @@ pub(crate) enum PrimitiveKind {
     Shadow,
     #[default]
     Quad,
+    Effect,
     Path,
     Underline,
     MonochromeSprite,
@@ -222,6 +233,7 @@ pub(crate) enum PaintOperation {
 pub enum Primitive {
     Shadow(Shadow),
     Quad(Quad),
+    Effect(EffectQuad),
     Path(Path<ScaledPixels>),
     Underline(Underline),
     MonochromeSprite(MonochromeSprite),
@@ -236,6 +248,7 @@ impl Primitive {
         match self {
             Primitive::Shadow(shadow) => &shadow.bounds,
             Primitive::Quad(quad) => &quad.bounds,
+            Primitive::Effect(effect) => &effect.bounds,
             Primitive::Path(path) => &path.bounds,
             Primitive::Underline(underline) => &underline.bounds,
             Primitive::MonochromeSprite(sprite) => &sprite.bounds,
@@ -249,6 +262,7 @@ impl Primitive {
         match self {
             Primitive::Shadow(shadow) => &shadow.content_mask,
             Primitive::Quad(quad) => &quad.content_mask,
+            Primitive::Effect(effect) => &effect.content_mask,
             Primitive::Path(path) => &path.content_mask,
             Primitive::Underline(underline) => &underline.content_mask,
             Primitive::MonochromeSprite(sprite) => &sprite.content_mask,
@@ -271,6 +285,8 @@ struct BatchIterator<'a> {
     shadows_iter: Peekable<slice::Iter<'a, Shadow>>,
     quads_start: usize,
     quads_iter: Peekable<slice::Iter<'a, Quad>>,
+    effects_start: usize,
+    effects_iter: Peekable<slice::Iter<'a, EffectQuad>>,
     paths_start: usize,
     paths_iter: Peekable<slice::Iter<'a, Path<ScaledPixels>>>,
     underlines_start: usize,
@@ -295,6 +311,10 @@ impl<'a> Iterator for BatchIterator<'a> {
                 PrimitiveKind::Shadow,
             ),
             (self.quads_iter.peek().map(|q| q.order), PrimitiveKind::Quad),
+            (
+                self.effects_iter.peek().map(|effect| effect.order),
+                PrimitiveKind::Effect,
+            ),
             (self.paths_iter.peek().map(|q| q.order), PrimitiveKind::Path),
             (
                 self.underlines_iter.peek().map(|u| u.order),
@@ -355,6 +375,20 @@ impl<'a> Iterator for BatchIterator<'a> {
                 }
                 self.quads_start = quads_end;
                 Some(PrimitiveBatch::Quads(quads_start..quads_end))
+            }
+            PrimitiveKind::Effect => {
+                let effects_start = self.effects_start;
+                let mut effects_end = effects_start + 1;
+                self.effects_iter.next();
+                while self
+                    .effects_iter
+                    .next_if(|effect| (effect.order, batch_kind) < max_order_and_kind)
+                    .is_some()
+                {
+                    effects_end += 1;
+                }
+                self.effects_start = effects_end;
+                Some(PrimitiveBatch::Effects(effects_start..effects_end))
             }
             PrimitiveKind::Path => {
                 let paths_start = self.paths_start;
@@ -477,6 +511,7 @@ impl<'a> Iterator for BatchIterator<'a> {
 pub enum PrimitiveBatch {
     Shadows(Range<usize>),
     Quads(Range<usize>),
+    Effects(Range<usize>),
     Paths(Range<usize>),
     Underlines(Range<usize>),
     MonochromeSprites {
@@ -504,7 +539,8 @@ pub struct Quad {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub background: Background,
-    pub border_color: Hsla,
+    pub border_colors: Edges<Hsla>,
+    pub border_gradient: BorderGradient,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
 }
@@ -512,6 +548,45 @@ pub struct Quad {
 impl From<Quad> for Primitive {
     fn from(quad: Quad) -> Self {
         Primitive::Quad(quad)
+    }
+}
+
+/// A custom fragment effect drawn over a rectangular region.
+#[derive(Clone, Debug)]
+pub struct EffectQuad {
+    /// Scene draw order assigned during primitive insertion.
+    pub order: DrawOrder,
+    /// Device-scaled bounds covered by the effect.
+    pub bounds: Bounds<ScaledPixels>,
+    /// Device-scaled coordinate bounds exposed to the effect function.
+    pub effect_bounds: Bounds<ScaledPixels>,
+    /// GPU transformation applied without changing layout.
+    pub transformation: TransformationMatrix,
+    /// Device-scaled rectangular content mask.
+    pub content_mask: ContentMask<ScaledPixels>,
+    /// Shader used to evaluate each pixel.
+    pub shader: EffectShader,
+    /// User-defined effect parameters.
+    pub uniforms: EffectUniforms,
+    /// Animation time supplied to the effect function.
+    pub time: f32,
+    /// Device-scaled radii used to clip the effect.
+    pub corner_radii: Corners<ScaledPixels>,
+    /// Opacity applied after shader evaluation.
+    pub opacity: f32,
+    /// Optional atlas tile sampled by an image effect.
+    pub image_tile: Option<AtlasTile>,
+    /// Optional second atlas tile sampled by a two-image effect.
+    pub second_image_tile: Option<AtlasTile>,
+    /// Optional third atlas tile sampled by a four-image effect.
+    pub third_image_tile: Option<AtlasTile>,
+    /// Optional fourth atlas tile sampled by a four-image effect.
+    pub fourth_image_tile: Option<AtlasTile>,
+}
+
+impl From<EffectQuad> for Primitive {
+    fn from(effect: EffectQuad) -> Self {
+        Primitive::Effect(effect)
     }
 }
 
@@ -679,7 +754,8 @@ pub struct MonochromeSprite {
     pub pad: u32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: Hsla,
+    pub background: Background,
+    pub background_bounds: Bounds<ScaledPixels>,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
 }
@@ -698,7 +774,8 @@ pub struct SubpixelSprite {
     pub pad: u32, // align to 8 bytes
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: Hsla,
+    pub background: Background,
+    pub background_bounds: Bounds<ScaledPixels>,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
 }
@@ -721,6 +798,7 @@ pub struct PolychromeSprite {
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub tile: AtlasTile,
+    pub transformation: TransformationMatrix,
 }
 
 impl From<PolychromeSprite> for Primitive {

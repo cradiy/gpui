@@ -5,11 +5,11 @@ use std::{
 };
 
 use crate::{
-    AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
-    CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
-    FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
-    PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
-    point, px, quad, rems, size,
+    AbsoluteLength, App, Background, BackgroundTag, BorderGradient, BorderStyle, Bounds,
+    ContentMask, Corners, CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges,
+    EdgesRefinement, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla,
+    Length, Pixels, Point, PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled,
+    TextRun, Window, black, phi, point, px, quad, rems, size,
 };
 use collections::HashSet;
 use refineable::Refineable;
@@ -276,6 +276,21 @@ pub struct Style {
 
     /// The border color of this element
     pub border_color: Option<Hsla>,
+
+    /// The optional color override for the top border.
+    pub border_top_color: Option<Hsla>,
+
+    /// The optional color override for the right border.
+    pub border_right_color: Option<Hsla>,
+
+    /// The optional color override for the bottom border.
+    pub border_bottom_color: Option<Hsla>,
+
+    /// The optional color override for the left border.
+    pub border_left_color: Option<Hsla>,
+
+    /// A gradient sampled clockwise along the border perimeter.
+    pub border_gradient: Option<BorderGradient>,
 
     /// The border style of this element
     pub border_style: BorderStyle,
@@ -646,8 +661,11 @@ impl Style {
                 let mut max = bounds.bottom_right();
 
                 if self
-                    .border_color
-                    .is_some_and(|color| !color.is_transparent())
+                    .border_gradient
+                    .is_some_and(|gradient| !gradient.is_transparent())
+                    || self
+                        .resolved_border_colors()
+                        .any(|color| !color.is_transparent())
                 {
                     min.x += self.border_widths.left.to_pixels(rem_size);
                     max.x -= self.border_widths.right.to_pixels(rem_size);
@@ -739,16 +757,21 @@ impl Style {
 
         if self.is_border_visible() {
             let border_widths = self.border_widths.to_pixels(rem_size);
-            let mut background = self.border_color.unwrap_or_default();
+            let border_colors = self.resolved_border_colors();
+            let mut background = border_colors.top;
             background.a = 0.;
-            window.paint_quad(quad(
+            let mut border_quad = quad(
                 bounds,
                 corner_radii,
                 background,
                 border_widths,
-                self.border_color.unwrap_or_default(),
+                border_colors,
                 self.border_style,
-            ));
+            );
+            if let Some(gradient) = self.border_gradient {
+                border_quad = border_quad.border_gradient(gradient);
+            }
+            window.paint_quad(border_quad);
         }
 
         #[cfg(debug_assertions)]
@@ -758,9 +781,23 @@ impl Style {
     }
 
     fn is_border_visible(&self) -> bool {
-        self.border_color
-            .is_some_and(|color| !color.is_transparent())
+        (self
+            .border_gradient
+            .is_some_and(|gradient| !gradient.is_transparent())
+            || self
+                .resolved_border_colors()
+                .any(|color| !color.is_transparent()))
             && self.border_widths.any(|length| !length.is_zero())
+    }
+
+    fn resolved_border_colors(&self) -> Edges<Hsla> {
+        let fallback = self.border_color.unwrap_or_default();
+        Edges {
+            top: self.border_top_color.unwrap_or(fallback),
+            right: self.border_right_color.unwrap_or(fallback),
+            bottom: self.border_bottom_color.unwrap_or(fallback),
+            left: self.border_left_color.unwrap_or(fallback),
+        }
     }
 }
 
@@ -799,6 +836,11 @@ impl Default for Style {
             flex_basis: Length::Auto,
             background: None,
             border_color: None,
+            border_top_color: None,
+            border_right_color: None,
+            border_bottom_color: None,
+            border_left_color: None,
+            border_gradient: None,
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
             box_shadow: Default::default(),
@@ -1331,6 +1373,26 @@ mod tests {
     use super::*;
 
     use util_macros::perf;
+
+    #[test]
+    fn resolves_individual_border_colors_against_uniform_fallback() {
+        let style = Style {
+            border_color: Some(red()),
+            border_top_color: Some(blue()),
+            border_bottom_color: Some(green()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            style.resolved_border_colors(),
+            Edges {
+                top: blue(),
+                right: red(),
+                bottom: green(),
+                left: red(),
+            }
+        );
+    }
 
     #[perf]
     fn test_basic_highlight_style_combination() {

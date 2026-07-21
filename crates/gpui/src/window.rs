@@ -2,23 +2,23 @@
 use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow, Capslock,
-    Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
-    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
-    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-    Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
-    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
-    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
-    Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
-    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
-    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle,
-    TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
-    WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size,
-    transparent_black,
+    AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderGradient, BorderStyle, Bounds,
+    BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, EffectQuad,
+    EffectShader, EffectUniforms, Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global,
+    GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext,
+    KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers,
+    ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent,
+    PaintEffect, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
+    PlatformWindow, Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
+    RenderColorSvgParams, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
+    Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
+    ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
+    SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
+    TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
+    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    point, prelude::*, profiler, px, rems, size, transparent_black,
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -985,6 +985,21 @@ enum InputModality {
     Touch,
 }
 
+#[derive(Clone)]
+enum MaskedPaint {
+    Fill {
+        background: Background,
+        bounds: Bounds<Pixels>,
+    },
+    Effect {
+        bounds: Bounds<Pixels>,
+        shader: EffectShader,
+        uniforms: EffectUniforms,
+        time: f32,
+        opacity: f32,
+    },
+}
+
 /// Holds the state for a specific window.
 pub struct Window {
     pub(crate) handle: AnyWindowHandle,
@@ -1006,6 +1021,7 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
+    masked_paint_stack: Vec<MaskedPaint>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -1717,6 +1733,7 @@ impl Window {
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
+            masked_paint_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -3215,6 +3232,69 @@ impl Window {
         }
     }
 
+    /// Overrides the fill used by monochrome content painted by `f`.
+    ///
+    /// Text glyphs and monochrome SVGs use their alpha atlas as a mask for the
+    /// supplied background. The background is sampled relative to `bounds`, so
+    /// separate glyph sprites share one continuous gradient instead of
+    /// restarting it for every glyph.
+    ///
+    /// Polychrome content such as emoji, images, and [`ColorSvg`](crate::ColorSvg)
+    /// is intentionally unaffected.
+    pub fn with_masked_fill<F, R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        background: impl Into<Background>,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.invalidator.debug_assert_paint();
+        self.masked_paint_stack.push(MaskedPaint::Fill {
+            background: background.into(),
+            bounds,
+        });
+        let result = f(self);
+        self.masked_paint_stack.pop();
+        result
+    }
+
+    /// Evaluates a custom fragment effect through monochrome content painted by `f`.
+    ///
+    /// `bounds` defines one shared coordinate system for every glyph or SVG
+    /// mask produced by the closure. The shader must have been created with
+    /// [`EffectShader::wgsl_mask`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_masked_effect<F, R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        shader: EffectShader,
+        uniforms: EffectUniforms,
+        time: f32,
+        opacity: f32,
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.invalidator.debug_assert_paint();
+        assert!(
+            shader.is_mask(),
+            "masked effects require EffectShader::wgsl_mask"
+        );
+        self.masked_paint_stack.push(MaskedPaint::Effect {
+            bounds,
+            shader,
+            uniforms,
+            time,
+            opacity: opacity.clamp(0.0, 1.0),
+        });
+        let result = f(self);
+        self.masked_paint_stack.pop();
+        result
+    }
+
     /// Updates the cursor style at the platform level. This method should only be called
     /// during the paint phase of element drawing.
     pub fn set_cursor_style(&mut self, style: CursorStyle, hitbox: &Hitbox) {
@@ -3773,11 +3853,85 @@ impl Window {
             bounds: snapped_bounds,
             content_mask: self.snapped_content_mask(),
             background: quad.background.opacity(opacity),
-            border_color: quad.border_color.opacity(opacity),
+            border_colors: quad.border_colors.map(|color| color.opacity(opacity)),
+            border_gradient: quad.border_gradient.opacity(opacity),
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
         });
+    }
+
+    /// Paints a custom fragment effect into the scene for the next frame.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_effect(&mut self, effect: PaintEffect) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let mut insert_effect_image =
+            |source: &Option<(Arc<RenderImage>, usize)>, label: &str| -> Result<AtlasTile> {
+                let (image, frame_index) = source.as_ref().ok_or_else(|| {
+                    anyhow!("{label} image is required before this effect can be painted")
+                })?;
+                if *frame_index >= image.frame_count() {
+                    return Err(anyhow!("{label} image frame index is out of bounds"));
+                }
+                let params = RenderImageParams {
+                    image_id: image.id,
+                    frame_index: *frame_index,
+                };
+                Ok(self
+                    .sprite_atlas
+                    .get_or_insert_with(&params.into(), &mut || {
+                        Ok(Some((
+                            image.size(*frame_index),
+                            Cow::Borrowed(
+                                image
+                                    .as_bytes(*frame_index)
+                                    .expect("frame index was checked above"),
+                            ),
+                        )))
+                    })?
+                    .expect("image effect atlas callback always returns a tile"))
+            };
+        let image_tile = if effect.shader.image_count() >= 1 {
+            Some(insert_effect_image(&effect.image, "primary")?)
+        } else {
+            None
+        };
+        let second_image_tile = if effect.shader.image_count() >= 2 {
+            Some(insert_effect_image(&effect.second_image, "second")?)
+        } else {
+            None
+        };
+        let third_image_tile = if effect.shader.image_count() >= 4 {
+            Some(insert_effect_image(&effect.third_image, "third")?)
+        } else {
+            None
+        };
+        let fourth_image_tile = if effect.shader.image_count() >= 4 {
+            Some(insert_effect_image(&effect.fourth_image, "fourth")?)
+        } else {
+            None
+        };
+        let opacity = self.element_opacity() * effect.opacity;
+        let snapped_bounds = self.snap_bounds(effect.bounds);
+        self.next_frame.scene.insert_primitive(EffectQuad {
+            order: 0,
+            bounds: snapped_bounds,
+            effect_bounds: snapped_bounds,
+            transformation: TransformationMatrix::unit(),
+            content_mask: self.snapped_content_mask(),
+            shader: effect.shader,
+            uniforms: effect.uniforms,
+            time: effect.time,
+            corner_radii: effect.corner_radii.scale(self.scale_factor()),
+            opacity,
+            image_tile,
+            second_image_tile,
+            third_image_tile,
+            fourth_image_tile,
+        });
+        Ok(())
     }
 
     /// Paint the given `Path` into the scene for the next frame at the current z-index.
@@ -3895,7 +4049,10 @@ impl Window {
             (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
         );
         let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
-        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
+        // Arbitrary per-pixel fills are incompatible with LCD subpixel text,
+        // whose three coverage channels assume one constant foreground color.
+        let subpixel_rendering = self.masked_paint_stack.is_empty()
+            && self.should_use_subpixel_rendering(font_id, font_size);
         let dilation = self.text_system().glyph_dilation_for_color(color);
         let params = RenderGlyphParams {
             font_id,
@@ -3922,6 +4079,43 @@ impl Window {
                 size: tile.bounds.size.map(Into::into),
             };
             let content_mask = self.snapped_content_mask();
+            let masked_paint = self.masked_paint_stack.last().cloned();
+            if let Some(MaskedPaint::Effect {
+                bounds: effect_bounds,
+                shader,
+                uniforms,
+                time,
+                opacity,
+            }) = masked_paint.as_ref()
+            {
+                self.next_frame.scene.insert_primitive(EffectQuad {
+                    order: 0,
+                    bounds,
+                    effect_bounds: self.snap_bounds(*effect_bounds),
+                    transformation: TransformationMatrix::unit(),
+                    content_mask,
+                    shader: shader.clone(),
+                    uniforms: *uniforms,
+                    time: *time,
+                    corner_radii: Corners::default(),
+                    opacity: element_opacity * *opacity,
+                    image_tile: Some(tile),
+                    second_image_tile: None,
+                    third_image_tile: None,
+                    fourth_image_tile: None,
+                });
+                return Ok(());
+            }
+            let (background, background_bounds) = match masked_paint {
+                Some(MaskedPaint::Fill {
+                    background,
+                    bounds: background_bounds,
+                }) => (
+                    background.opacity(element_opacity),
+                    self.snap_bounds(background_bounds),
+                ),
+                _ => (Background::from(color.opacity(element_opacity)), bounds),
+            };
 
             if subpixel_rendering {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
@@ -3929,7 +4123,8 @@ impl Window {
                     pad: 0,
                     bounds,
                     content_mask,
-                    color: color.opacity(element_opacity),
+                    background,
+                    background_bounds,
                     tile,
                     transformation: TransformationMatrix::unit(),
                 });
@@ -3939,7 +4134,8 @@ impl Window {
                     pad: 0,
                     bounds,
                     content_mask,
-                    color: color.opacity(element_opacity),
+                    background,
+                    background_bounds,
                     tile,
                     transformation: TransformationMatrix::unit(),
                 });
@@ -4024,6 +4220,7 @@ impl Window {
                 content_mask,
                 tile,
                 opacity,
+                transformation: TransformationMatrix::default(),
             });
         }
         Ok(())
@@ -4080,17 +4277,127 @@ impl Window {
         let final_bounds = svg_bounds
             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
             .map_size(|size| size.ceil());
+        let masked_paint = self.masked_paint_stack.last().cloned();
+        if let Some(MaskedPaint::Effect {
+            bounds: effect_bounds,
+            shader,
+            uniforms,
+            time,
+            opacity,
+        }) = masked_paint.as_ref()
+        {
+            self.next_frame.scene.insert_primitive(EffectQuad {
+                order: 0,
+                bounds: final_bounds,
+                effect_bounds: self.snap_bounds(*effect_bounds),
+                transformation,
+                content_mask,
+                shader: shader.clone(),
+                uniforms: *uniforms,
+                time: *time,
+                corner_radii: Corners::default(),
+                opacity: element_opacity * *opacity,
+                image_tile: Some(tile),
+                second_image_tile: None,
+                third_image_tile: None,
+                fourth_image_tile: None,
+            });
+            return Ok(());
+        }
+        let (background, background_bounds) = match masked_paint {
+            Some(MaskedPaint::Fill {
+                background,
+                bounds: background_bounds,
+            }) => (
+                background.opacity(element_opacity),
+                self.snap_bounds(background_bounds),
+            ),
+            _ => (
+                Background::from(color.opacity(element_opacity)),
+                final_bounds,
+            ),
+        };
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
             pad: 0,
             bounds: final_bounds,
             content_mask,
-            color: color.opacity(element_opacity),
+            background,
+            background_bounds,
             tile,
             transformation,
         });
 
+        Ok(())
+    }
+
+    /// Paints a colored SVG into the scene for the next frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_color_svg(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        path: SharedString,
+        mut data: Option<&[u8]>,
+        transformation: TransformationMatrix,
+        corner_radii: Corners<Pixels>,
+        current_color: Option<Hsla>,
+        fill_color: Option<Hsla>,
+        text_color: Option<Hsla>,
+        cx: &App,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let element_opacity = self.element_opacity();
+        let bounds = self.snap_bounds(bounds);
+        let params = RenderColorSvgParams {
+            path,
+            size: bounds.size.map(|pixels| {
+                DevicePixels::from((pixels.0 * SMOOTH_SVG_SCALE_FACTOR).ceil() as i32)
+            }),
+            current_color,
+            fill_color,
+            text_color,
+        };
+        let Some(tile) =
+            self.sprite_atlas
+                .get_or_insert_with(&params.clone().into(), &mut || {
+                    let Some((size, bytes)) = cx.svg_renderer.render_color_image(&params, data)?
+                    else {
+                        return Ok(None);
+                    };
+                    Ok(Some((size, Cow::Owned(bytes))))
+                })?
+        else {
+            return Ok(());
+        };
+
+        let svg_bounds = Bounds {
+            origin: bounds.center()
+                - Point::new(
+                    ScaledPixels(tile.bounds.size.width.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
+                    ScaledPixels(tile.bounds.size.height.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
+                ),
+            size: tile
+                .bounds
+                .size
+                .map(|value| ScaledPixels(value.0 as f32 / SMOOTH_SVG_SCALE_FACTOR)),
+        };
+        let final_bounds = svg_bounds
+            .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
+            .map_size(|size| size.ceil());
+
+        self.next_frame.scene.insert_primitive(PolychromeSprite {
+            order: 0,
+            pad: 0,
+            grayscale: false.into(),
+            bounds: final_bounds,
+            content_mask: self.snapped_content_mask(),
+            corner_radii: corner_radii.scale(self.scale_factor()),
+            tile,
+            opacity: element_opacity,
+            transformation,
+        });
         Ok(())
     }
 
@@ -4139,6 +4446,7 @@ impl Window {
             corner_radii,
             tile,
             opacity,
+            transformation: TransformationMatrix::default(),
         });
         Ok(())
     }
@@ -6244,8 +6552,10 @@ pub struct PaintQuad {
     pub background: Background,
     /// The widths of the quad's borders.
     pub border_widths: Edges<Pixels>,
-    /// The color of the quad's borders.
-    pub border_color: Hsla,
+    /// The colors of the quad's borders.
+    pub border_colors: Edges<Hsla>,
+    /// A gradient sampled along the quad's border perimeter.
+    pub border_gradient: BorderGradient,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
 }
@@ -6270,7 +6580,23 @@ impl PaintQuad {
     /// Sets the border color of the quad.
     pub fn border_color(self, border_color: impl Into<Hsla>) -> Self {
         PaintQuad {
-            border_color: border_color.into(),
+            border_colors: Edges::all(border_color.into()),
+            ..self
+        }
+    }
+
+    /// Sets the colors of the quad's four borders.
+    pub fn border_colors(self, border_colors: Edges<Hsla>) -> Self {
+        PaintQuad {
+            border_colors,
+            ..self
+        }
+    }
+
+    /// Sets a gradient sampled clockwise along the quad's border perimeter.
+    pub fn border_gradient(self, border_gradient: BorderGradient) -> Self {
+        PaintQuad {
+            border_gradient,
             ..self
         }
     }
@@ -6290,7 +6616,7 @@ pub fn quad(
     corner_radii: impl Into<Corners<Pixels>>,
     background: impl Into<Background>,
     border_widths: impl Into<Edges<Pixels>>,
-    border_color: impl Into<Hsla>,
+    border_colors: impl Into<Edges<Hsla>>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {
@@ -6298,7 +6624,8 @@ pub fn quad(
         corner_radii: corner_radii.into(),
         background: background.into(),
         border_widths: border_widths.into(),
-        border_color: border_color.into(),
+        border_colors: border_colors.into(),
+        border_gradient: BorderGradient::default(),
         border_style,
     }
 }
@@ -6310,7 +6637,8 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         corner_radii: (0.).into(),
         background: background.into(),
         border_widths: (0.).into(),
-        border_color: transparent_black(),
+        border_colors: Edges::all(transparent_black()),
+        border_gradient: BorderGradient::default(),
         border_style: BorderStyle::default(),
     }
 }
@@ -6326,7 +6654,8 @@ pub fn outline(
         corner_radii: (0.).into(),
         background: transparent_black().into(),
         border_widths: (1.).into(),
-        border_color: border_color.into(),
+        border_colors: Edges::all(border_color.into()),
+        border_gradient: BorderGradient::default(),
         border_style,
     }
 }

@@ -24,6 +24,7 @@ members = [
   "crates/refineable",
   "crates/refineable/derive_refineable",
   "crates/reqwest_client",
+  "crates/gpui_effects",
 ]
 
 [workspace.package]
@@ -46,6 +47,7 @@ gpui_shared_string = { path = "crates/gpui_shared_string" }
 gpui_linux = { path = "crates/gpui_linux", default-features = false }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
 gpui_macros = { path = "crates/gpui_macros" }
+gpui_effects = { path = "crates/gpui_effects" }
 gpui_platform = { path = "crates/gpui_platform", default-features = false }
 gpui_web = { path = "crates/gpui_web" }
 gpui_wgpu = { path = "crates/gpui_wgpu" }
@@ -58,6 +60,7 @@ sum_tree = { path = "crates/sum_tree" }
 http_client_tls = { path = "crates/http_client_tls" }
 media = { path = "crates/media" }
 mime = "0.3.17"
+naga = { version = "29.0.4", features = ["wgsl-in", "msl-out", "hlsl-out"] }
 util_macros = { path = "crates/util_macros" }
 util = { path = "crates/util" }
 oauth_callback_server = { path = "crates/oauth_callback_server" }
@@ -304,16 +307,6 @@ reqwest = { version = "0.13.4", features = [
   "stream",
   "charset",
 ] }
-# WARNING: If you change this, you must also publish a new version of zed-reqwest to crates.io
-# reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662463bda39148ba154100dd44d3fba5873a4", default-features = false, features = [
-#   "charset",
-#   "http2",
-#   "macos-system-configuration",
-#   "multipart",
-#   "rustls-tls-native-roots",
-#   "socks",
-#   "stream",
-# ], package = "zed-reqwest", version = "0.12.15-zed" }
 resvg = { version = "0.46.0", default-features = false, features = [
   "text",
   "system-fonts",
@@ -610,10 +603,3 @@ ignored = [
   "documented",
   "sea-orm-macros",
 ]
-
-# Dylint discovers our custom lints through this entry, so `cargo dylint --all`
-# runs them without a `--path` argument. The `lints` package pins its own
-# nightly toolchain (see `tooling/lints/rust-toolchain.toml`) and is kept out of
-# this workspace on purpose.
-[workspace.metadata.dylint]
-libraries = [{ path = "tooling/lints" }]

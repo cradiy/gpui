@@ -1892,6 +1892,12 @@ impl<T: Clone + Debug + Default + PartialEq> Edges<T> {
     }
 }
 
+impl From<crate::Hsla> for Edges<crate::Hsla> {
+    fn from(color: crate::Hsla) -> Self {
+        Self::all(color)
+    }
+}
+
 impl Edges<Length> {
     /// Sets the edges of the `Edges` struct to `auto`, which is a special value that allows the layout engine to automatically determine the size of the edges.
     ///

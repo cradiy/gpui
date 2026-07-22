@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use gpui::{
     Context, EventEmitter, GpuSpecs, IntoElement, Render, SharedString, Window, div, prelude::*,
-    rgb, surface,
+    surface,
 };
 #[cfg(target_os = "linux")]
 use gpui::{DmaBufImportStatus, SurfaceFrameBacking};
@@ -21,8 +21,6 @@ pub struct VideoPlayerOptions {
     pub volume: f64,
     pub muted: bool,
     pub timeline_update_interval: Duration,
-    pub click_to_toggle: bool,
-    pub show_status_overlay: bool,
 }
 
 impl Default for VideoPlayerOptions {
@@ -32,8 +30,6 @@ impl Default for VideoPlayerOptions {
             volume: 1.0,
             muted: false,
             timeline_update_interval: Duration::from_millis(100),
-            click_to_toggle: true,
-            show_status_overlay: true,
         }
     }
 }
@@ -54,6 +50,7 @@ pub enum PlaybackState {
 pub enum VideoPlayerEvent {
     StateChanged(PlaybackState),
     TimelineChanged(PlaybackTimeline),
+    BufferingChanged(u8),
     FrameReady(Arc<VideoFrame>),
     FrameTransportChanged(FrameTransport),
     DmaBufImportFailed(SharedString),
@@ -65,6 +62,8 @@ pub enum VideoPlayerEvent {
 ///
 /// The component owns demuxing, decoding, audio output and clock integration,
 /// while exposing control and observation APIs for custom player interfaces.
+/// Its [`Render`] implementation is intentionally limited to the current video
+/// frame and has no built-in interaction or player chrome.
 pub struct VideoPlayer {
     source: MediaSource,
     playback: GstreamerPlayback,
@@ -73,12 +72,11 @@ pub struct VideoPlayer {
     state: PlaybackState,
     state_after_seek: Option<PlaybackState>,
     timeline: PlaybackTimeline,
+    buffering_percent: Option<u8>,
     playback_rate: f64,
     delivered_frames: u64,
     volume: f64,
     muted: bool,
-    click_to_toggle: bool,
-    show_status_overlay: bool,
 }
 
 impl VideoPlayer {
@@ -157,6 +155,13 @@ impl VideoPlayer {
                     break;
                 };
                 this.update(cx, |player, cx| match event {
+                    BackendEvent::Buffering(percent) => {
+                        if player.buffering_percent != Some(percent) {
+                            player.buffering_percent = Some(percent);
+                            cx.emit(VideoPlayerEvent::BufferingChanged(percent));
+                            cx.notify();
+                        }
+                    }
                     BackendEvent::Ended => {
                         if let Some(duration) = player.timeline.duration() {
                             player.timeline = PlaybackTimeline::new(
@@ -209,12 +214,11 @@ impl VideoPlayer {
             },
             state_after_seek: None,
             timeline: PlaybackTimeline::default(),
+            buffering_percent: None,
             playback_rate: 1.0,
             delivered_frames: 0,
             volume: initial_volume,
             muted: options.muted,
-            click_to_toggle: options.click_to_toggle,
-            show_status_overlay: options.show_status_overlay,
         };
         if options.autoplay {
             player.playback.play()?;
@@ -246,6 +250,15 @@ impl VideoPlayer {
 
     pub fn is_seekable(&self) -> bool {
         self.timeline.is_seekable()
+    }
+
+    /// Returns the most recently reported buffering percentage.
+    ///
+    /// `None` means the backend has not emitted a buffering message. The
+    /// presentation of loading or buffering state is intentionally left to
+    /// the host application.
+    pub fn buffering_percent(&self) -> Option<u8> {
+        self.buffering_percent
     }
 
     pub fn current_frame(&self) -> Option<&Arc<VideoFrame>> {
@@ -468,60 +481,20 @@ impl VideoPlayer {
             cx.notify();
         }
     }
-
-    fn status_text(&self) -> Option<SharedString> {
-        match &self.state {
-            PlaybackState::Loading => Some("Loading…".into()),
-            PlaybackState::Paused => Some("Paused · Click to resume".into()),
-            PlaybackState::Seeking => Some("Seeking…".into()),
-            PlaybackState::Ended => Some("Playback ended · Click to replay".into()),
-            PlaybackState::Error(error) => Some(format!("Playback failed: {error}").into()),
-            PlaybackState::Playing => None,
-        }
-    }
 }
 
 impl EventEmitter<VideoPlayerEvent> for VideoPlayer {}
 
 impl Render for VideoPlayer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let frame = self.frame.clone();
-        let status = self
-            .show_status_overlay
-            .then(|| self.status_text())
-            .flatten();
 
         div()
-            .id("cvi-video-player")
             .relative()
             .size_full()
             .overflow_hidden()
-            .bg(rgb(0x000000))
-            .when(self.click_to_toggle, |this| {
-                this.cursor_pointer()
-                    .on_click(cx.listener(|player, _, _, cx| {
-                        if let Err(error) = player.toggle_playback(cx) {
-                            player.set_state(PlaybackState::Error(error.to_string().into()), cx);
-                        }
-                    }))
-            })
             .when_some(frame, |this, frame| {
                 this.child(surface(frame.surface().clone()).absolute().size_full())
-            })
-            .when_some(status, |this, status| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .p_6()
-                        .bg(gpui::rgba(0x00000080))
-                        .text_color(gpui::white())
-                        .text_center()
-                        .child(status),
-                )
             })
     }
 }

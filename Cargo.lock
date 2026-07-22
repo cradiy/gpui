@@ -2861,6 +2861,7 @@ dependencies = [
  "gstreamer-allocators",
  "gstreamer-app",
  "gstreamer-video",
+ "log",
  "url",
 ]
 

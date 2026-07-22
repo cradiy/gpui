@@ -2,7 +2,9 @@
 //!
 //! GStreamer owns demuxing, decoding, audio output and the playback clock.
 //! [`VideoPlayer`] receives decoded video frames through an appsink and renders
-//! only the newest frame with GPUI's dynamic `surface` element.
+//! only the newest frame with GPUI's dynamic `surface` element. It deliberately
+//! contains no controls, pointer behavior, status overlay or fullscreen policy;
+//! host applications build those features from the exported state and events.
 
 mod frame;
 mod frame_extractor;
@@ -13,7 +15,9 @@ mod stats;
 mod timeline;
 
 pub use frame::{FrameTransport, VideoFrame};
-pub use frame_extractor::{VideoFrameExtractor, VideoFrameExtractorOptions};
+pub use frame_extractor::{
+    FrameExtractionSuperseded, VideoFrameExtractor, VideoFrameExtractorOptions,
+};
 pub use player::{PlaybackState, VideoPlayer, VideoPlayerEvent, VideoPlayerOptions};
 pub use source::MediaSource;
 pub use stats::VideoPlaybackStats;

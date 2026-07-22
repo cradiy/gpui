@@ -1,6 +1,8 @@
 use std::{fmt, sync::Arc, time::Duration};
 
-use gpui::{DevicePixels, Size, SurfaceFrame, SurfaceFrameBacking};
+use gpui::{
+    Bounds, DevicePixels, Size, SurfaceColorInfo, SurfaceFormat, SurfaceFrame, SurfaceFrameBacking,
+};
 
 /// Describes how a decoded frame reaches GPUI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +49,26 @@ impl VideoFrame {
 
     pub fn coded_size(&self) -> Size<DevicePixels> {
         self.surface.coded_size()
+    }
+
+    /// Returns the displayable portion of the coded frame.
+    pub fn visible_rect(&self) -> Bounds<DevicePixels> {
+        self.surface.visible_rect()
+    }
+
+    /// Returns the intended presentation size after pixel-aspect correction.
+    pub fn display_size(&self) -> Size<DevicePixels> {
+        self.surface.display_size()
+    }
+
+    /// Returns the decoded pixel format.
+    pub fn format(&self) -> SurfaceFormat {
+        self.surface.format()
+    }
+
+    /// Returns the YUV conversion metadata associated with this frame.
+    pub fn color_info(&self) -> SurfaceColorInfo {
+        self.surface.color()
     }
 
     pub fn transport(&self) -> FrameTransport {

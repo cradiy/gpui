@@ -29,6 +29,7 @@ pub(crate) struct PlaybackOutput {
 
 #[derive(Debug)]
 pub(crate) enum BackendEvent {
+    Buffering(u8),
     Ended,
     Error(String),
 }
@@ -89,7 +90,7 @@ impl GstreamerPlayback {
                             .and_then(|device| *device),
                     )
                     .map_err(|error| {
-                        eprintln!("cvi: discarded decoded frame: {error:#}");
+                        log::warn!("discarded decoded video frame: {error:#}");
                         gst::FlowError::Error
                     })?;
 
@@ -116,7 +117,7 @@ impl GstreamerPlayback {
         let producer_drm_device_for_bus = producer_drm_device;
         let (event_tx, event_rx) = async_channel::unbounded();
         let bus_thread = std::thread::Builder::new()
-            .name("cvi-gstreamer-bus".into())
+            .name("gpui-video-gstreamer-bus".into())
             .spawn(move || {
                 for message in bus_for_thread.iter_timed(gst::ClockTime::NONE) {
                     #[cfg(target_os = "linux")]
@@ -128,6 +129,9 @@ impl GstreamerPlayback {
                     }
 
                     let event = match message.view() {
+                        gst::MessageView::Buffering(buffering) => Some(BackendEvent::Buffering(
+                            buffering_percent(buffering.percent()),
+                        )),
                         gst::MessageView::Eos(..) => Some(BackendEvent::Ended),
                         gst::MessageView::Error(error) => {
                             let mut message = error.error().to_string();
@@ -288,6 +292,10 @@ impl GstreamerPlayback {
         }
         result
     }
+}
+
+fn buffering_percent(percent: i32) -> u8 {
+    percent.clamp(0, 100) as u8
 }
 
 impl Drop for GstreamerPlayback {
@@ -572,9 +580,16 @@ mod tests {
     use gpui::{SurfaceFrameBacking, SurfaceHandle};
 
     use super::{
-        add_required_allocation_metas, appsink_caps, publish_latest, sample_to_surface_frame,
-        video_frame_geometry,
+        add_required_allocation_metas, appsink_caps, buffering_percent, publish_latest,
+        sample_to_surface_frame, video_frame_geometry,
     };
+
+    #[test]
+    fn buffering_percentage_is_clamped() {
+        assert_eq!(buffering_percent(-1), 0);
+        assert_eq!(buffering_percent(42), 42);
+        assert_eq!(buffering_percent(101), 100);
+    }
 
     #[test]
     fn latest_frame_queue_replaces_stale_value() {

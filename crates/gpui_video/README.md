@@ -12,7 +12,7 @@
 - playback rate, volume and mute controls
 - timestamped current-frame access
 - independent frame extraction for thumbnails and scrubbing
-- state, timeline, frame, transport, rate and volume events
+- state, timeline, buffering, frame, transport, rate and volume events
 - cumulative decoded, delivered and dropped-frame statistics
 - coded size, crop rectangle and pixel-aspect-ratio aware presentation geometry
 - CPU, linear Linux DMA-BUF and native tiled NV12 DMA-BUF frame transport
@@ -25,8 +25,6 @@ let player = cx.new(|cx| {
         MediaSource::parse("/path/to/video.mp4")?,
         VideoPlayerOptions {
             autoplay: true,
-            click_to_toggle: false,
-            show_status_overlay: false,
             ..VideoPlayerOptions::default()
         },
         window,
@@ -35,7 +33,7 @@ let player = cx.new(|cx| {
 });
 ```
 
-The entity itself implements `Render`, but applications may wrap it with any control layout.
+The entity itself implements `Render`, but deliberately paints only the current video frame. It does not install pointer handlers, draw status overlays, provide controls or manage fullscreen. Applications can wrap it with any interaction and control layout, or render `current_frame().surface()` directly when they need custom fitting and composition.
 
 ## Read the timeline
 
@@ -79,6 +77,9 @@ cx.subscribe(&player, |_, _, event, cx| {
         VideoPlayerEvent::TimelineChanged(timeline) => {
             // Update the scrubber and time labels.
         }
+        VideoPlayerEvent::BufferingChanged(percent) => {
+            // The host decides whether and how to present buffering UI.
+        }
         VideoPlayerEvent::FrameReady(frame) => {
             // Inspect PTS, size or transport.
         }
@@ -102,6 +103,10 @@ if let Some(frame) = frame {
     let timestamp = frame.timestamp();
     let frame_duration = frame.duration();
     let coded_size = frame.coded_size();
+    let visible_rect = frame.visible_rect();
+    let display_size = frame.display_size();
+    let format = frame.format();
+    let color_info = frame.color_info();
     let transport = frame.transport();
 }
 ```
@@ -127,6 +132,19 @@ let frame = extractor
     .await?;
 ```
 
+Interactive scrubbers should use the latest-only API so a pending preview can
+be superseded when the pointer moves again:
+
+```rust
+let frame = extractor
+    .frame_at_latest(Duration::from_secs_f64(scrub_seconds))
+    .await?;
+```
+
+When several latest-only calls overlap, the superseded caller receives an
+error for which `error.is::<FrameExtractionSuperseded>()` is true. Applications
+can ignore that case while continuing to surface decoder and I/O failures.
+
 For non-async workers:
 
 ```rust
@@ -135,7 +153,7 @@ let frame = extractor.frame_at_blocking(Duration::from_secs(30))?;
 
 An extractor owns one paused GStreamer pipeline and serializes requests on a worker thread. Reuse it for thumbnail strips or hover previews instead of creating one extractor per frame.
 
-The pending request queue is bounded to two requests by default, so request producers receive backpressure instead of growing the worker queue without limit. Configure `VideoFrameExtractorOptions::request_queue_capacity` when a different amount of backpressure is needed.
+The exact-request queue is bounded to two requests by default, so request producers receive backpressure instead of growing the worker queue without limit. Configure `VideoFrameExtractorOptions::request_queue_capacity` when a different amount of backpressure is needed. Latest-only requests use a separate one-slot mailbox and never discard exact thumbnail requests.
 
 Dropping the final extractor handle does not wait for an in-flight GStreamer seek timeout on the calling thread. The worker is notified to stop and releases its pipeline after the active request returns.
 

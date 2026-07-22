@@ -7,16 +7,18 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-channel.workspace = true
-gpui = { workspace = true, features = ["wayland", "x11"] }
+gpui.workspace = true
 gst = { package = "gstreamer", version = "0.25" }
 gst-app = { package = "gstreamer-app", version = "0.25", features = ["v1_24"] }
 gst-video = { package = "gstreamer-video", version = "0.25", features = ["v1_24"] }
+log.workspace = true
 url.workspace = true
-
-gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gst-allocators = { package = "gstreamer-allocators", version = "0.25" }
+
+[dev-dependencies]
+gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
 
 [lints]
 workspace = true

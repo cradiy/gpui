@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -17,6 +18,19 @@ use crate::{
         add_required_allocation_metas, appsink_caps, clock_time, sample_to_video_frame, seek_flags,
     },
 };
+
+/// Indicates that a pending latest-only preview request was replaced by a
+/// newer request before decoding started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameExtractionSuperseded;
+
+impl fmt::Display for FrameExtractionSuperseded {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("frame extraction request was superseded by a newer preview request")
+    }
+}
+
+impl std::error::Error for FrameExtractionSuperseded {}
 
 /// Configuration for an independent frame extraction pipeline.
 #[derive(Clone, Copy, Debug)]
@@ -50,10 +64,16 @@ pub struct VideoFrameExtractor {
 }
 
 struct ExtractorInner {
-    requests: async_channel::Sender<FrameRequest>,
+    requests: async_channel::Sender<WorkerRequest>,
+    latest_request: Arc<Mutex<Option<FrameRequest>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     shutdown: Arc<AtomicBool>,
     default_seek_mode: SeekMode,
+}
+
+enum WorkerRequest {
+    Exact(FrameRequest),
+    Latest,
 }
 
 struct FrameRequest {
@@ -78,19 +98,40 @@ impl VideoFrameExtractor {
 
         let pipeline = ExtractorPipeline::new(&source, options.timeout)?;
         let (request_tx, request_rx) =
-            async_channel::bounded::<FrameRequest>(options.request_queue_capacity);
+            async_channel::bounded::<WorkerRequest>(options.request_queue_capacity);
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_for_worker = shutdown.clone();
+        let latest_request = Arc::new(Mutex::new(None));
+        let latest_request_for_worker = latest_request.clone();
         let worker = std::thread::Builder::new()
-            .name("cvi-frame-extractor".into())
+            .name("gpui-video-frame-extractor".into())
             .spawn(move || {
                 let mut pipeline = pipeline;
                 while let Ok(request) = request_rx.recv_blocking() {
                     if shutdown_for_worker.load(Ordering::Acquire) {
                         break;
                     }
-                    let result = pipeline.frame_at(request.position, request.seek_mode);
-                    let _ = request.response.send_blocking(result);
+
+                    match request {
+                        WorkerRequest::Exact(request) => {
+                            process_frame_request(&mut pipeline, request);
+                        }
+                        WorkerRequest::Latest => {
+                            if let Some(request) = take_latest_request(&latest_request_for_worker) {
+                                process_frame_request(&mut pipeline, request);
+                            }
+                        }
+                    }
+
+                    // If a latest-only notification could not enter a full
+                    // exact-request queue, service it immediately after the
+                    // current request instead.
+                    if shutdown_for_worker.load(Ordering::Acquire) {
+                        break;
+                    }
+                    if let Some(request) = take_latest_request(&latest_request_for_worker) {
+                        process_frame_request(&mut pipeline, request);
+                    }
                 }
             })
             .context("failed to start frame extraction worker")?;
@@ -98,6 +139,7 @@ impl VideoFrameExtractor {
         Ok(Self {
             inner: Arc::new(ExtractorInner {
                 requests: request_tx,
+                latest_request,
                 worker: Mutex::new(Some(worker)),
                 shutdown,
                 default_seek_mode: options.seek_mode,
@@ -120,13 +162,42 @@ impl VideoFrameExtractor {
         let (response_tx, response_rx) = async_channel::bounded(1);
         self.inner
             .requests
-            .send(FrameRequest {
+            .send(WorkerRequest::Exact(FrameRequest {
                 position,
                 seek_mode,
                 response: response_tx,
-            })
+            }))
             .await
             .map_err(|_| anyhow!("frame extraction worker has stopped"))?;
+        response_rx
+            .recv()
+            .await
+            .map_err(|_| anyhow!("frame extraction worker stopped before returning a frame"))?
+    }
+
+    /// Extracts the newest requested preview frame and supersedes an older
+    /// latest-only request that has not started decoding yet.
+    ///
+    /// This is intended for interactive scrubbers and hover previews. It does
+    /// not cancel the seek currently executing on the worker. Use [`Self::frame_at`]
+    /// when every submitted request must complete, such as thumbnail generation.
+    pub async fn frame_at_latest(&self, position: Duration) -> Result<Arc<VideoFrame>> {
+        self.frame_at_latest_with_mode(position, self.inner.default_seek_mode)
+            .await
+    }
+
+    /// Latest-only counterpart to [`Self::frame_at_with_mode`].
+    pub async fn frame_at_latest_with_mode(
+        &self,
+        position: Duration,
+        seek_mode: SeekMode,
+    ) -> Result<Arc<VideoFrame>> {
+        let (response_tx, response_rx) = async_channel::bounded(1);
+        self.submit_latest(FrameRequest {
+            position,
+            seek_mode,
+            response: response_tx,
+        })?;
         response_rx
             .recv()
             .await
@@ -147,16 +218,60 @@ impl VideoFrameExtractor {
         let (response_tx, response_rx) = async_channel::bounded(1);
         self.inner
             .requests
-            .send_blocking(FrameRequest {
+            .send_blocking(WorkerRequest::Exact(FrameRequest {
                 position,
                 seek_mode,
                 response: response_tx,
-            })
+            }))
             .map_err(|_| anyhow!("frame extraction worker has stopped"))?;
         response_rx
             .recv_blocking()
             .map_err(|_| anyhow!("frame extraction worker stopped before returning a frame"))?
     }
+
+    fn submit_latest(&self, request: FrameRequest) -> Result<()> {
+        let should_notify = replace_latest_request(&self.inner.latest_request, request);
+        if !should_notify {
+            return Ok(());
+        }
+
+        match self.inner.requests.try_send(WorkerRequest::Latest) {
+            Ok(()) | Err(async_channel::TrySendError::Full(_)) => Ok(()),
+            Err(async_channel::TrySendError::Closed(_)) => {
+                let _ = take_latest_request(&self.inner.latest_request);
+                Err(anyhow!("frame extraction worker has stopped"))
+            }
+        }
+    }
+}
+
+fn process_frame_request(pipeline: &mut ExtractorPipeline, request: FrameRequest) {
+    let result = pipeline.frame_at(request.position, request.seek_mode);
+    let _ = request.response.send_blocking(result);
+}
+
+fn take_latest_request(latest_request: &Mutex<Option<FrameRequest>>) -> Option<FrameRequest> {
+    latest_request
+        .lock()
+        .expect("latest frame request mutex poisoned")
+        .take()
+}
+
+fn replace_latest_request(
+    latest_request: &Mutex<Option<FrameRequest>>,
+    request: FrameRequest,
+) -> bool {
+    let previous = latest_request
+        .lock()
+        .expect("latest frame request mutex poisoned")
+        .replace(request);
+    let should_notify = previous.is_none();
+    if let Some(previous) = previous {
+        let _ = previous
+            .response
+            .try_send(Err(anyhow!(FrameExtractionSuperseded)));
+    }
+    should_notify
 }
 
 impl Drop for ExtractorInner {
@@ -336,7 +451,11 @@ fn extraction_candidates(position: Duration) -> impl Iterator<Item = Duration> {
 mod tests {
     use std::time::Duration;
 
-    use super::{VideoFrameExtractorOptions, clamp_extraction_position, extraction_candidates};
+    use super::{
+        FrameExtractionSuperseded, FrameRequest, VideoFrameExtractorOptions,
+        clamp_extraction_position, extraction_candidates, replace_latest_request,
+    };
+    use crate::SeekMode;
 
     #[test]
     fn extraction_requests_are_bounded_by_default() {
@@ -344,6 +463,33 @@ mod tests {
             VideoFrameExtractorOptions::default().request_queue_capacity,
             2
         );
+    }
+
+    #[test]
+    fn latest_extraction_request_supersedes_pending_preview() {
+        let latest = std::sync::Mutex::new(None);
+        let (first_response, first_result) = async_channel::bounded(1);
+        let (second_response, _) = async_channel::bounded(1);
+
+        assert!(replace_latest_request(
+            &latest,
+            FrameRequest {
+                position: Duration::from_secs(1),
+                seek_mode: SeekMode::KeyFrame,
+                response: first_response,
+            },
+        ));
+        assert!(!replace_latest_request(
+            &latest,
+            FrameRequest {
+                position: Duration::from_secs(2),
+                seek_mode: SeekMode::KeyFrame,
+                response: second_response,
+            },
+        ));
+
+        let error = first_result.try_recv().unwrap().unwrap_err();
+        assert!(error.is::<FrameExtractionSuperseded>());
     }
 
     #[test]

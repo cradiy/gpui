@@ -1,5 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
 use anyhow::Context as _;
+#[cfg(target_os = "linux")]
+use gpui::{DmaBufModifier, DrmDevice};
 #[cfg(not(target_family = "wasm"))]
 use gpui_util::ResultExt;
 use std::sync::Arc;
@@ -164,6 +166,12 @@ impl WgpuContext {
                 .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF)
         {
             required_features |= wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+            if adapter
+                .features()
+                .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
+            {
+                required_features |= wgpu::Features::TEXTURE_FORMAT_NV12;
+            }
         }
 
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
@@ -453,6 +461,94 @@ impl WgpuContext {
                 .device
                 .features()
                 .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF)
+    }
+
+    /// Returns whether this device can attempt native multi-plane NV12 DMA-BUF imports.
+    ///
+    /// Support for a particular DRM modifier is queried when that image is imported.
+    pub fn supports_native_nv12_dma_buf_import(&self) -> bool {
+        self.supports_dma_buf_import()
+            && self
+                .device
+                .features()
+                .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
+    }
+
+    /// Returns sampleable native NV12 DRM modifiers exposed by this Vulkan adapter.
+    #[cfg(target_os = "linux")]
+    pub fn native_nv12_dma_buf_modifiers(&self) -> Vec<DmaBufModifier> {
+        use ash::vk;
+
+        if !self.supports_native_nv12_dma_buf_import() {
+            return Vec::new();
+        }
+        let Some(instance) = (unsafe { self.instance.as_hal::<wgpu::hal::vulkan::Api>() }) else {
+            return Vec::new();
+        };
+        let Some(adapter) = (unsafe { self.adapter.as_hal::<wgpu::hal::vulkan::Api>() }) else {
+            return Vec::new();
+        };
+        let raw_instance = instance.shared_instance().raw_instance();
+        let physical_device = adapter.raw_physical_device();
+        let format = vk::Format::G8_B8R8_2PLANE_420_UNORM;
+        let mut list = vk::DrmFormatModifierPropertiesListEXT::default();
+        let mut properties = vk::FormatProperties2::default().push_next(&mut list);
+        unsafe {
+            raw_instance.get_physical_device_format_properties2(
+                physical_device,
+                format,
+                &mut properties,
+            );
+        }
+        let mut modifiers = vec![
+            vk::DrmFormatModifierPropertiesEXT::default();
+            list.drm_format_modifier_count as usize
+        ];
+        let mut list = vk::DrmFormatModifierPropertiesListEXT::default()
+            .drm_format_modifier_properties(&mut modifiers);
+        let mut properties = vk::FormatProperties2::default().push_next(&mut list);
+        unsafe {
+            raw_instance.get_physical_device_format_properties2(
+                physical_device,
+                format,
+                &mut properties,
+            );
+        }
+        modifiers
+            .into_iter()
+            .filter(|modifier| {
+                modifier
+                    .drm_format_modifier_tiling_features
+                    .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+            })
+            .map(|modifier| DmaBufModifier {
+                modifier: modifier.drm_format_modifier,
+                plane_count: modifier.drm_format_modifier_plane_count,
+            })
+            .collect()
+    }
+
+    /// Returns the DRM render device exposed by the active Vulkan adapter.
+    #[cfg(target_os = "linux")]
+    pub fn drm_render_device(&self) -> Option<DrmDevice> {
+        let instance = unsafe { self.instance.as_hal::<wgpu::hal::vulkan::Api>() }?;
+        let adapter = unsafe { self.adapter.as_hal::<wgpu::hal::vulkan::Api>() }?;
+        let mut drm = ash::vk::PhysicalDeviceDrmPropertiesEXT::default();
+        let mut properties = ash::vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
+        unsafe {
+            instance
+                .shared_instance()
+                .raw_instance()
+                .get_physical_device_properties2(adapter.raw_physical_device(), &mut properties);
+        }
+        if drm.has_render != 0 {
+            Some(DrmDevice {
+                major: drm.render_major as u32,
+                minor: drm.render_minor as u32,
+            })
+        } else {
+            None
+        }
     }
 
     /// Returns true if the GPU device was lost (e.g., due to driver crash, suspend/resume).

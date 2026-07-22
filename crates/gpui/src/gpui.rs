@@ -348,4 +348,31 @@ pub struct GpuSpecs {
     /// Whether the active renderer can directly sample single-plane Linux DMA-BUF images.
     #[serde(default)]
     pub supports_dma_buf_import: bool,
+    /// Whether the active renderer has the Vulkan path needed to import a native
+    /// multi-plane NV12 DMA-BUF image.
+    ///
+    /// A particular DRM modifier is still checked when the image is imported.
+    #[serde(default)]
+    pub supports_native_nv12_dma_buf_import: bool,
+    /// Sampleable NV12 DRM modifiers advertised by the active Vulkan adapter.
+    #[cfg(target_os = "linux")]
+    #[serde(default)]
+    pub native_nv12_dma_buf_modifiers: Vec<DmaBufModifier>,
+    /// DRM render device associated with the active Vulkan adapter.
+    #[cfg(target_os = "linux")]
+    #[serde(default)]
+    pub drm_render_device: Option<DrmDevice>,
+}
+
+#[cfg(target_os = "linux")]
+impl GpuSpecs {
+    /// Returns whether Vulkan advertises this NV12 modifier and memory-plane count.
+    ///
+    /// The external-memory importability of a particular allocation is checked
+    /// again when the renderer receives it.
+    pub fn supports_native_nv12_dma_buf_modifier(&self, modifier: u64, plane_count: u32) -> bool {
+        self.native_nv12_dma_buf_modifiers
+            .iter()
+            .any(|candidate| candidate.modifier == modifier && candidate.plane_count == plane_count)
+    }
 }

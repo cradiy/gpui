@@ -29,6 +29,9 @@ pub struct SurfaceId(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DmaBufId(u64);
 
+#[cfg(target_os = "linux")]
+static NEXT_DMA_BUF_ID: AtomicU64 = AtomicU64::new(1);
+
 /// Identifies one dynamic surface for the lifetime of a stream.
 ///
 /// Reuse the same handle for every frame produced by a decoder. Renderers use
@@ -97,6 +100,170 @@ pub struct DmaBufPlane {
     stride: u32,
 }
 
+/// DRM fourcc for an 8-bit NV12 image.
+#[cfg(target_os = "linux")]
+pub const DRM_FORMAT_NV12: u32 =
+    b'N' as u32 | (b'V' as u32) << 8 | (b'1' as u32) << 16 | (b'2' as u32) << 24;
+
+/// Identifies a Linux DRM render device by its character-device numbers.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DrmDevice {
+    /// Character-device major number.
+    pub major: u32,
+    /// Character-device minor number.
+    pub minor: u32,
+}
+
+/// One sampleable DRM modifier advertised for native NV12 Vulkan images.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DmaBufModifier {
+    /// Runtime DRM format modifier value.
+    pub modifier: u64,
+    /// Number of memory-plane layouts Vulkan requires for this modifier.
+    pub plane_count: u32,
+}
+
+/// One memory object referenced by a native DMA-BUF image.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct DmaBufObject {
+    fd: OwnedFd,
+    modifier: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl DmaBufObject {
+    /// Creates an object descriptor from an owned DMA-BUF fd and DRM modifier.
+    pub fn new(fd: OwnedFd, modifier: u64) -> Self {
+        Self { fd, modifier }
+    }
+
+    /// Returns this object's DRM modifier.
+    pub fn modifier(&self) -> u64 {
+        self.modifier
+    }
+
+    /// Duplicates the object descriptor for a graphics API import operation.
+    pub fn try_clone_fd(&self) -> io::Result<OwnedFd> {
+        self.fd.try_clone()
+    }
+}
+
+/// Maps one image-format plane into a DMA-BUF object.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DmaBufPlaneLayout {
+    object_index: usize,
+    offset: u64,
+    stride: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl DmaBufPlaneLayout {
+    /// Creates a plane layout referencing `objects[object_index]`.
+    pub fn new(object_index: usize, offset: u64, stride: u32) -> Self {
+        Self {
+            object_index,
+            offset,
+            stride,
+        }
+    }
+
+    /// Returns the index of the backing object.
+    pub fn object_index(&self) -> usize {
+        self.object_index
+    }
+
+    /// Returns this plane's byte offset within its object.
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// Returns the number of bytes between adjacent rows.
+    pub fn stride(&self) -> u32 {
+        self.stride
+    }
+}
+
+/// A native DRM image preserving object ownership and per-plane layouts.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct DmaBufImage {
+    coded_size: Size<DevicePixels>,
+    drm_fourcc: u32,
+    objects: Vec<DmaBufObject>,
+    planes: Vec<DmaBufPlaneLayout>,
+    drm_device: Option<DrmDevice>,
+}
+
+/// Runtime state of a Linux DMA-BUF import attempt.
+///
+/// Applications can inspect this after presenting a frame and switch to a CPU
+/// fallback if the active renderer rejects its format, modifier, or device.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DmaBufImportStatus {
+    /// The renderer has not attempted this allocation yet.
+    #[default]
+    Pending,
+    /// The allocation was imported and is available for sampling.
+    Ready,
+    /// The renderer rejected the allocation.
+    Failed(Arc<str>),
+}
+
+#[cfg(target_os = "linux")]
+impl DmaBufImage {
+    /// Describes a native DRM image exactly as exported by the producer.
+    pub fn new(
+        coded_size: Size<DevicePixels>,
+        drm_fourcc: u32,
+        objects: Vec<DmaBufObject>,
+        planes: Vec<DmaBufPlaneLayout>,
+    ) -> Self {
+        Self {
+            coded_size,
+            drm_fourcc,
+            objects,
+            planes,
+            drm_device: None,
+        }
+    }
+
+    /// Records the DRM render device which produced the allocation.
+    pub fn with_drm_device(mut self, drm_device: DrmDevice) -> Self {
+        self.drm_device = Some(drm_device);
+        self
+    }
+
+    /// Returns the coded image dimensions.
+    pub fn coded_size(&self) -> Size<DevicePixels> {
+        self.coded_size
+    }
+
+    /// Returns the DRM fourcc describing the complete image.
+    pub fn drm_fourcc(&self) -> u32 {
+        self.drm_fourcc
+    }
+
+    /// Returns all memory objects referenced by the image.
+    pub fn objects(&self) -> &[DmaBufObject] {
+        &self.objects
+    }
+
+    /// Returns image-format plane layouts in plane order.
+    pub fn planes(&self) -> &[DmaBufPlaneLayout] {
+        &self.planes
+    }
+
+    /// Returns the producer DRM device, when supplied by the caller.
+    pub fn drm_device(&self) -> Option<DrmDevice> {
+        self.drm_device
+    }
+}
+
 #[cfg(target_os = "linux")]
 impl DmaBufPlane {
     /// Describes one plane exported by a Linux graphics or video API.
@@ -146,8 +313,16 @@ struct DmaBufHandleInner {
     id: DmaBufId,
     coded_size: Size<DevicePixels>,
     format: SurfaceFormat,
-    planes: SmallVec<[DmaBufPlane; 2]>,
+    storage: DmaBufStorage,
     lifetime_guard: Option<Arc<dyn Send + Sync>>,
+    import_status: parking_lot::RwLock<DmaBufImportStatus>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+enum DmaBufStorage {
+    SeparatePlanes(SmallVec<[DmaBufPlane; 2]>),
+    NativeImage(DmaBufImage),
 }
 
 #[cfg(target_os = "linux")]
@@ -157,7 +332,7 @@ impl fmt::Debug for DmaBufHandleInner {
             .field("id", &self.id)
             .field("coded_size", &self.coded_size)
             .field("format", &self.format)
-            .field("planes", &self.planes)
+            .field("storage", &self.storage)
             .field("has_lifetime_guard", &self.lifetime_guard.is_some())
             .finish()
     }
@@ -279,14 +454,37 @@ impl DmaBufHandle {
         )
     }
 
+    /// Creates a handle for a native DRM image whose object-to-plane mapping
+    /// must be preserved during import.
+    ///
+    /// # Safety
+    ///
+    /// Every object and plane layout must match the producer's exported DRM
+    /// descriptor. The producer must not overwrite the allocation while GPUI
+    /// may sample it.
+    pub unsafe fn from_image(image: DmaBufImage) -> Result<Self, SurfaceFrameError> {
+        Self::from_image_inner(image, None)
+    }
+
+    /// Creates a native DRM image handle retaining its decoder-owned resource.
+    ///
+    /// # Safety
+    ///
+    /// The image has the same requirements as [`Self::from_image`]. The guard
+    /// must keep all referenced objects unavailable for producer writes.
+    pub unsafe fn from_image_with_lifetime_guard(
+        image: DmaBufImage,
+        lifetime_guard: Arc<dyn Send + Sync>,
+    ) -> Result<Self, SurfaceFrameError> {
+        Self::from_image_inner(image, Some(lifetime_guard))
+    }
+
     fn new_inner(
         coded_size: Size<DevicePixels>,
         format: SurfaceFormat,
         planes: impl IntoIterator<Item = DmaBufPlane>,
         lifetime_guard: Option<Arc<dyn Send + Sync>>,
     ) -> Result<Self, SurfaceFrameError> {
-        static NEXT_DMA_BUF_ID: AtomicU64 = AtomicU64::new(1);
-
         let planes = planes.into_iter().collect::<SmallVec<[_; 2]>>();
         validate_dma_buf_layout(coded_size, format, &planes)?;
 
@@ -295,8 +493,28 @@ impl DmaBufHandle {
                 id: DmaBufId(NEXT_DMA_BUF_ID.fetch_add(1, Ordering::Relaxed)),
                 coded_size,
                 format,
-                planes,
+                storage: DmaBufStorage::SeparatePlanes(planes),
                 lifetime_guard,
+                import_status: parking_lot::RwLock::new(DmaBufImportStatus::Pending),
+            }),
+        })
+    }
+
+    fn from_image_inner(
+        image: DmaBufImage,
+        lifetime_guard: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<Self, SurfaceFrameError> {
+        let format = surface_format_from_drm_fourcc(image.drm_fourcc())?;
+        validate_dma_buf_image(&image, format)?;
+        let coded_size = image.coded_size();
+        Ok(Self {
+            inner: Arc::new(DmaBufHandleInner {
+                id: DmaBufId(NEXT_DMA_BUF_ID.fetch_add(1, Ordering::Relaxed)),
+                coded_size,
+                format,
+                storage: DmaBufStorage::NativeImage(image),
+                lifetime_guard,
+                import_status: parking_lot::RwLock::new(DmaBufImportStatus::Pending),
             }),
         })
     }
@@ -318,27 +536,66 @@ impl DmaBufHandle {
 
     /// Returns the DRM format modifier supplied by the allocator.
     pub fn drm_modifier(&self) -> u64 {
-        self.inner.planes[0].drm_modifier()
+        match &self.inner.storage {
+            DmaBufStorage::SeparatePlanes(planes) => planes[0].drm_modifier(),
+            DmaBufStorage::NativeImage(image) => image.objects()[0].modifier(),
+        }
     }
 
     /// Returns the first pixel's byte offset in the DMA-BUF allocation.
     pub fn offset(&self) -> u64 {
-        self.inner.planes[0].offset()
+        match &self.inner.storage {
+            DmaBufStorage::SeparatePlanes(planes) => planes[0].offset(),
+            DmaBufStorage::NativeImage(image) => image.planes()[0].offset(),
+        }
     }
 
     /// Returns the number of bytes between adjacent rows.
     pub fn stride(&self) -> u32 {
-        self.inner.planes[0].stride()
+        match &self.inner.storage {
+            DmaBufStorage::SeparatePlanes(planes) => planes[0].stride(),
+            DmaBufStorage::NativeImage(image) => image.planes()[0].stride(),
+        }
     }
 
-    /// Returns all planes in image-format order.
+    /// Returns legacy independently imported planes in image-format order.
+    ///
+    /// Native multi-plane images instead expose their layouts through [`Self::image`].
     pub fn planes(&self) -> &[DmaBufPlane] {
-        &self.inner.planes
+        match &self.inner.storage {
+            DmaBufStorage::SeparatePlanes(planes) => planes,
+            DmaBufStorage::NativeImage(_) => &[],
+        }
     }
 
     /// Returns one plane by image-format index.
     pub fn plane(&self, index: usize) -> Option<&DmaBufPlane> {
-        self.inner.planes.get(index)
+        self.planes().get(index)
+    }
+
+    /// Returns the native object/plane image descriptor, when present.
+    pub fn image(&self) -> Option<&DmaBufImage> {
+        match &self.inner.storage {
+            DmaBufStorage::SeparatePlanes(_) => None,
+            DmaBufStorage::NativeImage(image) => Some(image),
+        }
+    }
+
+    /// Returns the result of this allocation's renderer import attempt.
+    pub fn import_status(&self) -> DmaBufImportStatus {
+        self.inner.import_status.read().clone()
+    }
+
+    /// Records a successful renderer import.
+    #[doc(hidden)]
+    pub fn report_import_ready(&self) {
+        *self.inner.import_status.write() = DmaBufImportStatus::Ready;
+    }
+
+    /// Records a renderer import failure for application fallback handling.
+    #[doc(hidden)]
+    pub fn report_import_failed(&self, error: impl Into<Arc<str>>) {
+        *self.inner.import_status.write() = DmaBufImportStatus::Failed(error.into());
     }
 
     /// Duplicates the file descriptor for an importing graphics API.
@@ -346,7 +603,10 @@ impl DmaBufHandle {
     /// Vulkan consumes the returned descriptor while this handle retains the
     /// decoder pool's original descriptor.
     pub fn try_clone_fd(&self) -> io::Result<OwnedFd> {
-        self.inner.planes[0].try_clone_fd()
+        match &self.inner.storage {
+            DmaBufStorage::SeparatePlanes(planes) => planes[0].try_clone_fd(),
+            DmaBufStorage::NativeImage(image) => image.objects()[0].try_clone_fd(),
+        }
     }
 
     /// Creates a weak handle that does not keep the allocation alive.
@@ -519,6 +779,30 @@ pub enum SurfaceFrameError {
     /// NV12 crop origins must align to a two-pixel chroma sample.
     #[error("NV12 visible rectangle origin must be even")]
     UnalignedNv12VisibleRect,
+    /// The native DMA-BUF image format is not supported yet.
+    #[cfg(target_os = "linux")]
+    #[error("unsupported DMA-BUF DRM fourcc {fourcc:#010x}")]
+    UnsupportedDmaBufFourcc {
+        /// Runtime DRM fourcc value.
+        fourcc: u32,
+    },
+    /// A native image does not reference any DMA-BUF memory object.
+    #[cfg(target_os = "linux")]
+    #[error("DMA-BUF image requires at least one memory object")]
+    MissingDmaBufObjects,
+    /// A plane refers to an object index not present in the image.
+    #[cfg(target_os = "linux")]
+    #[error("DMA-BUF plane {plane} references missing object {object_index}")]
+    InvalidDmaBufObjectIndex {
+        /// Plane index in image-format order.
+        plane: usize,
+        /// Invalid object index.
+        object_index: usize,
+    },
+    /// Objects forming one native image disagree about its DRM modifier.
+    #[cfg(target_os = "linux")]
+    #[error("all DMA-BUF objects in one native image must use the same DRM modifier")]
+    MismatchedDmaBufModifiers,
 }
 
 impl SurfaceFrame {
@@ -976,6 +1260,95 @@ fn validate_dma_buf_layout(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn surface_format_from_drm_fourcc(fourcc: u32) -> Result<SurfaceFormat, SurfaceFrameError> {
+    match fourcc {
+        DRM_FORMAT_NV12 => Ok(SurfaceFormat::Nv12),
+        _ => Err(SurfaceFrameError::UnsupportedDmaBufFourcc { fourcc }),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_dma_buf_image(
+    image: &DmaBufImage,
+    format: SurfaceFormat,
+) -> Result<(), SurfaceFrameError> {
+    if image.objects().is_empty() {
+        return Err(SurfaceFrameError::MissingDmaBufObjects);
+    }
+    let modifier = image.objects()[0].modifier();
+    if image
+        .objects()
+        .iter()
+        .any(|object| object.modifier() != modifier)
+    {
+        return Err(SurfaceFrameError::MismatchedDmaBufModifiers);
+    }
+    for (plane, layout) in image.planes().iter().enumerate() {
+        if layout.object_index() >= image.objects().len() {
+            return Err(SurfaceFrameError::InvalidDmaBufObjectIndex {
+                plane,
+                object_index: layout.object_index(),
+            });
+        }
+    }
+
+    let metadata_planes = image
+        .planes()
+        .iter()
+        .map(|layout| DmaBufPlaneMetadata {
+            stride: layout.stride(),
+        })
+        .collect::<SmallVec<[_; 2]>>();
+    validate_dma_buf_plane_metadata(image.coded_size(), format, &metadata_planes)
+}
+
+#[cfg(target_os = "linux")]
+struct DmaBufPlaneMetadata {
+    stride: u32,
+}
+
+#[cfg(target_os = "linux")]
+fn validate_dma_buf_plane_metadata(
+    coded_size: Size<DevicePixels>,
+    format: SurfaceFormat,
+    planes: &[DmaBufPlaneMetadata],
+) -> Result<(), SurfaceFrameError> {
+    if coded_size.width.0 <= 0 || coded_size.height.0 <= 0 {
+        return Err(SurfaceFrameError::InvalidSize);
+    }
+    let width = coded_size.width.0 as u32;
+    let expected_planes = match format {
+        SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => 1,
+        SurfaceFormat::Nv12 => 2,
+    };
+    if planes.len() != expected_planes {
+        return Err(SurfaceFrameError::InvalidPlaneCount {
+            format,
+            expected: expected_planes,
+            actual: planes.len(),
+        });
+    }
+    let minimum_strides: SmallVec<[u32; 2]> = match format {
+        SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => smallvec![
+            width
+                .checked_mul(4)
+                .ok_or(SurfaceFrameError::PlaneLayoutOverflow)?
+        ],
+        SurfaceFormat::Nv12 => smallvec![width, width.div_ceil(2) * 2],
+    };
+    for (plane_index, (plane, minimum_stride)) in planes.iter().zip(minimum_strides).enumerate() {
+        if plane.stride < minimum_stride {
+            return Err(SurfaceFrameError::InvalidStride {
+                plane: plane_index,
+                stride: plane.stride,
+                minimum: minimum_stride,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A source of a surface's content.
 #[derive(Clone, Debug)]
 pub enum SurfaceSource {
@@ -1359,6 +1732,103 @@ mod tests {
                 stride: 7,
                 minimum: 8,
             })
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_dma_buf_preserves_object_to_plane_layout() {
+        let coded_size = size(DevicePixels(3840), DevicePixels(2160));
+        let modifier = 0x0200_0000_0840_1b04;
+        let fd: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+        let image = DmaBufImage::new(
+            coded_size,
+            DRM_FORMAT_NV12,
+            vec![DmaBufObject::new(fd, modifier)],
+            vec![
+                DmaBufPlaneLayout::new(0, 0, 4096),
+                DmaBufPlaneLayout::new(0, 8_847_360, 4096),
+            ],
+        )
+        .with_drm_device(DrmDevice {
+            major: 226,
+            minor: 128,
+        });
+
+        let dma_buf = unsafe { DmaBufHandle::from_image(image) }.unwrap();
+        let native = dma_buf.image().expect("native image descriptor");
+
+        assert_eq!(dma_buf.format(), SurfaceFormat::Nv12);
+        assert_eq!(dma_buf.import_status(), DmaBufImportStatus::Pending);
+        assert!(dma_buf.planes().is_empty());
+        assert_eq!(native.objects().len(), 1);
+        assert_eq!(native.objects()[0].modifier(), modifier);
+        assert_eq!(native.planes().len(), 2);
+        assert_eq!(native.planes()[0], DmaBufPlaneLayout::new(0, 0, 4096));
+        assert_eq!(native.planes()[1].object_index(), 0);
+        assert_eq!(native.planes()[1].offset(), 8_847_360);
+        assert_eq!(
+            native.drm_device(),
+            Some(DrmDevice {
+                major: 226,
+                minor: 128
+            })
+        );
+
+        dma_buf.report_import_ready();
+        assert_eq!(dma_buf.import_status(), DmaBufImportStatus::Ready);
+        dma_buf.report_import_failed("unsupported test modifier");
+        assert_eq!(
+            dma_buf.import_status(),
+            DmaBufImportStatus::Failed(Arc::from("unsupported test modifier"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_dma_buf_rejects_invalid_object_mapping() {
+        let coded_size = size(DevicePixels(8), DevicePixels(4));
+        let fd: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+        let image = DmaBufImage::new(
+            coded_size,
+            DRM_FORMAT_NV12,
+            vec![DmaBufObject::new(fd, 0)],
+            vec![
+                DmaBufPlaneLayout::new(0, 0, 8),
+                DmaBufPlaneLayout::new(1, 32, 8),
+            ],
+        );
+
+        let result = unsafe { DmaBufHandle::from_image(image) };
+        assert!(matches!(
+            result,
+            Err(SurfaceFrameError::InvalidDmaBufObjectIndex {
+                plane: 1,
+                object_index: 1,
+            })
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_dma_buf_rejects_inconsistent_object_modifiers() {
+        let coded_size = size(DevicePixels(8), DevicePixels(4));
+        let first: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+        let second: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+        let image = DmaBufImage::new(
+            coded_size,
+            DRM_FORMAT_NV12,
+            vec![DmaBufObject::new(first, 1), DmaBufObject::new(second, 2)],
+            vec![
+                DmaBufPlaneLayout::new(0, 0, 8),
+                DmaBufPlaneLayout::new(1, 0, 8),
+            ],
+        );
+
+        let result = unsafe { DmaBufHandle::from_image(image) };
+        assert!(matches!(
+            result,
+            Err(SurfaceFrameError::MismatchedDmaBufModifiers)
         ));
     }
 

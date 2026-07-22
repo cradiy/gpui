@@ -11,9 +11,10 @@ mod linux {
 
     use anyhow::{Context as _, Result, anyhow, bail};
     use gpui::{
-        App, Bounds, ColorRange, Context, DevicePixels, DmaBufHandle, DmaBufPlane, GpuSpecs,
-        Render, SurfaceColorInfo, SurfaceFormat, SurfaceFrame, SurfaceHandle, Window, WindowBounds,
-        WindowOptions, YuvMatrix, bounds, div, prelude::*, px, size, surface,
+        App, Bounds, ColorRange, Context, DRM_FORMAT_NV12, DevicePixels, DmaBufHandle, DmaBufImage,
+        DmaBufObject, DmaBufPlane, DmaBufPlaneLayout, GpuSpecs, Render, SurfaceColorInfo,
+        SurfaceFormat, SurfaceFrame, SurfaceHandle, Window, WindowBounds, WindowOptions, YuvMatrix,
+        bounds, div, prelude::*, px, size, surface,
     };
     use gpui_platform::application;
 
@@ -27,6 +28,9 @@ mod linux {
     const GBM_BO_USE_RENDERING: u32 = 1 << 2;
     const GBM_BO_USE_LINEAR: u32 = 1 << 4;
     const GBM_BO_TRANSFER_WRITE: u32 = 1 << 1;
+    const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
+    const DMA_BUF_SYNC_WRITE: u64 = 2;
+    const DMA_BUF_SYNC_END: u64 = 1 << 2;
 
     const fn fourcc(a: u8, b: u8, c: u8, d: u8) -> u32 {
         a as u32 | (b as u32) << 8 | (c as u32) << 16 | (d as u32) << 24
@@ -40,6 +44,11 @@ mod linux {
     #[repr(C)]
     struct GbmBo {
         _private: [u8; 0],
+    }
+
+    #[repr(C)]
+    struct DmaBufSync {
+        flags: u64,
     }
 
     #[link(name = "gbm")]
@@ -140,13 +149,21 @@ mod linux {
                 .as_ref()
                 .map(|specs| {
                     format!(
-                        "GPU: {} · DMA-BUF import: {}",
+                        "GPU: {} · DMA-BUF import: {} · native NV12: {}",
                         specs.device_name,
                         if specs.supports_dma_buf_import {
                             "available"
                         } else {
                             "unavailable"
-                        }
+                        },
+                        if specs.supports_native_nv12_dma_buf_import {
+                            format!(
+                                "available ({} modifiers)",
+                                specs.native_nv12_dma_buf_modifiers.len()
+                            )
+                        } else {
+                            "unavailable".to_string()
+                        },
                     )
                 })
                 .unwrap_or_else(|| "Waiting for GPU information".to_string());
@@ -200,8 +217,24 @@ mod linux {
             bail!("gbm_create_device failed for {}", render_node.display());
         }
 
-        if std::env::var("GPUI_DMA_BUF_FORMAT").is_ok_and(|format| format == "nv12") {
-            return create_nv12_frame(handle, render_node, render_node_file, device);
+        match std::env::var("GPUI_DMA_BUF_FORMAT").as_deref() {
+            Ok("native-nv12") => {
+                if !specs.supports_native_nv12_dma_buf_import {
+                    unsafe { gbm_device_destroy(device) };
+                    bail!("the selected GPUI adapter does not support native NV12 import");
+                }
+                return create_native_nv12_frame(
+                    handle,
+                    render_node,
+                    render_node_file,
+                    device,
+                    specs,
+                );
+            }
+            Ok("nv12") => {
+                return create_nv12_frame(handle, render_node, render_node_file, device);
+            }
+            _ => {}
         }
 
         let flags = GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR;
@@ -381,6 +414,223 @@ mod linux {
                 "NV12 · Y modifier: {y_modifier:#018x}, stride: {y_stride} · UV modifier: {uv_modifier:#018x}, stride: {uv_stride}"
             ),
         })
+    }
+
+    fn create_native_nv12_frame(
+        handle: SurfaceHandle,
+        render_node: PathBuf,
+        render_node_file: File,
+        device: *mut GbmDevice,
+        specs: &GpuSpecs,
+    ) -> Result<ImportedFrame> {
+        let requested_modifier = requested_native_nv12_modifier()?;
+        let modifier_capability = specs
+            .native_nv12_dma_buf_modifiers
+            .iter()
+            .find(|candidate| candidate.modifier == requested_modifier)
+            .copied()
+            .with_context(|| {
+                format!("Vulkan does not advertise native NV12 modifier {requested_modifier:#018x}")
+            })?;
+        let bo = match allocate_native_nv12_bo(device, requested_modifier) {
+            Ok(allocation) => allocation,
+            Err(error) => {
+                unsafe { gbm_device_destroy(device) };
+                return Err(error).with_context(|| {
+                    format!(
+                        "Vulkan advertises modifier {requested_modifier:#018x} with {} memory planes, but GBM failed to allocate it",
+                        modifier_capability.plane_count
+                    )
+                });
+            }
+        };
+        let allocation = Arc::new(GbmAllocation {
+            bos: vec![bo],
+            device,
+            _render_node: render_node_file,
+        });
+
+        let plane_count = unsafe { gbm_bo_get_plane_count(bo) };
+        if plane_count != 2 {
+            bail!("expected two native NV12 planes, got {plane_count}");
+        }
+        let y_stride = unsafe { gbm_bo_get_stride_for_plane(bo, 0) };
+        let uv_stride = unsafe { gbm_bo_get_stride_for_plane(bo, 1) };
+        let y_offset = u64::from(unsafe { gbm_bo_get_offset(bo, 0) });
+        let uv_offset = u64::from(unsafe { gbm_bo_get_offset(bo, 1) });
+
+        let y_raw_fd = unsafe { gbm_bo_get_fd_for_plane(bo, 0) };
+        let uv_raw_fd = unsafe { gbm_bo_get_fd_for_plane(bo, 1) };
+        if y_raw_fd < 0 || uv_raw_fd < 0 {
+            if y_raw_fd >= 0 {
+                drop(unsafe { OwnedFd::from_raw_fd(y_raw_fd) });
+            }
+            if uv_raw_fd >= 0 {
+                drop(unsafe { OwnedFd::from_raw_fd(uv_raw_fd) });
+            }
+            bail!("GBM failed to export the native NV12 planes");
+        }
+        let y_fd = unsafe { OwnedFd::from_raw_fd(y_raw_fd) };
+        let uv_fd = unsafe { OwnedFd::from_raw_fd(uv_raw_fd) };
+        if dma_buf_identity(&y_fd)? != dma_buf_identity(&uv_fd)? {
+            bail!("GBM exported native NV12 as multiple objects; this example expects one");
+        }
+        drop(uv_fd);
+        let modifier = match unsafe { gbm_bo_get_modifier(bo) } {
+            DRM_FORMAT_MOD_INVALID => requested_modifier,
+            modifier => modifier,
+        };
+        if modifier != requested_modifier {
+            bail!("GBM allocated modifier {modifier:#018x}, requested {requested_modifier:#018x}");
+        }
+        if modifier == DRM_FORMAT_MOD_LINEAR {
+            paint_native_nv12(&y_fd, y_offset, y_stride, uv_offset, uv_stride)?;
+        }
+        let coded_size = size(DevicePixels(WIDTH as i32), DevicePixels(HEIGHT as i32));
+        let mut image = DmaBufImage::new(
+            coded_size,
+            DRM_FORMAT_NV12,
+            vec![DmaBufObject::new(y_fd, modifier)],
+            vec![
+                DmaBufPlaneLayout::new(0, y_offset, y_stride),
+                DmaBufPlaneLayout::new(0, uv_offset, uv_stride),
+            ],
+        );
+        if let Some(drm_device) = specs.drm_render_device {
+            image = image.with_drm_device(drm_device);
+        }
+        let dma_buf = unsafe { DmaBufHandle::from_image_with_lifetime_guard(image, allocation) }?;
+        let frame = SurfaceFrame::from_dma_buf_with_color(
+            handle,
+            0,
+            bounds(Default::default(), coded_size),
+            coded_size,
+            dma_buf,
+            SurfaceColorInfo {
+                matrix: YuvMatrix::Bt709,
+                range: ColorRange::Limited,
+            },
+        )?;
+
+        Ok(ImportedFrame {
+            frame: Arc::new(frame),
+            render_node,
+            layout: format!(
+                "native NV12 · one object / two planes · modifier: {modifier:#018x} · strides: {y_stride}/{uv_stride}"
+            ),
+        })
+    }
+
+    fn requested_native_nv12_modifier() -> Result<u64> {
+        let modifier = std::env::var("GPUI_DMA_BUF_MODIFIER")
+            .ok()
+            .map(|value| {
+                u64::from_str_radix(value.trim().trim_start_matches("0x"), 16)
+                    .context("invalid GPUI_DMA_BUF_MODIFIER")
+            })
+            .transpose()?
+            .unwrap_or(DRM_FORMAT_MOD_LINEAR);
+        Ok(modifier)
+    }
+
+    fn allocate_native_nv12_bo(device: *mut GbmDevice, modifier: u64) -> Result<*mut GbmBo> {
+        let flags = if modifier == DRM_FORMAT_MOD_LINEAR {
+            GBM_BO_USE_LINEAR
+        } else {
+            GBM_BO_USE_RENDERING
+        };
+        let mut bo = unsafe {
+            gbm_bo_create_with_modifiers2(
+                device,
+                WIDTH,
+                HEIGHT,
+                DRM_FORMAT_NV12,
+                &modifier,
+                1,
+                flags,
+            )
+        };
+        if bo.is_null() && modifier == DRM_FORMAT_MOD_LINEAR {
+            bo =
+                unsafe { gbm_bo_create(device, WIDTH, HEIGHT, DRM_FORMAT_NV12, GBM_BO_USE_LINEAR) };
+        }
+        if bo.is_null() {
+            bail!(
+                "unsupported GBM NV12 modifier {modifier:#018x}; use a decoder-exported DMA-BUF for modifiers the allocator cannot create"
+            );
+        }
+        Ok(bo)
+    }
+
+    fn paint_native_nv12(
+        fd: &OwnedFd,
+        y_offset: u64,
+        y_stride: u32,
+        uv_offset: u64,
+        uv_stride: u32,
+    ) -> Result<()> {
+        let y_end = y_offset
+            .checked_add(u64::from(y_stride) * u64::from(HEIGHT))
+            .context("native NV12 Y layout overflow")?;
+        let uv_height = HEIGHT.div_ceil(2);
+        let uv_end = uv_offset
+            .checked_add(u64::from(uv_stride) * u64::from(uv_height))
+            .context("native NV12 UV layout overflow")?;
+        let len = usize::try_from(y_end.max(uv_end))?;
+        dma_buf_sync(fd, DMA_BUF_SYNC_WRITE)?;
+        let mapping = unsafe {
+            libc::mmap(
+                ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        if mapping == libc::MAP_FAILED {
+            let error = std::io::Error::last_os_error();
+            let _ = dma_buf_sync(fd, DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END);
+            return Err(error).context("mmap failed for native NV12 DMA-BUF");
+        }
+        let bytes = unsafe { std::slice::from_raw_parts_mut(mapping.cast::<u8>(), len) };
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let offset = y_offset as usize + y as usize * y_stride as usize + x as usize;
+                bytes[offset] = 16 + ((x + y) * 219 / (WIDTH + HEIGHT - 2)) as u8;
+            }
+        }
+        for y in 0..uv_height {
+            for x in 0..WIDTH.div_ceil(2) {
+                let offset = uv_offset as usize + y as usize * uv_stride as usize + x as usize * 2;
+                bytes[offset] = (16 + x * 224 / WIDTH.div_ceil(2).max(1)) as u8;
+                bytes[offset + 1] = (240 - y * 224 / uv_height.max(1)) as u8;
+            }
+        }
+        if let Err(error) = dma_buf_sync(fd, DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END) {
+            unsafe { libc::munmap(mapping, len) };
+            return Err(error);
+        }
+        if unsafe { libc::munmap(mapping, len) } != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("munmap failed for native NV12 DMA-BUF");
+        }
+        Ok(())
+    }
+
+    fn dma_buf_sync(fd: &OwnedFd, flags: u64) -> Result<()> {
+        let sync = DmaBufSync { flags };
+        if unsafe { libc::ioctl(fd.as_raw_fd(), DMA_BUF_IOCTL_SYNC, &sync) } != 0 {
+            return Err(std::io::Error::last_os_error()).context("DMA_BUF_IOCTL_SYNC failed");
+        }
+        Ok(())
+    }
+
+    fn dma_buf_identity(fd: &OwnedFd) -> Result<(u64, u64)> {
+        let file = File::from(fd.try_clone()?);
+        let metadata = file.metadata()?;
+        use std::os::unix::fs::MetadataExt as _;
+        Ok((metadata.dev(), metadata.ino()))
     }
 
     fn allocate_linear_bo(

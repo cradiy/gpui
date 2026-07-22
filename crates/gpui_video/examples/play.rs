@@ -34,6 +34,8 @@ fn main() -> Result<()> {
                     VideoPlayer::new_in_window(source, VideoPlayerOptions::default(), window, cx)
                         .expect("failed to create video player")
                 });
+
+                #[cfg(target_os = "linux")]
                 let mut reported_frame_layout = false;
                 cx.subscribe(&player, move |_, event, _| match event {
                     VideoPlayerEvent::FrameTransportChanged(transport) => {

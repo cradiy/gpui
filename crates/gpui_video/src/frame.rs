@@ -8,6 +8,7 @@ use gpui::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameTransport {
     Cpu,
+    CoreVideo,
     DmaBuf,
 }
 
@@ -74,6 +75,8 @@ impl VideoFrame {
     pub fn transport(&self) -> FrameTransport {
         match self.surface.backing() {
             SurfaceFrameBacking::Cpu(_) => FrameTransport::Cpu,
+            #[cfg(target_os = "macos")]
+            SurfaceFrameBacking::CoreVideo(_) => FrameTransport::CoreVideo,
             #[cfg(target_os = "linux")]
             SurfaceFrameBacking::DmaBuf(_) => FrameTransport::DmaBuf,
         }

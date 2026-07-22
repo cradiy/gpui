@@ -17,6 +17,10 @@ url.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 gst-allocators = { package = "gstreamer-allocators", version = "0.25" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation.workspace = true
+core-video.workspace = true
+
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }

@@ -1,7 +1,9 @@
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicBool;
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     thread::JoinHandle,
     time::Duration,
@@ -19,6 +21,8 @@ use crate::{
     network::configure_playbin_network, stats::PlaybackCounters,
 };
 
+#[cfg(target_os = "macos")]
+mod core_video;
 #[cfg(target_os = "linux")]
 mod dma_buf;
 
@@ -36,10 +40,12 @@ pub(crate) enum BackendEvent {
 
 pub(crate) struct GstreamerPlayback {
     playbin: gst::Element,
+    #[cfg(target_os = "linux")]
     appsink: gst_app::AppSink,
     bus: gst::Bus,
     bus_thread: Option<JoinHandle<()>>,
     counters: Arc<PlaybackCounters>,
+    #[cfg(target_os = "linux")]
     using_cpu_fallback: AtomicBool,
 }
 
@@ -157,10 +163,12 @@ impl GstreamerPlayback {
         Ok((
             Self {
                 playbin,
+                #[cfg(target_os = "linux")]
                 appsink,
                 bus,
                 bus_thread: Some(bus_thread),
                 counters,
+                #[cfg(target_os = "linux")]
                 using_cpu_fallback: AtomicBool::new(false),
             },
             PlaybackOutput {
@@ -276,6 +284,7 @@ impl GstreamerPlayback {
         self.counters.snapshot(delivered_frames)
     }
 
+    #[cfg(target_os = "linux")]
     pub fn switch_to_cpu_fallback(&self) -> Result<bool> {
         if self
             .using_cpu_fallback
@@ -359,10 +368,10 @@ pub(crate) fn clock_time(duration: Duration) -> Result<gst::ClockTime> {
     gst::ClockTime::try_from(duration).context("media timestamp exceeds the GStreamer time range")
 }
 
-pub(crate) fn appsink_caps(gpu_specs: Option<&GpuSpecs>) -> Result<gst::Caps> {
+pub(crate) fn appsink_caps(_gpu_specs: Option<&GpuSpecs>) -> Result<gst::Caps> {
     #[cfg(target_os = "linux")]
     {
-        dma_buf::appsink_caps(gpu_specs)
+        dma_buf::appsink_caps(_gpu_specs)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -373,6 +382,7 @@ pub(crate) fn appsink_caps(gpu_specs: Option<&GpuSpecs>) -> Result<gst::Caps> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn cpu_appsink_caps() -> Result<gst::Caps> {
     "video/x-raw,format=(string){NV12,BGRA,RGBA}"
         .parse::<gst::Caps>()
@@ -385,6 +395,11 @@ fn sample_to_surface_frame(
     sequence: u64,
     #[cfg(target_os = "linux")] producer_drm_device: Option<gpui::DrmDevice>,
 ) -> Result<SurfaceFrame> {
+    #[cfg(target_os = "macos")]
+    if let Some(frame) = core_video::sample_to_surface_frame(sample, handle.clone(), sequence)? {
+        return Ok(frame);
+    }
+
     #[cfg(target_os = "linux")]
     if dma_buf::sample_uses_dma_buf(sample) {
         return dma_buf::sample_to_surface_frame(sample, handle, sequence, producer_drm_device);
@@ -591,6 +606,7 @@ fn surface_color_info(info: &gst_video::VideoInfo) -> SurfaceColorInfo {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
     use std::fs::File;
 
     use gpui::{SurfaceFrameBacking, SurfaceHandle};

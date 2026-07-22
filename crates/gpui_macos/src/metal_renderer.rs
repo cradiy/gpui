@@ -7,17 +7,20 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use gpui::{
-    AtlasTextureId, Background, Bounds, ContentMask, DevicePixels, EffectQuad, EffectShader,
-    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
+    AtlasTextureId, Background, Bounds, ColorRange, ContentMask, DevicePixels, EffectQuad,
+    EffectShader, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch,
+    Quad, ScaledPixels, Scene, Shadow, Size, SurfaceColorInfo, SurfaceFormat, SurfaceFrame,
+    SurfaceFrameBacking, SurfaceId, TransformationMatrix, Underline, WeakSurfaceHandle, YuvMatrix,
+    point, size,
 };
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
 
 use core_foundation::base::TCFType;
 use core_video::{
-    metal_texture::CVMetalTextureGetTexture, metal_texture_cache::CVMetalTextureCache,
-    pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+    metal_texture::{CVMetalTexture, CVMetalTextureGetTexture},
+    metal_texture_cache::CVMetalTextureCache,
+    pixel_buffer::CVPixelBuffer,
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
 use metal::{
@@ -46,6 +49,31 @@ const SHADERS_SOURCE_FILE: &str = include_str!(concat!(env!("OUT_DIR"), "/stitch
 // Use 4x MSAA, all devices support it.
 // https://developer.apple.com/documentation/metal/mtldevice/1433355-supportstexturesamplecount
 const PATH_SAMPLE_COUNT: u32 = 4;
+
+#[derive(Clone)]
+enum CachedSurfaceTextures {
+    Rgba(metal::Texture),
+    Nv12 {
+        y: metal::Texture,
+        uv: metal::Texture,
+    },
+}
+
+struct CachedSurface {
+    sequence: u64,
+    format: SurfaceFormat,
+    size: Size<DevicePixels>,
+    textures: CachedSurfaceTextures,
+    owner: WeakSurfaceHandle,
+}
+
+enum CoreVideoTextures {
+    Rgba(CVMetalTexture),
+    Nv12 {
+        y: CVMetalTexture,
+        uv: CVMetalTexture,
+    },
+}
 
 pub(crate) type Context = Arc<Mutex<InstanceBufferPool>>;
 pub(crate) type Renderer = MetalRenderer;
@@ -134,7 +162,9 @@ pub(crate) struct MetalRenderer {
     underlines_pipeline_state: metal::RenderPipelineState,
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
-    surfaces_pipeline_state: metal::RenderPipelineState,
+    surfaces_rgba_pipeline_state: metal::RenderPipelineState,
+    surfaces_nv12_pipeline_state: metal::RenderPipelineState,
+    surfaces: HashMap<SurfaceId, CachedSurface>,
     unit_vertices: metal::Buffer,
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
@@ -389,12 +419,20 @@ impl MetalRenderer {
             "polychrome_sprite_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
-        let surfaces_pipeline_state = build_pipeline_state(
+        let surfaces_rgba_pipeline_state = build_pipeline_state(
             &device,
             &library,
-            "surfaces",
+            "surfaces_rgba",
             "surface_vertex",
-            "surface_fragment",
+            "surface_rgba_fragment",
+            MTLPixelFormat::BGRA8Unorm,
+        );
+        let surfaces_nv12_pipeline_state = build_pipeline_state(
+            &device,
+            &library,
+            "surfaces_nv12",
+            "surface_vertex",
+            "surface_nv12_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
 
@@ -427,7 +465,9 @@ impl MetalRenderer {
             underlines_pipeline_state,
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
-            surfaces_pipeline_state,
+            surfaces_rgba_pipeline_state,
+            surfaces_nv12_pipeline_state,
+            surfaces: HashMap::default(),
             unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
@@ -1743,7 +1783,7 @@ impl MetalRenderer {
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
-        command_encoder.set_render_pipeline_state(&self.surfaces_pipeline_state);
+        self.surfaces.retain(|_, cached| cached.owner.is_alive());
         command_encoder.set_vertex_buffer(
             SurfaceInputIndex::Vertices as u64,
             Some(&self.unit_vertices),
@@ -1756,88 +1796,450 @@ impl MetalRenderer {
         );
 
         for surface in surfaces {
-            let gpui::SurfaceSource::Surface(image_buffer) = &surface.source else {
-                // Portable CPU-backed frames are currently rendered by the WGPU backend.
-                // Keep the existing CoreVideo zero-copy path intact on Metal.
-                continue;
-            };
-            let texture_size = size(
-                DevicePixels::from(image_buffer.get_width() as i32),
-                DevicePixels::from(image_buffer.get_height() as i32),
-            );
-
-            assert_eq!(
-                image_buffer.get_pixel_format(),
-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            );
-
-            let y_texture = self
-                .core_video_texture_cache
-                .create_texture_from_image(
-                    image_buffer.as_concrete_TypeRef(),
-                    None,
-                    MTLPixelFormat::R8Unorm,
-                    image_buffer.get_width_of_plane(0),
-                    image_buffer.get_height_of_plane(0),
-                    0,
-                )
-                .unwrap();
-            let cb_cr_texture = self
-                .core_video_texture_cache
-                .create_texture_from_image(
-                    image_buffer.as_concrete_TypeRef(),
-                    None,
-                    MTLPixelFormat::RG8Unorm,
-                    image_buffer.get_width_of_plane(1),
-                    image_buffer.get_height_of_plane(1),
-                    1,
-                )
-                .unwrap();
-
-            align_offset(instance_offset);
-            let next_offset = *instance_offset + mem::size_of::<Surface>();
-            if next_offset > instance_buffer.size {
-                return false;
+            match &surface.source {
+                gpui::SurfaceSource::Frame(frame) => {
+                    let params = surface_bounds(surface, Some(frame));
+                    match frame.backing() {
+                        SurfaceFrameBacking::Cpu(_) => {
+                            let Some(textures) = self.cpu_surface_textures(frame) else {
+                                continue;
+                            };
+                            let rendered = match &textures {
+                                CachedSurfaceTextures::Rgba(texture) => self.draw_surface_textures(
+                                    params,
+                                    texture,
+                                    texture,
+                                    false,
+                                    instance_buffer,
+                                    instance_offset,
+                                    command_encoder,
+                                ),
+                                CachedSurfaceTextures::Nv12 { y, uv } => self
+                                    .draw_surface_textures(
+                                        params,
+                                        y,
+                                        uv,
+                                        true,
+                                        instance_buffer,
+                                        instance_offset,
+                                        command_encoder,
+                                    ),
+                            };
+                            if !rendered {
+                                return false;
+                            }
+                        }
+                        SurfaceFrameBacking::CoreVideo(core_video) => {
+                            // SAFETY: The CoreVideoHandle contract freezes the
+                            // published buffer; Metal only samples it here.
+                            let pixel_buffer = unsafe { core_video.pixel_buffer() };
+                            let textures = match self
+                                .core_video_textures(pixel_buffer, frame.format())
+                            {
+                                Ok(textures) => textures,
+                                Err(error) => {
+                                    log::error!("failed to import CoreVideo surface: {error:#}");
+                                    continue;
+                                }
+                            };
+                            let rendered = self.draw_core_video_surface(
+                                params,
+                                &textures,
+                                instance_buffer,
+                                instance_offset,
+                                command_encoder,
+                            );
+                            match rendered {
+                                Ok(true) => {}
+                                Ok(false) => return false,
+                                Err(error) => {
+                                    log::error!(
+                                        "failed to access CoreVideo Metal texture: {error:#}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                gpui::SurfaceSource::Surface(image_buffer) => {
+                    let params = surface_bounds(surface, None);
+                    let textures = match self.core_video_textures(image_buffer, SurfaceFormat::Nv12)
+                    {
+                        Ok(textures) => textures,
+                        Err(error) => {
+                            log::error!("failed to import legacy CoreVideo surface: {error:#}");
+                            continue;
+                        }
+                    };
+                    let rendered = self.draw_core_video_surface(
+                        params,
+                        &textures,
+                        instance_buffer,
+                        instance_offset,
+                        command_encoder,
+                    );
+                    match rendered {
+                        Ok(true) => {}
+                        Ok(false) => return false,
+                        Err(error) => {
+                            log::error!(
+                                "failed to access legacy CoreVideo Metal texture: {error:#}"
+                            );
+                        }
+                    }
+                }
             }
-
-            command_encoder.set_vertex_buffer(
-                SurfaceInputIndex::Surfaces as u64,
-                Some(&instance_buffer.metal_buffer),
-                *instance_offset as u64,
-            );
-            command_encoder.set_vertex_bytes(
-                SurfaceInputIndex::TextureSize as u64,
-                mem::size_of_val(&texture_size) as u64,
-                &texture_size as *const Size<DevicePixels> as *const _,
-            );
-            // let y_texture = y_texture.get_texture().unwrap().
-            command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
-                let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
-                Some(metal::TextureRef::from_ptr(texture as *mut _))
-            });
-            command_encoder.set_fragment_texture(SurfaceInputIndex::CbCrTexture as u64, unsafe {
-                let texture = CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef());
-                Some(metal::TextureRef::from_ptr(texture as *mut _))
-            });
-
-            unsafe {
-                let buffer_contents = (instance_buffer.metal_buffer.contents() as *mut u8)
-                    .add(*instance_offset)
-                    as *mut SurfaceBounds;
-                ptr::write(
-                    buffer_contents,
-                    SurfaceBounds {
-                        bounds: surface.bounds,
-                        content_mask: surface.content_mask,
-                    },
-                );
-            }
-
-            command_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 6);
-            *instance_offset = next_offset;
         }
         true
     }
+
+    fn cpu_surface_textures(&mut self, frame: &SurfaceFrame) -> Option<CachedSurfaceTextures> {
+        let id = frame.handle().id();
+        let recreate = self.surfaces.get(&id).is_none_or(|cached| {
+            cached.format != frame.format() || cached.size != frame.coded_size()
+        });
+        if recreate {
+            let textures = self.create_surface_textures(frame);
+            upload_surface(&textures, frame);
+            self.surfaces.insert(
+                id,
+                CachedSurface {
+                    sequence: frame.sequence(),
+                    format: frame.format(),
+                    size: frame.coded_size(),
+                    textures,
+                    owner: frame.handle().downgrade(),
+                },
+            );
+            return self.surfaces.get(&id).map(|cached| cached.textures.clone());
+        }
+
+        let cached = self.surfaces.get_mut(&id)?;
+        if cached.sequence != frame.sequence() {
+            upload_surface(&cached.textures, frame);
+            cached.sequence = frame.sequence();
+        }
+        Some(cached.textures.clone())
+    }
+
+    fn create_surface_textures(&self, frame: &SurfaceFrame) -> CachedSurfaceTextures {
+        let size = frame.coded_size();
+        let width = size.width.0 as u64;
+        let height = size.height.0 as u64;
+        let create = |pixel_format, width, height| {
+            let descriptor = metal::TextureDescriptor::new();
+            descriptor.set_width(width);
+            descriptor.set_height(height);
+            descriptor.set_pixel_format(pixel_format);
+            descriptor.set_usage(metal::MTLTextureUsage::ShaderRead);
+            descriptor.set_storage_mode(if self.is_apple_gpu {
+                metal::MTLStorageMode::Shared
+            } else {
+                metal::MTLStorageMode::Managed
+            });
+            self.device.new_texture(&descriptor)
+        };
+
+        match frame.format() {
+            SurfaceFormat::Bgra8 => {
+                CachedSurfaceTextures::Rgba(create(MTLPixelFormat::BGRA8Unorm, width, height))
+            }
+            SurfaceFormat::Rgba8 => {
+                CachedSurfaceTextures::Rgba(create(MTLPixelFormat::RGBA8Unorm, width, height))
+            }
+            SurfaceFormat::Nv12 => CachedSurfaceTextures::Nv12 {
+                y: create(MTLPixelFormat::R8Unorm, width, height),
+                uv: create(
+                    MTLPixelFormat::RG8Unorm,
+                    width.div_ceil(2),
+                    height.div_ceil(2),
+                ),
+            },
+        }
+    }
+
+    fn core_video_textures(
+        &self,
+        image_buffer: &CVPixelBuffer,
+        format: SurfaceFormat,
+    ) -> Result<CoreVideoTextures> {
+        let image = image_buffer.as_concrete_TypeRef();
+        match format {
+            SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => {
+                let pixel_format = match format {
+                    SurfaceFormat::Bgra8 => MTLPixelFormat::BGRA8Unorm,
+                    SurfaceFormat::Rgba8 => MTLPixelFormat::RGBA8Unorm,
+                    SurfaceFormat::Nv12 => unreachable!(),
+                };
+                Ok(CoreVideoTextures::Rgba(
+                    self.core_video_texture_cache
+                        .create_texture_from_image(
+                            image,
+                            None,
+                            pixel_format,
+                            image_buffer.get_width(),
+                            image_buffer.get_height(),
+                            0,
+                        )
+                        .map_err(|code| anyhow::anyhow!("CVMetalTextureCache returned {code}"))?,
+                ))
+            }
+            SurfaceFormat::Nv12 => {
+                anyhow::ensure!(
+                    image_buffer.get_plane_count() >= 2,
+                    "NV12 CoreVideo buffer has fewer than two planes"
+                );
+                let y = self
+                    .core_video_texture_cache
+                    .create_texture_from_image(
+                        image,
+                        None,
+                        MTLPixelFormat::R8Unorm,
+                        image_buffer.get_width_of_plane(0),
+                        image_buffer.get_height_of_plane(0),
+                        0,
+                    )
+                    .map_err(|code| anyhow::anyhow!("CVMetalTextureCache returned {code}"))?;
+                let uv = self
+                    .core_video_texture_cache
+                    .create_texture_from_image(
+                        image,
+                        None,
+                        MTLPixelFormat::RG8Unorm,
+                        image_buffer.get_width_of_plane(1),
+                        image_buffer.get_height_of_plane(1),
+                        1,
+                    )
+                    .map_err(|code| anyhow::anyhow!("CVMetalTextureCache returned {code}"))?;
+                Ok(CoreVideoTextures::Nv12 { y, uv })
+            }
+        }
+    }
+
+    fn draw_core_video_surface(
+        &self,
+        params: SurfaceBounds,
+        textures: &CoreVideoTextures,
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+        command_encoder: &metal::RenderCommandEncoderRef,
+    ) -> Result<bool> {
+        match textures {
+            CoreVideoTextures::Rgba(texture) => {
+                let texture = core_video_texture_ref(texture)?;
+                Ok(self.draw_surface_textures(
+                    params,
+                    texture,
+                    texture,
+                    false,
+                    instance_buffer,
+                    instance_offset,
+                    command_encoder,
+                ))
+            }
+            CoreVideoTextures::Nv12 { y, uv } => {
+                let y = core_video_texture_ref(y)?;
+                let uv = core_video_texture_ref(uv)?;
+                Ok(self.draw_surface_textures(
+                    params,
+                    y,
+                    uv,
+                    true,
+                    instance_buffer,
+                    instance_offset,
+                    command_encoder,
+                ))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_surface_textures(
+        &self,
+        params: SurfaceBounds,
+        first_texture: &metal::TextureRef,
+        second_texture: &metal::TextureRef,
+        nv12: bool,
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+        command_encoder: &metal::RenderCommandEncoderRef,
+    ) -> bool {
+        align_offset(instance_offset);
+        let next_offset = *instance_offset + mem::size_of::<SurfaceBounds>();
+        if next_offset > instance_buffer.size {
+            return false;
+        }
+
+        command_encoder.set_render_pipeline_state(if nv12 {
+            &self.surfaces_nv12_pipeline_state
+        } else {
+            &self.surfaces_rgba_pipeline_state
+        });
+        command_encoder.set_vertex_buffer(
+            SurfaceInputIndex::Surfaces as u64,
+            Some(&instance_buffer.metal_buffer),
+            *instance_offset as u64,
+        );
+        command_encoder.set_fragment_buffer(
+            SurfaceInputIndex::Surfaces as u64,
+            Some(&instance_buffer.metal_buffer),
+            *instance_offset as u64,
+        );
+        command_encoder
+            .set_fragment_texture(SurfaceInputIndex::YTexture as u64, Some(first_texture));
+        command_encoder
+            .set_fragment_texture(SurfaceInputIndex::CbCrTexture as u64, Some(second_texture));
+
+        unsafe {
+            let buffer_contents = (instance_buffer.metal_buffer.contents() as *mut u8)
+                .add(*instance_offset) as *mut SurfaceBounds;
+            ptr::write(buffer_contents, params);
+        }
+
+        command_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 6);
+        *instance_offset = next_offset;
+        true
+    }
+}
+
+fn core_video_texture_ref(texture: &CVMetalTexture) -> Result<&metal::TextureRef> {
+    unsafe {
+        let texture = CVMetalTextureGetTexture(texture.as_concrete_TypeRef());
+        anyhow::ensure!(
+            !texture.is_null(),
+            "CVMetalTexture contains no Metal texture"
+        );
+        Ok(metal::TextureRef::from_ptr(texture as *mut _))
+    }
+}
+
+fn upload_surface(textures: &CachedSurfaceTextures, frame: &SurfaceFrame) {
+    let size = frame.coded_size();
+    let width = size.width.0 as u64;
+    let height = size.height.0 as u64;
+    let planes = frame
+        .cpu_planes()
+        .expect("CPU surface upload requires CPU planes");
+    let upload =
+        |texture: &metal::TextureRef, plane: &gpui::SurfacePlane, width: u64, height: u64| {
+            texture.replace_region(
+                metal::MTLRegion::new_2d(0, 0, width, height),
+                0,
+                plane.bytes().as_ptr() as *const _,
+                u64::from(plane.stride()),
+            );
+        };
+
+    match textures {
+        CachedSurfaceTextures::Rgba(texture) => upload(texture, &planes[0], width, height),
+        CachedSurfaceTextures::Nv12 { y, uv } => {
+            upload(y, &planes[0], width, height);
+            upload(uv, &planes[1], width.div_ceil(2), height.div_ceil(2));
+        }
+    }
+}
+
+fn surface_bounds(surface: &PaintSurface, frame: Option<&SurfaceFrame>) -> SurfaceBounds {
+    let (uv_origin, uv_size, color) = frame.map_or(
+        (
+            [0.0, 0.0],
+            [1.0, 1.0],
+            SurfaceColorInfo {
+                matrix: YuvMatrix::Bt601,
+                range: ColorRange::Full,
+            },
+        ),
+        |frame| {
+            let coded_size = frame.coded_size();
+            let visible_rect = frame.visible_rect();
+            (
+                [
+                    visible_rect.origin.x.0 as f32 / coded_size.width.0 as f32,
+                    visible_rect.origin.y.0 as f32 / coded_size.height.0 as f32,
+                ],
+                [
+                    visible_rect.size.width.0 as f32 / coded_size.width.0 as f32,
+                    visible_rect.size.height.0 as f32 / coded_size.height.0 as f32,
+                ],
+                frame.color(),
+            )
+        },
+    );
+
+    SurfaceBounds {
+        bounds: surface.bounds,
+        clip_bounds: surface.clip_bounds,
+        content_mask: surface.content_mask,
+        corner_radii: surface.corner_radii,
+        uv_origin,
+        uv_size,
+        color_rows: yuv_to_rgb_rows(color),
+        opacity: surface.opacity,
+        _pad: [0.0; 3],
+    }
+}
+
+fn yuv_to_rgb_rows(color: SurfaceColorInfo) -> [[f32; 4]; 3] {
+    let (y_scale, y_offset, chroma_center, r_cr, g_cb, g_cr, b_cb) =
+        match (color.matrix, color.range) {
+            (YuvMatrix::Bt601, ColorRange::Limited) => (
+                255.0 / 219.0,
+                16.0 / 255.0,
+                128.0 / 255.0,
+                1.596_027,
+                -0.391_762,
+                -0.812_968,
+                2.017_232,
+            ),
+            (YuvMatrix::Bt709, ColorRange::Limited) => (
+                255.0 / 219.0,
+                16.0 / 255.0,
+                128.0 / 255.0,
+                1.792_741,
+                -0.213_249,
+                -0.532_909,
+                2.112_402,
+            ),
+            (YuvMatrix::Bt601, ColorRange::Full) => (
+                1.0,
+                0.0,
+                128.0 / 255.0,
+                1.402,
+                -0.344_136,
+                -0.714_136,
+                1.772,
+            ),
+            (YuvMatrix::Bt709, ColorRange::Full) => (
+                1.0,
+                0.0,
+                128.0 / 255.0,
+                1.5748,
+                -0.187_324,
+                -0.468_124,
+                1.8556,
+            ),
+        };
+
+    [
+        [
+            y_scale,
+            0.0,
+            r_cr,
+            -y_scale * y_offset - r_cr * chroma_center,
+        ],
+        [
+            y_scale,
+            g_cb,
+            g_cr,
+            -y_scale * y_offset - (g_cb + g_cr) * chroma_center,
+        ],
+        [
+            y_scale,
+            b_cb,
+            0.0,
+            -y_scale * y_offset - b_cb * chroma_center,
+        ],
+    ]
 }
 
 fn new_command_encoder_for_texture<'a>(
@@ -2159,7 +2561,6 @@ enum SurfaceInputIndex {
     Vertices = 0,
     Surfaces = 1,
     ViewportSize = 2,
-    TextureSize = 3,
     YTexture = 4,
     CbCrTexture = 5,
 }
@@ -2176,11 +2577,18 @@ pub struct PathSprite {
     pub bounds: Bounds<ScaledPixels>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct SurfaceBounds {
     pub bounds: Bounds<ScaledPixels>,
+    pub clip_bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
+    pub corner_radii: gpui::Corners<ScaledPixels>,
+    pub uv_origin: [f32; 2],
+    pub uv_size: [f32; 2],
+    pub color_rows: [[f32; 4]; 3],
+    pub opacity: f32,
+    pub _pad: [f32; 3],
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -2213,5 +2621,36 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
 
     fn sprite_atlas(&self) -> Arc<dyn gpui::PlatformAtlas> {
         self.renderer.sprite_atlas().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_range_yuv_matrix_maps_neutral_black_and_white() {
+        let rows = yuv_to_rgb_rows(SurfaceColorInfo {
+            matrix: YuvMatrix::Bt709,
+            range: ColorRange::Full,
+        });
+        let convert = |y: f32, cb: f32, cr: f32| {
+            rows.map(|row| row[0] * y + row[1] * cb + row[2] * cr + row[3])
+        };
+
+        let black = convert(0.0, 128.0 / 255.0, 128.0 / 255.0);
+        let white = convert(1.0, 128.0 / 255.0, 128.0 / 255.0);
+        assert!(black.into_iter().all(|channel| channel.abs() < 1e-6));
+        assert!(
+            white
+                .into_iter()
+                .all(|channel| (channel - 1.0).abs() < 1e-6)
+        );
+    }
+
+    #[cfg(feature = "runtime_shaders")]
+    #[test]
+    fn surface_shaders_compile_at_runtime() {
+        let _renderer = MetalHeadlessRenderer::new();
     }
 }

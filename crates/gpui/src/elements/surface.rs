@@ -672,6 +672,65 @@ pub struct SurfacePlane {
     stride: u32,
 }
 
+/// An owned reference to a macOS CoreVideo allocation.
+///
+/// CoreVideo pixel buffers are reference-counted objects whose backing
+/// IOSurface can be sampled by Metal without copying its pixels. The wrapper
+/// makes that cross-thread ownership explicit for decoder callbacks, which
+/// commonly publish frames from a GStreamer or VideoToolbox worker thread.
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+pub struct CoreVideoHandle {
+    pixel_buffer: CVPixelBuffer,
+}
+
+#[cfg(target_os = "macos")]
+impl CoreVideoHandle {
+    /// Retains a CoreVideo pixel buffer for use by a surface frame.
+    ///
+    /// # Safety
+    ///
+    /// The producer must not mutate the pixel buffer or its backing storage
+    /// after publishing this handle. It must publish a new frame instead.
+    pub unsafe fn new(pixel_buffer: CVPixelBuffer) -> Self {
+        Self { pixel_buffer }
+    }
+
+    /// Returns the retained CoreVideo pixel buffer.
+    ///
+    /// # Safety
+    ///
+    /// The returned buffer may only be inspected or sampled. Its base address
+    /// must not be mutated while any clone of this handle exists.
+    pub unsafe fn pixel_buffer(&self) -> &CVPixelBuffer {
+        &self.pixel_buffer
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl fmt::Debug for CoreVideoHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CoreVideoHandle")
+            .field("width", &self.pixel_buffer.get_width())
+            .field("height", &self.pixel_buffer.get_height())
+            .field("pixel_format", &self.pixel_buffer.get_pixel_format())
+            .finish()
+    }
+}
+
+// SAFETY: CVPixelBuffer is an immutable, reference-counted CVBuffer while it
+// is held by GPUI. CoreVideo permits retaining, releasing, and using image
+// buffers across threads. Producers must publish a new frame rather than
+// mutate a buffer while GPUI may sample it.
+#[cfg(target_os = "macos")]
+unsafe impl Send for CoreVideoHandle {}
+
+// SAFETY: See the Send implementation. GPUI exposes only shared access to the
+// retained pixel buffer and never locks or mutates its base address.
+#[cfg(target_os = "macos")]
+unsafe impl Sync for CoreVideoHandle {}
+
 impl SurfacePlane {
     /// Creates a plane from shared bytes and a byte stride.
     pub fn new(bytes: impl Into<Arc<[u8]>>, stride: u32) -> Self {
@@ -717,6 +776,8 @@ pub struct SurfaceFrame {
 #[derive(Clone, Debug)]
 enum SurfaceFrameBackingData {
     Cpu(SmallVec<[SurfacePlane; 2]>),
+    #[cfg(target_os = "macos")]
+    CoreVideo(CoreVideoHandle),
     #[cfg(target_os = "linux")]
     DmaBuf {
         handle: DmaBufHandle,
@@ -729,6 +790,9 @@ enum SurfaceFrameBackingData {
 pub enum SurfaceFrameBacking<'a> {
     /// Portable CPU memory that must be uploaded to a GPU texture.
     Cpu(&'a [SurfacePlane]),
+    /// A macOS CoreVideo pixel buffer sampled through Metal.
+    #[cfg(target_os = "macos")]
+    CoreVideo(&'a CoreVideoHandle),
     /// A Linux DMA-BUF sampled without copying its pixels.
     #[cfg(target_os = "linux")]
     DmaBuf(&'a DmaBufHandle),
@@ -829,6 +893,47 @@ impl SurfaceFrame {
             display_size,
             format,
             backing: SurfaceFrameBackingData::Cpu(planes),
+            color,
+        })
+    }
+
+    /// Creates a frame backed by a macOS CoreVideo pixel buffer.
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_core_video(
+        handle: SurfaceHandle,
+        sequence: u64,
+        visible_rect: Bounds<DevicePixels>,
+        display_size: Size<DevicePixels>,
+        format: SurfaceFormat,
+        core_video: CoreVideoHandle,
+        color: SurfaceColorInfo,
+    ) -> Result<Self, SurfaceFrameError> {
+        let coded_size = Size {
+            width: DevicePixels(
+                i32::try_from(core_video.pixel_buffer.get_width())
+                    .map_err(|_| SurfaceFrameError::PlaneLayoutOverflow)?,
+            ),
+            height: DevicePixels(
+                i32::try_from(core_video.pixel_buffer.get_height())
+                    .map_err(|_| SurfaceFrameError::PlaneLayoutOverflow)?,
+            ),
+        };
+        validate_frame_geometry(coded_size, visible_rect, display_size)?;
+        if format == SurfaceFormat::Nv12
+            && (visible_rect.origin.x.0 % 2 != 0 || visible_rect.origin.y.0 % 2 != 0)
+        {
+            return Err(SurfaceFrameError::UnalignedNv12VisibleRect);
+        }
+
+        Ok(Self {
+            handle,
+            sequence,
+            coded_size,
+            visible_rect,
+            display_size,
+            format,
+            backing: SurfaceFrameBackingData::CoreVideo(core_video),
             color,
         })
     }
@@ -1054,6 +1159,10 @@ impl SurfaceFrame {
     pub fn backing(&self) -> SurfaceFrameBacking<'_> {
         match &self.backing {
             SurfaceFrameBackingData::Cpu(planes) => SurfaceFrameBacking::Cpu(planes),
+            #[cfg(target_os = "macos")]
+            SurfaceFrameBackingData::CoreVideo(core_video) => {
+                SurfaceFrameBacking::CoreVideo(core_video)
+            }
             #[cfg(target_os = "linux")]
             SurfaceFrameBackingData::DmaBuf { handle, .. } => SurfaceFrameBacking::DmaBuf(handle),
         }
@@ -1063,6 +1172,8 @@ impl SurfaceFrame {
     pub fn cpu_planes(&self) -> Option<&[SurfacePlane]> {
         match &self.backing {
             SurfaceFrameBackingData::Cpu(planes) => Some(planes),
+            #[cfg(target_os = "macos")]
+            SurfaceFrameBackingData::CoreVideo(_) => None,
             #[cfg(target_os = "linux")]
             SurfaceFrameBackingData::DmaBuf { .. } => None,
         }
@@ -1629,6 +1740,33 @@ mod tests {
         assert!(weak.is_alive());
         drop(handle);
         assert!(!weak.is_alive());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accepts_core_video_backing() {
+        use core_video::pixel_buffer::kCVPixelFormatType_32BGRA;
+
+        let pixel_buffer = CVPixelBuffer::new(kCVPixelFormatType_32BGRA, 8, 4, None).unwrap();
+        let frame = SurfaceFrame::from_core_video(
+            SurfaceHandle::new(),
+            9,
+            bounds(
+                point(DevicePixels(2), DevicePixels(1)),
+                size(DevicePixels(4), DevicePixels(2)),
+            ),
+            size(DevicePixels(4), DevicePixels(2)),
+            SurfaceFormat::Bgra8,
+            // SAFETY: The test never mutates the pixel buffer after publishing it.
+            unsafe { CoreVideoHandle::new(pixel_buffer) },
+            SurfaceColorInfo::default(),
+        )
+        .unwrap();
+
+        assert_eq!(frame.coded_size(), size(DevicePixels(8), DevicePixels(4)));
+        assert_eq!(frame.sequence(), 9);
+        assert!(matches!(frame.backing(), SurfaceFrameBacking::CoreVideo(_)));
+        assert!(frame.cpu_planes().is_none());
     }
 
     #[cfg(target_os = "linux")]

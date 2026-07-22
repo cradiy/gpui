@@ -15,7 +15,7 @@
 - state, timeline, buffering, frame, transport, rate and volume events
 - cumulative decoded, delivered and dropped-frame statistics
 - coded size, crop rectangle and pixel-aspect-ratio aware presentation geometry
-- CPU, linear Linux DMA-BUF and native tiled NV12 DMA-BUF frame transport
+- CPU, macOS CoreVideo/VideoToolbox and Linux DMA-BUF frame transport
 - HTTP request headers, authentication, proxy, timeout and source retry options
 - network buffering progress and an explicit host-controlled reload operation
 

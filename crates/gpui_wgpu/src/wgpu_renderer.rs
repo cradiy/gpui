@@ -7,13 +7,18 @@ use gpui::{
     Underline, WeakSurfaceHandle, YuvMatrix, get_gamma_correction_ratios,
 };
 #[cfg(target_os = "linux")]
-use gpui::{DmaBufHandle, DmaBufId, DmaBufPlane, SurfaceFrameBacking, WeakDmaBufHandle};
+use gpui::{
+    DRM_FORMAT_NV12, DmaBufHandle, DmaBufId, DmaBufImage, DmaBufPlane, DrmDevice,
+    SurfaceFrameBacking, WeakDmaBufHandle,
+};
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -322,6 +327,7 @@ pub type GpuContext = Rc<RefCell<Option<WgpuContext>>>;
 
 /// GPU resources that must be dropped together during device recovery.
 struct WgpuResources {
+    instance: wgpu::Instance,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
@@ -343,6 +349,10 @@ struct WgpuResources {
     dma_bufs: HashMap<DmaBufId, CachedDmaBuf>,
     #[cfg(target_os = "linux")]
     failed_dma_bufs: HashMap<DmaBufId, WeakDmaBufHandle>,
+    #[cfg(target_os = "linux")]
+    drm_render_device: Option<DrmDevice>,
+    #[cfg(target_os = "linux")]
+    native_nv12_dma_buf_modifiers: Vec<gpui::DmaBufModifier>,
 }
 
 impl WgpuResources {
@@ -673,6 +683,7 @@ impl WgpuRenderer {
         }));
 
         let resources = WgpuResources {
+            instance: context.instance.clone(),
             device,
             queue,
             surface,
@@ -696,6 +707,10 @@ impl WgpuRenderer {
             dma_bufs: HashMap::default(),
             #[cfg(target_os = "linux")]
             failed_dma_bufs: HashMap::default(),
+            #[cfg(target_os = "linux")]
+            drm_render_device: context.drm_render_device(),
+            #[cfg(target_os = "linux")]
+            native_nv12_dma_buf_modifiers: context.native_nv12_dma_buf_modifiers(),
         };
 
         Ok(Self {
@@ -1520,12 +1535,22 @@ impl WgpuRenderer {
     }
 
     pub fn gpu_specs(&self) -> GpuSpecs {
+        let resources = self.resources();
         GpuSpecs {
             is_software_emulated: self.adapter_info.device_type == wgpu::DeviceType::Cpu,
             device_name: self.adapter_info.name.clone(),
             driver_name: self.adapter_info.driver.clone(),
             driver_info: self.adapter_info.driver_info.clone(),
             supports_dma_buf_import: self.dma_buf_import,
+            supports_native_nv12_dma_buf_import: self.dma_buf_import
+                && resources
+                    .device
+                    .features()
+                    .contains(wgpu::Features::TEXTURE_FORMAT_NV12),
+            #[cfg(target_os = "linux")]
+            native_nv12_dma_buf_modifiers: resources.native_nv12_dma_buf_modifiers.clone(),
+            #[cfg(target_os = "linux")]
+            drm_render_device: resources.drm_render_device,
         }
     }
 
@@ -1860,6 +1885,12 @@ impl WgpuRenderer {
                     height,
                     max_texture_size
                 );
+                #[cfg(target_os = "linux")]
+                if let SurfaceFrameBacking::DmaBuf(dma_buf) = frame.backing() {
+                    dma_buf.report_import_failed(format!(
+                        "DMA-BUF size {width}x{height} exceeds the GPU texture limit {max_texture_size}"
+                    ));
+                }
                 resources.surfaces.remove(&id);
                 continue;
             }
@@ -1872,6 +1903,9 @@ impl WgpuRenderer {
                         "failed to wait for DMA-BUF {:?} acquire fence: {error}",
                         dma_buf_id
                     );
+                    dma_buf.report_import_failed(format!(
+                        "failed to wait for DMA-BUF acquire fence: {error}"
+                    ));
                     resources.dma_bufs.remove(&dma_buf_id);
                     continue;
                 }
@@ -1885,6 +1919,9 @@ impl WgpuRenderer {
                             "DMA-BUF {:?} was reused with incompatible frame metadata",
                             dma_buf_id
                         );
+                        dma_buf.report_import_failed(
+                            "DMA-BUF allocation was reused with incompatible frame metadata",
+                        );
                         resources
                             .failed_dma_bufs
                             .insert(dma_buf_id, dma_buf.downgrade());
@@ -1893,12 +1930,20 @@ impl WgpuRenderer {
                     continue;
                 }
 
-                match Self::import_dma_buf(&resources.device, &frame, dma_buf) {
+                match Self::import_dma_buf(
+                    &resources.instance,
+                    &resources.device,
+                    resources.drm_render_device,
+                    &frame,
+                    dma_buf,
+                ) {
                     Ok(cached) => {
+                        dma_buf.report_import_ready();
                         resources.dma_bufs.insert(dma_buf_id, cached);
                     }
                     Err(error) => {
                         log::error!("failed to import DMA-BUF {:?}: {error:#}", dma_buf_id);
+                        dma_buf.report_import_failed(format!("{error:#}"));
                         resources
                             .failed_dma_bufs
                             .insert(dma_buf_id, dma_buf.downgrade());
@@ -1939,7 +1984,9 @@ impl WgpuRenderer {
 
     #[cfg(target_os = "linux")]
     fn import_dma_buf(
+        instance: &wgpu::Instance,
         device: &wgpu::Device,
+        render_device: Option<DrmDevice>,
         frame: &SurfaceFrame,
         dma_buf: &DmaBufHandle,
     ) -> anyhow::Result<CachedDmaBuf> {
@@ -1953,6 +2000,27 @@ impl WgpuRenderer {
         let size = frame.coded_size();
         let width = size.width.0 as u32;
         let height = size.height.0 as u32;
+        if let Some(image) = dma_buf.image() {
+            if let Some(producer_device) = image.drm_device() {
+                let Some(render_device) = render_device else {
+                    anyhow::bail!(
+                        "DMA-BUF producer device {}:{} is known but the Vulkan adapter has no DRM render device",
+                        producer_device.major,
+                        producer_device.minor
+                    );
+                };
+                if producer_device != render_device {
+                    anyhow::bail!(
+                        "DMA-BUF producer device {}:{} does not match Vulkan render device {}:{}",
+                        producer_device.major,
+                        producer_device.minor,
+                        render_device.major,
+                        render_device.minor
+                    );
+                }
+            }
+            return Self::import_native_dma_buf_image(instance, device, frame, dma_buf, image);
+        }
         let textures = match frame.format() {
             SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => {
                 let format = match frame.format() {
@@ -2013,6 +2081,357 @@ impl WgpuRenderer {
             size,
             textures,
             owner: dma_buf.downgrade(),
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn import_native_dma_buf_image(
+        instance: &wgpu::Instance,
+        device: &wgpu::Device,
+        frame: &SurfaceFrame,
+        dma_buf: &DmaBufHandle,
+        image: &DmaBufImage,
+    ) -> anyhow::Result<CachedDmaBuf> {
+        if frame.format() != SurfaceFormat::Nv12 || image.drm_fourcc() != DRM_FORMAT_NV12 {
+            anyhow::bail!(
+                "native DMA-BUF import currently supports only NV12, got fourcc {:#010x}",
+                image.drm_fourcc()
+            );
+        }
+        if image.objects().len() != 1 {
+            anyhow::bail!(
+                "native tiled NV12 import currently requires one DMA-BUF object, got {}",
+                image.objects().len()
+            );
+        }
+        if image.planes().len() != 2 {
+            anyhow::bail!(
+                "native tiled NV12 import requires two plane layouts, got {}",
+                image.planes().len()
+            );
+        }
+        if !device
+            .features()
+            .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
+        {
+            anyhow::bail!("the selected Vulkan device does not support native NV12 textures");
+        }
+
+        let size = frame.coded_size();
+        let extent = wgpu::Extent3d {
+            width: size.width.0 as u32,
+            height: size.height.0 as u32,
+            depth_or_array_layers: 1,
+        };
+        let view_formats = vec![wgpu::TextureFormat::R8Unorm, wgpu::TextureFormat::Rg8Unorm];
+        let hal_descriptor = wgpu::hal::TextureDescriptor {
+            label: Some("gpui_surface_native_dma_buf_nv12"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::NV12,
+            usage: wgpu::wgt::TextureUses::RESOURCE,
+            memory_flags: wgpu::hal::MemoryFlags::empty(),
+            view_formats: view_formats.clone(),
+        };
+        let descriptor = wgpu::TextureDescriptor {
+            label: Some("gpui_surface_native_dma_buf_nv12"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::NV12,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &view_formats,
+        };
+
+        let hal_instance = unsafe { instance.as_hal::<wgpu::hal::vulkan::Api>() }
+            .ok_or_else(|| anyhow::anyhow!("the selected WGPU backend is not Vulkan"))?;
+        let hal_device = unsafe { device.as_hal::<wgpu::hal::vulkan::Api>() }
+            .ok_or_else(|| anyhow::anyhow!("the selected WGPU backend is not Vulkan"))?;
+        let hal_texture = unsafe {
+            Self::create_native_nv12_dma_buf_texture(
+                &hal_instance,
+                &hal_device,
+                image,
+                &hal_descriptor,
+            )
+        }?;
+        drop(hal_device);
+
+        let texture = unsafe {
+            device.create_texture_from_hal::<wgpu::hal::vulkan::Api>(
+                hal_texture,
+                &descriptor,
+                wgpu::wgt::TextureUses::RESOURCE,
+            )
+        };
+        let y_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("gpui_surface_native_dma_buf_nv12_y"),
+            format: Some(wgpu::TextureFormat::R8Unorm),
+            aspect: wgpu::TextureAspect::Plane0,
+            ..Default::default()
+        });
+        let uv_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("gpui_surface_native_dma_buf_nv12_uv"),
+            format: Some(wgpu::TextureFormat::Rg8Unorm),
+            aspect: wgpu::TextureAspect::Plane1,
+            ..Default::default()
+        });
+
+        Ok(CachedDmaBuf {
+            format: frame.format(),
+            size,
+            textures: CachedSurfaceTextures::Nv12 {
+                _y_texture: texture.clone(),
+                y_view,
+                _uv_texture: texture,
+                uv_view,
+            },
+            owner: dma_buf.downgrade(),
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    unsafe fn create_native_nv12_dma_buf_texture(
+        instance: &wgpu::hal::vulkan::Instance,
+        device: &wgpu::hal::vulkan::Device,
+        image: &DmaBufImage,
+        descriptor: &wgpu::hal::TextureDescriptor<'_>,
+    ) -> anyhow::Result<wgpu::hal::vulkan::Texture> {
+        use ash::vk;
+
+        let raw_instance = instance.shared_instance().raw_instance();
+        let raw_device = device.raw_device();
+        let physical_device = device.raw_physical_device();
+        let modifier = image.objects()[0].modifier();
+        let format = vk::Format::G8_B8R8_2PLANE_420_UNORM;
+        let image_flags =
+            vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE;
+        let usage = vk::ImageUsageFlags::SAMPLED;
+
+        let mut modifier_list = vk::DrmFormatModifierPropertiesListEXT::default();
+        let mut modifier_format_properties =
+            vk::FormatProperties2::default().push_next(&mut modifier_list);
+        unsafe {
+            raw_instance.get_physical_device_format_properties2(
+                physical_device,
+                format,
+                &mut modifier_format_properties,
+            );
+        }
+        let mut modifier_properties = vec![
+            vk::DrmFormatModifierPropertiesEXT::default();
+            modifier_list.drm_format_modifier_count as usize
+        ];
+        let mut modifier_list = vk::DrmFormatModifierPropertiesListEXT::default()
+            .drm_format_modifier_properties(&mut modifier_properties);
+        let mut modifier_format_properties =
+            vk::FormatProperties2::default().push_next(&mut modifier_list);
+        unsafe {
+            raw_instance.get_physical_device_format_properties2(
+                physical_device,
+                format,
+                &mut modifier_format_properties,
+            );
+        }
+        let modifier_properties = modifier_properties
+            .iter()
+            .find(|properties| properties.drm_format_modifier == modifier)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Vulkan does not advertise NV12 modifier {modifier:#018x} on the selected adapter"
+                )
+            })?;
+        if modifier_properties.drm_format_modifier_plane_count as usize != image.planes().len() {
+            anyhow::bail!(
+                "NV12 modifier {modifier:#018x} requires {} memory-plane layouts, but the descriptor supplies {}",
+                modifier_properties.drm_format_modifier_plane_count,
+                image.planes().len()
+            );
+        }
+        if !modifier_properties
+            .drm_format_modifier_tiling_features
+            .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+        {
+            anyhow::bail!(
+                "Vulkan does not support sampled images for NV12 modifier {modifier:#018x}"
+            );
+        }
+
+        let mut external_query = vk::PhysicalDeviceExternalImageFormatInfo::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let mut modifier_query = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+            .drm_format_modifier(modifier)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let format_query = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(format)
+            .ty(vk::ImageType::TYPE_2D)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(usage)
+            .flags(image_flags)
+            .push_next(&mut external_query)
+            .push_next(&mut modifier_query);
+        let mut external_properties = vk::ExternalImageFormatProperties::default();
+        let mut format_properties =
+            vk::ImageFormatProperties2::default().push_next(&mut external_properties);
+        unsafe {
+            raw_instance.get_physical_device_image_format_properties2(
+                physical_device,
+                &format_query,
+                &mut format_properties,
+            )
+        }
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "Vulkan does not support NV12 modifier {modifier:#018x} for sampled DMA-BUF import: {error:?}"
+            )
+        })?;
+        let external = external_properties.external_memory_properties;
+        if !external
+            .external_memory_features
+            .contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+            || !external
+                .compatible_handle_types
+                .contains(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+        {
+            anyhow::bail!(
+                "Vulkan reports NV12 modifier {modifier:#018x} as non-importable DMA-BUF memory"
+            );
+        }
+
+        let plane_layouts = image
+            .planes()
+            .iter()
+            .map(|plane| vk::SubresourceLayout {
+                offset: plane.offset(),
+                size: 0,
+                row_pitch: u64::from(plane.stride()),
+                array_pitch: 0,
+                depth_pitch: 0,
+            })
+            .collect::<Vec<_>>();
+        let view_formats = [format, vk::Format::R8_UNORM, vk::Format::R8G8_UNORM];
+        let mut external_create = vk::ExternalMemoryImageCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let mut modifier_create = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
+            .drm_format_modifier(modifier)
+            .plane_layouts(&plane_layouts);
+        let mut format_list = vk::ImageFormatListCreateInfo::default().view_formats(&view_formats);
+        let create_info = vk::ImageCreateInfo::default()
+            .flags(image_flags)
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(vk::Extent3D {
+                width: descriptor.size.width,
+                height: descriptor.size.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut external_create)
+            .push_next(&mut modifier_create)
+            .push_next(&mut format_list);
+        let raw_image =
+            unsafe { raw_device.create_image(&create_info, None) }.map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to create native NV12 image for modifier {modifier:#018x}: {error:?}"
+                )
+            })?;
+
+        let requirements = unsafe { raw_device.get_image_memory_requirements(raw_image) };
+        let external_memory_fd =
+            ash::khr::external_memory_fd::Device::new(raw_instance, raw_device);
+        let fd = match image.objects()[0].try_clone_fd() {
+            Ok(fd) => fd,
+            Err(error) => {
+                unsafe { raw_device.destroy_image(raw_image, None) };
+                return Err(anyhow::anyhow!("failed to duplicate DMA-BUF fd: {error}"));
+            }
+        };
+        let mut fd_properties = vk::MemoryFdPropertiesKHR::default();
+        if let Err(error) = unsafe {
+            external_memory_fd.get_memory_fd_properties(
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                fd.as_raw_fd(),
+                &mut fd_properties,
+            )
+        } {
+            unsafe { raw_device.destroy_image(raw_image, None) };
+            return Err(anyhow::anyhow!(
+                "failed to query DMA-BUF memory properties: {error:?}"
+            ));
+        }
+
+        let type_bits = requirements.memory_type_bits & fd_properties.memory_type_bits;
+        let memory_properties =
+            unsafe { raw_instance.get_physical_device_memory_properties(physical_device) };
+        let memory_type_index = memory_properties
+            .memory_types_as_slice()
+            .iter()
+            .enumerate()
+            .find(|(index, memory_type)| {
+                type_bits & (1 << index) != 0
+                    && memory_type
+                        .property_flags
+                        .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+            })
+            .or_else(|| {
+                memory_properties
+                    .memory_types_as_slice()
+                    .iter()
+                    .enumerate()
+                    .find(|(index, _)| type_bits & (1 << index) != 0)
+            })
+            .map(|(index, _)| index as u32);
+        let Some(memory_type_index) = memory_type_index else {
+            unsafe { raw_device.destroy_image(raw_image, None) };
+            anyhow::bail!("DMA-BUF has no memory type compatible with the Vulkan NV12 image");
+        };
+
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(raw_image);
+        let raw_fd = fd.into_raw_fd();
+        let mut import = vk::ImportMemoryFdInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .fd(raw_fd);
+        let allocation_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type_index)
+            .push_next(&mut import)
+            .push_next(&mut dedicated);
+        let memory = match unsafe { raw_device.allocate_memory(&allocation_info, None) } {
+            Ok(memory) => memory,
+            Err(error) => {
+                drop(unsafe { OwnedFd::from_raw_fd(raw_fd) });
+                unsafe { raw_device.destroy_image(raw_image, None) };
+                return Err(anyhow::anyhow!(
+                    "failed to import native NV12 DMA-BUF memory: {error:?}"
+                ));
+            }
+        };
+        if let Err(error) = unsafe { raw_device.bind_image_memory(raw_image, memory, 0) } {
+            unsafe {
+                raw_device.free_memory(memory, None);
+                raw_device.destroy_image(raw_image, None);
+            }
+            return Err(anyhow::anyhow!(
+                "failed to bind native NV12 DMA-BUF memory: {error:?}"
+            ));
+        }
+
+        Ok(unsafe {
+            device.texture_from_raw(
+                raw_image,
+                descriptor,
+                None,
+                wgpu::hal::vulkan::TextureMemory::Dedicated(memory),
+            )
         })
     }
 

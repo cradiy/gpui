@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="bg" x1="1" y2="1"><stop stop-color="#f7ecd8"/><stop offset="1" stop-color="#d7b98d"/></linearGradient></defs><rect width="720" height="960" fill="url(#bg)"/>
+  <path d="M78 0V960" stroke="#b46d65" stroke-opacity=".35" stroke-width="2"/><g stroke="#6f817b" stroke-opacity=".28" stroke-width="3"><path d="M110 190H650M110 255H620M110 320H650M110 385H590M110 450H650M110 515H610"/></g>
+  <path d="M175 700c100-165 265-170 370 0M255 740c52-80 132-80 210 0" fill="none" stroke="#8c7452" stroke-width="7" opacity=".7"/>
+  <text x="110" y="112" font-family="serif" font-size="34" fill="#354944">Morning notes</text><text x="40" y="910" font-family="serif" font-size="26" fill="#6c5942">02</text>
+</svg>

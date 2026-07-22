@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="p" x1="1" y2="1"><stop stop-color="#fff8e9"/><stop offset="1" stop-color="#dfc89e"/></linearGradient></defs>
+  <rect width="720" height="960" fill="url(#p)"/>
+  <circle cx="535" cy="185" r="115" fill="#d7a65c" opacity=".58"/>
+  <text x="70" y="90" font-family="Georgia,serif" font-size="20" letter-spacing="6" fill="#76634b">FIELD NOTES · II</text>
+  <text x="70" y="195" font-family="Georgia,serif" font-size="64" fill="#263d39">A Quiet</text>
+  <text x="70" y="270" font-family="Georgia,serif" font-size="64" font-style="italic" fill="#263d39">Journey</text>
+  <text x="73" y="320" font-family="Georgia,serif" font-size="20" fill="#725f49">Notes on light, landscape, and time</text>
+  <path d="M0 690c140-105 270 60 430-45s225-10 290 35v280H0z" fill="#58756d"/>
+  <path d="M0 795c180-85 325 60 500-20s170 10 220 25v160H0z" fill="#183b38"/>
+  <text x="620" y="915" font-family="Georgia,serif" font-size="18" fill="#e8dec9">19</text>
+</svg>

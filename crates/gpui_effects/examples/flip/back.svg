@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="p" x2="1" y2="1"><stop stop-color="#eadfc9"/><stop offset=".52" stop-color="#fff9ea"/><stop offset="1" stop-color="#d3ba8f"/></linearGradient></defs>
+  <rect width="720" height="960" fill="url(#p)"/>
+  <path d="M82 0V960" stroke="#ba7770" stroke-opacity=".45" stroke-width="2"/>
+  <g stroke="#78909a" stroke-opacity=".22"><path d="M0 120H720M0 170H720M0 220H720M0 270H720M0 320H720M0 370H720M0 420H720M0 470H720M0 520H720M0 570H720M0 620H720M0 670H720M0 720H720M0 770H720M0 820H720"/></g>
+  <text x="120" y="110" font-family="Georgia,serif" font-size="26" fill="#405359">July 16 — northern ridge</text>
+  <text x="120" y="200" font-family="Georgia,serif" font-size="19" fill="#56666a">The morning arrived slowly, carrying the scent</text>
+  <text x="120" y="250" font-family="Georgia,serif" font-size="19" fill="#56666a">of wet stone and cedar through the window.</text>
+  <text x="120" y="300" font-family="Georgia,serif" font-size="19" fill="#56666a">Beyond the path, the hills held the last blue</text>
+  <text x="120" y="350" font-family="Georgia,serif" font-size="19" fill="#56666a">shadow of night.</text>
+  <path d="M395 560c72-95 175-78 210 15-56-30-91-8-107 50-28-54-62-75-103-65zM500 625c-8 63-2 120 20 180" fill="none" stroke="#617a73" stroke-width="6"/>
+  <text x="80" y="915" font-family="Georgia,serif" font-size="18" fill="#756750">20</text>
+</svg>

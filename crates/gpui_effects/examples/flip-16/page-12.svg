@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <rect width="720" height="960" fill="#ece6da"/><rect x="95" y="90" width="530" height="780" fill="#f8f2e5" stroke="#8a8277" stroke-width="2"/>
+  <path d="M145 260H575M145 325H540M145 390H575M145 455H520M145 520H575" stroke="#788982" stroke-opacity=".36" stroke-width="4"/>
+  <path d="M175 690c80-95 150 60 230-25s130-15 165 25" fill="none" stroke="#4f766e" stroke-width="12"/><circle cx="515" cy="170" r="42" fill="#d39962"/>
+  <text x="145" y="175" font-family="serif" font-size="40" fill="#3d504a">A quiet pause</text><text x="120" y="835" font-family="serif" font-size="26" fill="#6a6157">12</text>
+</svg>

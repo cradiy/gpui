@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#17263e"/>
+      <stop offset="0.58" stop-color="#d58a66"/>
+      <stop offset="1" stop-color="#f1c38a"/>
+    </linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5f7884"/>
+      <stop offset="1" stop-color="#182f3d"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="1120" fill="url(#sky)"/>
+  <circle cx="800" cy="420" r="125" fill="#ffe8ae" opacity="0.92"/>
+  <path d="M0 630 180 510 370 590 540 430 720 585 880 470 1070 610 1260 440 1430 560 1600 485V760H0Z" fill="#263c4a"/>
+  <path d="M0 705 210 600 420 680 650 535 830 665 1020 570 1210 690 1410 575 1600 650V815H0Z" fill="#38545b"/>
+  <rect y="735" width="1600" height="385" fill="url(#water)"/>
+  <path d="M120 850c230-70 420 55 650-10s450-28 710 20M20 960c260-50 470 48 720-5s500-25 820 30" fill="none" stroke="#c7d0c4" stroke-width="12" opacity="0.28"/>
+  <text x="90" y="120" font-family="sans-serif" font-size="38" letter-spacing="12" fill="#f7e8d2">ONE SOURCE · TWO PAGE SLOTS</text>
+  <text x="1510" y="1050" text-anchor="end" font-family="sans-serif" font-size="30" fill="#e9d7bf">shared horizontal spread</text>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="bg" x2="1"><stop stop-color="#c7d8cd"/><stop offset="1" stop-color="#f0c98e"/></linearGradient></defs><rect width="720" height="960" fill="url(#bg)"/>
+  <g fill="none" stroke="#476e65" stroke-width="12"><circle cx="360" cy="475" r="95"/><circle cx="360" cy="475" r="180" opacity=".65"/><circle cx="360" cy="475" r="270" opacity=".35"/></g>
+  <circle cx="360" cy="475" r="24" fill="#d87d59"/><text x="58" y="105" font-family="sans-serif" font-size="21" letter-spacing="6" fill="#53635b">THE SPRING</text><text x="58" y="180" font-family="serif" font-size="58" fill="#2e4842">Ripples</text>
+  <text x="635" y="910" font-family="serif" font-size="26" fill="#365d55">09</text>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="p" x2="1" y2="1"><stop stop-color="#f8f0df"/><stop offset="1" stop-color="#d8c29b"/></linearGradient></defs>
+  <rect width="720" height="960" fill="url(#p)"/>
+  <text x="70" y="90" font-family="Georgia,serif" font-size="20" letter-spacing="6" fill="#76634b">FIELD NOTES · I</text>
+  <text x="70" y="195" font-family="Georgia,serif" font-size="58" fill="#30443f">Before the</text>
+  <text x="70" y="260" font-family="Georgia,serif" font-size="58" font-style="italic" fill="#30443f">road began</text>
+  <path d="M70 340H640M70 390H640M70 440H610M70 490H640M70 540H575M70 590H640M70 640H600" stroke="#6e807a" stroke-opacity=".33" stroke-width="3"/>
+  <path d="M0 780c130-85 230 40 360-30s220-25 360 30v180H0z" fill="#547068" opacity=".65"/>
+  <path d="M0 855c170-70 300 55 470-15s180 5 250 35v85H0z" fill="#294b46"/>
+  <text x="620" y="915" font-family="Georgia,serif" font-size="18" fill="#e8dec9">18</text>
+</svg>

@@ -96,6 +96,9 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
             gpui_effects::plasma_shader(),
             gpui_effects::color_orbs_shader(),
             gpui_effects::album_glow_shader(),
+            gpui_effects::flip_shader(),
+            gpui_effects::rigid_flip_shader(),
+            gpui_effects::soft_flip_shader(),
             gpui_effects::spectrum_mask_shader(),
         ] {
             let source = gpui::compose_effect_shader_wgsl(&shader);
@@ -307,7 +310,11 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
 }
 "#,
         );
-        for shader in [four_image_shader, gpui_effects::spectrum_mask_shader()] {
+        for shader in [
+            four_image_shader,
+            gpui_effects::flip_shader(),
+            gpui_effects::spectrum_mask_shader(),
+        ] {
             assert_effect_translates_to_msl_and_hlsl(shader);
         }
     }

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#c9dcd3"/><stop offset="1" stop-color="#7aa09a"/></linearGradient></defs><rect width="720" height="960" fill="url(#bg)"/>
+  <path d="M120 760V310M250 760V210M390 760V360M530 760V170M650 760V290" stroke="#315b55" stroke-width="24" stroke-linecap="round"/><g fill="#dbe8da"><circle cx="120" cy="270" r="75"/><circle cx="250" cy="180" r="92"/><circle cx="390" cy="320" r="70"/><circle cx="530" cy="135" r="100"/><circle cx="650" cy="255" r="70"/></g>
+  <text x="58" y="105" font-family="sans-serif" font-size="21" letter-spacing="6" fill="#355b56">CEDAR PATH</text><text x="58" y="875" font-family="serif" font-size="58" fill="#264b46">Deep green</text><text x="635" y="910" font-family="serif" font-size="26" fill="#eaf1e8">13</text>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="p" x1="1" y2="1"><stop stop-color="#faf2df"/><stop offset="1" stop-color="#cfb98f"/></linearGradient></defs>
+  <rect width="720" height="960" fill="url(#p)"/>
+  <text x="70" y="90" font-family="Georgia,serif" font-size="20" letter-spacing="6" fill="#76634b">FIELD NOTES · III</text>
+  <text x="70" y="195" font-family="Georgia,serif" font-size="57" fill="#30443f">The Distant</text>
+  <text x="70" y="260" font-family="Georgia,serif" font-size="57" font-style="italic" fill="#30443f">Shore</text>
+  <path d="M70 340H640M70 390H610M70 440H640M70 490H590M70 540H640" stroke="#6e807a" stroke-opacity=".32" stroke-width="3"/>
+  <path d="M420 620c65-75 145-76 210 0M475 650c34-38 74-38 109 0" fill="none" stroke="#927551" stroke-width="5" opacity=".68"/>
+  <path d="M0 800c145-72 250 55 390-20s225-5 330 35v145H0z" fill="#65847b"/>
+  <text x="620" y="915" font-family="Georgia,serif" font-size="18" fill="#eee5d4">21</text>
+</svg>

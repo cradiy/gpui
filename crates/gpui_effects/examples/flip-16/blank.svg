@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="paper" x2="1" y2="1"><stop stop-color="#fbf4e5"/><stop offset="1" stop-color="#e5d6bb"/></linearGradient></defs>
+  <rect width="720" height="960" fill="url(#paper)"/>
+  <path d="M78 0V960" stroke="#9d765f" stroke-opacity=".12" stroke-width="2"/>
+  <text x="360" y="485" text-anchor="middle" font-family="serif" font-size="28" letter-spacing="5" fill="#776b5a" opacity=".36">INTENTIONALLY BLANK</text>
+</svg>

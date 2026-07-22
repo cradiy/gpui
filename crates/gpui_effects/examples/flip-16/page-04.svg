@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <rect width="720" height="960" fill="#edf0e4"/><rect x="70" y="70" width="580" height="820" rx="8" fill="#faf8ed" stroke="#9db2aa" stroke-width="3"/>
+  <path d="M130 245C230 130 330 340 430 220S590 250 610 180M130 395C250 300 345 505 490 350S600 410 610 325" fill="none" stroke="#4b8c91" stroke-width="13" opacity=".7"/>
+  <circle cx="215" cy="630" r="82" fill="#e6ae67"/><circle cx="470" cy="650" r="128" fill="#7da89a" opacity=".72"/>
+  <text x="120" y="155" font-family="serif" font-size="45" fill="#324c4c">Lines on water</text><text x="95" y="850" font-family="serif" font-size="26" fill="#607571">04</text>
+</svg>

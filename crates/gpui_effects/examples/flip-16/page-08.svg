@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><radialGradient id="bg"><stop stop-color="#607895"/><stop offset="1" stop-color="#1f3048"/></radialGradient></defs><rect width="720" height="960" fill="url(#bg)"/>
+  <path d="M80 280Q190 160 300 280T520 280T740 280M-20 490Q90 370 200 490T420 490T640 490" fill="none" stroke="#b9d7db" stroke-width="18" opacity=".36"/>
+  <path d="M90 730Q210 590 340 730T610 700" fill="none" stroke="#f0c78c" stroke-width="8" opacity=".75"/><text x="80" y="115" font-family="serif" font-size="46" fill="#edf0e7">Night current</text>
+  <text x="40" y="910" font-family="serif" font-size="26" fill="#edf0e7">08</text>
+</svg>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="bg" y2="1"><stop stop-color="#bfdde5"/><stop offset=".55" stop-color="#f3dcae"/><stop offset="1" stop-color="#d88365"/></linearGradient></defs><rect width="720" height="960" fill="url(#bg)"/>
+  <circle cx="180" cy="225" r="98" fill="#fff2bf" opacity=".75"/><path d="M0 610Q140 540 280 635T555 620T720 570V960H0Z" fill="#637c75"/><path d="M0 760Q180 665 360 790T720 735V960H0Z" fill="#293f42"/>
+  <text x="62" y="105" font-family="sans-serif" font-size="22" letter-spacing="7" fill="#40565b">COASTLINE</text><text x="62" y="190" font-family="serif" font-size="64" fill="#30484b">Salt air</text><text x="635" y="910" font-family="serif" font-size="26" fill="#f6ead8">03</text>
+</svg>

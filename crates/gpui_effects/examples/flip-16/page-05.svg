@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#efe0cf"/><stop offset="1" stop-color="#9cc0b2"/></linearGradient></defs><rect width="720" height="960" fill="url(#bg)"/>
+  <path d="M110 760L235 250 360 760M190 560H300M390 760L485 390 585 760M435 590H540" fill="none" stroke="#365d55" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="560" cy="205" r="105" fill="#e69262" opacity=".74"/><text x="58" y="105" font-family="sans-serif" font-size="21" letter-spacing="6" fill="#53635b">HIGH COUNTRY</text>
+  <text x="58" y="175" font-family="serif" font-size="55" fill="#2e4842">Twin peaks</text><text x="635" y="910" font-family="serif" font-size="26" fill="#365d55">05</text>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#f9e8d0"/><stop offset="1" stop-color="#c9d8c0"/></linearGradient></defs>
+  <rect width="720" height="960" fill="url(#bg)"/><circle cx="520" cy="210" r="120" fill="#e9a15b" opacity=".7"/>
+  <path d="M0 660Q170 520 350 675T720 610V960H0Z" fill="#779786"/><path d="M0 790Q190 675 400 810T720 750V960H0Z" fill="#335d55"/>
+  <text x="62" y="105" font-family="sans-serif" font-size="22" letter-spacing="7" fill="#5d5549">CHAPTER ONE</text><text x="62" y="230" font-family="serif" font-size="70" fill="#243c38">First light</text>
+  <text x="62" y="292" font-family="serif" font-size="25" fill="#56615a">A sixteen-page journey through color and motion.</text><text x="635" y="910" font-family="serif" font-size="26" fill="#f7eee0">01</text>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="bg" y2="1"><stop stop-color="#283d57"/><stop offset=".5" stop-color="#6a7891"/><stop offset="1" stop-color="#d9ad7d"/></linearGradient></defs><rect width="720" height="960" fill="url(#bg)"/>
+  <g fill="#f9e8b0"><circle cx="110" cy="155" r="4"/><circle cx="260" cy="115" r="3"/><circle cx="410" cy="185" r="5"/><circle cx="610" cy="125" r="3"/></g><circle cx="555" cy="250" r="105" fill="#ffe5a3" opacity=".78"/>
+  <path d="M0 700Q160 610 310 735T720 650V960H0Z" fill="#243f43"/><text x="58" y="110" font-family="sans-serif" font-size="21" letter-spacing="6" fill="#dbe4df">EVENING</text>
+  <text x="58" y="600" font-family="serif" font-size="68" fill="#f5e7cf">Blue hour</text><text x="635" y="910" font-family="serif" font-size="26" fill="#f5e7cf">07</text>
+</svg>

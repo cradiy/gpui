@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <rect width="720" height="960" fill="#f2e9d8"/><path d="M78 0V960" stroke="#ae7068" stroke-opacity=".35" stroke-width="2"/>
+  <g fill="#79958a" opacity=".8"><ellipse cx="220" cy="310" rx="115" ry="55" transform="rotate(-32 220 310)"/><ellipse cx="480" cy="430" rx="150" ry="65" transform="rotate(24 480 430)"/><ellipse cx="260" cy="650" rx="135" ry="58" transform="rotate(18 260 650)"/></g>
+  <path d="M110 770C230 690 370 810 610 690" fill="none" stroke="#d18b5f" stroke-width="10"/>
+  <text x="112" y="125" font-family="serif" font-size="42" fill="#3c514b">Leaves in wind</text><text x="40" y="910" font-family="serif" font-size="26" fill="#725e46">10</text>
+</svg>

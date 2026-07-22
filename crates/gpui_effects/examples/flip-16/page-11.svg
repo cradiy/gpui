@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="960" viewBox="0 0 720 960">
+  <defs><linearGradient id="bg" y2="1"><stop stop-color="#f5c7a0"/><stop offset=".5" stop-color="#cc7d70"/><stop offset="1" stop-color="#604c65"/></linearGradient></defs><rect width="720" height="960" fill="url(#bg)"/>
+  <circle cx="360" cy="360" r="142" fill="#ffe0a1" opacity=".84"/><path d="M0 620Q170 510 350 650T720 590V960H0Z" fill="#53465e"/><path d="M0 760Q160 670 340 790T720 710V960H0Z" fill="#293b48"/>
+  <text x="58" y="105" font-family="sans-serif" font-size="21" letter-spacing="6" fill="#594754">WESTWARD</text><text x="58" y="190" font-family="serif" font-size="64" fill="#4b3f4b">Last sun</text><text x="635" y="910" font-family="serif" font-size="26" fill="#f3e4d1">11</text>
+</svg>

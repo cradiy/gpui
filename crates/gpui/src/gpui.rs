@@ -345,4 +345,7 @@ pub struct GpuSpecs {
     pub driver_name: String,
     /// Further information about the driver, as reported by Vulkan.
     pub driver_info: String,
+    /// Whether the active renderer can directly sample single-plane Linux DMA-BUF images.
+    #[serde(default)]
+    pub supports_dma_buf_import: bool,
 }

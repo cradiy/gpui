@@ -23,8 +23,6 @@ use crate::{
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
-#[cfg(target_os = "macos")]
-use core_video::pixel_buffer::CVPixelBuffer;
 use derive_more::{Deref, DerefMut};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -4454,19 +4452,29 @@ impl Window {
     /// Paint a surface into the scene for the next frame at the current z-index.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
-    #[cfg(target_os = "macos")]
-    pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, image_buffer: CVPixelBuffer) {
+    pub fn paint_surface(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        clip_bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        source: crate::SurfaceSource,
+    ) {
         use crate::PaintSurface;
 
         self.invalidator.debug_assert_paint();
 
         let bounds = self.snap_bounds(bounds);
-        let content_mask = self.snapped_content_mask();
+        let clip_bounds = self.snap_bounds(clip_bounds);
+        let mut content_mask = self.snapped_content_mask();
+        content_mask.bounds = content_mask.bounds.intersect(&clip_bounds);
         self.next_frame.scene.insert_primitive(PaintSurface {
             order: 0,
             bounds,
+            clip_bounds,
             content_mask,
-            image_buffer,
+            corner_radii: corner_radii.scale(self.scale_factor()),
+            opacity: self.element_opacity(),
+            source,
         });
     }
 

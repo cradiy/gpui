@@ -1,10 +1,13 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
-    AtlasTextureId, Background, Bounds, DevicePixels, EffectQuad, EffectShader, GpuSpecs,
-    MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene,
-    Shadow, Size, SubpixelSprite, Underline, get_gamma_correction_ratios,
+    AtlasTextureId, Background, Bounds, ColorRange, DevicePixels, EffectQuad, EffectShader,
+    GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels,
+    Scene, Shadow, Size, SubpixelSprite, SurfaceColorInfo, SurfaceFormat, SurfaceFrame, SurfaceId,
+    Underline, WeakSurfaceHandle, YuvMatrix, get_gamma_correction_ratios,
 };
+#[cfg(target_os = "linux")]
+use gpui::{DmaBufHandle, DmaBufId, DmaBufPlane, SurfaceFrameBacking, WeakDmaBufHandle};
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -40,9 +43,146 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct SurfaceParams {
+pub(super) struct SurfaceParams {
     bounds: PodBounds,
+    clip_bounds: PodBounds,
     content_mask: PodBounds,
+    uv_bounds: PodBounds,
+    corner_radii: [f32; 4],
+    color_rows: [[f32; 4]; 3],
+    opacity: f32,
+    _pad: [f32; 3],
+}
+
+pub(super) fn yuv_to_rgb_rows(color: SurfaceColorInfo) -> [[f32; 4]; 3] {
+    let (y_scale, y_offset, chroma_center, r_cr, g_cb, g_cr, b_cb) =
+        match (color.matrix, color.range) {
+            (YuvMatrix::Bt601, ColorRange::Limited) => (
+                255.0 / 219.0,
+                16.0 / 255.0,
+                128.0 / 255.0,
+                1.596_027,
+                -0.391_762,
+                -0.812_968,
+                2.017_232,
+            ),
+            (YuvMatrix::Bt709, ColorRange::Limited) => (
+                255.0 / 219.0,
+                16.0 / 255.0,
+                128.0 / 255.0,
+                1.792_741,
+                -0.213_249,
+                -0.532_909,
+                2.112_402,
+            ),
+            (YuvMatrix::Bt601, ColorRange::Full) => (
+                1.0,
+                0.0,
+                128.0 / 255.0,
+                1.402,
+                -0.344_136,
+                -0.714_136,
+                1.772,
+            ),
+            (YuvMatrix::Bt709, ColorRange::Full) => (
+                1.0,
+                0.0,
+                128.0 / 255.0,
+                1.5748,
+                -0.187_324,
+                -0.468_124,
+                1.8556,
+            ),
+        };
+
+    [
+        [
+            y_scale,
+            0.0,
+            r_cr,
+            -y_scale * y_offset - r_cr * chroma_center,
+        ],
+        [
+            y_scale,
+            g_cb,
+            g_cr,
+            -y_scale * y_offset - (g_cb + g_cr) * chroma_center,
+        ],
+        [
+            y_scale,
+            b_cb,
+            0.0,
+            -y_scale * y_offset - b_cb * chroma_center,
+        ],
+    ]
+}
+
+enum CachedSurfaceTextures {
+    Rgba {
+        _texture: wgpu::Texture,
+        view: wgpu::TextureView,
+    },
+    Nv12 {
+        _y_texture: wgpu::Texture,
+        y_view: wgpu::TextureView,
+        _uv_texture: wgpu::Texture,
+        uv_view: wgpu::TextureView,
+    },
+}
+
+struct CachedSurface {
+    sequence: u64,
+    format: SurfaceFormat,
+    size: Size<DevicePixels>,
+    textures: CachedSurfaceTextures,
+    owner: WeakSurfaceHandle,
+}
+
+#[cfg(target_os = "linux")]
+struct CachedDmaBuf {
+    format: SurfaceFormat,
+    size: Size<DevicePixels>,
+    textures: CachedSurfaceTextures,
+    owner: WeakDmaBufHandle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SurfaceCacheAction {
+    Create,
+    Recreate,
+    Upload,
+    Reuse,
+}
+
+pub(super) fn surface_cache_action(
+    cached: Option<(u64, SurfaceFormat, Size<DevicePixels>)>,
+    frame: &SurfaceFrame,
+) -> SurfaceCacheAction {
+    let Some((sequence, format, size)) = cached else {
+        return SurfaceCacheAction::Create;
+    };
+    if format != frame.format() || size != frame.coded_size() {
+        SurfaceCacheAction::Recreate
+    } else if sequence != frame.sequence() {
+        SurfaceCacheAction::Upload
+    } else {
+        SurfaceCacheAction::Reuse
+    }
+}
+
+pub(super) fn surface_uv_bounds(frame: &SurfaceFrame) -> ([f32; 2], [f32; 2]) {
+    let coded_size = frame.coded_size();
+    let visible_rect = frame.visible_rect();
+    (
+        [
+            visible_rect.origin.x.0 as f32 / coded_size.width.0 as f32,
+            visible_rect.origin.y.0 as f32 / coded_size.height.0 as f32,
+        ],
+        [
+            visible_rect.size.width.0 as f32 / coded_size.width.0 as f32,
+            visible_rect.size.height.0 as f32 / coded_size.height.0 as f32,
+        ],
+    )
 }
 
 #[repr(C)]
@@ -164,8 +304,8 @@ struct WgpuPipelines {
     mono_sprites: wgpu::RenderPipeline,
     subpixel_sprites: Option<wgpu::RenderPipeline>,
     poly_sprites: wgpu::RenderPipeline,
-    #[allow(dead_code)]
-    surfaces: wgpu::RenderPipeline,
+    surfaces_rgba: wgpu::RenderPipeline,
+    surfaces_nv12: wgpu::RenderPipeline,
 }
 
 struct WgpuBindGroupLayouts {
@@ -198,6 +338,11 @@ struct WgpuResources {
     path_intermediate_view: Option<wgpu::TextureView>,
     path_msaa_texture: Option<wgpu::Texture>,
     path_msaa_view: Option<wgpu::TextureView>,
+    surfaces: HashMap<SurfaceId, CachedSurface>,
+    #[cfg(target_os = "linux")]
+    dma_bufs: HashMap<DmaBufId, CachedDmaBuf>,
+    #[cfg(target_os = "linux")]
+    failed_dma_bufs: HashMap<DmaBufId, WeakDmaBufHandle>,
 }
 
 impl WgpuResources {
@@ -227,6 +372,7 @@ pub struct WgpuRenderer {
     rendering_params: RenderingParameters,
     is_bgr: bool,
     dual_source_blending: bool,
+    dma_buf_import: bool,
     adapter_info: wgpu::AdapterInfo,
     transparent_alpha_mode: wgpu::CompositeAlphaMode,
     opaque_alpha_mode: wgpu::CompositeAlphaMode,
@@ -420,6 +566,7 @@ impl WgpuRenderer {
             desired_maximum_frame_latency: 2,
             alpha_mode,
             view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
         // Configure the surface immediately. The adapter selection process already validated
         // that this adapter can successfully configure this surface.
@@ -427,6 +574,7 @@ impl WgpuRenderer {
 
         let queue = Arc::clone(&context.queue);
         let dual_source_blending = context.supports_dual_source_blending();
+        let dma_buf_import = context.supports_dma_buf_import();
 
         let rendering_params = RenderingParameters::new(&context.adapter, surface_format);
         let bind_group_layouts = Self::create_bind_group_layouts(&device);
@@ -543,6 +691,11 @@ impl WgpuRenderer {
             path_intermediate_view: None,
             path_msaa_texture: None,
             path_msaa_view: None,
+            surfaces: HashMap::default(),
+            #[cfg(target_os = "linux")]
+            dma_bufs: HashMap::default(),
+            #[cfg(target_os = "linux")]
+            failed_dma_bufs: HashMap::default(),
         };
 
         Ok(Self {
@@ -559,6 +712,7 @@ impl WgpuRenderer {
             rendering_params,
             is_bgr: false,
             dual_source_blending,
+            dma_buf_import,
             adapter_info,
             transparent_alpha_mode,
             opaque_alpha_mode,
@@ -738,7 +892,7 @@ impl WgpuRenderer {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: NonZeroU64::new(
                             std::mem::size_of::<SurfaceParams>() as u64
@@ -1145,10 +1299,22 @@ impl WgpuRenderer {
             &shader_module,
         );
 
-        let surfaces = create_pipeline(
-            "surfaces",
+        let surfaces_rgba = create_pipeline(
+            "surfaces_rgba",
             "vs_surface",
-            "fs_surface",
+            "fs_surface_rgba",
+            &layouts.globals,
+            &layouts.surfaces,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(color_target.clone())],
+            1,
+            &shader_module,
+        );
+
+        let surfaces_nv12 = create_pipeline(
+            "surfaces_nv12",
+            "vs_surface",
+            "fs_surface_nv12",
             &layouts.globals,
             &layouts.surfaces,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -1166,7 +1332,8 @@ impl WgpuRenderer {
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
-            surfaces,
+            surfaces_rgba,
+            surfaces_nv12,
         }
     }
 
@@ -1358,6 +1525,7 @@ impl WgpuRenderer {
             device_name: self.adapter_info.name.clone(),
             driver_name: self.adapter_info.driver.clone(),
             driver_info: self.adapter_info.driver_info.clone(),
+            supports_dma_buf_import: self.dma_buf_import,
         }
     }
 
@@ -1433,6 +1601,22 @@ impl WgpuRenderer {
 
         // Now that we know the surface is healthy, ensure intermediate textures exist
         self.ensure_intermediate_textures();
+        self.prepare_surfaces(scene);
+        #[cfg(target_os = "linux")]
+        let dma_buf_leases = {
+            let mut ids = HashSet::new();
+            scene
+                .surfaces
+                .iter()
+                .filter_map(|surface| surface.source.frame())
+                .filter_map(|frame| match frame.backing() {
+                    SurfaceFrameBacking::Cpu(_) => None,
+                    SurfaceFrameBacking::DmaBuf(dma_buf) => Some(dma_buf),
+                })
+                .filter(|dma_buf| ids.insert(dma_buf.id()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
 
         let frame_view = frame
             .texture
@@ -1592,11 +1776,11 @@ impl WgpuRenderer {
                                 &mut instance_offset,
                                 &mut pass,
                             ),
-                        PrimitiveBatch::Surfaces(_surfaces) => {
-                            // Surfaces are macOS-only for video playback
-                            // Not implemented for Linux/wgpu
-                            true
-                        }
+                        PrimitiveBatch::Surfaces(range) => self.draw_surfaces(
+                            &scene.surfaces[range],
+                            &mut instance_offset,
+                            &mut pass,
+                        ),
                     };
                     if !ok {
                         overflow = true;
@@ -1612,19 +1796,498 @@ impl WgpuRenderer {
                         "instance buffer size grew too large: {}",
                         self.instance_buffer_capacity
                     );
-                    frame.present();
+                    self.resources().queue.present(frame);
                     return true;
                 }
                 self.grow_instance_buffer();
                 continue;
             }
 
-            self.resources()
-                .queue
-                .submit(std::iter::once(encoder.finish()));
-            frame.present();
+            let resources = self.resources();
+            resources.queue.submit(std::iter::once(encoder.finish()));
+            #[cfg(target_os = "linux")]
+            if !dma_buf_leases.is_empty() {
+                resources
+                    .queue
+                    .on_submitted_work_done(move || drop(dma_buf_leases));
+            }
+            resources.queue.present(frame);
             return true;
         }
+    }
+
+    fn prepare_surfaces(&mut self, scene: &Scene) {
+        let mut frames = HashMap::<SurfaceId, Arc<SurfaceFrame>>::new();
+        for surface in &scene.surfaces {
+            let Some(frame) = surface.source.frame() else {
+                continue;
+            };
+            if let Some(previous) = frames.insert(frame.handle().id(), frame.clone())
+                && previous.sequence() != frame.sequence()
+            {
+                log::warn!(
+                    "surface {:?} was painted with multiple sequences in one scene; using {}",
+                    frame.handle().id(),
+                    frame.sequence()
+                );
+            }
+        }
+
+        let max_texture_size = self.max_texture_size;
+        let resources = self.resources_mut();
+        resources
+            .surfaces
+            .retain(|_, cached| cached.owner.is_alive());
+        #[cfg(target_os = "linux")]
+        {
+            resources
+                .dma_bufs
+                .retain(|_, cached| cached.owner.is_alive());
+            resources
+                .failed_dma_bufs
+                .retain(|_, owner| owner.is_alive());
+        }
+
+        for (id, frame) in frames {
+            let size = frame.coded_size();
+            let width = size.width.0.max(0) as u32;
+            let height = size.height.0.max(0) as u32;
+            if width > max_texture_size || height > max_texture_size {
+                log::error!(
+                    "surface {:?} size {}x{} exceeds the GPU texture limit {}",
+                    id,
+                    width,
+                    height,
+                    max_texture_size
+                );
+                resources.surfaces.remove(&id);
+                continue;
+            }
+
+            #[cfg(target_os = "linux")]
+            if let SurfaceFrameBacking::DmaBuf(dma_buf) = frame.backing() {
+                let dma_buf_id = dma_buf.id();
+                if let Err(error) = frame.wait_for_dma_buf_acquire_fence() {
+                    log::error!(
+                        "failed to wait for DMA-BUF {:?} acquire fence: {error}",
+                        dma_buf_id
+                    );
+                    resources.dma_bufs.remove(&dma_buf_id);
+                    continue;
+                }
+                if resources.failed_dma_bufs.contains_key(&dma_buf_id) {
+                    continue;
+                }
+
+                if let Some(cached) = resources.dma_bufs.get(&dma_buf_id) {
+                    if cached.format != frame.format() || cached.size != frame.coded_size() {
+                        log::error!(
+                            "DMA-BUF {:?} was reused with incompatible frame metadata",
+                            dma_buf_id
+                        );
+                        resources
+                            .failed_dma_bufs
+                            .insert(dma_buf_id, dma_buf.downgrade());
+                        resources.dma_bufs.remove(&dma_buf_id);
+                    }
+                    continue;
+                }
+
+                match Self::import_dma_buf(&resources.device, &frame, dma_buf) {
+                    Ok(cached) => {
+                        resources.dma_bufs.insert(dma_buf_id, cached);
+                    }
+                    Err(error) => {
+                        log::error!("failed to import DMA-BUF {:?}: {error:#}", dma_buf_id);
+                        resources
+                            .failed_dma_bufs
+                            .insert(dma_buf_id, dma_buf.downgrade());
+                    }
+                }
+                continue;
+            }
+
+            let action = surface_cache_action(
+                resources
+                    .surfaces
+                    .get(&id)
+                    .map(|cached| (cached.sequence, cached.format, cached.size)),
+                &frame,
+            );
+            match action {
+                SurfaceCacheAction::Create | SurfaceCacheAction::Recreate => {
+                    let textures = Self::create_surface_textures(&resources.device, &frame);
+                    let cached = CachedSurface {
+                        sequence: frame.sequence(),
+                        format: frame.format(),
+                        size: frame.coded_size(),
+                        textures,
+                        owner: frame.handle().downgrade(),
+                    };
+                    Self::upload_surface(&resources.queue, &cached.textures, &frame);
+                    resources.surfaces.insert(id, cached);
+                }
+                SurfaceCacheAction::Upload => {
+                    let cached = resources.surfaces.get_mut(&id).unwrap();
+                    Self::upload_surface(&resources.queue, &cached.textures, &frame);
+                    cached.sequence = frame.sequence();
+                }
+                SurfaceCacheAction::Reuse => {}
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn import_dma_buf(
+        device: &wgpu::Device,
+        frame: &SurfaceFrame,
+        dma_buf: &DmaBufHandle,
+    ) -> anyhow::Result<CachedDmaBuf> {
+        if !device
+            .features()
+            .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF)
+        {
+            anyhow::bail!("the selected WGPU device does not support Vulkan DMA-BUF import");
+        }
+
+        let size = frame.coded_size();
+        let width = size.width.0 as u32;
+        let height = size.height.0 as u32;
+        let textures = match frame.format() {
+            SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => {
+                let format = match frame.format() {
+                    SurfaceFormat::Bgra8 => wgpu::TextureFormat::Bgra8Unorm,
+                    SurfaceFormat::Rgba8 => wgpu::TextureFormat::Rgba8Unorm,
+                    SurfaceFormat::Nv12 => unreachable!(),
+                };
+                let plane = dma_buf
+                    .plane(0)
+                    .ok_or_else(|| anyhow::anyhow!("RGB DMA-BUF is missing plane 0"))?;
+                let (texture, view) = Self::import_dma_buf_plane(
+                    device,
+                    plane,
+                    "gpui_surface_dma_buf_rgba",
+                    format,
+                    width,
+                    height,
+                )?;
+                CachedSurfaceTextures::Rgba {
+                    _texture: texture,
+                    view,
+                }
+            }
+            SurfaceFormat::Nv12 => {
+                let y_plane = dma_buf
+                    .plane(0)
+                    .ok_or_else(|| anyhow::anyhow!("NV12 DMA-BUF is missing Y plane"))?;
+                let uv_plane = dma_buf
+                    .plane(1)
+                    .ok_or_else(|| anyhow::anyhow!("NV12 DMA-BUF is missing UV plane"))?;
+                let (y_texture, y_view) = Self::import_dma_buf_plane(
+                    device,
+                    y_plane,
+                    "gpui_surface_dma_buf_nv12_y",
+                    wgpu::TextureFormat::R8Unorm,
+                    width,
+                    height,
+                )?;
+                let (uv_texture, uv_view) = Self::import_dma_buf_plane(
+                    device,
+                    uv_plane,
+                    "gpui_surface_dma_buf_nv12_uv",
+                    wgpu::TextureFormat::Rg8Unorm,
+                    width.div_ceil(2),
+                    height.div_ceil(2),
+                )?;
+                CachedSurfaceTextures::Nv12 {
+                    _y_texture: y_texture,
+                    y_view,
+                    _uv_texture: uv_texture,
+                    uv_view,
+                }
+            }
+        };
+
+        Ok(CachedDmaBuf {
+            format: frame.format(),
+            size,
+            textures,
+            owner: dma_buf.downgrade(),
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn import_dma_buf_plane(
+        device: &wgpu::Device,
+        plane: &DmaBufPlane,
+        label: &'static str,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<(wgpu::Texture, wgpu::TextureView)> {
+        let extent = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let hal_descriptor = wgpu::hal::TextureDescriptor {
+            label: Some(label),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::wgt::TextureUses::RESOURCE,
+            memory_flags: wgpu::hal::MemoryFlags::empty(),
+            view_formats: Vec::new(),
+        };
+        let descriptor = wgpu::TextureDescriptor {
+            label: Some(label),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+
+        let fd = plane
+            .try_clone_fd()
+            .map_err(|error| anyhow::anyhow!("failed to duplicate DMA-BUF fd: {error}"))?;
+        let hal_device = unsafe { device.as_hal::<wgpu::hal::vulkan::Api>() }
+            .ok_or_else(|| anyhow::anyhow!("the selected WGPU backend is not Vulkan"))?;
+        let hal_texture = unsafe {
+            hal_device.texture_from_dmabuf_fd(
+                fd,
+                &hal_descriptor,
+                plane.drm_modifier(),
+                u64::from(plane.stride()),
+                plane.offset(),
+            )
+        }
+        .map_err(|error| anyhow::anyhow!("Vulkan rejected the DMA-BUF: {error:?}"))?;
+        drop(hal_device);
+
+        // The producer contract guarantees that the imported pixels are fully initialized
+        // and ready for sampled reads before the frame is published.
+        let texture = unsafe {
+            device.create_texture_from_hal::<wgpu::hal::vulkan::Api>(
+                hal_texture,
+                &descriptor,
+                wgpu::wgt::TextureUses::RESOURCE,
+            )
+        };
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Ok((texture, view))
+    }
+
+    fn create_surface_textures(
+        device: &wgpu::Device,
+        frame: &SurfaceFrame,
+    ) -> CachedSurfaceTextures {
+        let size = frame.coded_size();
+        let width = size.width.0 as u32;
+        let height = size.height.0 as u32;
+        let descriptor = |label, format, width, height| wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+
+        match frame.format() {
+            SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => {
+                let format = match frame.format() {
+                    SurfaceFormat::Bgra8 => wgpu::TextureFormat::Bgra8Unorm,
+                    SurfaceFormat::Rgba8 => wgpu::TextureFormat::Rgba8Unorm,
+                    SurfaceFormat::Nv12 => unreachable!(),
+                };
+                let texture =
+                    device.create_texture(&descriptor("gpui_surface_rgba", format, width, height));
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                CachedSurfaceTextures::Rgba {
+                    _texture: texture,
+                    view,
+                }
+            }
+            SurfaceFormat::Nv12 => {
+                let y_texture = device.create_texture(&descriptor(
+                    "gpui_surface_y",
+                    wgpu::TextureFormat::R8Unorm,
+                    width,
+                    height,
+                ));
+                let y_view = y_texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let uv_texture = device.create_texture(&descriptor(
+                    "gpui_surface_uv",
+                    wgpu::TextureFormat::Rg8Unorm,
+                    width.div_ceil(2),
+                    height.div_ceil(2),
+                ));
+                let uv_view = uv_texture.create_view(&wgpu::TextureViewDescriptor::default());
+                CachedSurfaceTextures::Nv12 {
+                    _y_texture: y_texture,
+                    y_view,
+                    _uv_texture: uv_texture,
+                    uv_view,
+                }
+            }
+        }
+    }
+
+    fn upload_surface(queue: &wgpu::Queue, textures: &CachedSurfaceTextures, frame: &SurfaceFrame) {
+        let size = frame.coded_size();
+        let width = size.width.0 as u32;
+        let height = size.height.0 as u32;
+        let write_plane =
+            |texture: &wgpu::Texture, plane: &gpui::SurfacePlane, width: u32, height: u32| {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    plane.bytes(),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(plane.stride()),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            };
+
+        let planes = frame
+            .cpu_planes()
+            .expect("CPU surface upload requires CPU planes");
+        match textures {
+            CachedSurfaceTextures::Rgba { _texture, .. } => {
+                write_plane(_texture, &planes[0], width, height);
+            }
+            CachedSurfaceTextures::Nv12 {
+                _y_texture,
+                _uv_texture,
+                ..
+            } => {
+                write_plane(_y_texture, &planes[0], width, height);
+                write_plane(
+                    _uv_texture,
+                    &planes[1],
+                    width.div_ceil(2),
+                    height.div_ceil(2),
+                );
+            }
+        }
+    }
+
+    fn draw_surfaces(
+        &self,
+        surfaces: &[gpui::PaintSurface],
+        instance_offset: &mut u64,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) -> bool {
+        for surface in surfaces {
+            let Some(frame) = surface.source.frame() else {
+                continue;
+            };
+            let resources = self.resources();
+            #[cfg(target_os = "linux")]
+            let cached_textures = match frame.backing() {
+                SurfaceFrameBacking::Cpu(_) => resources
+                    .surfaces
+                    .get(&frame.handle().id())
+                    .map(|cached| &cached.textures),
+                SurfaceFrameBacking::DmaBuf(dma_buf) => resources
+                    .dma_bufs
+                    .get(&dma_buf.id())
+                    .map(|cached| &cached.textures),
+            };
+            #[cfg(not(target_os = "linux"))]
+            let cached_textures = resources
+                .surfaces
+                .get(&frame.handle().id())
+                .map(|cached| &cached.textures);
+            let Some(cached_textures) = cached_textures else {
+                continue;
+            };
+
+            let (uv_origin, uv_size) = surface_uv_bounds(frame);
+            let params = SurfaceParams {
+                bounds: surface.bounds.into(),
+                clip_bounds: surface.clip_bounds.into(),
+                content_mask: surface.content_mask.bounds.into(),
+                uv_bounds: PodBounds {
+                    origin: uv_origin,
+                    size: uv_size,
+                },
+                corner_radii: [
+                    surface.corner_radii.top_left.0,
+                    surface.corner_radii.top_right.0,
+                    surface.corner_radii.bottom_right.0,
+                    surface.corner_radii.bottom_left.0,
+                ],
+                color_rows: yuv_to_rgb_rows(frame.color()),
+                opacity: surface.opacity,
+                _pad: [0.0; 3],
+            };
+            let Some((offset, size)) =
+                self.write_to_instance_buffer(instance_offset, bytemuck::bytes_of(&params))
+            else {
+                return false;
+            };
+
+            let (first_view, second_view, pipeline) = match cached_textures {
+                CachedSurfaceTextures::Rgba { view, .. } => {
+                    (view, view, &resources.pipelines.surfaces_rgba)
+                }
+                CachedSurfaceTextures::Nv12 {
+                    y_view, uv_view, ..
+                } => (y_view, uv_view, &resources.pipelines.surfaces_nv12),
+            };
+            let bind_group = resources
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("gpui_surface_bind_group"),
+                    layout: &resources.bind_group_layouts.surfaces,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.instance_binding(offset, size),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(first_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(second_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&resources.atlas_sampler),
+                        },
+                    ],
+                });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &resources.globals_bind_group, &[]);
+            pass.set_bind_group(1, &bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
+        true
     }
 
     fn draw_quads(

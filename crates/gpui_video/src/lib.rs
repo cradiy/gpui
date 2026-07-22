@@ -6,20 +6,23 @@
 //! contains no controls, pointer behavior, status overlay or fullscreen policy;
 //! host applications build those features from the exported state and events.
 
+mod container;
 mod frame;
 mod frame_extractor;
 mod gstreamer_backend;
+mod network;
 mod player;
 mod source;
 mod stats;
 mod timeline;
 
+pub use container::{VideoContainer, video_container};
 pub use frame::{FrameTransport, VideoFrame};
 pub use frame_extractor::{
     FrameExtractionSuperseded, VideoFrameExtractor, VideoFrameExtractorOptions,
 };
 pub use player::{PlaybackState, VideoPlayer, VideoPlayerEvent, VideoPlayerOptions};
-pub use source::MediaSource;
+pub use source::{MediaSource, NetworkSourceOptions};
 pub use stats::VideoPlaybackStats;
 pub use timeline::{PlaybackTimeline, SeekMode};
 

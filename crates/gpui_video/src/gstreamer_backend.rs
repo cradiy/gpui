@@ -16,7 +16,7 @@ use gst::prelude::*;
 
 use crate::{
     MediaSource, PlaybackTimeline, SeekMode, VideoFrame, VideoPlaybackStats,
-    stats::PlaybackCounters,
+    network::configure_playbin_network, stats::PlaybackCounters,
 };
 
 #[cfg(target_os = "linux")]
@@ -106,6 +106,7 @@ impl GstreamerPlayback {
         let playbin = gst::ElementFactory::make("playbin3")
             .build()
             .context("GStreamer element 'playbin3' is not installed")?;
+        configure_playbin_network(&playbin, source.network_options());
         playbin.set_property("uri", source.uri());
         playbin.set_property("video-sink", &appsink);
 
@@ -186,6 +187,21 @@ impl GstreamerPlayback {
     pub fn restart(&self) -> Result<()> {
         self.seek_to(Duration::ZERO, SeekMode::KeyFrame)?;
         self.play()
+    }
+
+    pub fn reload(&self, autoplay: bool) -> Result<()> {
+        self.playbin
+            .set_state(gst::State::Null)
+            .map_err(|error| anyhow!("failed to reset playback pipeline: {error:?}"))?;
+        let target = if autoplay {
+            gst::State::Playing
+        } else {
+            gst::State::Paused
+        };
+        self.playbin
+            .set_state(target)
+            .map(|_| ())
+            .map_err(|error| anyhow!("failed to reload playback pipeline: {error:?}"))
     }
 
     pub fn timeline(&self) -> PlaybackTimeline {

@@ -17,6 +17,7 @@ use crate::{
     gstreamer_backend::{
         add_required_allocation_metas, appsink_caps, clock_time, sample_to_video_frame, seek_flags,
     },
+    network::configure_playbin_network,
 };
 
 /// Indicates that a pending latest-only preview request was replaced by a
@@ -324,6 +325,7 @@ impl ExtractorPipeline {
         let playbin = gst::ElementFactory::make("playbin3")
             .build()
             .context("GStreamer element 'playbin3' is not installed")?;
+        configure_playbin_network(&playbin, source.network_options());
         playbin.set_property("uri", source.uri());
         playbin.set_property("video-sink", &appsink);
         playbin.set_property("audio-sink", &audio_sink);

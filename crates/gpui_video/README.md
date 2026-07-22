@@ -16,6 +16,8 @@
 - cumulative decoded, delivered and dropped-frame statistics
 - coded size, crop rectangle and pixel-aspect-ratio aware presentation geometry
 - CPU, linear Linux DMA-BUF and native tiled NV12 DMA-BUF frame transport
+- HTTP request headers, authentication, proxy, timeout and source retry options
+- network buffering progress and an explicit host-controlled reload operation
 
 ## Create a player entity
 
@@ -35,6 +37,39 @@ let player = cx.new(|cx| {
 
 The entity itself implements `Render`, but deliberately paints only the current video frame. It does not install pointer handlers, draw status overlays, provide controls or manage fullscreen. Applications can wrap it with any interaction and control layout, or render `current_frame().surface()` directly when they need custom fitting and composition.
 
+## Draw controls over the video container
+
+`VideoContainer` gives the player and application-owned overlays the same
+complete container bounds. The player uses `Contain` fitting inside it, while
+overlay children may also use the letterbox area. The container exists before
+the first frame arrives, so the host can provide its own loading UI. Passing
+the player entity directly also lets GPUI refresh video frames independently.
+
+```rust
+let video = video_container(player.clone());
+
+div().size_full().child(
+    video.child(
+        div()
+            .absolute()
+            .bottom_4()
+            .left_4()
+            .right_4()
+            .child(custom_control_bar()),
+    ),
+)
+```
+
+The player only supplies the video-and-overlay container. Controls, pointer
+behavior, subtitles, status overlays and fullscreen transitions remain owned
+by the host application.
+
+Run the custom play/pause and timeline example with:
+
+```sh
+cargo run -p gpui_video --example overlay_controls -- /path/to/video.mp4
+```
+
 ## Read the timeline
 
 ```rust
@@ -46,6 +81,64 @@ let seekable = timeline.is_seekable();
 ```
 
 Duration can be `None` while a remote or live source is still loading.
+
+## Network sources
+
+HTTP(S), HLS and DASH URLs use the same `MediaSource` API as local files. The
+network configuration is also reused by `VideoFrameExtractor`, so authenticated
+hover previews do not need a separate request path.
+
+```rust
+let network = NetworkSourceOptions::default()
+    .with_bearer_token(token)?
+    .with_referer("https://app.example.com/")?
+    .with_user_agent("MyPlayer/1.0")
+    .with_timeout(Duration::from_secs(15))
+    .with_retry_count(3)
+    .with_retry_backoff(Duration::from_millis(250), Duration::from_secs(3))
+    .with_buffer_duration(Duration::from_secs(5));
+
+let source = MediaSource::from_uri("https://cdn.example.com/video.m3u8")?
+    .with_network_options(network);
+```
+
+WebDAV file playback uses the same HTTP source. Give the player the direct
+file URL rather than a collection URL; directory discovery and `PROPFIND`
+remain the responsibility of the host application's WebDAV client.
+
+```rust
+let network = NetworkSourceOptions::default()
+    .with_basic_auth(username, password);
+let source = MediaSource::from_uri(webdav_file_url)?
+    .with_network_options(network);
+```
+
+Run the dedicated WebDAV example with credentials supplied outside the command
+line:
+
+```sh
+GPUI_VIDEO_WEBDAV_USERNAME='user' \
+GPUI_VIDEO_WEBDAV_PASSWORD='password' \
+cargo run -p gpui_video --example webdav -- \
+  'https://dav.example.com/remote.php/dav/files/user/video.mp4'
+```
+
+Custom headers are applied to dynamically created adaptive-stream segment
+sources as well as the initial manifest request. Header values and proxy URLs
+are redacted from `Debug` output.
+
+`retry_count` configures retry behavior implemented by the HTTP source plugin.
+It does not silently loop after a fatal demuxer, decoder or pipeline error. The
+host can observe `PlaybackState::Error`, apply its own retry policy, then ask
+the existing player entity to perform one clean reload:
+
+```rust
+player.update(cx, |player, cx| player.reload(true, cx))?;
+```
+
+While a non-live stream reports buffering below 100%, the player temporarily
+pauses the pipeline and resumes it only if playback was still requested. A
+user pause during buffering is therefore never overridden by the backend.
 
 ## Playback controls
 
@@ -152,6 +245,11 @@ let frame = extractor.frame_at_blocking(Duration::from_secs(30))?;
 ```
 
 An extractor owns one paused GStreamer pipeline and serializes requests on a worker thread. Reuse it for thumbnail strips or hover previews instead of creating one extractor per frame.
+
+Remote frame extraction requires a seekable server response, normally HTTP
+byte-range support. This does not restrict ordinary sequential playback, but a
+server that only returns full `200 OK` bodies cannot provide arbitrary hover
+frames efficiently; the extractor reports that seek failure to the host.
 
 The exact-request queue is bounded to two requests by default, so request producers receive backpressure instead of growing the worker queue without limit. Configure `VideoFrameExtractorOptions::request_queue_capacity` when a different amount of backpressure is needed. Latest-only requests use a separate one-slot mailbox and never discard exact thumbnail requests.
 

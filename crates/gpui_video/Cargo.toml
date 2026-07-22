@@ -18,6 +18,7 @@ url.workspace = true
 gst-allocators = { package = "gstreamer-allocators", version = "0.25" }
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
 
 [lints]

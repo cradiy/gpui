@@ -73,6 +73,7 @@ pub struct VideoPlayer {
     state_after_seek: Option<PlaybackState>,
     timeline: PlaybackTimeline,
     buffering_percent: Option<u8>,
+    play_when_ready: bool,
     playback_rate: f64,
     delivered_frames: u64,
     volume: f64,
@@ -140,7 +141,14 @@ impl VideoPlayer {
                         (player.state == PlaybackState::Loading).then_some(PlaybackState::Playing)
                     });
                     if let Some(next_state) = next_state {
-                        player.set_state(next_state, cx);
+                        player.set_state(
+                            if next_state == PlaybackState::Playing && player.is_buffering() {
+                                PlaybackState::Loading
+                            } else {
+                                next_state
+                            },
+                            cx,
+                        );
                     }
                     cx.emit(VideoPlayerEvent::FrameReady(frame));
                     cx.notify();
@@ -156,13 +164,36 @@ impl VideoPlayer {
                 };
                 this.update(cx, |player, cx| match event {
                     BackendEvent::Buffering(percent) => {
+                        let was_buffering = player.is_buffering();
                         if player.buffering_percent != Some(percent) {
                             player.buffering_percent = Some(percent);
                             cx.emit(VideoPlayerEvent::BufferingChanged(percent));
                             cx.notify();
                         }
+                        let is_buffering = player.is_buffering();
+                        if is_buffering && !was_buffering && player.play_when_ready {
+                            if let Err(error) = player.playback.pause() {
+                                player
+                                    .set_state(PlaybackState::Error(error.to_string().into()), cx);
+                            } else if player.state != PlaybackState::Seeking {
+                                player.set_state(PlaybackState::Loading, cx);
+                            }
+                        } else if !is_buffering && was_buffering && player.play_when_ready {
+                            if let Err(error) = player.playback.play() {
+                                player
+                                    .set_state(PlaybackState::Error(error.to_string().into()), cx);
+                            } else if player.state != PlaybackState::Seeking {
+                                let state = if player.frame.is_some() {
+                                    PlaybackState::Playing
+                                } else {
+                                    PlaybackState::Loading
+                                };
+                                player.set_state(state, cx);
+                            }
+                        }
                     }
                     BackendEvent::Ended => {
+                        player.play_when_ready = false;
                         if let Some(duration) = player.timeline.duration() {
                             player.timeline = PlaybackTimeline::new(
                                 duration,
@@ -215,6 +246,7 @@ impl VideoPlayer {
             state_after_seek: None,
             timeline: PlaybackTimeline::default(),
             buffering_percent: None,
+            play_when_ready: options.autoplay,
             playback_rate: 1.0,
             delivered_frames: 0,
             volume: initial_volume,
@@ -261,6 +293,10 @@ impl VideoPlayer {
         self.buffering_percent
     }
 
+    pub fn is_buffering(&self) -> bool {
+        self.buffering_percent.is_some_and(|percent| percent < 100)
+    }
+
     pub fn current_frame(&self) -> Option<&Arc<VideoFrame>> {
         self.frame.as_ref()
     }
@@ -293,22 +329,26 @@ impl VideoPlayer {
     }
 
     pub fn play(&mut self, cx: &mut Context<Self>) -> Result<()> {
+        self.play_when_ready = true;
         if self.state == PlaybackState::Ended {
             self.playback.restart()?;
+        } else if self.is_buffering() {
+            self.playback.pause()?;
         } else {
             self.playback.play()?;
         }
         self.state_after_seek = None;
-        let state = if self.frame.is_some() {
-            PlaybackState::Playing
-        } else {
+        let state = if self.is_buffering() || self.frame.is_none() {
             PlaybackState::Loading
+        } else {
+            PlaybackState::Playing
         };
         self.set_state(state, cx);
         Ok(())
     }
 
     pub fn pause(&mut self, cx: &mut Context<Self>) -> Result<()> {
+        self.play_when_ready = false;
         self.playback.pause()?;
         self.state_after_seek = None;
         self.set_state(PlaybackState::Paused, cx);
@@ -316,6 +356,7 @@ impl VideoPlayer {
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) -> Result<()> {
+        self.play_when_ready = false;
         self.playback.pause()?;
         self.playback.seek_to(Duration::ZERO, SeekMode::KeyFrame)?;
         self.state_after_seek = Some(PlaybackState::Paused);
@@ -339,6 +380,33 @@ impl VideoPlayer {
         }
     }
 
+    /// Recreates the active GStreamer pipeline for the same media source.
+    ///
+    /// This is useful after a network or decoder error. The host decides when
+    /// and how often to retry; the player only performs one explicit reload.
+    pub fn reload(&mut self, autoplay: bool, cx: &mut Context<Self>) -> Result<()> {
+        self.playback.reload(autoplay)?;
+        self.frame = None;
+        self.frame_transport = None;
+        self.state_after_seek = None;
+        self.timeline = PlaybackTimeline::default();
+        self.buffering_percent = None;
+        self.play_when_ready = autoplay;
+        self.delivered_frames = 0;
+        self.playback_rate = 1.0;
+        cx.emit(VideoPlayerEvent::TimelineChanged(self.timeline));
+        cx.emit(VideoPlayerEvent::PlaybackRateChanged(self.playback_rate));
+        self.set_state(
+            if autoplay {
+                PlaybackState::Loading
+            } else {
+                PlaybackState::Paused
+            },
+            cx,
+        );
+        Ok(())
+    }
+
     pub fn seek_to(
         &mut self,
         position: Duration,
@@ -349,9 +417,10 @@ impl VideoPlayer {
             .timeline
             .duration()
             .map_or(position, |duration| position.min(duration));
-        let resume_state = match self.state {
-            PlaybackState::Playing | PlaybackState::Loading => PlaybackState::Playing,
-            _ => PlaybackState::Paused,
+        let resume_state = if self.play_when_ready {
+            PlaybackState::Playing
+        } else {
+            PlaybackState::Paused
         };
         self.playback.seek_to(target, mode)?;
         self.state_after_seek = Some(resume_state);

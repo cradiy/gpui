@@ -7,6 +7,7 @@ use gpui::{Bounds, DisplayId, Pixels, PlatformDisplay, Size, px};
 #[derive(Debug)]
 pub(crate) struct X11Display {
     x_screen_index: usize,
+    scale_factor: f32,
     bounds: Bounds<Pixels>,
     uuid: Uuid,
 }
@@ -24,6 +25,7 @@ impl X11Display {
             .with_context(|| format!("No screen found with index {x_screen_index}"))?;
         Ok(Self {
             x_screen_index,
+            scale_factor,
             bounds: Bounds {
                 origin: Default::default(),
                 size: Size {
@@ -43,6 +45,10 @@ impl PlatformDisplay for X11Display {
 
     fn uuid(&self) -> anyhow::Result<Uuid> {
         Ok(self.uuid)
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 
     fn bounds(&self) -> Bounds<Pixels> {

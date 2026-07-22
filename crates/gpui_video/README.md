@@ -64,6 +64,51 @@ The player only supplies the video-and-overlay container. Controls, pointer
 behavior, subtitles, status overlays and fullscreen transitions remain owned
 by the host application.
 
+## Open a native-size borderless window
+
+The first frame can be decoded before opening the native window, avoiding a
+visible provisional-size resize. `fit_video_window_bounds` keeps the video's
+one-device-pixel-to-one-device-pixel size when it fits; larger videos are
+reduced proportionally to the display's visible area without cropping.
+
+```rust
+let source = MediaSource::parse(input)?;
+let initial_frame = VideoFrameExtractor::new(source.clone())?
+    .initial_frame_blocking()?;
+let video_size = initial_frame.display_size();
+
+gpui_platform::application().run(move |cx: &mut App| {
+    let display = cx
+        .primary_display()
+        .or_else(|| cx.displays().into_iter().next())
+        .expect("no display available");
+    let bounds = fit_video_window_bounds(video_size, display.as_ref());
+
+    cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: None,
+            window_decorations: Some(WindowDecorations::Client),
+            is_resizable: false,
+            ..Default::default()
+        },
+        move |window, cx| {
+            cx.new(|cx| {
+                VideoPlayer::new_in_window(source, Default::default(), window, cx)
+                    .expect("failed to create video player")
+            })
+        },
+    )
+    .expect("failed to open video window");
+});
+```
+
+For network media this performs a preroll request before the playback pipeline
+is created. Applications that already know the encoded display size can skip
+the probe and call `fit_video_window_bounds` directly. The initial-frame path
+does not seek, so WebDAV servers without HTTP byte-range support can still be
+probed.
+
 Run the custom play/pause and timeline example with:
 
 ```sh

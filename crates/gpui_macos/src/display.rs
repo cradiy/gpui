@@ -105,6 +105,17 @@ impl PlatformDisplay for MacDisplay {
         ]))
     }
 
+    fn scale_factor(&self) -> f32 {
+        unsafe {
+            let screen = self.get_nsscreen();
+            if screen == nil {
+                1.0
+            } else {
+                NSScreen::backingScaleFactor(screen) as f32
+            }
+        }
+    }
+
     fn bounds(&self) -> Bounds<Pixels> {
         unsafe {
             // CGDisplayBounds is in "global display" coordinates, where 0 is

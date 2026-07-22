@@ -136,6 +136,10 @@ impl PlatformDisplay for WindowsDisplay {
         Ok(self.uuid)
     }
 
+    fn scale_factor(&self) -> f32 {
+        self.scale_factor
+    }
+
     fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
     }

@@ -27,6 +27,10 @@ impl PlatformDisplay for TestDisplay {
         Ok(self.uuid)
     }
 
+    fn scale_factor(&self) -> f32 {
+        1.0
+    }
+
     fn bounds(&self) -> crate::Bounds<crate::Pixels> {
         self.bounds
     }

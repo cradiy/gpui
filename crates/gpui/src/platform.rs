@@ -287,6 +287,12 @@ pub trait PlatformDisplay: Debug {
     /// across system restarts.
     fn uuid(&self) -> Result<Uuid>;
 
+    /// Returns the ratio between physical device pixels and logical pixels on
+    /// this display.
+    fn scale_factor(&self) -> f32 {
+        1.0
+    }
+
     /// Get the bounds for this display
     fn bounds(&self) -> Bounds<Pixels>;
 

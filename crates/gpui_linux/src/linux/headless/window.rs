@@ -45,6 +45,10 @@ impl PlatformDisplay for HeadlessDisplay {
         Ok(Uuid::nil())
     }
 
+    fn scale_factor(&self) -> f32 {
+        1.0
+    }
+
     fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
     }

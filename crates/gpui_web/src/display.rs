@@ -68,6 +68,10 @@ impl PlatformDisplay for WebDisplay {
         Ok(self.uuid)
     }
 
+    fn scale_factor(&self) -> f32 {
+        self.browser_window.device_pixel_ratio() as f32
+    }
+
     fn bounds(&self) -> Bounds<Pixels> {
         let size = self.screen_size();
         Bounds {

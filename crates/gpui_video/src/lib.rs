@@ -15,6 +15,7 @@ mod player;
 mod source;
 mod stats;
 mod timeline;
+mod window_sizing;
 
 pub use container::{VideoContainer, video_container};
 pub use frame::{FrameTransport, VideoFrame};
@@ -25,6 +26,7 @@ pub use player::{PlaybackState, VideoPlayer, VideoPlayerEvent, VideoPlayerOption
 pub use source::{MediaSource, NetworkSourceOptions};
 pub use stats::VideoPlaybackStats;
 pub use timeline::{PlaybackTimeline, SeekMode};
+pub use window_sizing::{fit_video_window_bounds, fit_video_window_size};
 
 /// Initializes GStreamer for the current process.
 ///

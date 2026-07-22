@@ -154,6 +154,16 @@ impl VideoFrameExtractor {
             .await
     }
 
+    /// Returns the first decoded frame without issuing a seek.
+    ///
+    /// Hosts can call this before opening a window to determine the video's
+    /// display size without briefly showing a provisional window. Unlike an
+    /// arbitrary timestamp request, this also works for sequential HTTP
+    /// responses that do not support byte ranges.
+    pub async fn initial_frame(&self) -> Result<Arc<VideoFrame>> {
+        self.frame_at(Duration::ZERO).await
+    }
+
     /// Extracts a frame asynchronously with an explicit seek mode.
     pub async fn frame_at_with_mode(
         &self,
@@ -208,6 +218,11 @@ impl VideoFrameExtractor {
     /// Blocking counterpart to [`Self::frame_at`].
     pub fn frame_at_blocking(&self, position: Duration) -> Result<Arc<VideoFrame>> {
         self.frame_at_blocking_with_mode(position, self.inner.default_seek_mode)
+    }
+
+    /// Blocking counterpart to [`Self::initial_frame`].
+    pub fn initial_frame_blocking(&self) -> Result<Arc<VideoFrame>> {
+        self.frame_at_blocking(Duration::ZERO)
     }
 
     /// Blocking counterpart to [`Self::frame_at_with_mode`].
@@ -295,7 +310,7 @@ struct ExtractorPipeline {
     surface_handle: SurfaceHandle,
     sequence: u64,
     timeout: Duration,
-    prerolled: bool,
+    initial_frame: Option<Arc<VideoFrame>>,
     end_guard: Duration,
 }
 
@@ -336,29 +351,15 @@ impl ExtractorPipeline {
             surface_handle: SurfaceHandle::new(),
             sequence: 1,
             timeout,
-            prerolled: false,
+            initial_frame: None,
             end_guard: Duration::from_millis(1),
         })
     }
 
     fn frame_at(&mut self, requested: Duration, seek_mode: SeekMode) -> Result<Arc<VideoFrame>> {
-        if !self.prerolled {
-            self.playbin
-                .set_state(gst::State::Paused)
-                .map_err(|error| anyhow!("failed to prepare frame extraction: {error:?}"))?;
-            let timeout = clock_time(self.timeout)?;
-            self.playbin
-                .state(timeout)
-                .0
-                .map_err(|error| anyhow!("frame extraction preroll failed: {error:?}"))?;
-            let initial_sample = self
-                .appsink
-                .try_pull_preroll(timeout)
-                .context("timed out waiting for the initial video frame")?;
-            self.end_guard = estimated_frame_duration(&initial_sample)
-                .unwrap_or(self.end_guard)
-                .max(Duration::from_millis(1));
-            self.prerolled = true;
+        let initial_frame = self.preroll_initial_frame()?;
+        if requested.is_zero() {
+            return Ok(initial_frame);
         }
 
         let duration = self
@@ -387,6 +388,38 @@ impl ExtractorPipeline {
         Err(anyhow!(
             "failed to extract a video frame at or before {position:?}"
         ))
+    }
+
+    fn preroll_initial_frame(&mut self) -> Result<Arc<VideoFrame>> {
+        if let Some(frame) = &self.initial_frame {
+            return Ok(frame.clone());
+        }
+
+        self.playbin
+            .set_state(gst::State::Paused)
+            .map_err(|error| anyhow!("failed to prepare frame extraction: {error:?}"))?;
+        let timeout = clock_time(self.timeout)?;
+        self.playbin
+            .state(timeout)
+            .0
+            .map_err(|error| anyhow!("frame extraction preroll failed: {error:?}"))?;
+        let sample = self
+            .appsink
+            .try_pull_preroll(timeout)
+            .context("timed out waiting for the initial video frame")?;
+        self.end_guard = estimated_frame_duration(&sample)
+            .unwrap_or(self.end_guard)
+            .max(Duration::from_millis(1));
+        let frame = sample_to_video_frame(
+            &sample,
+            self.surface_handle.clone(),
+            self.sequence,
+            #[cfg(target_os = "linux")]
+            None,
+        )?;
+        self.sequence = self.sequence.wrapping_add(1).max(1);
+        self.initial_frame = Some(frame.clone());
+        Ok(frame)
     }
 }
 

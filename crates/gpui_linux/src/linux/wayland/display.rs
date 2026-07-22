@@ -14,6 +14,7 @@ pub(crate) struct WaylandDisplay {
     /// The ID of the wl_output object
     pub id: ObjectId,
     pub name: Option<String>,
+    pub scale_factor: f32,
     pub bounds: Bounds<Pixels>,
 }
 
@@ -34,6 +35,10 @@ impl PlatformDisplay for WaylandDisplay {
             .as_ref()
             .context("Wayland display does not have a name")?;
         Ok(Uuid::new_v5(&Uuid::NAMESPACE_DNS, name.as_bytes()))
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 
     fn bounds(&self) -> Bounds<Pixels> {

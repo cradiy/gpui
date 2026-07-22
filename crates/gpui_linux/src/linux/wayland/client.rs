@@ -797,6 +797,7 @@ impl LinuxClient for WaylandClient {
                 Rc::new(WaylandDisplay {
                     id: id.clone(),
                     name: output.name.clone(),
+                    scale_factor: output.scale as f32,
                     bounds: output.bounds.to_pixels(output.scale as f32),
                 }) as Rc<dyn PlatformDisplay>
             })
@@ -813,6 +814,7 @@ impl LinuxClient for WaylandClient {
                     Rc::new(WaylandDisplay {
                         id: object_id.clone(),
                         name: output.name.clone(),
+                        scale_factor: output.scale as f32,
                         bounds: output.bounds.to_pixels(output.scale as f32),
                     }) as Rc<dyn PlatformDisplay>
                 })

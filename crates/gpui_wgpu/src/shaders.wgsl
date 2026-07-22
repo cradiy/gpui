@@ -1648,20 +1648,19 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
 
 struct SurfaceParams {
     bounds: Bounds,
+    clip_bounds: Bounds,
     content_mask: Bounds,
+    uv_bounds: Bounds,
+    corner_radii: Corners,
+    color_rows: array<vec4<f32>, 3>,
+    opacity: f32,
+    _pad: array<f32, 3>,
 }
 
-@group(1) @binding(0) var<uniform> surface_locals: SurfaceParams;
-@group(1) @binding(1) var t_y: texture_2d<f32>;
-@group(1) @binding(2) var t_cb_cr: texture_2d<f32>;
+@group(1) @binding(0) var<storage, read> surface_locals: SurfaceParams;
+@group(1) @binding(1) var t_surface_0: texture_2d<f32>;
+@group(1) @binding(2) var t_surface_1: texture_2d<f32>;
 @group(1) @binding(3) var s_surface: sampler;
-
-const ycbcr_to_RGB = mat4x4<f32>(
-    vec4<f32>( 1.0000f,  1.0000f,  1.0000f, 0.0),
-    vec4<f32>( 0.0000f, -0.3441f,  1.7720f, 0.0),
-    vec4<f32>( 1.4020f, -0.7141f,  0.0000f, 0.0),
-    vec4<f32>(-0.7010f,  0.5291f, -0.8860f, 1.0),
-);
 
 struct SurfaceVarying {
     @builtin(position) position: vec4<f32>,
@@ -1675,22 +1674,35 @@ fn vs_surface(@builtin(vertex_index) vertex_id: u32) -> SurfaceVarying {
 
     var out = SurfaceVarying();
     out.position = to_device_position(unit_vertex, surface_locals.bounds);
-    out.texture_position = unit_vertex;
+    out.texture_position = surface_locals.uv_bounds.origin + unit_vertex * surface_locals.uv_bounds.size;
     out.clip_distances = distance_from_clip_rect(unit_vertex, surface_locals.bounds, surface_locals.content_mask);
     return out;
 }
 
 @fragment
-fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
-    // Alpha clip after using the derivatives.
+fn fs_surface_rgba(input: SurfaceVarying) -> @location(0) vec4<f32> {
+    let sample = textureSample(t_surface_0, s_surface, input.texture_position);
     if (any(input.clip_distances < vec4<f32>(0.0))) {
         return vec4<f32>(0.0);
     }
+    let distance = quad_sdf(input.position.xy, surface_locals.clip_bounds, surface_locals.corner_radii);
+    return blend_color(sample, surface_locals.opacity * saturate(0.5 - distance));
+}
 
-    let y_cb_cr = vec4<f32>(
-        textureSampleLevel(t_y, s_surface, input.texture_position, 0.0).r,
-        textureSampleLevel(t_cb_cr, s_surface, input.texture_position, 0.0).rg,
+@fragment
+fn fs_surface_nv12(input: SurfaceVarying) -> @location(0) vec4<f32> {
+    let yuv = vec4<f32>(
+        textureSample(t_surface_0, s_surface, input.texture_position).r,
+        textureSample(t_surface_1, s_surface, input.texture_position).rg,
         1.0);
-
-    return ycbcr_to_RGB * y_cb_cr;
+    if (any(input.clip_distances < vec4<f32>(0.0))) {
+        return vec4<f32>(0.0);
+    }
+    let rgb = vec3<f32>(
+        dot(surface_locals.color_rows[0], yuv),
+        dot(surface_locals.color_rows[1], yuv),
+        dot(surface_locals.color_rows[2], yuv),
+    );
+    let distance = quad_sdf(input.position.xy, surface_locals.clip_bounds, surface_locals.corner_radii);
+    return blend_color(vec4<f32>(rgb, 1.0), surface_locals.opacity * saturate(0.5 - distance));
 }

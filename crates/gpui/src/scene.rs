@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AtlasTextureId, AtlasTile, Background, BorderGradient, Bounds, ContentMask, Corners, Edges,
-    EffectShader, EffectUniforms, Hsla, Pixels, Point, Radians, ScaledPixels, Size,
+    EffectShader, EffectUniforms, Hsla, Pixels, Point, Radians, ScaledPixels, Size, SurfaceSource,
     bounds_tree::BoundsTree, point,
 };
 use std::{
@@ -812,9 +812,11 @@ impl From<PolychromeSprite> for Primitive {
 pub struct PaintSurface {
     pub order: DrawOrder,
     pub bounds: Bounds<ScaledPixels>,
+    pub clip_bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    #[cfg(target_os = "macos")]
-    pub image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+    pub corner_radii: Corners<ScaledPixels>,
+    pub opacity: f32,
+    pub source: SurfaceSource,
 }
 
 impl From<PaintSurface> for Primitive {

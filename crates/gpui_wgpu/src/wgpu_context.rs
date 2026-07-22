@@ -114,6 +114,7 @@ impl WgpuContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|e| anyhow::anyhow!("Failed to request GPU adapter: {e}"))?;
@@ -154,6 +155,15 @@ impl WgpuContext {
                 "Dual-source blending not available on this GPU. \
                 Subpixel text antialiasing will be disabled."
             );
+        }
+
+        #[cfg(target_os = "linux")]
+        if adapter.get_info().backend == wgpu::Backend::Vulkan
+            && adapter
+                .features()
+                .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF)
+        {
+            required_features |= wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
         }
 
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
@@ -376,6 +386,7 @@ impl WgpuContext {
             desired_maximum_frame_latency: 2,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
         surface.configure(&device, &test_config);
@@ -432,6 +443,16 @@ impl WgpuContext {
 
     pub fn color_texture_format(&self) -> wgpu::TextureFormat {
         self.color_texture_format
+    }
+
+    /// Returns whether this device can import single-plane Linux DMA-BUF textures.
+    pub fn supports_dma_buf_import(&self) -> bool {
+        cfg!(target_os = "linux")
+            && self.adapter.get_info().backend == wgpu::Backend::Vulkan
+            && self
+                .device
+                .features()
+                .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF)
     }
 
     /// Returns true if the GPU device was lost (e.g., due to driver crash, suspend/resume).

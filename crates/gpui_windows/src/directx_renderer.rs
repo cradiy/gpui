@@ -876,6 +876,7 @@ impl DirectXRenderer {
             device_name,
             driver_name,
             driver_info: driver_version,
+            supports_dma_buf_import: false,
         })
     }
 

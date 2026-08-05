@@ -1,13 +1,14 @@
 use crate::{
     AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, DevicePixels,
-    DummyKeyboardMapper, ForegroundExecutor, Keymap, NoopTextSystem, PathPromptOptions, Platform,
+    DummyKeyboardMapper, ForegroundExecutor, GlobalShortcut, GlobalShortcutEvent,
+    GlobalShortcutRegistrationId, Keymap, NoopTextSystem, PathPromptOptions, Platform,
     PlatformDisplay, PlatformHeadlessRenderer, PlatformKeyboardLayout, PlatformKeyboardMapper,
-    PlatformTextSystem, PromptButton, ScreenCaptureFrame, ScreenCaptureSource, ScreenCaptureStream,
-    SourceMetadata, Task, TestDisplay, TestWindow, ThermalState, WindowAppearance, WindowParams,
-    size,
+    PlatformTextSystem, PromptButton, RegisteredGlobalShortcut, ScreenCaptureFrame,
+    ScreenCaptureSource, ScreenCaptureStream, SourceMetadata, Task, TestDisplay, TestWindow,
+    ThermalState, WindowAppearance, WindowParams, size,
 };
 use anyhow::Result;
-use collections::VecDeque;
+use collections::{HashMap, VecDeque};
 use futures::channel::oneshot;
 use parking_lot::Mutex;
 use std::{
@@ -37,6 +38,9 @@ pub(crate) struct TestPlatform {
     pub expect_restart: RefCell<Option<oneshot::Sender<Option<PathBuf>>>>,
     headless_renderer_factory: Option<Box<dyn Fn() -> Option<Box<dyn PlatformHeadlessRenderer>>>>,
     weak: Weak<Self>,
+    global_shortcut_callback: RefCell<Option<Box<dyn FnMut(GlobalShortcutEvent)>>>,
+    global_shortcut_registrations:
+        RefCell<HashMap<GlobalShortcutRegistrationId, Vec<RegisteredGlobalShortcut>>>,
 }
 
 #[derive(Clone)]
@@ -136,6 +140,8 @@ impl TestPlatform {
             opened_url: Default::default(),
             text_system,
             headless_renderer_factory,
+            global_shortcut_callback: RefCell::new(None),
+            global_shortcut_registrations: RefCell::new(HashMap::default()),
         })
     }
 
@@ -213,6 +219,18 @@ impl TestPlatform {
         *self.screen_capture_sources.borrow_mut() = sources;
     }
 
+    pub(crate) fn simulate_global_shortcut_event(&self, event: GlobalShortcutEvent) {
+        let callback = self.global_shortcut_callback.borrow_mut().take();
+        if let Some(mut callback) = callback {
+            callback(event);
+            self.global_shortcut_callback.borrow_mut().replace(callback);
+        }
+    }
+
+    pub(crate) fn global_shortcut_registration_count(&self) -> usize {
+        self.global_shortcut_registrations.borrow().len()
+    }
+
     pub(crate) fn prompt(
         &self,
         msg: &str,
@@ -279,6 +297,40 @@ impl Platform for TestPlatform {
 
     fn keyboard_mapper(&self) -> Rc<dyn PlatformKeyboardMapper> {
         Rc::new(DummyKeyboardMapper)
+    }
+
+    fn global_shortcuts_supported(&self) -> bool {
+        true
+    }
+
+    fn register_global_shortcuts(
+        &self,
+        registration_id: GlobalShortcutRegistrationId,
+        shortcuts: Vec<GlobalShortcut>,
+    ) -> Task<Result<Vec<RegisteredGlobalShortcut>>> {
+        let registered = shortcuts
+            .into_iter()
+            .map(|shortcut| {
+                RegisteredGlobalShortcut::new(
+                    shortcut.id(),
+                    shortcut.preferred_trigger().key.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.global_shortcut_registrations
+            .borrow_mut()
+            .insert(registration_id, registered.clone());
+        Task::ready(Ok(registered))
+    }
+
+    fn unregister_global_shortcuts(&self, registration_id: GlobalShortcutRegistrationId) {
+        self.global_shortcut_registrations
+            .borrow_mut()
+            .remove(&registration_id);
+    }
+
+    fn on_global_shortcut(&self, callback: Box<dyn FnMut(GlobalShortcutEvent)>) {
+        self.global_shortcut_callback.borrow_mut().replace(callback);
     }
 
     fn on_keyboard_layout_change(&self, _: Box<dyn FnMut()>) {}

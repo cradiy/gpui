@@ -136,7 +136,11 @@ impl WindowsKeyboardMapper {
         }
     }
 
-    fn get_vkey_from_key(&self, key: &str, use_key_equivalents: bool) -> Option<(u16, bool)> {
+    pub(crate) fn get_vkey_from_key(
+        &self,
+        key: &str,
+        use_key_equivalents: bool,
+    ) -> Option<(u16, bool)> {
         if use_key_equivalents {
             get_vkey_from_key_with_us_layout(key)
         } else {

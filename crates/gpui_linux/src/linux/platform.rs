@@ -23,9 +23,10 @@ use xkbcommon::xkb::{self, Keycode, Keysym, State};
 use crate::linux::{LinuxDispatcher, PriorityQueueCalloopReceiver};
 use gpui::{
     Action, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, DisplayId,
-    ForegroundExecutor, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, Result, RunnableVariant, Task, ThermalState, WindowAppearance,
+    ForegroundExecutor, GlobalShortcut, GlobalShortcutEvent, GlobalShortcutRegistrationId, Keymap,
+    Menu, MenuItem, OwnedMenu, PathPromptOptions, Platform, PlatformDisplay,
+    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow,
+    RegisteredGlobalShortcut, Result, RunnableVariant, Task, ThermalState, WindowAppearance,
     WindowButtonLayout, WindowParams,
 };
 #[cfg(any(feature = "wayland", feature = "x11"))]
@@ -93,6 +94,22 @@ pub(crate) trait LinuxClient {
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>>;
     fn run(&self);
 
+    fn global_shortcuts_supported(&self) -> bool {
+        false
+    }
+
+    fn register_global_shortcuts(
+        &self,
+        _registration_id: GlobalShortcutRegistrationId,
+        _shortcuts: Vec<GlobalShortcut>,
+    ) -> Task<Result<Vec<RegisteredGlobalShortcut>>> {
+        Task::ready(Err(anyhow!(
+            "global shortcuts are not supported by this Linux backend"
+        )))
+    }
+
+    fn unregister_global_shortcuts(&self, _registration_id: GlobalShortcutRegistrationId) {}
+
     #[cfg(any(feature = "wayland", feature = "x11"))]
     fn window_identifier(
         &self,
@@ -111,6 +128,7 @@ pub(crate) struct PlatformHandlers {
     pub(crate) validate_app_menu_command: Option<Box<dyn FnMut(&dyn Action) -> bool>>,
     pub(crate) keyboard_layout_change: Option<Box<dyn FnMut()>>,
     pub(crate) system_wake: Option<Box<dyn FnMut()>>,
+    pub(crate) global_shortcut: Option<Box<dyn FnMut(GlobalShortcutEvent)>>,
 }
 
 pub(crate) struct LinuxCommon {
@@ -553,6 +571,29 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
         self.inner.with_common(|common| {
             common.callbacks.system_wake = Some(callback);
             common.start_wake_listener();
+        });
+    }
+
+    fn global_shortcuts_supported(&self) -> bool {
+        self.inner.global_shortcuts_supported()
+    }
+
+    fn register_global_shortcuts(
+        &self,
+        registration_id: GlobalShortcutRegistrationId,
+        shortcuts: Vec<GlobalShortcut>,
+    ) -> Task<Result<Vec<RegisteredGlobalShortcut>>> {
+        self.inner
+            .register_global_shortcuts(registration_id, shortcuts)
+    }
+
+    fn unregister_global_shortcuts(&self, registration_id: GlobalShortcutRegistrationId) {
+        self.inner.unregister_global_shortcuts(registration_id);
+    }
+
+    fn on_global_shortcut(&self, callback: Box<dyn FnMut(GlobalShortcutEvent)>) {
+        self.inner.with_common(|common| {
+            common.callbacks.global_shortcut = Some(callback);
         });
     }
 

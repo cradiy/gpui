@@ -389,6 +389,16 @@ impl TestAppContext {
         self.test_platform.set_screen_capture_sources(sources);
     }
 
+    /// Simulates a global shortcut platform event.
+    pub fn simulate_global_shortcut_event(&self, event: crate::GlobalShortcutEvent) {
+        self.test_platform.simulate_global_shortcut_event(event);
+    }
+
+    /// Returns the number of active global shortcut registration groups.
+    pub fn global_shortcut_registration_count(&self) -> usize {
+        self.test_platform.global_shortcut_registration_count()
+    }
+
     /// Returns all windows open in the test.
     pub fn windows(&self) -> Vec<AnyWindowHandle> {
         self.app.borrow().windows()

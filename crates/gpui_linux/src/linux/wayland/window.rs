@@ -875,6 +875,10 @@ impl WaylandWindowStatePtr {
         self.state.borrow().handle
     }
 
+    pub(crate) fn app_id(&self) -> Option<String> {
+        self.state.borrow().app_id.clone()
+    }
+
     pub fn surface(&self) -> wl_surface::WlSurface {
         self.state.borrow().surface.clone()
     }

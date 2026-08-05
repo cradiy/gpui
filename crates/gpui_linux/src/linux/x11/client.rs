@@ -29,7 +29,7 @@ use x11rb::{
     protocol::xkb::ConnectionExt as _,
     protocol::xproto::{
         AtomEnum, ChangeWindowAttributesAux, ClientMessageData, ClientMessageEvent,
-        ConnectionExt as _, EventMask, Visibility,
+        ConnectionExt as _, EventMask, GrabMode, ModMask, Visibility,
     },
     protocol::{Event, dri3, randr, render, xinput, xkb, xproto},
     resource_manager::Database,
@@ -59,9 +59,10 @@ use crate::linux::{
 use crate::linux::{LinuxCommon, LinuxKeyboardLayout, X11Window, modifiers_from_xinput_info};
 
 use gpui::{
-    AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, DisplayId, FileDropEvent, Keystroke,
-    Modifiers, ModifiersChangedEvent, MouseButton, Pixels, PlatformDisplay, PlatformInput,
-    PlatformKeyboardLayout, PlatformWindow, Point, RequestFrameOptions, ScrollDelta, Size,
+    AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, DisplayId, FileDropEvent, GlobalShortcut,
+    GlobalShortcutEvent, GlobalShortcutRegistrationId, Keystroke, Modifiers, ModifiersChangedEvent,
+    MouseButton, Pixels, PlatformDisplay, PlatformInput, PlatformKeyboardLayout, PlatformWindow,
+    Point, RegisteredGlobalShortcut, RequestFrameOptions, ScrollDelta, SharedString, Size, Task,
     TouchPhase, WindowButtonLayout, WindowParams, point, px,
 };
 use gpui_wgpu::{CompositorGpuHint, GpuContext};
@@ -222,6 +223,9 @@ pub struct X11ClientState {
     pub(crate) clipboard: Clipboard,
     pub(crate) clipboard_item: Option<ClipboardItem>,
     pub(crate) xdnd_state: Xdnd,
+    global_shortcuts: HashMap<(u8, u16), (GlobalShortcutRegistrationId, SharedString)>,
+    global_shortcut_registrations: HashMap<GlobalShortcutRegistrationId, Vec<(u8, ModMask)>>,
+    pressed_global_shortcuts: HashSet<(u8, u16)>,
 }
 
 #[derive(Clone)]
@@ -559,6 +563,9 @@ impl X11Client {
             clipboard,
             clipboard_item: None,
             xdnd_state: Xdnd::default(),
+            global_shortcuts: HashMap::default(),
+            global_shortcut_registrations: HashMap::default(),
+            pressed_global_shortcuts: HashSet::default(),
         }))))
     }
 
@@ -665,6 +672,19 @@ impl X11Client {
             }
 
             for event in events.into_iter() {
+                let handled_global_shortcut = match &event {
+                    Event::KeyPress(event) => {
+                        self.handle_global_shortcut_key(event.detail, u16::from(event.state), true)
+                    }
+                    Event::KeyRelease(event) => {
+                        self.handle_global_shortcut_key(event.detail, u16::from(event.state), false)
+                    }
+                    _ => false,
+                };
+                if handled_global_shortcut {
+                    continue;
+                }
+
                 let mut state = self.0.borrow_mut();
                 if !state.has_xim() {
                     drop(state);
@@ -783,7 +803,50 @@ impl X11Client {
             .map(|window_reference| window_reference.window.clone())
     }
 
+    fn handle_global_shortcut_key(&self, keycode: u8, state_mask: u16, pressed: bool) -> bool {
+        let normalized_mask = state_mask & !(u16::from(ModMask::LOCK) | u16::from(ModMask::M2));
+        let key = (keycode, normalized_mask);
+        let mut state = self.0.borrow_mut();
+        let Some((registration_id, shortcut_id)) = state.global_shortcuts.get(&key).cloned() else {
+            return false;
+        };
+
+        if !pressed {
+            state.pressed_global_shortcuts.remove(&key);
+            return true;
+        }
+        if !state.pressed_global_shortcuts.insert(key) {
+            return true;
+        }
+
+        let callback = state.common.callbacks.global_shortcut.take();
+        drop(state);
+        if let Some(mut callback) = callback {
+            callback(GlobalShortcutEvent::Activated {
+                registration_id,
+                shortcut_id,
+                activation_token: None,
+            });
+            self.0.borrow_mut().common.callbacks.global_shortcut = Some(callback);
+        }
+        true
+    }
+
     fn handle_event(&self, event: Event) -> Option<()> {
+        match &event {
+            Event::KeyPress(event)
+                if self.handle_global_shortcut_key(event.detail, u16::from(event.state), true) =>
+            {
+                return Some(());
+            }
+            Event::KeyRelease(event)
+                if self.handle_global_shortcut_key(event.detail, u16::from(event.state), false) =>
+            {
+                return Some(());
+            }
+            _ => {}
+        }
+
         match event {
             Event::UnmapNotify(event) => {
                 let mut state = self.0.borrow_mut();
@@ -1522,6 +1585,111 @@ impl X11Client {
 }
 
 impl LinuxClient for X11Client {
+    fn global_shortcuts_supported(&self) -> bool {
+        true
+    }
+
+    fn register_global_shortcuts(
+        &self,
+        registration_id: GlobalShortcutRegistrationId,
+        shortcuts: Vec<GlobalShortcut>,
+    ) -> Task<anyhow::Result<Vec<RegisteredGlobalShortcut>>> {
+        let result = (|| {
+            let mut state = self.0.borrow_mut();
+            let root = state.xcb_connection.setup().roots[state.x_root_index].root;
+            let layout = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
+            let mut grabs = Vec::new();
+            let mut registered = Vec::new();
+            let mut mappings = Vec::new();
+
+            for shortcut in &shortcuts {
+                let (keycode, modifiers, description) =
+                    x11_global_shortcut(&state.xkb, layout, shortcut.preferred_trigger())?;
+                let normalized = u16::from(modifiers);
+                if state.global_shortcuts.contains_key(&(keycode, normalized))
+                    || grabs
+                        .iter()
+                        .any(|(grabbed_key, grabbed_modifiers): &(u8, ModMask)| {
+                            *grabbed_key == keycode && u16::from(*grabbed_modifiers) == normalized
+                        })
+                {
+                    rollback_x11_global_shortcuts(&state, root, &grabs);
+                    anyhow::bail!("global shortcut {description} is already registered");
+                }
+
+                for lock_mask in [
+                    ModMask::default(),
+                    ModMask::LOCK,
+                    ModMask::M2,
+                    ModMask::LOCK | ModMask::M2,
+                ] {
+                    let grab_modifiers = modifiers | lock_mask;
+                    let grab = state.xcb_connection.grab_key(
+                        false,
+                        root,
+                        grab_modifiers,
+                        keycode,
+                        GrabMode::ASYNC,
+                        GrabMode::ASYNC,
+                    );
+                    let grab = match grab {
+                        Ok(cookie) => cookie.check().map_err(anyhow::Error::from),
+                        Err(error) => Err(anyhow::Error::from(error)),
+                    };
+                    if let Err(error) = grab {
+                        rollback_x11_global_shortcuts(&state, root, &grabs);
+                        return Err(error)
+                            .context(format!("failed to register global shortcut {description}"));
+                    }
+                    grabs.push((keycode, grab_modifiers));
+                }
+
+                mappings.push((
+                    (keycode, normalized),
+                    (registration_id, SharedString::from(shortcut.id())),
+                ));
+                registered.push(RegisteredGlobalShortcut::new(shortcut.id(), description));
+            }
+
+            if let Err(error) = state.xcb_connection.flush() {
+                rollback_x11_global_shortcuts(&state, root, &grabs);
+                return Err(error.into());
+            }
+            state.global_shortcuts.extend(mappings);
+            state
+                .global_shortcut_registrations
+                .insert(registration_id, grabs);
+            Ok(registered)
+        })();
+        Task::ready(result)
+    }
+
+    fn unregister_global_shortcuts(&self, registration_id: GlobalShortcutRegistrationId) {
+        let mut state = self.0.borrow_mut();
+        let root = state.xcb_connection.setup().roots[state.x_root_index].root;
+        let Some(grabs) = state.global_shortcut_registrations.remove(&registration_id) else {
+            return;
+        };
+        for (keycode, modifiers) in &grabs {
+            state
+                .xcb_connection
+                .ungrab_key(*keycode, root, *modifiers)
+                .ok();
+        }
+        let removed_keys = state
+            .global_shortcuts
+            .iter()
+            .filter_map(|(key, (id, _))| (*id == registration_id).then_some(*key))
+            .collect::<Vec<_>>();
+        state
+            .global_shortcuts
+            .retain(|_, (id, _)| *id != registration_id);
+        for key in removed_keys {
+            state.pressed_global_shortcuts.remove(&key);
+        }
+        state.xcb_connection.flush().ok();
+    }
+
     fn compositor_name(&self) -> &'static str {
         "X11"
     }
@@ -1858,6 +2026,88 @@ impl LinuxClient for X11Client {
             .map(|x_window| std::future::ready(Some(WindowIdentifier::from_xid(x_window))))
             .unwrap_or(std::future::ready(None))
     }
+}
+
+fn x11_global_shortcut(
+    state: &xkbc::State,
+    layout: u32,
+    keystroke: &Keystroke,
+) -> anyhow::Result<(u8, ModMask, String)> {
+    if keystroke.modifiers.function {
+        anyhow::bail!("the function modifier is not supported by X11 global shortcuts");
+    }
+
+    let mut modifiers = ModMask::default();
+    let mut names = Vec::new();
+    if keystroke.modifiers.control {
+        modifiers |= ModMask::CONTROL;
+        names.push("Ctrl");
+    }
+    if keystroke.modifiers.alt {
+        modifiers |= ModMask::M1;
+        names.push("Alt");
+    }
+    if keystroke.modifiers.shift {
+        modifiers |= ModMask::SHIFT;
+        names.push("Shift");
+    }
+    if keystroke.modifiers.platform {
+        modifiers |= ModMask::M4;
+        names.push("Super");
+    }
+
+    let key_name = match keystroke.key.as_str() {
+        "enter" => "Return",
+        "backspace" => "BackSpace",
+        "escape" => "Escape",
+        "pageup" => "Page_Up",
+        "pagedown" => "Page_Down",
+        "left" => "Left",
+        "right" => "Right",
+        "up" => "Up",
+        "down" => "Down",
+        "space" => "space",
+        "tab" => "Tab",
+        "delete" => "Delete",
+        "insert" => "Insert",
+        "home" => "Home",
+        "end" => "End",
+        key => key,
+    };
+    let keysym = xkbc::keysym_from_name(key_name, xkbc::KEYSYM_CASE_INSENSITIVE);
+    if keysym.raw() == xkbc::keysyms::KEY_NoSymbol {
+        anyhow::bail!("unsupported global shortcut key: {}", keystroke.key);
+    }
+
+    let keymap = state.get_keymap();
+    let mut keycode = None;
+    keymap.key_for_each(|keymap, candidate| {
+        if keycode.is_none()
+            && keymap
+                .key_get_syms_by_level(candidate, layout, 0)
+                .contains(&keysym)
+        {
+            keycode = u8::try_from(candidate.raw()).ok();
+        }
+    });
+    let keycode = keycode
+        .with_context(|| format!("global shortcut key {key_name} is absent from the keymap"))?;
+    names.push(key_name);
+    Ok((keycode, modifiers, names.join("+")))
+}
+
+fn rollback_x11_global_shortcuts(
+    state: &X11ClientState,
+    root: xproto::Window,
+    grabs: &[(u8, ModMask)],
+) {
+    for (keycode, modifiers) in grabs {
+        state
+            .xcb_connection
+            .ungrab_key(*keycode, root, *modifiers)
+            .ok();
+    }
+    state.xcb_connection.flush().ok();
 }
 
 impl X11ClientState {

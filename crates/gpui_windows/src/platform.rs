@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     ffi::OsStr,
     path::{Path, PathBuf},
     rc::{Rc, Weak},
@@ -67,6 +68,15 @@ pub(crate) struct WindowsPlatformState {
     /// Shared with each window so `WM_SETCURSOR` can read it directly.
     pub(crate) cursor_visible: Arc<AtomicBool>,
     directx_devices: RefCell<Option<DirectXDevices>>,
+    global_shortcuts: RefCell<HashMap<i32, WindowsGlobalShortcut>>,
+    global_shortcut_registrations: RefCell<HashMap<GlobalShortcutRegistrationId, Vec<i32>>>,
+    next_global_shortcut_id: Cell<i32>,
+}
+
+#[derive(Clone)]
+struct WindowsGlobalShortcut {
+    registration_id: GlobalShortcutRegistrationId,
+    shortcut_id: SharedString,
 }
 
 #[derive(Default)]
@@ -79,6 +89,7 @@ struct PlatformCallbacks {
     validate_app_menu_command: Cell<Option<Box<dyn FnMut(&dyn Action) -> bool>>>,
     keyboard_layout_change: Cell<Option<Box<dyn FnMut()>>>,
     system_wake: Cell<Option<Box<dyn FnMut()>>>,
+    global_shortcut: Cell<Option<Box<dyn FnMut(GlobalShortcutEvent)>>>,
 }
 
 impl WindowsPlatformState {
@@ -94,6 +105,9 @@ impl WindowsPlatformState {
             cursor_visible: Arc::new(AtomicBool::new(true)),
             directx_devices: RefCell::new(directx_devices),
             menus: RefCell::new(Vec::new()),
+            global_shortcuts: RefCell::new(HashMap::new()),
+            global_shortcut_registrations: RefCell::new(HashMap::new()),
+            next_global_shortcut_id: Cell::new(1),
         }
     }
 }
@@ -360,6 +374,73 @@ fn translate_accelerator(msg: &MSG) -> Option<()> {
     (result.0 == 0).then_some(())
 }
 
+fn windows_global_shortcut(
+    mapper: &WindowsKeyboardMapper,
+    keystroke: &Keystroke,
+) -> Result<(u32, HOT_KEY_MODIFIERS, String)> {
+    if keystroke.modifiers.function {
+        anyhow::bail!("the function modifier is not supported by Windows global shortcuts");
+    }
+
+    let mut modifiers = MOD_NOREPEAT;
+    let mut names = Vec::new();
+    if keystroke.modifiers.control {
+        modifiers |= MOD_CONTROL;
+        names.push("Ctrl");
+    }
+    if keystroke.modifiers.alt {
+        modifiers |= MOD_ALT;
+        names.push("Alt");
+    }
+    if keystroke.modifiers.shift {
+        modifiers |= MOD_SHIFT;
+        names.push("Shift");
+    }
+    if keystroke.modifiers.platform {
+        modifiers |= MOD_WIN;
+        names.push("Win");
+    }
+
+    let named_key = match keystroke.key.as_str() {
+        "space" => Some(VK_SPACE),
+        "enter" => Some(VK_RETURN),
+        "escape" => Some(VK_ESCAPE),
+        "backspace" => Some(VK_BACK),
+        "tab" => Some(VK_TAB),
+        "delete" => Some(VK_DELETE),
+        "insert" => Some(VK_INSERT),
+        "home" => Some(VK_HOME),
+        "end" => Some(VK_END),
+        "pageup" => Some(VK_PRIOR),
+        "pagedown" => Some(VK_NEXT),
+        "left" => Some(VK_LEFT),
+        "right" => Some(VK_RIGHT),
+        "up" => Some(VK_UP),
+        "down" => Some(VK_DOWN),
+        _ => None,
+    };
+    let (virtual_key, shifted) = if let Some(key) = named_key {
+        (key.0, false)
+    } else if let Some(number) = keystroke
+        .key
+        .strip_prefix('f')
+        .and_then(|number| number.parse::<u16>().ok())
+        .filter(|number| (1..=24).contains(number))
+    {
+        (VK_F1.0 + number - 1, false)
+    } else {
+        mapper
+            .get_vkey_from_key(&keystroke.key, false)
+            .with_context(|| format!("unsupported global shortcut key: {}", keystroke.key))?
+    };
+    if shifted && !modifiers.contains(MOD_SHIFT) {
+        modifiers |= MOD_SHIFT;
+        names.push("Shift");
+    }
+    names.push(&keystroke.key);
+    Ok((u32::from(virtual_key), modifiers, names.join("+")))
+}
+
 impl Platform for WindowsPlatform {
     fn background_executor(&self) -> BackgroundExecutor {
         self.background_executor.clone()
@@ -383,6 +464,101 @@ impl Platform for WindowsPlatform {
 
     fn keyboard_mapper(&self) -> Rc<dyn PlatformKeyboardMapper> {
         Rc::new(WindowsKeyboardMapper::new())
+    }
+
+    fn global_shortcuts_supported(&self) -> bool {
+        !self.headless
+    }
+
+    fn register_global_shortcuts(
+        &self,
+        registration_id: GlobalShortcutRegistrationId,
+        shortcuts: Vec<GlobalShortcut>,
+    ) -> Task<Result<Vec<RegisteredGlobalShortcut>>> {
+        if self.headless {
+            return Task::ready(Err(anyhow!(
+                "global shortcuts are unavailable in headless mode"
+            )));
+        }
+
+        let result = (|| {
+            let mapper = WindowsKeyboardMapper::new();
+            let mut native_ids = Vec::new();
+            let mut pending = Vec::new();
+            let mut registered = Vec::new();
+
+            for shortcut in shortcuts {
+                let (virtual_key, modifiers, description) =
+                    windows_global_shortcut(&mapper, shortcut.preferred_trigger())?;
+                let native_id = self.inner.state.next_global_shortcut_id.get();
+                self.inner
+                    .state
+                    .next_global_shortcut_id
+                    .set(native_id.checked_add(1).unwrap_or(1));
+
+                let result =
+                    unsafe { RegisterHotKey(Some(self.handle), native_id, modifiers, virtual_key) };
+                if let Err(error) = result {
+                    for id in &native_ids {
+                        unsafe { UnregisterHotKey(Some(self.handle), *id) }.ok();
+                    }
+                    return Err(error)
+                        .context(format!("failed to register global shortcut {description}"));
+                }
+
+                native_ids.push(native_id);
+                pending.push((
+                    native_id,
+                    WindowsGlobalShortcut {
+                        registration_id,
+                        shortcut_id: SharedString::from(shortcut.id()),
+                    },
+                ));
+                registered.push(RegisteredGlobalShortcut::new(shortcut.id(), description));
+            }
+
+            self.inner
+                .state
+                .global_shortcuts
+                .borrow_mut()
+                .extend(pending);
+            self.inner
+                .state
+                .global_shortcut_registrations
+                .borrow_mut()
+                .insert(registration_id, native_ids);
+            Ok(registered)
+        })();
+
+        Task::ready(result)
+    }
+
+    fn unregister_global_shortcuts(&self, registration_id: GlobalShortcutRegistrationId) {
+        let Some(native_ids) = self
+            .inner
+            .state
+            .global_shortcut_registrations
+            .borrow_mut()
+            .remove(&registration_id)
+        else {
+            return;
+        };
+        for native_id in native_ids {
+            unsafe { UnregisterHotKey(Some(self.handle), native_id) }.ok();
+            self.inner
+                .state
+                .global_shortcuts
+                .borrow_mut()
+                .remove(&native_id);
+        }
+    }
+
+    fn on_global_shortcut(&self, callback: Box<dyn FnMut(GlobalShortcutEvent)>) {
+        self.inner
+            .state
+            .callbacks
+            .global_shortcut
+            .set(Some(callback));
     }
 
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
@@ -910,6 +1086,7 @@ impl WindowsPlatformInner {
             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
             | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(msg, wparam, lparam),
             WM_POWERBROADCAST => self.handle_power_broadcast(wparam),
+            WM_HOTKEY => self.handle_global_shortcut(wparam),
             _ => None,
         };
         if let Some(result) = handled {
@@ -917,6 +1094,26 @@ impl WindowsPlatformInner {
         } else {
             unsafe { DefWindowProcW(handle, msg, wparam, lparam) }
         }
+    }
+
+    fn handle_global_shortcut(&self, wparam: WPARAM) -> Option<isize> {
+        let shortcut = self
+            .state
+            .global_shortcuts
+            .borrow()
+            .get(&(wparam.0 as i32))
+            .cloned()?;
+        self.with_callback(
+            |callbacks| &callbacks.global_shortcut,
+            |callback| {
+                callback(GlobalShortcutEvent::Activated {
+                    registration_id: shortcut.registration_id,
+                    shortcut_id: shortcut.shortcut_id,
+                    activation_token: None,
+                })
+            },
+        );
+        Some(0)
     }
 
     fn handle_gpui_events(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {

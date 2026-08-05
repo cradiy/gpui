@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GPUI Global Shortcuts Example
+Comment=Test GPUI global shortcut registration
+Exec=global_shortcuts
+Terminal=false
+NoDisplay=true
+Categories=Development;

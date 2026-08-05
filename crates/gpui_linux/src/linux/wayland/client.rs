@@ -8,7 +8,13 @@ use std::{
 };
 
 use anyhow::Context as _;
-use ashpd::WindowIdentifier;
+use ashpd::{
+    WindowIdentifier,
+    desktop::{
+        CreateSessionOptions,
+        global_shortcuts::{BindShortcutsOptions, GlobalShortcuts, NewShortcut},
+    },
+};
 use calloop::{
     EventLoop, LoopHandle,
     timer::{TimeoutAction, Timer},
@@ -16,6 +22,7 @@ use calloop::{
 use calloop_wayland_source::WaylandSource;
 use collections::HashMap;
 use filedescriptor::Pipe;
+use futures::{FutureExt as _, StreamExt as _};
 use gpui_util::ResultExt as _;
 use http_client::Url;
 use smallvec::SmallVec;
@@ -96,11 +103,13 @@ use crate::linux::{
 };
 use gpui::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, DisplayId, DragSessionId,
-    FileDropEvent, ForegroundExecutor, InternalDragEvent, KeyDownEvent, KeyUpEvent, Keystroke,
+    FileDropEvent, ForegroundExecutor, GlobalShortcut, GlobalShortcutEvent,
+    GlobalShortcutRegistrationId, InternalDragEvent, KeyDownEvent, KeyUpEvent, Keystroke,
     Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
     MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay, PlatformInput,
-    PlatformKeyboardLayout, PlatformWindow, Point, ScrollDelta, ScrollWheelEvent, SharedString,
-    Size, TouchPhase, WindowButtonLayout, WindowKind, WindowParams, point, profiler, px, size,
+    PlatformKeyboardLayout, PlatformWindow, Point, RegisteredGlobalShortcut, ScrollDelta,
+    ScrollWheelEvent, SharedString, Size, Task, TouchPhase, WindowButtonLayout, WindowKind,
+    WindowParams, point, profiler, px, size,
 };
 use gpui_wgpu::{CompositorGpuHint, GpuContext};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
@@ -285,6 +294,8 @@ pub(crate) struct WaylandClientState {
     event_loop: Option<EventLoop<'static, WaylandClientStatePtr>>,
     pub common: LinuxCommon,
     ime_enabled: Option<bool>,
+    global_shortcut_sessions:
+        HashMap<GlobalShortcutRegistrationId, futures::channel::oneshot::Sender<()>>,
 }
 
 pub struct DragState {
@@ -947,6 +958,7 @@ impl WaylandClient {
             startup_activation_token,
             event_loop: Some(event_loop),
             ime_enabled: None,
+            global_shortcut_sessions: HashMap::default(),
         }));
 
         WaylandSource::new(conn, event_queue)
@@ -958,6 +970,185 @@ impl WaylandClient {
 }
 
 impl LinuxClient for WaylandClient {
+    fn global_shortcuts_supported(&self) -> bool {
+        true
+    }
+
+    fn register_global_shortcuts(
+        &self,
+        registration_id: GlobalShortcutRegistrationId,
+        shortcuts: Vec<GlobalShortcut>,
+    ) -> Task<anyhow::Result<Vec<RegisteredGlobalShortcut>>> {
+        let identifier = self.window_identifier();
+        let app_id = {
+            let state = self.0.borrow();
+            state
+                .keyboard_focused_window
+                .as_ref()
+                .and_then(WaylandWindowStatePtr::app_id)
+                .or_else(|| {
+                    state
+                        .windows
+                        .values()
+                        .find_map(WaylandWindowStatePtr::app_id)
+                })
+        };
+        let weak_state = Rc::downgrade(&self.0);
+        let executor = self.0.borrow().common.foreground_executor.clone();
+        let listener_executor = executor.clone();
+
+        executor.spawn(async move {
+            let mut wire_ids = HashMap::default();
+            let portal_shortcuts = shortcuts
+                .iter()
+                .map(|shortcut| {
+                    let trigger = global_shortcut_trigger(shortcut.preferred_trigger())?;
+                    let wire_id = format!("gpui-{}-{}", registration_id.as_u64(), shortcut.id());
+                    wire_ids.insert(wire_id.clone(), SharedString::from(shortcut.id()));
+                    Ok(NewShortcut::new(wire_id, shortcut.description())
+                        .preferred_trigger(Some(trigger.as_str())))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+
+            let app_id = app_id.context(
+                "Wayland global shortcuts require WindowOptions::app_id on an application window",
+            )?;
+            let app_id = ashpd::AppID::try_from(app_id.as_str())?;
+            let connection = ashpd::zbus::Connection::session().await?;
+            ashpd::register_host_app_with_connection(connection.clone(), app_id).await?;
+
+            let identifier = identifier.await;
+            let portal = GlobalShortcuts::with_connection(connection).await?;
+            let session = portal
+                .create_session(CreateSessionOptions::default())
+                .await?;
+
+            let request = match portal
+                .bind_shortcuts(
+                    &session,
+                    &portal_shortcuts,
+                    identifier.as_ref(),
+                    BindShortcutsOptions::default(),
+                )
+                .await
+            {
+                Ok(request) => request,
+                Err(error) => {
+                    session.close().await.ok();
+                    return Err(error.into());
+                }
+            };
+            let response = match request.response() {
+                Ok(response) => response,
+                Err(error) => {
+                    session.close().await.ok();
+                    return Err(error.into());
+                }
+            };
+            let registered = response
+                .shortcuts()
+                .iter()
+                .filter_map(|shortcut| {
+                    wire_ids.get(shortcut.id()).map(|id| {
+                        RegisteredGlobalShortcut::new(id.clone(), shortcut.trigger_description())
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            let (cancel_tx, cancel_rx) = futures::channel::oneshot::channel();
+            let Some(state) = weak_state.upgrade() else {
+                session.close().await.ok();
+                anyhow::bail!("the Wayland platform was shut down while registering shortcuts");
+            };
+            state
+                .borrow_mut()
+                .global_shortcut_sessions
+                .insert(registration_id, cancel_tx);
+            drop(state);
+
+            let listener_state = weak_state.clone();
+            listener_executor
+                .spawn(async move {
+                    let activated = portal.receive_activated().await;
+                    let changed = portal.receive_shortcuts_changed().await;
+                    let (Ok(activated), Ok(changed)) = (activated, changed) else {
+                        session.close().await.ok();
+                        return;
+                    };
+                    let activated = activated.fuse();
+                    let changed = changed.fuse();
+                    let cancel_rx = cancel_rx.fuse();
+                    futures::pin_mut!(activated, changed, cancel_rx);
+
+                    loop {
+                        futures::select_biased! {
+                            _ = cancel_rx => break,
+                            event = activated.next() => {
+                                let Some(event) = event else { break };
+                                if let Some(shortcut_id) = wire_ids.get(event.shortcut_id()) {
+                                    let activation_token = event
+                                        .options()
+                                        .get("activation_token")
+                                        .and_then(|value| value.downcast_ref::<&str>().ok())
+                                        .map(SharedString::from);
+                                    emit_global_shortcut_event(
+                                        &listener_state,
+                                        GlobalShortcutEvent::Activated {
+                                            registration_id,
+                                            shortcut_id: shortcut_id.clone(),
+                                            activation_token,
+                                        },
+                                    );
+                                }
+                            }
+                            event = changed.next() => {
+                                let Some(event) = event else { break };
+                                let shortcuts = event.shortcuts().iter().filter_map(|shortcut| {
+                                    wire_ids.get(shortcut.id()).map(|id| {
+                                        RegisteredGlobalShortcut::new(
+                                            id.clone(),
+                                            shortcut.trigger_description(),
+                                        )
+                                    })
+                                }).collect::<Vec<_>>();
+                                if !shortcuts.is_empty() {
+                                    emit_global_shortcut_event(
+                                        &listener_state,
+                                        GlobalShortcutEvent::ShortcutsChanged {
+                                            registration_id,
+                                            shortcuts,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    session.close().await.ok();
+                    if let Some(state) = listener_state.upgrade() {
+                        state
+                            .borrow_mut()
+                            .global_shortcut_sessions
+                            .remove(&registration_id);
+                    }
+                })
+                .detach();
+
+            Ok(registered)
+        })
+    }
+
+    fn unregister_global_shortcuts(&self, registration_id: GlobalShortcutRegistrationId) {
+        if let Some(cancel) = self
+            .0
+            .borrow_mut()
+            .global_shortcut_sessions
+            .remove(&registration_id)
+        {
+            cancel.send(()).ok();
+        }
+    }
+
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {
         Box::new(self.0.borrow().keyboard_layout.clone())
     }
@@ -1256,6 +1447,66 @@ impl LinuxClient for WaylandClient {
         let active_window = client_state.keyboard_focused_window.as_ref();
         inner(active_window.map(|aw| aw.surface()))
     }
+}
+
+fn global_shortcut_trigger(keystroke: &Keystroke) -> anyhow::Result<String> {
+    if keystroke.modifiers.function {
+        anyhow::bail!("the function modifier is not supported by the GlobalShortcuts portal");
+    }
+
+    let mut parts = Vec::new();
+    if keystroke.modifiers.control {
+        parts.push("CTRL".to_string());
+    }
+    if keystroke.modifiers.alt {
+        parts.push("ALT".to_string());
+    }
+    if keystroke.modifiers.shift {
+        parts.push("SHIFT".to_string());
+    }
+    if keystroke.modifiers.platform {
+        parts.push("LOGO".to_string());
+    }
+
+    let key = match keystroke.key.as_str() {
+        "enter" => "Return",
+        "backspace" => "BackSpace",
+        "escape" => "Escape",
+        "pageup" => "Page_Up",
+        "pagedown" => "Page_Down",
+        "left" => "Left",
+        "right" => "Right",
+        "up" => "Up",
+        "down" => "Down",
+        "space" => "space",
+        "tab" => "Tab",
+        "delete" => "Delete",
+        "insert" => "Insert",
+        "home" => "Home",
+        "end" => "End",
+        key => key,
+    };
+    let keysym = xkb::keysym_from_name(key, xkb::KEYSYM_CASE_INSENSITIVE);
+    if keysym.raw() == xkb::keysyms::KEY_NoSymbol {
+        anyhow::bail!("unsupported global shortcut key: {}", keystroke.key);
+    }
+    parts.push(xkb::keysym_get_name(keysym));
+    Ok(parts.join("+"))
+}
+
+fn emit_global_shortcut_event(
+    weak_state: &Weak<RefCell<WaylandClientState>>,
+    event: GlobalShortcutEvent,
+) {
+    let Some(state) = weak_state.upgrade() else {
+        return;
+    };
+    let callback = state.borrow_mut().common.callbacks.global_shortcut.take();
+    let Some(mut callback) = callback else {
+        return;
+    };
+    callback(event);
+    state.borrow_mut().common.callbacks.global_shortcut = Some(callback);
 }
 
 struct DmabufProbeState {

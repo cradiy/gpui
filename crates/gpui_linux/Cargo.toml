@@ -18,6 +18,7 @@ wayland = [
     "bitflags",
     "gpui_wgpu",
     "ashpd/wayland",
+    "ashpd/global_shortcuts",
 
     "calloop-wayland-source",
     "wayland-backend",

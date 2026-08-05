@@ -49,6 +49,7 @@ use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Arena,
     ArenaBox, Asset, AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle,
     DispatchPhase, DisplayId, EventEmitter, FocusHandle, FocusMap, ForegroundExecutor, Global,
+    GlobalShortcut, GlobalShortcutEvent, GlobalShortcutRegistration, GlobalShortcutRegistrationId,
     KeyBinding, KeyContext, Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu,
     PathPromptOptions, Pixels, Platform, PlatformDisplay, PlatformKeyboardLayout,
     PlatformKeyboardMapper, Point, Priority, PromptBuilder, PromptButton, PromptHandle,
@@ -326,6 +327,7 @@ type Handler = Box<dyn FnMut(&mut App) -> bool + 'static>;
 type Listener = Box<dyn FnMut(&dyn Any, &mut App) -> bool + 'static>;
 pub(crate) type KeystrokeObserver =
     Box<dyn FnMut(&KeystrokeEvent, &mut Window, &mut App) -> bool + 'static>;
+type GlobalShortcutObserver = Box<dyn FnMut(&GlobalShortcutEvent, &mut App) -> bool + 'static>;
 type QuitHandler = Box<dyn FnOnce(&mut App) -> LocalBoxFuture<'static, ()> + 'static>;
 type WindowClosedHandler = Box<dyn FnMut(&mut App, WindowId)>;
 type ReleaseListener = Box<dyn FnOnce(&mut dyn Any, &mut App) + 'static>;
@@ -704,6 +706,7 @@ pub struct App {
     pub(crate) event_listeners: SubscriberSet<EntityId, (TypeId, Listener)>,
     pub(crate) keystroke_observers: SubscriberSet<(), KeystrokeObserver>,
     pub(crate) keystroke_interceptors: SubscriberSet<(), KeystrokeObserver>,
+    global_shortcut_observers: SubscriberSet<(), GlobalShortcutObserver>,
     pub(crate) keyboard_layout_observers: SubscriberSet<(), Handler>,
     pub(crate) thermal_state_observers: SubscriberSet<(), Handler>,
     pub(crate) release_listeners: SubscriberSet<EntityId, ReleaseListener>,
@@ -827,6 +830,7 @@ impl App {
                 release_listeners: SubscriberSet::new(),
                 keystroke_observers: SubscriberSet::new(),
                 keystroke_interceptors: SubscriberSet::new(),
+                global_shortcut_observers: SubscriberSet::new(),
                 keyboard_layout_observers: SubscriberSet::new(),
                 thermal_state_observers: SubscriberSet::new(),
                 global_observers: SubscriberSet::new(),
@@ -881,6 +885,18 @@ impl App {
                     cx.thermal_state_observers
                         .clone()
                         .retain(&(), move |callback| (callback)(cx));
+                }
+            }
+        }));
+
+        platform.on_global_shortcut(Box::new({
+            let app = Rc::downgrade(&app);
+            move |event| {
+                if let Some(app) = app.upgrade() {
+                    let cx = &mut app.borrow_mut();
+                    cx.global_shortcut_observers
+                        .clone()
+                        .retain(&(), move |callback| callback(&event, cx));
                 }
             }
         }));
@@ -973,6 +989,72 @@ impl App {
             (),
             Box::new(move |cx| {
                 callback(cx);
+                true
+            }),
+        );
+        activate();
+        subscription
+    }
+
+    /// Returns whether the current platform supports global shortcuts.
+    pub fn global_shortcuts_supported(&self) -> bool {
+        self.platform.global_shortcuts_supported()
+    }
+
+    /// Registers a group of global shortcuts.
+    ///
+    /// Registration is asynchronous because some platforms may ask the user
+    /// to approve or change the requested shortcuts. The returned value owns
+    /// the effective registrations and unregisters them when dropped.
+    pub fn register_global_shortcuts(
+        &self,
+        shortcuts: impl IntoIterator<Item = GlobalShortcut>,
+    ) -> Task<Result<GlobalShortcutRegistration>> {
+        let shortcuts = shortcuts.into_iter().collect::<Vec<_>>();
+        if shortcuts.is_empty() {
+            return Task::ready(Err(anyhow!("at least one global shortcut is required")));
+        }
+        let mut ids = FxHashSet::default();
+        for shortcut in &shortcuts {
+            if shortcut.id().is_empty() {
+                return Task::ready(Err(anyhow!("global shortcut IDs cannot be empty")));
+            }
+            if !ids.insert(shortcut.id()) {
+                return Task::ready(Err(anyhow!(
+                    "duplicate global shortcut ID: {}",
+                    shortcut.id()
+                )));
+            }
+            if shortcut.description().is_empty() {
+                return Task::ready(Err(anyhow!("global shortcut descriptions cannot be empty")));
+            }
+            if shortcut.preferred_trigger().key.is_empty() {
+                return Task::ready(Err(anyhow!("global shortcut triggers cannot be empty")));
+            }
+        }
+
+        let registration_id = GlobalShortcutRegistrationId::next();
+        let platform = self.platform.clone();
+        let registration = platform.register_global_shortcuts(registration_id, shortcuts);
+        self.foreground_executor.spawn(async move {
+            let shortcuts = registration.await?;
+            Ok(GlobalShortcutRegistration::new(
+                registration_id,
+                shortcuts,
+                platform,
+            ))
+        })
+    }
+
+    /// Observes global shortcut activation and binding-change events.
+    pub fn observe_global_shortcuts(
+        &mut self,
+        mut callback: impl FnMut(&GlobalShortcutEvent, &mut App) + 'static,
+    ) -> Subscription {
+        let (subscription, activate) = self.global_shortcut_observers.insert(
+            (),
+            Box::new(move |event, cx| {
+                callback(event, cx);
                 true
             }),
         );
@@ -3031,7 +3113,7 @@ impl<'a, T> Drop for GpuiBorrow<'a, T> {
 mod test {
     use std::{cell::RefCell, rc::Rc};
 
-    use crate::{AppContext, TestAppContext};
+    use crate::{AppContext, GlobalShortcut, GlobalShortcutEvent, Keystroke, TestAppContext};
 
     #[test]
     fn test_gpui_borrow() {
@@ -3062,5 +3144,59 @@ mod test {
         });
 
         assert_eq!(*observation_count.borrow(), 2);
+    }
+
+    #[gpui::test]
+    async fn test_global_shortcut_registration_lifecycle(cx: &mut TestAppContext) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = cx.update({
+            let events = events.clone();
+            move |cx| {
+                cx.observe_global_shortcuts(move |event, _| {
+                    events.borrow_mut().push(event.clone());
+                })
+            }
+        });
+
+        let registration = cx
+            .update(|cx| {
+                cx.register_global_shortcuts([GlobalShortcut::new(
+                    "show-window",
+                    "Show the main window",
+                    Keystroke::parse("ctrl-shift-space").unwrap(),
+                )])
+            })
+            .await
+            .unwrap();
+        assert_eq!(cx.global_shortcut_registration_count(), 1);
+        assert_eq!(registration.shortcuts()[0].id(), "show-window");
+
+        let event = GlobalShortcutEvent::Activated {
+            registration_id: registration.id(),
+            shortcut_id: "show-window".into(),
+            activation_token: None,
+        };
+        cx.simulate_global_shortcut_event(event.clone());
+        assert_eq!(events.borrow().as_slice(), &[event]);
+
+        drop(registration);
+        assert_eq!(cx.global_shortcut_registration_count(), 0);
+    }
+
+    #[gpui::test]
+    async fn test_global_shortcut_ids_must_be_unique(cx: &mut TestAppContext) {
+        let shortcut = || {
+            GlobalShortcut::new(
+                "show-window",
+                "Show the main window",
+                Keystroke::parse("ctrl-shift-space").unwrap(),
+            )
+        };
+        let error = cx
+            .update(|cx| cx.register_global_shortcuts([shortcut(), shortcut()]))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("duplicate global shortcut ID"));
+        assert_eq!(cx.global_shortcut_registration_count(), 0);
     }
 }

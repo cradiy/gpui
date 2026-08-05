@@ -1,7 +1,9 @@
 use crate::{
     BoolExt, MacDispatcher, MacDisplay, MacKeyboardLayout, MacKeyboardMapper, MacWindow,
-    events::key_to_native, ns_string, pasteboard::Pasteboard, renderer,
-    set_active_window_cursor_style,
+    events::{NO_MOD, SHIFT_MOD, chars_for_modified_key, key_to_native},
+    ns_string,
+    pasteboard::Pasteboard,
+    renderer, set_active_window_cursor_style,
 };
 use anyhow::{Context as _, anyhow};
 use block::ConcreteBlock;
@@ -29,10 +31,11 @@ use dispatch2::DispatchQueue;
 use futures::channel::oneshot;
 use gpui::{
     Action, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, ForegroundExecutor,
-    KeyContext, Keymap, Menu, MenuItem, OsMenu, OwnedMenu, PathPromptOptions, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, Result, SystemMenuType, Task, ThermalState, WindowAppearance, WindowKind,
-    WindowParams, popup::PopupNotSupportedError,
+    GlobalShortcut, GlobalShortcutEvent, GlobalShortcutRegistrationId, KeyContext, Keymap,
+    Keystroke, Menu, MenuItem, OsMenu, OwnedMenu, PathPromptOptions, Platform, PlatformDisplay,
+    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow,
+    RegisteredGlobalShortcut, Result, SharedString, SystemMenuType, Task, ThermalState,
+    WindowAppearance, WindowKind, WindowParams, popup::PopupNotSupportedError,
 };
 use gpui_util::{ResultExt, new_std_command};
 use itertools::Itertools;
@@ -48,6 +51,7 @@ use ptr::null_mut;
 use semver::Version;
 use std::{
     cell::Cell,
+    collections::HashMap,
     ffi::{CStr, OsStr, c_void},
     os::{raw::c_char, unix::ffi::OsStrExt},
     path::{Path, PathBuf},
@@ -62,6 +66,36 @@ use std::{
 
 #[allow(non_upper_case_globals)]
 const NSUTF8StringEncoding: NSUInteger = 4;
+
+type EventHotKeyRef = *mut c_void;
+type EventHandlerRef = *mut c_void;
+type EventHandlerCallRef = *mut c_void;
+type EventRef = *mut c_void;
+type EventTargetRef = *mut c_void;
+
+#[repr(C)]
+struct EventTypeSpec {
+    event_class: u32,
+    event_kind: u32,
+}
+
+#[derive(Clone, Copy, Default)]
+#[repr(C)]
+struct EventHotKeyId {
+    signature: u32,
+    id: u32,
+}
+
+const EVENT_CLASS_KEYBOARD: u32 = u32::from_be_bytes(*b"keyb");
+const EVENT_HOT_KEY_PRESSED: u32 = 6;
+const EVENT_PARAM_DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
+const TYPE_EVENT_HOT_KEY_ID: u32 = u32::from_be_bytes(*b"hkid");
+const GPUI_HOT_KEY_SIGNATURE: u32 = u32::from_be_bytes(*b"GPUI");
+
+const CARBON_CMD_KEY: u32 = 1 << 8;
+const CARBON_SHIFT_KEY: u32 = 1 << 9;
+const CARBON_OPTION_KEY: u32 = 1 << 11;
+const CARBON_CONTROL_KEY: u32 = 1 << 12;
 
 const MAC_PLATFORM_IVAR: &str = "platform";
 static mut APP_CLASS: *const Class = ptr::null();
@@ -189,6 +223,18 @@ pub(crate) struct MacPlatformState {
     keyboard_mapper: Rc<MacKeyboardMapper>,
     /// Mirrors `[NSCursor setHiddenUntilMouseMoves:]` state, which AppKit doesn't expose.
     cursor_visible: Arc<AtomicBool>,
+    global_shortcut_callback: Option<Box<dyn FnMut(GlobalShortcutEvent)>>,
+    global_shortcuts: HashMap<u32, MacGlobalShortcut>,
+    global_shortcut_registrations:
+        HashMap<GlobalShortcutRegistrationId, Vec<(u32, EventHotKeyRef)>>,
+    next_global_shortcut_id: u32,
+    global_shortcut_handler: EventHandlerRef,
+}
+
+#[derive(Clone)]
+struct MacGlobalShortcut {
+    registration_id: GlobalShortcutRegistrationId,
+    shortcut_id: SharedString,
 }
 
 impl MacPlatform {
@@ -235,6 +281,11 @@ impl MacPlatform {
             menus: None,
             keyboard_mapper,
             cursor_visible: Arc::new(AtomicBool::new(true)),
+            global_shortcut_callback: None,
+            global_shortcuts: HashMap::new(),
+            global_shortcut_registrations: HashMap::new(),
+            next_global_shortcut_id: 1,
+            global_shortcut_handler: ptr::null_mut(),
         }))
     }
 
@@ -976,6 +1027,111 @@ impl Platform for MacPlatform {
         self.0.lock().keyboard_mapper.clone()
     }
 
+    fn global_shortcuts_supported(&self) -> bool {
+        !self.0.lock().headless
+    }
+
+    fn register_global_shortcuts(
+        &self,
+        registration_id: GlobalShortcutRegistrationId,
+        shortcuts: Vec<GlobalShortcut>,
+    ) -> Task<Result<Vec<RegisteredGlobalShortcut>>> {
+        let result = (|| {
+            let mut state = self.0.lock();
+            if state.headless {
+                anyhow::bail!("global shortcuts are unavailable in headless mode");
+            }
+
+            if state.global_shortcut_handler.is_null() {
+                let event_type = EventTypeSpec {
+                    event_class: EVENT_CLASS_KEYBOARD,
+                    event_kind: EVENT_HOT_KEY_PRESSED,
+                };
+                let mut handler = ptr::null_mut();
+                let status = unsafe {
+                    InstallEventHandler(
+                        GetApplicationEventTarget(),
+                        Some(handle_global_shortcut_event),
+                        1,
+                        &event_type,
+                        self as *const Self as *mut c_void,
+                        &mut handler,
+                    )
+                };
+                anyhow::ensure!(
+                    status == 0,
+                    "InstallEventHandler failed with status {status}"
+                );
+                state.global_shortcut_handler = handler;
+            }
+
+            let mut native_shortcuts = Vec::new();
+            let mut pending = Vec::new();
+            let mut registered = Vec::new();
+            for shortcut in shortcuts {
+                let (keycode, modifiers, description) =
+                    mac_global_shortcut(shortcut.preferred_trigger())?;
+                let native_id = state.next_global_shortcut_id;
+                state.next_global_shortcut_id = native_id.checked_add(1).unwrap_or(1);
+                let hot_key_id = EventHotKeyId {
+                    signature: GPUI_HOT_KEY_SIGNATURE,
+                    id: native_id,
+                };
+                let mut hot_key_ref = ptr::null_mut();
+                let status = unsafe {
+                    RegisterEventHotKey(
+                        u32::from(keycode),
+                        modifiers,
+                        hot_key_id,
+                        GetApplicationEventTarget(),
+                        0,
+                        &mut hot_key_ref,
+                    )
+                };
+                if status != 0 {
+                    for (_, hot_key_ref) in &native_shortcuts {
+                        unsafe { UnregisterEventHotKey(*hot_key_ref) };
+                    }
+                    anyhow::bail!(
+                        "failed to register global shortcut {description}: status {status}"
+                    );
+                }
+
+                native_shortcuts.push((native_id, hot_key_ref));
+                pending.push((
+                    native_id,
+                    MacGlobalShortcut {
+                        registration_id,
+                        shortcut_id: SharedString::from(shortcut.id()),
+                    },
+                ));
+                registered.push(RegisteredGlobalShortcut::new(shortcut.id(), description));
+            }
+
+            state.global_shortcuts.extend(pending);
+            state
+                .global_shortcut_registrations
+                .insert(registration_id, native_shortcuts);
+            Ok(registered)
+        })();
+        Task::ready(result)
+    }
+
+    fn unregister_global_shortcuts(&self, registration_id: GlobalShortcutRegistrationId) {
+        let mut state = self.0.lock();
+        let Some(shortcuts) = state.global_shortcut_registrations.remove(&registration_id) else {
+            return;
+        };
+        for (native_id, hot_key_ref) in shortcuts {
+            unsafe { UnregisterEventHotKey(hot_key_ref) };
+            state.global_shortcuts.remove(&native_id);
+        }
+    }
+
+    fn on_global_shortcut(&self, callback: Box<dyn FnMut(GlobalShortcutEvent)>) {
+        self.0.lock().global_shortcut_callback = Some(callback);
+    }
+
     fn app_path(&self) -> Result<PathBuf> {
         unsafe {
             let bundle: id = NSBundle::mainBundle();
@@ -1458,8 +1614,170 @@ unsafe fn ns_url_to_path(url: id) -> Result<PathBuf> {
     })))
 }
 
+fn mac_global_shortcut(keystroke: &Keystroke) -> Result<(u16, u32, String)> {
+    if keystroke.modifiers.function {
+        anyhow::bail!("the function modifier is not supported by macOS global shortcuts");
+    }
+
+    let mut modifiers = 0;
+    let mut names = Vec::new();
+    if keystroke.modifiers.control {
+        modifiers |= CARBON_CONTROL_KEY;
+        names.push("Control");
+    }
+    if keystroke.modifiers.alt {
+        modifiers |= CARBON_OPTION_KEY;
+        names.push("Option");
+    }
+    if keystroke.modifiers.shift {
+        modifiers |= CARBON_SHIFT_KEY;
+        names.push("Shift");
+    }
+    if keystroke.modifiers.platform {
+        modifiers |= CARBON_CMD_KEY;
+        names.push("Command");
+    }
+
+    let named_keycode = match keystroke.key.as_str() {
+        "enter" => Some(36),
+        "tab" => Some(48),
+        "space" => Some(49),
+        "backspace" => Some(51),
+        "escape" => Some(53),
+        "insert" => Some(114),
+        "home" => Some(115),
+        "pageup" => Some(116),
+        "delete" => Some(117),
+        "end" => Some(119),
+        "pagedown" => Some(121),
+        "left" => Some(123),
+        "right" => Some(124),
+        "down" => Some(125),
+        "up" => Some(126),
+        "f1" => Some(122),
+        "f2" => Some(120),
+        "f3" => Some(99),
+        "f4" => Some(118),
+        "f5" => Some(96),
+        "f6" => Some(97),
+        "f7" => Some(98),
+        "f8" => Some(100),
+        "f9" => Some(101),
+        "f10" => Some(109),
+        "f11" => Some(103),
+        "f12" => Some(111),
+        "f13" => Some(105),
+        "f14" => Some(107),
+        "f15" => Some(113),
+        "f16" => Some(106),
+        "f17" => Some(64),
+        "f18" => Some(79),
+        "f19" => Some(80),
+        "f20" => Some(90),
+        _ => None,
+    };
+
+    let keycode = if let Some(keycode) = named_keycode {
+        keycode
+    } else {
+        let wanted = keystroke.key.to_lowercase();
+        let mut match_ = None;
+        for keycode in 0..=127 {
+            if chars_for_modified_key(keycode, NO_MOD).to_lowercase() == wanted {
+                match_ = Some((keycode, false));
+                break;
+            }
+            if chars_for_modified_key(keycode, SHIFT_MOD).to_lowercase() == wanted {
+                match_ = Some((keycode, true));
+                break;
+            }
+        }
+        let (keycode, requires_shift) = match_
+            .with_context(|| format!("unsupported global shortcut key: {}", keystroke.key))?;
+        if requires_shift && !keystroke.modifiers.shift {
+            modifiers |= CARBON_SHIFT_KEY;
+            names.push("Shift");
+        }
+        keycode
+    };
+
+    names.push(&keystroke.key);
+    Ok((keycode, modifiers, names.join("+")))
+}
+
+unsafe extern "C" fn handle_global_shortcut_event(
+    _next_handler: EventHandlerCallRef,
+    event: EventRef,
+    user_data: *mut c_void,
+) -> OSStatus {
+    let mut hot_key_id = EventHotKeyId::default();
+    let status = unsafe {
+        GetEventParameter(
+            event,
+            EVENT_PARAM_DIRECT_OBJECT,
+            TYPE_EVENT_HOT_KEY_ID,
+            ptr::null_mut(),
+            size_of::<EventHotKeyId>(),
+            ptr::null_mut(),
+            &mut hot_key_id as *mut EventHotKeyId as *mut c_void,
+        )
+    };
+    if status != 0 || hot_key_id.signature != GPUI_HOT_KEY_SIGNATURE || user_data.is_null() {
+        return -9874;
+    }
+
+    let platform = unsafe { &*(user_data as *const MacPlatform) };
+    let (shortcut, callback) = {
+        let mut state = platform.0.lock();
+        (
+            state.global_shortcuts.get(&hot_key_id.id).cloned(),
+            state.global_shortcut_callback.take(),
+        )
+    };
+    let (Some(shortcut), Some(mut callback)) = (shortcut, callback) else {
+        return -9874;
+    };
+    callback(GlobalShortcutEvent::Activated {
+        registration_id: shortcut.registration_id,
+        shortcut_id: shortcut.shortcut_id,
+        activation_token: None,
+    });
+    platform.0.lock().global_shortcut_callback = Some(callback);
+    0
+}
+
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
+    fn GetApplicationEventTarget() -> EventTargetRef;
+    fn InstallEventHandler(
+        target: EventTargetRef,
+        handler: Option<
+            unsafe extern "C" fn(EventHandlerCallRef, EventRef, *mut c_void) -> OSStatus,
+        >,
+        event_type_count: u32,
+        event_types: *const EventTypeSpec,
+        user_data: *mut c_void,
+        handler_ref: *mut EventHandlerRef,
+    ) -> OSStatus;
+    fn RegisterEventHotKey(
+        key_code: u32,
+        modifiers: u32,
+        hot_key_id: EventHotKeyId,
+        target: EventTargetRef,
+        options: u32,
+        hot_key_ref: *mut EventHotKeyRef,
+    ) -> OSStatus;
+    fn UnregisterEventHotKey(hot_key: EventHotKeyRef) -> OSStatus;
+    fn GetEventParameter(
+        event: EventRef,
+        name: u32,
+        desired_type: u32,
+        actual_type: *mut u32,
+        buffer_size: usize,
+        actual_size: *mut usize,
+        data: *mut c_void,
+    ) -> OSStatus;
+
     pub(super) fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut Object;
     pub(super) fn TISCopyCurrentKeyboardInputSource() -> *mut Object;
     pub(super) fn TISGetInputSourceProperty(

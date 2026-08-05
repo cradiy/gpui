@@ -1,4 +1,5 @@
 mod app_menu;
+mod global_shortcut;
 mod keyboard;
 mod keystroke;
 
@@ -75,6 +76,7 @@ use strum::EnumIter;
 use uuid::Uuid;
 
 pub use app_menu::*;
+pub use global_shortcut::*;
 pub use keyboard::*;
 pub use keystroke::*;
 
@@ -193,6 +195,24 @@ pub trait Platform: 'static {
     fn on_quit(&self, callback: Box<dyn FnMut()>);
     fn on_reopen(&self, callback: Box<dyn FnMut()>);
     fn on_system_wake(&self, callback: Box<dyn FnMut()>);
+
+    fn global_shortcuts_supported(&self) -> bool {
+        false
+    }
+
+    fn register_global_shortcuts(
+        &self,
+        _registration_id: GlobalShortcutRegistrationId,
+        _shortcuts: Vec<GlobalShortcut>,
+    ) -> Task<Result<Vec<RegisteredGlobalShortcut>>> {
+        Task::ready(Err(anyhow::anyhow!(
+            "global shortcuts are not supported on this platform"
+        )))
+    }
+
+    fn unregister_global_shortcuts(&self, _registration_id: GlobalShortcutRegistrationId) {}
+
+    fn on_global_shortcut(&self, _callback: Box<dyn FnMut(GlobalShortcutEvent)>) {}
 
     // Mobile platform methods. On mobile the OS owns the application
     // lifecycle: apps are backgrounded, foregrounded, and killed at the

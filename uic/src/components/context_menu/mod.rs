@@ -179,12 +179,7 @@ impl ContextMenuLayer {
         let viewport_width = window.viewport_size().width;
         let appearance = menu.appearance.unwrap_or(self.appearance);
         let style = menu.style.clone();
-        let opens_left = position.x > viewport_width * 0.5;
-        let anchor = if opens_left {
-            Anchor::TopRight
-        } else {
-            Anchor::TopLeft
-        };
+        let anchor = root_menu_anchor();
         let surfaces = menu.surfaces.clone();
         let viewport_margin = menu.viewport_margin;
         let submenu_gap = menu.submenu_gap;
@@ -658,6 +653,14 @@ fn selectable(entry: &ContextMenuEntry) -> bool {
     matches!(entry, ContextMenuEntry::Item(item) if !item.disabled)
 }
 
+fn root_menu_anchor() -> Anchor {
+    // Root menus should follow the pointer and only move when their measured bounds
+    // would overflow the viewport. Anchoring every click in the right half to the
+    // top-right corner makes the menu jump left at the window midpoint, even when
+    // there is enough room to open to the right.
+    Anchor::TopLeft
+}
+
 struct GlobalContextMenu(Entity<ContextMenuLayer>);
 
 impl Global for GlobalContextMenu {}
@@ -717,3 +720,13 @@ pub trait ContextMenuExt: InteractiveElement + Sized {
 }
 
 impl<T: InteractiveElement> ContextMenuExt for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_menu_starts_at_the_pointer_without_a_midpoint_flip() {
+        assert_eq!(root_menu_anchor(), Anchor::TopLeft);
+    }
+}

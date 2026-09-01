@@ -153,6 +153,12 @@ Use the failing seed from sweep output. Avoid assuming test order unless the run
 
 ## Writing GPUI tests
 
+- Add a test only when it exercises observable behavior, a meaningful invariant,
+  or a failure mode that can regress independently. Do not extract a
+  constant-returning helper solely to make it testable, assert that a hard-coded
+  value equals the same hard-coded value, or add a test that merely restates the
+  implementation. When type checking or an existing test already covers the
+  change, use that validation instead of manufacturing another unit test.
 - Prefer `#[gpui::test]` for tests that need `TestAppContext`, deterministic executors, fake time, or scheduler interleaving coverage.
 - Add `iterations = N` when the test is intentionally checking interleavings.
 - Use `StdRng` as a test argument when randomized test data should follow the same seed as the scheduler.

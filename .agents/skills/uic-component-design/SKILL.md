@@ -135,7 +135,15 @@ cargo check --workspace
 git diff --check
 ~~~
 
-Add focused tests proving that:
+Add focused tests only when they exercise observable behavior or protect a
+meaningful invariant. Do not extract a constant-returning helper solely to make
+it testable, assert that a hard-coded value equals the same hard-coded value, or
+add a test that merely restates the implementation. If the change is already
+covered by type checking and has no behavior that can fail independently, use
+the appropriate check or real rendered inspection instead of manufacturing a
+unit test.
+
+Useful focused tests can prove that:
 
 - the component exposes the expected Styled chain;
 - Styled values reach custom-painted text or nested overlay levels;

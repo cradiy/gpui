@@ -66,7 +66,7 @@ impl EventEmitter<PopoverEvent> for PopoverState {}
 impl PopoverState {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let blur_subscription = cx.on_blur(&focus_handle, window, |state, window, cx| {
+        let blur_subscription = cx.on_focus_out(&focus_handle, window, |state, _, window, cx| {
             state.dismiss(PopoverDismissReason::FocusLost, false, window, cx);
         });
         Self {
@@ -418,14 +418,25 @@ mod tests {
 
     struct TestPopover {
         state: Entity<PopoverState>,
+        content_focus: FocusHandle,
     }
 
     impl Render for TestPopover {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let content_focus = self.content_focus.clone();
             div().size_full().p(px(80.)).child(
                 Popover::new(&self.state)
                     .trigger(div().w(px(120.)).h(px(32.)).child("Open"))
-                    .content(|_, _| div().w(px(180.)).h(px(90.)).child("Popover content")),
+                    .content(move |_, _| {
+                        div()
+                            .id("popover-content-focus")
+                            .track_focus(&content_focus)
+                            .tab_stop(true)
+                            .role(Role::Button)
+                            .w(px(180.))
+                            .h(px(90.))
+                            .child("Popover content")
+                    }),
             )
         }
     }
@@ -433,6 +444,7 @@ mod tests {
     fn open_test_popover(cx: &mut TestAppContext) -> gpui::WindowHandle<TestPopover> {
         cx.open_window(size(px(420.), px(300.)), |window, cx| TestPopover {
             state: cx.new(|cx| PopoverState::new(window, cx)),
+            content_focus: cx.focus_handle(),
         })
     }
 
@@ -484,6 +496,34 @@ mod tests {
         window
             .update(&mut visual.cx, |view, _, cx| {
                 assert!(!view.state.read(cx).is_open());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn focusing_interactive_content_keeps_the_popover_open(cx: &mut TestAppContext) {
+        let window = open_test_popover(cx);
+        let mut visual = draw(&window, cx);
+        let trigger = visual
+            .debug_bounds("uic-popover-trigger")
+            .expect("trigger should be rendered");
+
+        visual.simulate_click(trigger.center(), Modifiers::default());
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.content_focus.focus(window, cx);
+            })
+            .unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                assert!(view.state.read(cx).is_open());
             })
             .unwrap();
     }

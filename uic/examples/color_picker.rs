@@ -5,8 +5,12 @@ use gpui::{
     prelude::*, px, rgb, rgba, size,
 };
 use uic::components::{
-    color_picker::{AlphaSlider, ColorPicker, ColorPickerEvent, ColorPickerState, Hsva},
+    color_picker::{
+        AlphaSlider, ColorPicker, ColorPickerAppearance, ColorPickerEvent, ColorPickerState,
+        ColorPickerTrigger, ColorPickerTriggerSize, Hsva,
+    },
     input::{Input, InputAppearance, InputEvent, TextInput},
+    popover::{Popover, PopoverPlacement, PopoverState},
 };
 
 // Everything except the SV + Hue `ColorPicker` is composed at the consumer layer in this example.
@@ -42,6 +46,8 @@ impl ColorFormat {
 
 struct ColorPickerExample {
     picker: Entity<ColorPickerState>,
+    popup_picker: Entity<ColorPickerState>,
+    popover: Entity<PopoverState>,
     hex_input: Entity<TextInput>,
     rgb_input: Entity<TextInput>,
     hsv_input: Entity<TextInput>,
@@ -52,7 +58,7 @@ struct ColorPickerExample {
 }
 
 impl ColorPickerExample {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let initial = rgba(0x20222eff);
         let hsva = Hsva::from(initial);
         let picker = cx.new(|cx| ColorPickerState::new(initial, cx));
@@ -81,6 +87,8 @@ impl ColorPickerExample {
         });
         Self {
             picker,
+            popup_picker: cx.new(|cx| ColorPickerState::new(initial, cx)),
+            popover: cx.new(|cx| PopoverState::new(window, cx)),
             hex_input,
             rgb_input,
             hsv_input,
@@ -313,6 +321,9 @@ impl ColorPickerExample {
 impl Render for ColorPickerExample {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let value = self.picker.read(cx).value();
+        let popup_value = self.popup_picker.read(cx).value();
+        let popover_open = self.popover.read(cx).is_open();
+        let popup_picker = self.popup_picker.clone();
         div()
             .id("color-picker-example-scroll")
             .size_full()
@@ -337,6 +348,76 @@ impl Render for ColorPickerExample {
                         div()
                             .text_color(rgb(0x9ca3af))
                             .child("Only the SV canvas and hue track come from ColorPicker."),
+                    )
+                    .child(
+                        div()
+                            .p_4()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(rgb(0x303437))
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(0x9ca3af))
+                                    .child("Popover triggers"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(
+                                        ColorPickerTrigger::new("small-color-trigger", popup_value)
+                                            .control_size(ColorPickerTriggerSize::Small),
+                                    )
+                                    .child(
+                                        Popover::new(&self.popover)
+                                            .label("Choose color")
+                                            .placement(PopoverPlacement::BottomStart)
+                                            .trigger(
+                                                ColorPickerTrigger::new(
+                                                    "interactive-color-trigger",
+                                                    popup_value,
+                                                )
+                                                .show_value(true)
+                                                .active(popover_open),
+                                            )
+                                            .content(move |_, _| {
+                                                div()
+                                                    .w(px(390.))
+                                                    .p_3()
+                                                    .rounded_lg()
+                                                    .bg(rgb(0x15191b))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_3()
+                                                    .child(
+                                                        ColorPicker::new(&popup_picker)
+                                                            .appearance(
+                                                                ColorPickerAppearance::default()
+                                                                    .area_height(px(220.))
+                                                                    .hue_width(px(26.))
+                                                                    .marker_size(px(16.)),
+                                                            )
+                                                            .p_0()
+                                                            .border_0()
+                                                            .bg(hsla(0.0, 0.0, 0.0, 0.0)),
+                                                    )
+                                                    .child(AlphaSlider::new(&popup_picker))
+                                            })
+                                            .p_0()
+                                            .border_0()
+                                            .bg(hsla(0.0, 0.0, 0.0, 0.0)),
+                                    )
+                                    .child(
+                                        ColorPickerTrigger::new("large-color-trigger", popup_value)
+                                            .control_size(ColorPickerTriggerSize::Large)
+                                            .label(div().child("Custom color")),
+                                    ),
+                            ),
                     )
                     .child(
                         ColorPicker::new(&self.picker)
@@ -535,7 +616,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(ColorPickerExample::new),
+            |window, cx| cx.new(|cx| ColorPickerExample::new(window, cx)),
         )
         .expect("failed to open color picker example window");
     });

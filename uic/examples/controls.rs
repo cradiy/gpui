@@ -81,6 +81,11 @@ impl Render for ControlsExample {
                             .child(
                                 Switch::new("notifications", self.notifications)
                                     .label("Desktop notifications")
+                                    .checked_content(
+                                        div().flex().items_center().gap_1().child("✓").child("On"),
+                                    )
+                                    .unchecked_content("Off")
+                                    .w(px(68.))
                                     .on_change(move |checked, _, cx| {
                                         switch_entity.update(cx, |this, cx| {
                                             this.notifications = checked;

@@ -40,6 +40,8 @@ pub struct SwitchAppearance {
     pub hover_off_track: Background,
     pub hover_on_track: Background,
     pub thumb: Background,
+    pub off_content: Hsla,
+    pub on_content: Hsla,
     pub focus_ring: Hsla,
     pub thumb_size: Pixels,
     pub disabled_opacity: f32,
@@ -48,14 +50,16 @@ pub struct SwitchAppearance {
 impl Default for SwitchAppearance {
     fn default() -> Self {
         Self {
-            off_track: rgb(0xe2e5e9).into(),
+            off_track: rgb(0xaeb4bc).into(),
             on_track: rgb(0x1677ff).into(),
-            hover_off_track: rgb(0xd4d9e0).into(),
+            hover_off_track: rgb(0x969da7).into(),
             hover_on_track: rgb(0x4096ff).into(),
             thumb: rgb(0xffffff).into(),
+            off_content: rgb(0x344054).into(),
+            on_content: rgb(0xffffff).into(),
             focus_ring: rgb(0x1677ff).opacity(0.55).into(),
-            thumb_size: px(16.),
-            disabled_opacity: 0.5,
+            thumb_size: px(18.),
+            disabled_opacity: 0.45,
         }
     }
 }

@@ -3,6 +3,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 use uic::components::{
+    badge::{Badge, BadgeState},
     popover::{Popover, PopoverPlacement, PopoverState},
     scrollbar::{Scrollbar, ScrollbarState},
     selection::{Checkbox, RadioGroup, Switch},
@@ -19,6 +20,8 @@ struct ControlsExample {
     popover: Entity<PopoverState>,
     remember: bool,
     notifications: bool,
+    badge: Entity<BadgeState>,
+    badge_dismissals: usize,
     density: Density,
     scroll: ScrollHandle,
     scrollbar: ScrollbarState,
@@ -30,6 +33,8 @@ impl ControlsExample {
             popover: cx.new(|cx| PopoverState::new(window, cx)),
             remember: true,
             notifications: false,
+            badge: cx.new(|_| BadgeState::new()),
+            badge_dismissals: 0,
             density: Density::Comfortable,
             scroll: ScrollHandle::new(),
             scrollbar: ScrollbarState::new(),
@@ -41,6 +46,8 @@ impl Render for ControlsExample {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let remember_entity = cx.entity();
         let switch_entity = cx.entity();
+        let badge_entity = cx.entity();
+        let reset_badge = self.badge.clone();
         let radio_entity = cx.entity();
         let popover_state = self.popover.clone();
 
@@ -92,6 +99,55 @@ impl Render for ControlsExample {
                                             cx.notify();
                                         });
                                     }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div().flex().flex_col().gap_1().child("Badge").child(
+                                    div().text_sm().text_color(rgb(0x667085)).child(
+                                        "Drag the red badge; release nearby to spring back.",
+                                    ),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_6()
+                                    .child(Badge::new("badge-basic", badge_anchor()).count(5))
+                                    .child(
+                                        Badge::new("badge-max", badge_anchor()).count(120).max(99),
+                                    )
+                                    .child(Badge::new("badge-dot", badge_anchor()).dot())
+                                    .child(
+                                        Badge::new("badge-drag", badge_anchor())
+                                            .count(8)
+                                            .dismissible(&self.badge)
+                                            .on_dismiss(move |_, cx| {
+                                                badge_entity.update(cx, |this, cx| {
+                                                    this.badge_dismissals += 1;
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("reset-badge")
+                                            .px_3()
+                                            .py_1()
+                                            .rounded(px(7.))
+                                            .border_1()
+                                            .border_color(rgb(0xd0d5dd))
+                                            .cursor_pointer()
+                                            .child(format!("Reset ({})", self.badge_dismissals))
+                                            .on_click(move |_, _, cx| {
+                                                reset_badge.update(cx, |state, cx| state.reset(cx));
+                                            }),
+                                    ),
                             ),
                     )
                     .child(
@@ -186,6 +242,10 @@ impl Render for ControlsExample {
                     ),
             )
     }
+}
+
+fn badge_anchor() -> gpui::Div {
+    div().size(px(48.)).rounded(px(10.)).bg(rgb(0x5b6472))
 }
 
 fn main() {

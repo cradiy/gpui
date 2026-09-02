@@ -2954,6 +2954,7 @@ dependencies = [
  "anyhow",
  "gpui",
  "gpui_platform",
+ "naga 29.0.4",
  "refineable",
  "uic-macros",
 ]

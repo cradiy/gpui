@@ -10,11 +10,11 @@ strum = { workspace = true, features = ["derive", "strum_macros"] }
 unicode-segmentation = { workspace = true }
 anyhow = { workspace = true }
 gpui = { workspace = true }
+gpui_effects = { workspace = true }
 rust-embed = { version = "8.11", features = ["include-exclude"] }
 uic_macros = { workspace = true }
 
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
-gpui_effects = { workspace = true }
 gpui_platform = { workspace = true, features = ["wayland"] }

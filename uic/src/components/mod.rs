@@ -5,6 +5,7 @@
 //! inherited through the component tree. Appearance types describe interaction
 //! states and internal geometry that belong to the component itself.
 
+pub mod badge;
 pub mod color_picker;
 pub mod context_menu;
 pub mod dropdown;

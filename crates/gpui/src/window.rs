@@ -4352,6 +4352,81 @@ impl Window {
         transformation: Transformation,
         anchor: Point<Pixels>,
     ) -> Result<()> {
+        self.paint_glyph_with_transformation_and_blur(
+            origin,
+            font_id,
+            glyph_id,
+            font_size,
+            color,
+            transformation,
+            anchor,
+            px(0.),
+        )
+    }
+
+    /// Paints a monochrome glyph with a cached Gaussian blur mask.
+    ///
+    /// The blur expands only painting bounds; text layout and hit testing are
+    /// unchanged. Rasterized masks are cached in the sprite atlas by glyph,
+    /// scale, subpixel position, and device-pixel blur radius.
+    pub fn paint_blurred_glyph(
+        &mut self,
+        origin: Point<Pixels>,
+        font_id: FontId,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+        color: Hsla,
+        blur_radius: Pixels,
+    ) -> Result<()> {
+        self.paint_glyph_with_transformation_and_blur(
+            origin,
+            font_id,
+            glyph_id,
+            font_size,
+            color,
+            Transformation::default(),
+            origin,
+            blur_radius,
+        )
+    }
+
+    /// Paints a transformed monochrome glyph with a cached Gaussian blur mask.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_blurred_glyph_with_transformation(
+        &mut self,
+        origin: Point<Pixels>,
+        font_id: FontId,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+        color: Hsla,
+        transformation: Transformation,
+        anchor: Point<Pixels>,
+        blur_radius: Pixels,
+    ) -> Result<()> {
+        self.paint_glyph_with_transformation_and_blur(
+            origin,
+            font_id,
+            glyph_id,
+            font_size,
+            color,
+            transformation,
+            anchor,
+            blur_radius,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_glyph_with_transformation_and_blur(
+        &mut self,
+        origin: Point<Pixels>,
+        font_id: FontId,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+        color: Hsla,
+        transformation: Transformation,
+        anchor: Point<Pixels>,
+        blur_radius: Pixels,
+    ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
         let element_opacity = self.element_opacity();
@@ -4372,7 +4447,10 @@ impl Window {
         let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
         // Arbitrary per-pixel fills are incompatible with LCD subpixel text,
         // whose three coverage channels assume one constant foreground color.
-        let subpixel_rendering = transformation == TransformationMatrix::unit()
+        let blur_radius = ((blur_radius.max(px(0.)).0 * scale_factor).ceil() as u32)
+            .min(u32::from(u16::MAX)) as u16;
+        let subpixel_rendering = blur_radius == 0
+            && transformation == TransformationMatrix::unit()
             && self.masked_paint_stack.is_empty()
             && self.should_use_subpixel_rendering(font_id, font_size);
         let dilation = self.text_system().glyph_dilation_for_color(color);
@@ -4385,6 +4463,7 @@ impl Window {
             is_emoji: false,
             subpixel_rendering,
             dilation,
+            blur_radius,
         };
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
@@ -4535,6 +4614,7 @@ impl Window {
             is_emoji: true,
             subpixel_rendering: false,
             dilation: 0,
+            blur_radius: 0,
         };
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;

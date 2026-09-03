@@ -2,10 +2,11 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, App, Background, Bounds, Context, FontWeight, Render, Window,
-    WindowBounds, WindowOptions, div, linear_color_stop, multi_linear_gradient, prelude::*, px,
-    rgb, rgba, size,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, rgba, size,
 };
-use gpui_effects::{FrostedGlass, FrostedGlassAppearance, TimedText, TimedTextUnit};
+use gpui_effects::{
+    FrostedGlass, FrostedGlassAppearance, TimedText, TimedTextRevealWave, TimedTextUnit,
+};
 use gpui_platform::application;
 
 type Piece = (&'static str, u64, u64, usize);
@@ -90,6 +91,11 @@ fn timed_row(
             TimedText::new(line, timings(line, pieces))
                 .active_fill(fill)
                 .inactive_opacity(0.25)
+                .reveal_wave(TimedTextRevealWave {
+                    width: px(22.),
+                    leading_opacity: 0.18,
+                    softness: px(7.),
+                })
                 .progressive_lift(px(3.))
                 .text_color(rgb(0xe7edf8))
                 .text_size(px(28.))
@@ -106,14 +112,7 @@ struct TimedTextExample;
 
 impl Render for TimedTextExample {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let fill = multi_linear_gradient(
-            90.0,
-            [
-                linear_color_stop(rgb(0x67e8f9), 0.0),
-                linear_color_stop(rgb(0xa78bfa), 0.45),
-                linear_color_stop(rgb(0xf9a8d4), 1.0),
-            ],
-        );
+        let fill: Background = rgb(0x67c7e9).into();
         let mut glass = FrostedGlassAppearance::dark();
         glass.tint = rgba(0x11182a80).into();
 

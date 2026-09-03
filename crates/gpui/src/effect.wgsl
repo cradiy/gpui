@@ -173,7 +173,10 @@ fn fs_effect(input: EffectVarying) -> @location(0) vec4<f32> {
     let raw_color = effect(effect_input, instance.uniforms);
     let color = vec4<f32>(raw_color.rgb, clamp(raw_color.a, 0.0, 1.0));
 
-    let distance = effect_quad_sdf(input.position.xy, instance.bounds, instance.corner_radii);
+    // The quad bounds are local to the primitive. Using the transformed screen
+    // position here clips translated or scaled masked effects against their
+    // original rectangle (for example, the top of lifted text glyphs).
+    let distance = effect_quad_sdf(input.local_position, instance.bounds, instance.corner_radii);
     let coverage = 1.0 - smoothstep(-0.5, 0.5, distance);
     let mask_coverage = effect_mask_coverage(effect_input);
     return effect_blend_color(color, coverage * mask_coverage * instance.opacity);

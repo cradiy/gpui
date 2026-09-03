@@ -95,11 +95,14 @@ words.
 
 ## Selecting elastic groups
 
-All groups use elastic emphasis by default. Calling `.elastic_groups(...)`
-changes this to an allow-list:
+Motion is disabled by default. After enabling elastic emphasis with
+`.emphasis(...)`, all groups participate unless `.elastic_groups(...)` supplies
+an allow-list:
 
 ```rust,ignore
-TimedText::new(text, units).elastic_groups([0, 2, 5])
+TimedText::new(text, units)
+    .emphasis(TimedTextEmphasis::default())
+    .elastic_groups([0, 2, 5])
 ```
 
 Groups `0`, `2`, and `5` scale, lift, and push neighboring text. Other groups
@@ -107,7 +110,9 @@ continue to use timed fill without changing shape or position. An empty list
 disables elasticity for the complete line:
 
 ```rust,ignore
-TimedText::new(text, units).elastic_groups([])
+TimedText::new(text, units)
+    .emphasis(TimedTextEmphasis::default())
+    .elastic_groups([])
 ```
 
 The list can be generated from lyric metadata. For example, to emphasize
@@ -119,7 +124,9 @@ let elastic_groups = words
     .filter(|word| word.end - word.start >= Duration::from_millis(350))
     .map(|word| word.group);
 
-TimedText::new(text, units).elastic_groups(elastic_groups)
+TimedText::new(text, units)
+    .emphasis(TimedTextEmphasis::default())
+    .elastic_groups(elastic_groups)
 ```
 
 ## Elastic emphasis

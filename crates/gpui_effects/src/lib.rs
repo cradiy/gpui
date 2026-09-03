@@ -26,6 +26,7 @@ mod masked_effect;
 mod masked_fill;
 mod motion;
 mod sticky;
+mod text_blur;
 mod timed_text;
 
 pub use backdrop::*;
@@ -47,4 +48,5 @@ pub use motion::{
     MotionPath, MotionPolicy,
 };
 pub use sticky::{StickyShape, paint_sticky_shapes, sticky_shape_shader};
-pub use timed_text::{TimedText, TimedTextEmphasis, TimedTextUnit};
+pub use text_blur::TextBlur;
+pub use timed_text::{TimedText, TimedTextEmphasis, TimedTextRevealWave, TimedTextUnit};

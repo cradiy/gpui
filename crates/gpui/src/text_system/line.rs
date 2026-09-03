@@ -124,11 +124,41 @@ impl ShapedLine {
             &self.decoration_runs,
             &[],
             &[],
+            px(0.),
             window,
             cx,
         )?;
 
         Ok(())
+    }
+
+    /// Paints this line using cached Gaussian-blurred monochrome glyph masks.
+    ///
+    /// Shaping, alignment, and layout are identical to [`Self::paint`]. The
+    /// blur expands paint bounds without changing the measured line size.
+    pub fn paint_blurred(
+        &self,
+        origin: Point<Pixels>,
+        line_height: Pixels,
+        align: TextAlign,
+        align_width: Option<Pixels>,
+        blur_radius: Pixels,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<()> {
+        paint_line(
+            origin,
+            &self.layout,
+            line_height,
+            align,
+            align_width,
+            &self.decoration_runs,
+            &[],
+            &[],
+            blur_radius.max(px(0.)),
+            window,
+            cx,
+        )
     }
 
     /// Paints this line with paint-only transformations on selected ranges.
@@ -155,6 +185,7 @@ impl ShapedLine {
             &self.decoration_runs,
             &[],
             transforms,
+            px(0.),
             window,
             cx,
         )
@@ -350,6 +381,7 @@ impl WrappedLine {
             &self.decoration_runs,
             &self.wrap_boundaries,
             &[],
+            px(0.),
             window,
             cx,
         )?;
@@ -397,6 +429,7 @@ fn paint_line(
     decoration_runs: &[DecorationRun],
     wrap_boundaries: &[WrapBoundary],
     transforms: &[GlyphRunTransform],
+    blur_radius: Pixels,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<()> {
@@ -606,14 +639,36 @@ fn paint_line(
                             )?;
                         }
                     } else if let Some(transform) = transform {
-                        window.paint_glyph_with_transformation(
+                        if blur_radius > px(0.) {
+                            window.paint_blurred_glyph_with_transformation(
+                                paint_origin,
+                                run.font_id,
+                                glyph.id,
+                                layout.font_size,
+                                color,
+                                transform.transformation,
+                                aligned_line_origin + transform.anchor,
+                                blur_radius,
+                            )?;
+                        } else {
+                            window.paint_glyph_with_transformation(
+                                paint_origin,
+                                run.font_id,
+                                glyph.id,
+                                layout.font_size,
+                                color,
+                                transform.transformation,
+                                aligned_line_origin + transform.anchor,
+                            )?;
+                        }
+                    } else if blur_radius > px(0.) {
+                        window.paint_blurred_glyph(
                             paint_origin,
                             run.font_id,
                             glyph.id,
                             layout.font_size,
                             color,
-                            transform.transformation,
-                            aligned_line_origin + transform.anchor,
+                            blur_radius,
                         )?;
                     } else {
                         window.paint_glyph(

@@ -21,10 +21,16 @@ cargo run -p gpui_effects --example frosted_glass
 Other examples in `examples/` demonstrate gradients, masked effects, motion
 layers, and page-flip effects.
 
-Run the standalone timed-text example:
+Run the timed-text example:
 
 ```sh
 cargo run -p gpui_effects --example timed_text
+```
+
+Run the blurred-text example:
+
+```sh
+cargo run -p gpui_effects --example text_blur
 ```
 
 ## License

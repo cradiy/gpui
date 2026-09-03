@@ -327,7 +327,15 @@ impl TextSystem {
             Ok(*bounds)
         } else {
             let mut raster_bounds = RwLockUpgradableReadGuard::upgrade(raster_bounds);
-            let bounds = self.platform_text_system.glyph_raster_bounds(params)?;
+            let bounds = if params.blur_radius == 0 {
+                self.platform_text_system.glyph_raster_bounds(params)?
+            } else {
+                let mut source_params = params.clone();
+                source_params.blur_radius = 0;
+                self.platform_text_system
+                    .glyph_raster_bounds(&source_params)?
+                    .dilate(DevicePixels(i32::from(params.blur_radius)))
+            };
             raster_bounds.insert(params.clone(), bounds);
             Ok(bounds)
         }
@@ -337,9 +345,21 @@ impl TextSystem {
         &self,
         params: &RenderGlyphParams,
     ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
-        let raster_bounds = self.raster_bounds(params)?;
-        self.platform_text_system
-            .rasterize_glyph(params, raster_bounds)
+        if params.blur_radius == 0 {
+            let raster_bounds = self.raster_bounds(params)?;
+            return self
+                .platform_text_system
+                .rasterize_glyph(params, raster_bounds);
+        }
+
+        debug_assert!(!params.is_emoji && !params.subpixel_rendering);
+        let mut source_params = params.clone();
+        source_params.blur_radius = 0;
+        let source_bounds = self.raster_bounds(&source_params)?;
+        let (source_size, source) = self
+            .platform_text_system
+            .rasterize_glyph(&source_params, source_bounds)?;
+        gaussian_blur_alpha(source_size, source, params.blur_radius)
     }
 
     /// Returns the dilation level to use for a glyph painted in the given color.
@@ -1029,6 +1049,8 @@ pub struct RenderGlyphParams {
     pub is_emoji: bool,
     pub subpixel_rendering: bool,
     pub dilation: u8,
+    /// Gaussian kernel radius in device pixels. Zero keeps the original glyph.
+    pub blur_radius: u16,
 }
 
 impl Eq for RenderGlyphParams {}
@@ -1043,7 +1065,79 @@ impl Hash for RenderGlyphParams {
         self.is_emoji.hash(state);
         self.subpixel_rendering.hash(state);
         self.dilation.hash(state);
+        self.blur_radius.hash(state);
     }
+}
+
+fn gaussian_blur_alpha(
+    source_size: Size<DevicePixels>,
+    source: Vec<u8>,
+    radius: u16,
+) -> Result<(Size<DevicePixels>, Vec<u8>)> {
+    let radius = usize::from(radius);
+    if radius == 0 {
+        return Ok((source_size, source));
+    }
+
+    let source_width = usize::try_from(source_size.width.0).unwrap_or_default();
+    let source_height = usize::try_from(source_size.height.0).unwrap_or_default();
+    if source.len() != source_width.saturating_mul(source_height) {
+        return Err(anyhow!("blurred glyphs require a monochrome alpha mask"));
+    }
+
+    let width = source_width + radius * 2;
+    let height = source_height + radius * 2;
+    let mut padded = vec![0.0_f32; width * height];
+    for y in 0..source_height {
+        for x in 0..source_width {
+            padded[(y + radius) * width + x + radius] = f32::from(source[y * source_width + x]);
+        }
+    }
+
+    let sigma = (radius as f32 * 0.5).max(0.5);
+    let mut kernel = (-(radius as isize)..=(radius as isize))
+        .map(|offset| (-(offset * offset) as f32 / (2.0 * sigma * sigma)).exp())
+        .collect::<Vec<_>>();
+    let kernel_sum = kernel.iter().sum::<f32>();
+    for weight in &mut kernel {
+        *weight /= kernel_sum;
+    }
+
+    let mut horizontal = vec![0.0_f32; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let mut value = 0.0;
+            for (kernel_index, weight) in kernel.iter().enumerate() {
+                let source_x = x as isize + kernel_index as isize - radius as isize;
+                if (0..width as isize).contains(&source_x) {
+                    value += padded[y * width + source_x as usize] * weight;
+                }
+            }
+            horizontal[y * width + x] = value;
+        }
+    }
+
+    let mut blurred = vec![0_u8; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let mut value = 0.0;
+            for (kernel_index, weight) in kernel.iter().enumerate() {
+                let source_y = y as isize + kernel_index as isize - radius as isize;
+                if (0..height as isize).contains(&source_y) {
+                    value += horizontal[source_y as usize * width + x] * weight;
+                }
+            }
+            blurred[y * width + x] = value.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    Ok((
+        Size {
+            width: DevicePixels(width as i32),
+            height: DevicePixels(height as i32),
+        },
+        blurred,
+    ))
 }
 
 /// The configuration details for identifying a specific font.

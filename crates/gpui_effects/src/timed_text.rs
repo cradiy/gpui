@@ -1,10 +1,10 @@
 use std::{cell::RefCell, collections::BTreeSet, ops::Range, rc::Rc, time::Duration};
 
 use gpui::{
-    App, Background, Bounds, ContentMask, Element, ElementId, GlobalElementId, GlyphRunTransform,
-    Hitbox, InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, Pixels,
-    Point, ShapedLine, SharedString, StyleRefinement, Styled, TextAlign, Transformation, Window,
-    point, px, size, white,
+    App, Background, Bounds, ContentMask, EffectShader, EffectUniforms, Element, ElementId,
+    GlobalElementId, GlyphRunTransform, Hitbox, InspectorElementId, InteractiveElement,
+    Interactivity, IntoElement, LayoutId, Pixels, Point, Rgba, ShapedLine, SharedString,
+    StyleRefinement, Styled, TextAlign, Transformation, Window, point, px, size, white,
 };
 
 /// Timing for one independently revealed text unit, usually a grapheme or word.
@@ -81,6 +81,30 @@ impl Default for TimedTextEmphasis {
     }
 }
 
+/// Soft leading opacity that travels ahead of the completed lyric fill.
+///
+/// The leading band fades into unreached text at its front edge and into the
+/// completed fill at its back edge, avoiding a hard vertical reveal boundary.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TimedTextRevealWave {
+    /// Distance between the completed fill and the front of the reveal.
+    pub width: Pixels,
+    /// Opacity of the active fill at the leading edge.
+    pub leading_opacity: f32,
+    /// Feathering applied to both edges of the leading band.
+    pub softness: Pixels,
+}
+
+impl Default for TimedTextRevealWave {
+    fn default() -> Self {
+        Self {
+            width: px(18.),
+            leading_opacity: 0.16,
+            softness: px(6.),
+        }
+    }
+}
+
 #[doc(hidden)]
 #[derive(Clone, Default)]
 pub struct TimedTextLayout(Rc<RefCell<Option<TimedTextLayoutInner>>>);
@@ -103,6 +127,7 @@ pub struct TimedText {
     position: Duration,
     active_fill: Background,
     inactive_opacity: f32,
+    reveal_wave: Option<TimedTextRevealWave>,
     motion: TimedTextMotion,
     elastic_groups: Option<BTreeSet<usize>>,
     interactivity: Interactivity,
@@ -126,7 +151,8 @@ impl TimedText {
             position: Duration::ZERO,
             active_fill: white().into(),
             inactive_opacity: 0.34,
-            motion: TimedTextMotion::Elastic(TimedTextEmphasis::default()),
+            reveal_wave: Some(TimedTextRevealWave::default()),
+            motion: TimedTextMotion::None,
             elastic_groups: None,
             interactivity: Interactivity::new(),
         }
@@ -150,6 +176,18 @@ impl TimedText {
         self
     }
 
+    /// Sets the same-color, lower-opacity band that leads the completed lyric fill.
+    pub fn reveal_wave(mut self, reveal_wave: TimedTextRevealWave) -> Self {
+        self.reveal_wave = Some(reveal_wave);
+        self
+    }
+
+    /// Restores the legacy hard reveal edge.
+    pub fn without_reveal_wave(mut self) -> Self {
+        self.reveal_wave = None;
+        self
+    }
+
     /// Sets the paint-only scale/lift animation for the active group.
     pub fn emphasis(mut self, emphasis: TimedTextEmphasis) -> Self {
         self.motion = TimedTextMotion::Elastic(emphasis);
@@ -168,8 +206,8 @@ impl TimedText {
 
     /// Selects the word or phrase groups that receive elastic emphasis.
     ///
-    /// By default every group is elastic. After calling this method, only the
-    /// listed group identifiers scale, lift, and push surrounding text. Other
+    /// After elastic emphasis is enabled, every group participates by default.
+    /// Calling this method limits it to the listed group identifiers. Other
     /// groups retain timed gradient reveal without a transform. Pass an empty
     /// iterator to disable elasticity for every group.
     pub fn elastic_groups(mut self, groups: impl IntoIterator<Item = usize>) -> Self {
@@ -336,7 +374,7 @@ impl Element for TimedText {
             hitbox.as_ref(),
             window,
             cx,
-            |style, window, cx| {
+            |_style, window, cx| {
                 let state = state.0.borrow();
                 let Some(layout) = state.as_ref() else {
                     return;
@@ -360,23 +398,6 @@ impl Element for TimedText {
                 };
                 let transforms = transform.as_slice();
 
-                layout
-                    .line
-                    .paint_with_transforms(
-                        layout.content_bounds.origin,
-                        layout.line_height,
-                        align,
-                        Some(align_width),
-                        transforms,
-                        window,
-                        cx,
-                    )
-                    .ok();
-
-                let reveal_x = reveal_x(&layout.line, &self.units, self.position);
-                if reveal_x <= px(0.) {
-                    return;
-                }
                 let aligned_x = match align {
                     TextAlign::Left => layout.content_bounds.origin.x,
                     TextAlign::Center => {
@@ -388,39 +409,174 @@ impl Element for TimedText {
                             + (align_width - layout.line.width()).max(px(0.))
                     }
                 };
-                let lift_overscan = match self.motion {
-                    TimedTextMotion::ProgressiveLift(height) => height,
-                    _ => px(0.),
-                };
-                let clip = Bounds::new(
-                    point(aligned_x, layout.content_bounds.origin.y - lift_overscan),
-                    size(
-                        reveal_x.min(layout.line.width()),
-                        layout.line_height + lift_overscan,
-                    ),
+                let fill_bounds = Bounds::new(
+                    point(aligned_x, layout.content_bounds.origin.y),
+                    size(layout.line.width().max(px(1.)), layout.line_height),
                 );
+                let inactive_color = window.text_style().color.opacity(self.inactive_opacity);
 
-                window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
-                    window.with_masked_fill(layout.content_bounds, self.active_fill, |window| {
-                        layout
-                            .line
-                            .paint_with_transforms(
-                                layout.content_bounds.origin,
-                                layout.line_height,
-                                align,
-                                Some(align_width),
-                                transforms,
-                                window,
-                                cx,
-                            )
-                            .ok();
-                    });
+                // Both passes deliberately use grayscale atlas masks. Mixing
+                // LCD subpixel glyphs with grayscale gradient glyphs produces
+                // mismatched outlines at a partially revealed character.
+                window.with_masked_fill(fill_bounds, inactive_color, |window| {
+                    layout
+                        .line
+                        .paint_with_transforms(
+                            layout.content_bounds.origin,
+                            layout.line_height,
+                            align,
+                            Some(align_width),
+                            transforms,
+                            window,
+                            cx,
+                        )
+                        .ok();
                 });
 
-                let _ = style;
+                let reveal_x = reveal_x(&layout.line, &self.units, self.position);
+                if reveal_x <= px(0.) {
+                    return;
+                }
+                let vertical_overscan = match self.motion {
+                    TimedTextMotion::ProgressiveLift(height) => height,
+                    TimedTextMotion::Elastic(emphasis) => {
+                        emphasis.translation.y.abs()
+                            + layout.line_height * (emphasis.scale.max(1.0) - 1.0) / 2.
+                    }
+                    TimedTextMotion::None => px(0.),
+                };
+                let reveal_wave = self.reveal_wave.filter(|wave| wave.width > px(0.));
+                let completed_x = reveal_wave
+                    .map(|wave| (reveal_x - wave.width).max(px(0.)))
+                    .unwrap_or(reveal_x);
+                let completed_edge = completed_x.min(layout.line.width());
+                let completed_clip = Bounds::new(
+                    point(
+                        aligned_x,
+                        layout.content_bounds.origin.y - vertical_overscan,
+                    ),
+                    size(completed_edge, layout.line_height + vertical_overscan * 2.),
+                );
+                let solid_wave = reveal_wave.zip(self.active_fill.as_solid());
+
+                if solid_wave.is_none() {
+                    window.with_content_mask(
+                        Some(ContentMask {
+                            bounds: completed_clip,
+                        }),
+                        |window| {
+                            window.with_masked_fill(fill_bounds, self.active_fill, |window| {
+                                layout
+                                    .line
+                                    .paint_with_transforms(
+                                        layout.content_bounds.origin,
+                                        layout.line_height,
+                                        align,
+                                        Some(align_width),
+                                        transforms,
+                                        window,
+                                        cx,
+                                    )
+                                    .ok();
+                            });
+                        },
+                    );
+                }
+
+                if let Some((reveal_wave, color)) = solid_wave {
+                    let line_width = layout.line.width().max(px(1.));
+                    let color = Rgba::from(color);
+                    let mut uniforms = EffectUniforms::default();
+                    uniforms.set_slot(0, [color.r, color.g, color.b, color.a]);
+                    uniforms.set_slot(
+                        1,
+                        [
+                            (reveal_x / line_width).clamp(0.0, 1.0),
+                            (completed_x / line_width).clamp(0.0, 1.0),
+                            (reveal_wave.softness.max(px(0.5)) / line_width).clamp(0.0, 1.0),
+                            reveal_wave.leading_opacity.clamp(0.0, 1.0),
+                        ],
+                    );
+                    window.with_masked_effect(
+                        fill_bounds,
+                        timed_text_opacity_reveal_shader(),
+                        uniforms,
+                        0.0,
+                        1.0,
+                        |window| {
+                            layout
+                                .line
+                                .paint_with_transforms(
+                                    layout.content_bounds.origin,
+                                    layout.line_height,
+                                    align,
+                                    Some(align_width),
+                                    transforms,
+                                    window,
+                                    cx,
+                                )
+                                .ok();
+                        },
+                    );
+                } else if let Some(reveal_wave) = reveal_wave {
+                    let wave_width = (reveal_x - completed_x).max(px(0.));
+                    let steps = ((wave_width / px(2.)).ceil() as usize).clamp(4, 12);
+                    let softness = reveal_wave.softness.max(px(0.5));
+                    for step in 0..steps {
+                        let start_t = step as f32 / steps as f32;
+                        let end_t = (step + 1) as f32 / steps as f32;
+                        let center_t = (start_t + end_t) * 0.5;
+                        let strip_start = completed_x + wave_width * start_t;
+                        let strip_end = completed_x + wave_width * end_t;
+                        let opacity = (1.0
+                            - (1.0 - reveal_wave.leading_opacity.clamp(0.0, 1.0))
+                                * smootherstep(center_t))
+                            * smootherstep((reveal_x - (strip_start + strip_end) / 2.) / softness);
+                        if opacity <= f32::EPSILON {
+                            continue;
+                        }
+                        let strip_clip = Bounds::new(
+                            point(
+                                aligned_x + strip_start,
+                                layout.content_bounds.origin.y - vertical_overscan,
+                            ),
+                            size(
+                                (strip_end - strip_start + px(0.75)).min(reveal_x - strip_start),
+                                layout.line_height + vertical_overscan * 2.,
+                            ),
+                        );
+                        window.with_content_mask(
+                            Some(ContentMask { bounds: strip_clip }),
+                            |window| {
+                                window.with_masked_fill(
+                                    fill_bounds,
+                                    self.active_fill.opacity(opacity),
+                                    |window| {
+                                        layout
+                                            .line
+                                            .paint_with_transforms(
+                                                layout.content_bounds.origin,
+                                                layout.line_height,
+                                                align,
+                                                Some(align_width),
+                                                transforms,
+                                                window,
+                                                cx,
+                                            )
+                                            .ok();
+                                    },
+                                );
+                            },
+                        );
+                    }
+                }
             },
         );
     }
+}
+
+fn timed_text_opacity_reveal_shader() -> EffectShader {
+    EffectShader::wgsl_mask(include_str!("shaders/timed_text_opacity_reveal.wgsl"))
 }
 
 fn validate_units(text: &str, units: &[TimedTextUnit]) {

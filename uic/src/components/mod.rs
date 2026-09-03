@@ -7,6 +7,7 @@
 
 pub mod badge;
 pub mod calendar;
+pub mod collapsible;
 pub mod color_picker;
 pub mod context_menu;
 pub mod dropdown;

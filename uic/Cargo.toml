@@ -9,6 +9,7 @@ serde = { workspace = true, features = ["derive"] }
 strum = { workspace = true, features = ["derive", "strum_macros"] }
 unicode-segmentation = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 gpui = { workspace = true }
 gpui_effects = { workspace = true }
 rust-embed = { version = "8.11", features = ["include-exclude"] }

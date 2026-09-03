@@ -7958,6 +7958,7 @@ name = "uic"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gpui",
  "gpui_effects",
  "gpui_platform",

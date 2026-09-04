@@ -157,6 +157,11 @@ and surrounding displacement.
 | `.inactive_opacity(0.0..1.0)` | Opacity of unreached text relative to the inherited text color. |
 | `.position(Duration)` | Playback position represented by the current frame. |
 | `.elastic_groups(...)` | Groups that receive elastic emphasis. |
+| `.reveal_wave(...)` | Width, leading opacity, and edge softness of the progressive fill. |
+| `.reveal_wave_width(px(...))` | Controls how far the lower-opacity fill spreads ahead of completed text. |
+| `.reveal_edge_softness(px(...))` | Controls edge feathering without changing the leading range. |
+| `.without_reveal_wave()` | Uses a hard reveal boundary. |
+
 
 `TimedText` implements `Styled` and `InteractiveElement`. Standard GPUI text
 and layout methods such as `.text_size(...)`, `.font_weight(...)`, `.id(...)`,

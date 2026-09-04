@@ -92,7 +92,7 @@ fn timed_row(
                 .active_fill(fill)
                 .inactive_opacity(0.25)
                 .reveal_wave(TimedTextRevealWave {
-                    width: px(22.),
+                    width: px(12.),
                     leading_opacity: 0.18,
                     softness: px(7.),
                 })

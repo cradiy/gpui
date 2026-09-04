@@ -98,7 +98,7 @@ pub struct TimedTextRevealWave {
 impl Default for TimedTextRevealWave {
     fn default() -> Self {
         Self {
-            width: px(18.),
+            width: px(12.),
             leading_opacity: 0.16,
             softness: px(6.),
         }
@@ -179,6 +179,27 @@ impl TimedText {
     /// Sets the same-color, lower-opacity band that leads the completed lyric fill.
     pub fn reveal_wave(mut self, reveal_wave: TimedTextRevealWave) -> Self {
         self.reveal_wave = Some(reveal_wave);
+        self
+    }
+
+    /// Sets how far the lower-opacity leading fill spreads ahead of the
+    /// completed fill.
+    ///
+    /// Smaller values keep the transition concentrated near the current
+    /// playback position. This enables the reveal wave with its default
+    /// settings if it was previously disabled.
+    pub fn reveal_wave_width(mut self, width: Pixels) -> Self {
+        self.reveal_wave.get_or_insert_default().width = width.max(px(0.));
+        self
+    }
+
+    /// Sets the width of the feathered reveal edge.
+    ///
+    /// Smaller values produce a sharper edge without changing how far the
+    /// lower-opacity fill spreads. This enables the reveal wave with its
+    /// default settings if it was previously disabled.
+    pub fn reveal_edge_softness(mut self, softness: Pixels) -> Self {
+        self.reveal_wave.get_or_insert_default().softness = softness.max(px(0.));
         self
     }
 

@@ -13,8 +13,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Bounds, DevicePixels, Hsla, Pixels, PlatformTextSystem, Point, Result, SharedString, Size,
-    StrikethroughStyle, TextRenderingMode, UnderlineStyle, px,
+    Bounds, DevicePixels, Hsla, IsZero, Pixels, PlatformTextSystem, Point, Result, SharedString,
+    Size, StrikethroughStyle, TextRenderingMode, UnderlineStyle, px,
 };
 use anyhow::{Context as _, anyhow};
 use collections::FxHashMap;
@@ -332,9 +332,14 @@ impl TextSystem {
             } else {
                 let mut source_params = params.clone();
                 source_params.blur_radius = 0;
-                self.platform_text_system
-                    .glyph_raster_bounds(&source_params)?
-                    .dilate(DevicePixels(i32::from(params.blur_radius)))
+                let source_bounds = self
+                    .platform_text_system
+                    .glyph_raster_bounds(&source_params)?;
+                if source_bounds.is_zero() {
+                    source_bounds
+                } else {
+                    source_bounds.dilate(DevicePixels(i32::from(params.blur_radius)))
+                }
             };
             raster_bounds.insert(params.clone(), bounds);
             Ok(bounds)
@@ -345,8 +350,12 @@ impl TextSystem {
         &self,
         params: &RenderGlyphParams,
     ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
+        let raster_bounds = self.raster_bounds(params)?;
+        if raster_bounds.is_zero() {
+            return Ok((raster_bounds.size, Vec::new()));
+        }
+
         if params.blur_radius == 0 {
-            let raster_bounds = self.raster_bounds(params)?;
             return self
                 .platform_text_system
                 .rasterize_glyph(params, raster_bounds);
@@ -1296,5 +1305,199 @@ pub fn font_name_with_fallbacks_shared<'a>(
         ".ZedSans" | "Zed Plex Sans" => const { &SharedString::new_static("IBM Plex Sans") },
         ".ZedMono" | "Zed Plex Mono" => const { &SharedString::new_static("Lilex") },
         _ => name,
+    }
+}
+
+#[cfg(test)]
+mod blurred_glyph_tests {
+    use super::*;
+    use crate::{FontRun, LineLayout, ShapedGlyph, ShapedRun, WindowTextSystem, point, size};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const SPACE_GLYPH: GlyphId = GlyphId(1);
+    const INK_GLYPH: GlyphId = GlyphId(2);
+
+    #[derive(Default)]
+    struct WhitespaceTextSystem {
+        rasterize_calls: AtomicUsize,
+    }
+
+    impl PlatformTextSystem for WhitespaceTextSystem {
+        fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+            Ok(())
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn font_id(&self, _descriptor: &Font) -> Result<FontId> {
+            Ok(FontId(1))
+        }
+
+        fn font_metrics(&self, _font_id: FontId) -> FontMetrics {
+            FontMetrics {
+                units_per_em: 1000,
+                ascent: 800.,
+                descent: 200.,
+                line_gap: 0.,
+                underline_position: -100.,
+                underline_thickness: 50.,
+                cap_height: 700.,
+                x_height: 500.,
+                bounding_box: Bounds::default(),
+            }
+        }
+
+        fn typographic_bounds(&self, _font_id: FontId, _glyph_id: GlyphId) -> Result<Bounds<f32>> {
+            Ok(Bounds::default())
+        }
+
+        fn advance(&self, _font_id: FontId, _glyph_id: GlyphId) -> Result<Size<f32>> {
+            Ok(size(10., 0.))
+        }
+
+        fn glyph_for_char(&self, _font_id: FontId, ch: char) -> Option<GlyphId> {
+            Some(if ch == ' ' { SPACE_GLYPH } else { INK_GLYPH })
+        }
+
+        fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
+            if params.glyph_id == SPACE_GLYPH {
+                Ok(Bounds::default())
+            } else {
+                Ok(Bounds {
+                    origin: point(DevicePixels(0), DevicePixels(-5)),
+                    size: size(DevicePixels(4), DevicePixels(6)),
+                })
+            }
+        }
+
+        fn rasterize_glyph(
+            &self,
+            _params: &RenderGlyphParams,
+            raster_bounds: Bounds<DevicePixels>,
+        ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
+            if raster_bounds.is_zero() {
+                anyhow::bail!("glyph bounds are empty");
+            }
+
+            self.rasterize_calls.fetch_add(1, Ordering::Relaxed);
+            let len = raster_bounds.size.width.0 as usize * raster_bounds.size.height.0 as usize;
+            Ok((raster_bounds.size, vec![255; len]))
+        }
+
+        fn layout_line(&self, text: &str, font_size: Pixels, _runs: &[FontRun]) -> LineLayout {
+            let glyphs = text
+                .char_indices()
+                .enumerate()
+                .map(|(glyph_index, (byte_index, ch))| ShapedGlyph {
+                    id: self.glyph_for_char(FontId(1), ch).unwrap(),
+                    position: point(px(glyph_index as f32 * 10.), px(0.)),
+                    index: byte_index,
+                    is_emoji: false,
+                })
+                .collect::<Vec<_>>();
+
+            LineLayout {
+                font_size,
+                width: px(text.chars().count() as f32 * 10.),
+                ascent: px(12.),
+                descent: px(4.),
+                runs: (!glyphs.is_empty())
+                    .then_some(ShapedRun {
+                        font_id: FontId(1),
+                        glyphs,
+                    })
+                    .into_iter()
+                    .collect(),
+                len: text.len(),
+            }
+        }
+
+        fn recommended_rendering_mode(
+            &self,
+            _font_id: FontId,
+            _font_size: Pixels,
+        ) -> TextRenderingMode {
+            TextRenderingMode::Grayscale
+        }
+    }
+
+    fn render_params(glyph_id: GlyphId, blur_radius: u16) -> RenderGlyphParams {
+        RenderGlyphParams {
+            font_id: FontId(1),
+            glyph_id,
+            font_size: px(16.),
+            subpixel_variant: Point::default(),
+            scale_factor: 1.,
+            is_emoji: false,
+            subpixel_rendering: false,
+            dilation: 0,
+            blur_radius,
+        }
+    }
+
+    #[test]
+    fn blurred_whitespace_stays_empty_without_truncating_the_line() -> Result<()> {
+        let cases = ["甲 乙", "alpha beta", "a  b", " a ", "   "];
+
+        for blur_radius in [0, 3] {
+            for text in cases {
+                let platform = Arc::new(WhitespaceTextSystem::default());
+                let text_system = Arc::new(TextSystem::new(platform.clone()));
+                let window_text_system = WindowTextSystem::new(text_system.clone());
+                let line = window_text_system.shape_line(
+                    text.into(),
+                    px(16.),
+                    &[TextRun {
+                        len: text.len(),
+                        ..Default::default()
+                    }],
+                    None,
+                );
+
+                assert_eq!(line.width(), px(text.chars().count() as f32 * 10.));
+
+                let mut rendered_indexes = Vec::new();
+                for run in &line.runs {
+                    for glyph in &run.glyphs {
+                        let params = render_params(glyph.id, blur_radius);
+                        let bounds = text_system.raster_bounds(&params)?;
+                        if !bounds.is_zero() {
+                            text_system.rasterize_glyph(&params)?;
+                            rendered_indexes.push(glyph.index);
+                        }
+                    }
+                }
+
+                let expected_indexes = text
+                    .char_indices()
+                    .filter_map(|(index, ch)| (ch != ' ').then_some(index))
+                    .collect::<Vec<_>>();
+                assert_eq!(rendered_indexes, expected_indexes);
+                assert_eq!(
+                    platform.rasterize_calls.load(Ordering::Relaxed),
+                    expected_indexes.len()
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn rasterizing_empty_glyph_returns_an_empty_mask() -> Result<()> {
+        let platform = Arc::new(WhitespaceTextSystem::default());
+        let text_system = TextSystem::new(platform.clone());
+
+        for blur_radius in [0, 3] {
+            let (size, mask) =
+                text_system.rasterize_glyph(&render_params(SPACE_GLYPH, blur_radius))?;
+            assert!(size.is_zero());
+            assert!(mask.is_empty());
+        }
+
+        assert_eq!(platform.rasterize_calls.load(Ordering::Relaxed), 0);
+        Ok(())
     }
 }

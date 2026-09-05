@@ -300,6 +300,7 @@ impl RenderOnce for Scrollbar {
 
         let mut element = div()
             .id(self.id)
+            .cursor(gpui::CursorStyle::Arrow)
             .debug_selector(|| "uic-scrollbar".to_string())
             .focusable()
             .tab_stop(scrollable)

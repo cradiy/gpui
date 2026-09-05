@@ -4,6 +4,7 @@ use gpui::{
 };
 
 use super::{InputAppearance, TextInput};
+use crate::components::scrollbar::Scrollbar;
 
 #[derive(IntoElement)]
 pub struct Input {
@@ -11,6 +12,7 @@ pub struct Input {
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
     appearance: InputAppearance,
+    configure_scrollbar: Option<Box<dyn FnOnce(Scrollbar) -> Scrollbar>>,
     rows: Option<usize>,
     style: StyleRefinement,
 }
@@ -24,6 +26,7 @@ impl Input {
             prefix: None,
             suffix: None,
             appearance: InputAppearance::default(),
+            configure_scrollbar: None,
             rows: None,
             style: StyleRefinement::default(),
         }
@@ -43,6 +46,23 @@ impl Input {
         self.appearance = appearance;
         self
     }
+
+    /// Configures the multi-line input's scrollbar after its defaults are applied.
+    ///
+    /// Use Styled methods for the cursor, track size, position, and background;
+    /// use `appearance` for thumb states and `auto_hide` for visibility behavior.
+    /// Increase the input's right padding when widening the overlaid scrollbar.
+    /// Repeated calls apply in order.
+    pub fn scrollbar(mut self, configure: impl FnOnce(Scrollbar) -> Scrollbar + 'static) -> Self {
+        let previous = self.configure_scrollbar.take();
+        self.configure_scrollbar = Some(Box::new(move |scrollbar| {
+            configure(match previous {
+                Some(previous) => previous(scrollbar),
+                None => scrollbar,
+            })
+        }));
+        self
+    }
 }
 
 impl RenderOnce for Input {
@@ -51,21 +71,25 @@ impl RenderOnce for Input {
         self.state
             .update(cx, |state, _cx| state.appearance = appearance);
 
-        let (focused, focus_handle, disabled, multiline) = {
+        let (focused, focus_handle, disabled, multiline, scroll_handle, scrollbar_state) = {
             let state = self.state.read(cx);
             (
                 state.focus_handle.is_focused(window),
                 state.focus_handle.clone(),
                 state.disabled,
                 state.mode == super::InputMode::Multiline,
+                state.scroll_handle.clone(),
+                state.scrollbar_state.clone(),
             )
         };
+        let scrollbar_id = ("uic-input-scrollbar", self.state.entity_id());
 
         let row_height = self
             .rows
             .map(|rows| super::row_height(&self.style, rows, window.rem_size()));
 
         let mut element = div()
+            .relative()
             .flex()
             .when(multiline, |this| this.items_start())
             .when(!multiline, |this| this.items_center())
@@ -100,8 +124,29 @@ impl RenderOnce for Input {
                 }
             })
             .children(self.prefix)
-            .child(self.state)
-            .children(self.suffix);
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .when(multiline, |this| this.h_full())
+                    .child(self.state),
+            )
+            .children(self.suffix)
+            .when(multiline, |this| {
+                this.child(
+                    Scrollbar::vertical(scrollbar_id, &scrollbar_state, &scroll_handle)
+                        .auto_hide(false)
+                        .absolute()
+                        .right(px(2.))
+                        .top(px(4.))
+                        .bottom(px(4.))
+                        .h_auto()
+                        .when_some(self.configure_scrollbar, |scrollbar, configure| {
+                            configure(scrollbar)
+                        }),
+                )
+            });
         element.style().refine(&self.style);
         if focused && !disabled {
             element = element.border_color(appearance.focus_border);

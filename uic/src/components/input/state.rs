@@ -8,6 +8,7 @@ use gpui::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{InputAppearance, InputEvent, InputMode, actions::*, element::TextElement};
+use crate::components::scrollbar::ScrollbarState;
 
 pub(super) struct TextLayout {
     pub(super) lines: Vec<WrappedLine>,
@@ -110,6 +111,7 @@ pub struct TextInput {
     pub(super) appearance: InputAppearance,
     pub(super) preferred_x: Option<Pixels>,
     pub(super) scroll_handle: ScrollHandle,
+    pub(super) scrollbar_state: ScrollbarState,
     pub(super) scroll_cursor_pending: bool,
 }
 
@@ -133,6 +135,7 @@ impl TextInput {
             appearance: InputAppearance::default(),
             preferred_x: None,
             scroll_handle: ScrollHandle::new(),
+            scrollbar_state: ScrollbarState::new(),
             scroll_cursor_pending: true,
         }
     }
@@ -950,6 +953,11 @@ mod tests {
             window.draw(cx).clear();
         });
 
+        assert!(
+            visual.debug_bounds("uic-scrollbar").is_some(),
+            "a multiline input should render its scrollbar"
+        );
+
         window
             .update(&mut visual.cx, |view, _, cx| {
                 assert!(
@@ -1000,6 +1008,54 @@ mod tests {
         window
             .update(&mut visual.cx, |view, _, cx| {
                 assert_eq!(view.state.read(cx).scroll_handle.offset().y, px(0.));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn multiline_scrollbar_stays_at_the_edge_and_dragging_preserves_selection(
+        cx: &mut TestAppContext,
+    ) {
+        let window = open_input_with_rows(cx, 3, |cx| {
+            TextInput::new(cx)
+                .multiline()
+                .initial_value("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight")
+        });
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                view.state.update(cx, |input, cx| input.move_to(0, cx));
+            })
+            .unwrap();
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                window.draw(cx).clear();
+            });
+        }
+        let track = visual.debug_bounds("uic-scrollbar").unwrap();
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let viewport = view.state.read(cx).scroll_handle.bounds();
+                assert!(track.left() >= viewport.right());
+                assert!(track.top() < viewport.top());
+                assert!(track.bottom() > viewport.bottom());
+            })
+            .unwrap();
+        let start = point(track.center().x, track.top() + px(8.));
+        let end = point(track.center().x, track.bottom() - px(8.));
+        visual.simulate_mouse_down(start, MouseButton::Left, gpui::Modifiers::default());
+        visual.simulate_mouse_move(end, MouseButton::Left, gpui::Modifiers::default());
+        visual.simulate_mouse_up(end, MouseButton::Left, gpui::Modifiers::default());
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert!(input.scroll_handle.offset().y < px(0.));
+                assert_eq!(input.selected_range, 0..0);
+                assert!(!input.is_selecting);
+                assert!(!input.scrollbar_state.is_dragging());
             })
             .unwrap();
     }
@@ -1064,14 +1120,19 @@ mod tests {
         });
         let mut visual = draw_and_focus(&window, cx);
 
-        visual.simulate_keystrokes("ctrl-a");
+        let select_all = if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        };
+        visual.simulate_keystrokes(select_all);
         window
             .update(&mut visual.cx, |view, _, cx| {
                 let input = view.state.read(cx);
                 assert_eq!(input.selected_range, 0..input.content.len());
             })
             .unwrap();
-        visual.simulate_keystrokes("ctrl-a");
+        visual.simulate_keystrokes(select_all);
         visual.update(|window, cx| {
             window.draw(cx).clear();
         });

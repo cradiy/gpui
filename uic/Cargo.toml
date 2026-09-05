@@ -18,4 +18,4 @@ uic_macros = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
-gpui_platform = { workspace = true, features = ["wayland"] }
+gpui_platform = { workspace = true, features = ["wayland", "font-kit"] }

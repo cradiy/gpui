@@ -9,6 +9,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Frosted glass](docs/glass.md): strongly blurred panels and mergeable rounded surfaces.
 - [Timed text](docs/timed_text.md): arbitrary character/word timings, gradient
   reveal, grouped lift/scale emphasis, and playback-clock integration.
+- [Color flow](docs/color_flow.md): image-derived flowing light and brightness configuration.
 
 ## Examples
 

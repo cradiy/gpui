@@ -18,6 +18,7 @@ pub mod timed_text_guide {}
 
 mod backdrop;
 mod builtins;
+mod color_flow;
 mod element;
 mod flip;
 mod glass;
@@ -31,6 +32,10 @@ mod timed_text;
 
 pub use backdrop::*;
 pub use builtins::*;
+pub use color_flow::{
+    ColorFlow, ColorFlowOptions, ColorFlowPalette, ColorFlowPaletteColor, color_flow,
+    color_flow_shader,
+};
 pub use element::{Effect, effect, four_image_effect, image_effect, two_image_effect};
 pub use flip::{
     FLIP_APPEARANCE_SLOT, FLIP_BACKGROUND_SLOT, FLIP_INTERACTION_SLOT, FLIP_LAYOUT_SLOT,

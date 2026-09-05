@@ -7,7 +7,7 @@ use gpui::{
     Animation, AnimationExt, App, Context, Image, ImageFormat, Render, Window, WindowOptions, div,
     prelude::*, px,
 };
-use gpui_effects::{album_glow, album_ripples, aurora, color_orbs, plasma};
+use gpui_effects::{album_ripples, aurora, color_flow, color_orbs, plasma};
 use gpui_platform::application;
 
 struct EffectsViewer {
@@ -47,8 +47,8 @@ impl Render for EffectsViewer {
             .bg(gpui::rgb(0x111318))
             .text_color(gpui::white())
             .child(effect_row(
-                "Album flow",
-                album_glow(self.album_cover.clone())
+                "Color flow",
+                color_flow(self.album_cover.clone())
                     .time(elapsed)
                     .size_full()
                     .rounded_xl(),

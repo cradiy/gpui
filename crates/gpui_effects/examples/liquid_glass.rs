@@ -8,14 +8,24 @@ use gpui_platform::application;
 
 const GLASS_WIDTH: f32 = 460.0;
 const GLASS_HEIGHT: f32 = 280.0;
+const SMALL_GLASS_WIDTH: f32 = 128.0;
+const SMALL_GLASS_HEIGHT: f32 = 80.0;
+
+#[derive(Clone, Copy)]
+enum GlassTarget {
+    Large,
+    Small,
+}
 
 struct GlassStudy {
     appearance: LiquidGlassAppearance,
     radius: f32,
     position: Point<Pixels>,
-    drag_offset: Option<Point<Pixels>>,
+    small_position: Point<Pixels>,
+    drag_offset: Option<(GlassTarget, Point<Pixels>)>,
     grid: bool,
     dark_background: bool,
+    edge_tint_on_strength: f32,
 }
 
 impl GlassStudy {
@@ -24,9 +34,11 @@ impl GlassStudy {
             appearance: LiquidGlassAppearance::regular(),
             radius: 40.0,
             position: point(px(480.0), px(245.0)),
+            small_position: point(px(770.0), px(595.0)),
             drag_offset: None,
             grid: true,
             dark_background: false,
+            edge_tint_on_strength: 1.0,
         }
     }
 
@@ -43,99 +55,123 @@ impl GlassStudy {
                 .child(label)
         };
         div()
+            .id("material-controls")
             .absolute()
             .left(px(32.0))
             .top(px(32.0))
             .w(px(300.0))
+            .max_h(gpui::relative(0.92))
+            .overflow_y_scroll()
             .p_5()
             .rounded(px(20.0))
             .bg(rgba(0xf0f4f9f5))
             .text_color(rgb(0x21334a))
             .text_sm()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(
-                div()
-                    .font_weight(FontWeight::BOLD)
-                    .child("LIQUID GLASS / MATERIAL STUDY"),
-            )
-            .child("Drag the glass across the background.")
             .child(
                 div()
                     .flex()
-                    .gap_2()
-                    .children(["Regular", "Clear", "Dark"].into_iter().map(|preset| {
-                        button(preset, preset.into()).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                this.appearance = match preset {
-                                    "Clear" => LiquidGlassAppearance::clear(),
-                                    "Dark" => LiquidGlassAppearance::dark(),
-                                    _ => LiquidGlassAppearance::regular(),
-                                };
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::BOLD)
+                            .child("LIQUID GLASS / MATERIAL STUDY"),
+                    )
+                    .child("Drag the glass across the background.")
+                    .child(div().flex().gap_2().children(
+                        ["Regular", "Clear", "Dark"].into_iter().map(|preset| {
+                            button(preset, preset.into()).on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.appearance = match preset {
+                                        "Clear" => LiquidGlassAppearance::clear(),
+                                        "Dark" => LiquidGlassAppearance::dark(),
+                                        _ => LiquidGlassAppearance::regular(),
+                                    };
+                                    cx.notify();
+                                },
+                            ))
+                        }),
+                    ))
+                    .child(
+                        button(
+                            "border-color-toggle",
+                            if self.appearance.edge_tint_strength > 0.0 {
+                                "Border color: ON".into()
+                            } else {
+                                "Border color: OFF — click to enable".into()
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.appearance.edge_tint_strength > 0.0 {
+                                this.edge_tint_on_strength = this.appearance.edge_tint_strength;
+                                this.appearance.edge_tint_strength = 0.0;
+                            } else {
+                                this.appearance.edge_tint_strength = this.edge_tint_on_strength;
+                            }
+                            cx.notify();
+                        })),
+                    )
+                    .children(Knob::ALL.into_iter().map(|knob| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().child(format!(
+                                "{} {:.2}",
+                                knob.label(),
+                                knob.value(self)
+                            )))
+                            .child(
+                                div()
+                                    .id(("less", knob as usize))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .bg(rgba(0xffffffcc))
+                                    .cursor_pointer()
+                                    .child("−")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        knob.adjust(this, -1.0);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id(("more", knob as usize))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .bg(rgba(0xffffffcc))
+                                    .cursor_pointer()
+                                    .child("+")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        knob.adjust(this, 1.0);
+                                        cx.notify();
+                                    })),
+                            )
+                    }))
+                    .child(
+                        button(
+                            "grid",
+                            format!("Grid: {}", if self.grid { "on" } else { "off" }),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.grid = !this.grid;
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        button("background", "Switch background".into()).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.dark_background = !this.dark_background;
                                 cx.notify();
                             },
-                        ))
-                    })),
-            )
-            .children(Knob::ALL.into_iter().map(|knob| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().flex_1().child(format!(
-                        "{} {:.2}",
-                        knob.label(),
-                        knob.value(self)
-                    )))
-                    .child(
-                        div()
-                            .id(("less", knob as usize))
-                            .px_3()
-                            .py_2()
-                            .rounded_lg()
-                            .bg(rgba(0xffffffcc))
-                            .cursor_pointer()
-                            .child("−")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                knob.adjust(this, -1.0);
-                                cx.notify();
-                            })),
+                        )),
                     )
                     .child(
-                        div()
-                            .id(("more", knob as usize))
-                            .px_3()
-                            .py_2()
-                            .rounded_lg()
-                            .bg(rgba(0xffffffcc))
-                            .cursor_pointer()
-                            .child("+")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                knob.adjust(this, 1.0);
-                                cx.notify();
-                            })),
-                    )
-            }))
-            .child(
-                button(
-                    "grid",
-                    format!("Grid: {}", if self.grid { "on" } else { "off" }),
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.grid = !this.grid;
-                    cx.notify();
-                })),
+                        "Refraction = 0 disables bending.\nDispersion = 0 disables RGB separation.",
+                    ),
             )
-            .child(
-                button("background", "Switch background".into()).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.dark_background = !this.dark_background;
-                        cx.notify();
-                    },
-                )),
-            )
-            .child("Refraction = 0 disables bending.\nDispersion = 0 disables RGB separation.")
     }
 }
 
@@ -147,17 +183,25 @@ enum Knob {
     Thickness,
     Highlight,
     Dispersion,
+    EdgeTint,
+    EdgeWidth,
+    EdgeSampling,
+    EdgeLift,
     Radius,
 }
 
 impl Knob {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 11] = [
         Self::Blur,
         Self::Clarity,
         Self::Refraction,
         Self::Thickness,
         Self::Highlight,
         Self::Dispersion,
+        Self::EdgeTint,
+        Self::EdgeWidth,
+        Self::EdgeSampling,
+        Self::EdgeLift,
         Self::Radius,
     ];
 
@@ -169,6 +213,10 @@ impl Knob {
             Self::Thickness => "Thickness (px)",
             Self::Highlight => "Highlight",
             Self::Dispersion => "Dispersion",
+            Self::EdgeTint => "Border strength",
+            Self::EdgeWidth => "Border width (px)",
+            Self::EdgeSampling => "Border sampling (px)",
+            Self::EdgeLift => "Border brightness",
             Self::Radius => "Corner radius (px)",
         }
     }
@@ -181,6 +229,10 @@ impl Knob {
             Self::Thickness => study.appearance.thickness.as_f32(),
             Self::Highlight => study.appearance.highlight,
             Self::Dispersion => study.appearance.dispersion,
+            Self::EdgeTint => study.appearance.edge_tint_strength,
+            Self::EdgeWidth => study.appearance.edge_tint_width.as_f32(),
+            Self::EdgeSampling => study.appearance.edge_sample_distance.as_f32(),
+            Self::EdgeLift => study.appearance.edge_tint_lift,
             Self::Radius => study.radius,
         }
     }
@@ -188,8 +240,10 @@ impl Knob {
     fn adjust(self, study: &mut GlassStudy, direction: f32) {
         let (step, max) = match self {
             Self::Blur => (1.0, 24.0),
-            Self::Clarity | Self::Highlight => (0.1, 1.0),
-            Self::Refraction => (1.0, 24.0),
+            Self::Clarity | Self::Highlight | Self::EdgeTint | Self::EdgeLift => (0.1, 1.0),
+            Self::EdgeWidth => (1.0, 24.0),
+            Self::EdgeSampling => (2.0, 48.0),
+            Self::Refraction => (0.5, 24.0),
             Self::Thickness => (2.0, 64.0),
             Self::Dispersion => (0.01, 0.1),
             Self::Radius => (8.0, GLASS_HEIGHT * 0.5),
@@ -202,6 +256,10 @@ impl Knob {
             Self::Thickness => study.appearance.thickness = px(value),
             Self::Highlight => study.appearance.highlight = value,
             Self::Dispersion => study.appearance.dispersion = value,
+            Self::EdgeTint => study.appearance.edge_tint_strength = value,
+            Self::EdgeWidth => study.appearance.edge_tint_width = px(2.),
+            Self::EdgeSampling => study.appearance.edge_sample_distance = px(value),
+            Self::EdgeLift => study.appearance.edge_tint_lift = value,
             Self::Radius => study.radius = value,
         }
     }
@@ -235,19 +293,29 @@ impl Render for GlassStudy {
             ))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if event.pressed_button != Some(MouseButton::Left) {
-                    this.drag_offset = None;
+                    if this.drag_offset.take().is_some() {
+                        cx.notify();
+                    }
                     return;
                 }
-                if let Some(offset) = this.drag_offset {
+                if let Some((target, offset)) = this.drag_offset {
                     let viewport = window.viewport_size();
                     let position = event.position - offset;
-                    this.position = point(
+                    let (width, height, target_position) = match target {
+                        GlassTarget::Large => (GLASS_WIDTH, GLASS_HEIGHT, &mut this.position),
+                        GlassTarget::Small => (
+                            SMALL_GLASS_WIDTH,
+                            SMALL_GLASS_HEIGHT,
+                            &mut this.small_position,
+                        ),
+                    };
+                    *target_position = point(
                         position
                             .x
-                            .clamp(px(0.0), (viewport.width - px(GLASS_WIDTH)).max(px(0.0))),
+                            .clamp(px(0.0), (viewport.width - px(width)).max(px(0.0))),
                         position
                             .y
-                            .clamp(px(0.0), (viewport.height - px(GLASS_HEIGHT)).max(px(0.0))),
+                            .clamp(px(0.0), (viewport.height - px(height)).max(px(0.0))),
                     );
                     cx.notify();
                 }
@@ -345,15 +413,19 @@ impl Render for GlassStudy {
                             .blur_radius(px(42.0))
                             .spread_radius(px(-12.0)),
                     ])
-                    .cursor(if self.drag_offset.is_some() {
-                        CursorStyle::ClosedHand
-                    } else {
-                        CursorStyle::OpenHand
-                    })
+                    .cursor(
+                        if matches!(self.drag_offset, Some((GlassTarget::Large, _))) {
+                            CursorStyle::ClosedHand
+                        } else {
+                            CursorStyle::OpenHand
+                        },
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.drag_offset = Some(event.position - this.position);
+                            this.drag_offset =
+                                Some((GlassTarget::Large, event.position - this.position));
+                            cx.stop_propagation();
                             cx.notify();
                         }),
                     )
@@ -370,6 +442,48 @@ impl Render for GlassStudy {
                             .opacity(0.7)
                             .child("The background refracts. This foreground stays sharp."),
                     ),
+            )
+            .child(
+                LiquidGlass::with_appearance(self.appearance)
+                    .id("small-test-glass")
+                    .absolute()
+                    .left(self.small_position.x)
+                    .top(self.small_position.y)
+                    .w(px(SMALL_GLASS_WIDTH))
+                    .h(px(SMALL_GLASS_HEIGHT))
+                    .rounded(px(self.radius))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(if self.appearance.tint.a > 0.2 {
+                        rgb(0xffffff)
+                    } else {
+                        rgb(0x1c3049)
+                    })
+                    .shadow(vec![
+                        gpui::BoxShadow::new(px(0.0), px(8.0), rgba(0x182a4528).into())
+                            .blur_radius(px(20.0))
+                            .spread_radius(px(-4.0)),
+                    ])
+                    .cursor(
+                        if matches!(self.drag_offset, Some((GlassTarget::Small, _))) {
+                            CursorStyle::ClosedHand
+                        } else {
+                            CursorStyle::OpenHand
+                        },
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.drag_offset =
+                                Some((GlassTarget::Small, event.position - this.small_position));
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .child("128 × 80"),
             )
             .child(self.controls(cx))
     }

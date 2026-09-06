@@ -9,6 +9,7 @@ const TINT_SLOT: usize = 1;
 const SURFACE_SLOT: usize = 2;
 const LIGHT_SLOT: usize = 3;
 const CORNERS_SLOT: usize = 4;
+const EDGE_TINT_SLOT: usize = 5;
 
 /// Optical parameters for [`LiquidGlass`]. Layout and foreground styling use [`Styled`].
 #[derive(Clone, Copy, Debug, PartialEq, uic_macros::Chainable)]
@@ -35,6 +36,14 @@ pub struct LiquidGlassAppearance {
     pub edge_shadow: f32,
     /// Width of the fine reflective rim, in logical pixels.
     pub rim_width: Pixels,
+    /// Contribution of nearby background colors to the outline, `0..=1`; disabled by default.
+    pub edge_tint_strength: f32,
+    /// Width of the background-colored outline, in logical pixels; does not affect layout.
+    pub edge_tint_width: Pixels,
+    /// Distance beyond the silhouette used to gather edge colors, in logical pixels.
+    pub edge_sample_distance: Pixels,
+    /// Brightness lift of the sampled border, `0..=1`, preserving its RGB ratios.
+    pub edge_tint_lift: f32,
     /// Direction toward the light; negative x/y points toward the top-left.
     pub light_direction: Point<f32>,
 }
@@ -52,8 +61,12 @@ impl LiquidGlassAppearance {
             saturation: 1.04,
             brightness: 1.0,
             highlight: 0.34,
-            edge_shadow: 0.12,
+            edge_shadow: 0.04,
             rim_width: px(0.8),
+            edge_tint_strength: 0.0,
+            edge_tint_width: px(1.0),
+            edge_sample_distance: px(8.0),
+            edge_tint_lift: 0.35,
             light_direction: point(-0.6, -0.8),
         }
     }
@@ -117,6 +130,15 @@ impl LiquidGlassAppearance {
                     corners.top_right.as_f32() * scale,
                     corners.bottom_right.as_f32() * scale,
                     corners.bottom_left.as_f32() * scale,
+                ],
+            )
+            .with_slot(
+                EDGE_TINT_SLOT,
+                [
+                    self.edge_tint_strength.clamp(0.0, 1.0),
+                    self.edge_tint_width.as_f32().max(0.0) * scale,
+                    self.edge_sample_distance.as_f32().max(0.0) * scale,
+                    self.edge_tint_lift.clamp(0.0, 1.0),
                 ],
             )
     }
@@ -251,6 +273,10 @@ mod tests {
             .thickness(px(12.0))
             .rim_width(px(0.5))
             .dispersion(0.03)
+            .edge_tint_strength(0.6)
+            .edge_tint_width(px(3.0))
+            .edge_sample_distance(px(10.0))
+            .edge_tint_lift(0.4)
             .light_direction(point(0.4, -0.8));
         let corners = Corners {
             top_left: px(1.0),
@@ -262,7 +288,8 @@ mod tests {
         assert_eq!(uniforms.slots()[OPTICS_SLOT], [1.04, 1.0, 10.0, 24.0]);
         assert_eq!(uniforms.slots()[LIGHT_SLOT], [0.4, -0.8, 1.0, 0.0]);
         assert_eq!(uniforms.slots()[CORNERS_SLOT], [2.0, 4.0, 6.0, 8.0]);
-        assert_eq!(uniforms.slots()[SURFACE_SLOT], [0.34, 0.12, 0.03, 0.78]);
+        assert_eq!(uniforms.slots()[SURFACE_SLOT], [0.34, 0.04, 0.03, 0.78]);
+        assert_eq!(uniforms.slots()[EDGE_TINT_SLOT], [0.6, 6.0, 20.0, 0.4]);
     }
 
     #[test]
@@ -273,9 +300,61 @@ mod tests {
             .highlight(-1.0)
             .edge_shadow(2.0)
             .refraction(px(-2.0))
+            .edge_tint_strength(2.0)
+            .edge_tint_width(px(-3.0))
+            .edge_sample_distance(px(-5.0))
+            .edge_tint_lift(2.0)
             .uniforms(Corners::default(), 1.0);
         assert_eq!(uniforms.slots()[SURFACE_SLOT], [0.0, 1.0, 0.1, 1.0]);
         assert_eq!(uniforms.slots()[OPTICS_SLOT][2], 0.0);
+        assert_eq!(uniforms.slots()[EDGE_TINT_SLOT], [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn edge_tint_can_be_disabled_without_changing_other_optics() {
+        let appearance = LiquidGlassAppearance::default().edge_tint_strength(0.45);
+        let original = appearance.uniforms(Corners::default(), 1.0);
+        let disabled = appearance
+            .edge_tint_strength(0.0)
+            .uniforms(Corners::default(), 1.0);
+        assert_eq!(disabled.slots()[EDGE_TINT_SLOT][0], 0.0);
+        assert_eq!(
+            original.slots()[..EDGE_TINT_SLOT],
+            disabled.slots()[..EDGE_TINT_SLOT]
+        );
+    }
+
+    #[test]
+    fn edge_tint_is_opt_in_for_all_presets() {
+        for appearance in [
+            LiquidGlassAppearance::default(),
+            LiquidGlassAppearance::regular(),
+            LiquidGlassAppearance::clear(),
+            LiquidGlassAppearance::dark(),
+        ] {
+            assert_eq!(appearance.edge_tint_strength, 0.0);
+            assert_eq!(
+                appearance.uniforms(Corners::default(), 1.0).slots()[EDGE_TINT_SLOT][0],
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn tinted_border_preserves_preset_refraction() {
+        for (preset, refraction, thickness) in [
+            (LiquidGlassAppearance::regular(), px(7.0), px(16.0)),
+            (LiquidGlassAppearance::clear(), px(6.0), px(12.0)),
+            (LiquidGlassAppearance::dark(), px(7.0), px(16.0)),
+        ] {
+            let configured = preset.edge_tint_strength(0.75).edge_tint_lift(0.5);
+            assert_eq!(configured.refraction, refraction);
+            assert_eq!(configured.thickness, thickness);
+            assert_eq!(
+                configured.uniforms(Corners::default(), 1.0).slots()[OPTICS_SLOT],
+                preset.uniforms(Corners::default(), 1.0).slots()[OPTICS_SLOT],
+            );
+        }
     }
 
     #[test]

@@ -1,18 +1,14 @@
-fn flow_hash(p: vec2<f32>) -> f32 {
-    let q = fract(p * vec2<f32>(123.34, 456.21));
-    let r = q + dot(q, q + vec2<f32>(45.32));
-    return fract(r.x * r.y);
-}
-
-fn flow_noise(p: vec2<f32>) -> f32 {
-    let cell = floor(p);
-    let f = fract(p);
-    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    return mix(
-        mix(flow_hash(cell), flow_hash(cell + vec2<f32>(1.0, 0.0)), u.x),
-        mix(flow_hash(cell + vec2<f32>(0.0, 1.0)), flow_hash(cell + vec2<f32>(1.0)), u.x),
-        u.y,
+fn flow_warp(p: vec2<f32>, time: f32, seed: f32) -> vec2<f32> {
+    let phase = seed * 6.283185;
+    let broad = vec2<f32>(
+        sin(dot(p, vec2<f32>(1.7, 2.3)) + time * 0.17 + phase),
+        cos(dot(p, vec2<f32>(-2.1, 1.3)) - time * 0.13 + phase * 0.73),
     );
+    let bend = vec2<f32>(
+        sin(dot(p, vec2<f32>(-2.6, 1.8)) - time * 0.23 + broad.y * 0.65),
+        cos(dot(p, vec2<f32>(1.9, 2.7)) + time * 0.19 + broad.x * 0.65),
+    );
+    return broad * 0.32 + bend * 0.18;
 }
 
 // Sixteen stratified samples are grouped by tone before averaging, so bright
@@ -114,11 +110,7 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
     let metric = vec2<f32>(max(aspect, 1.0), max(1.0 / max(aspect, 0.001), 1.0));
     let p = (input.uv - vec2<f32>(0.5)) * metric;
     let time = input.time;
-    // Broad, advected noise bends the color volumes without narrow wave crests.
-    let warp = vec2<f32>(
-        flow_noise(p * 1.25 + vec2<f32>(time * 0.19, -time * 0.13) + seed),
-        flow_noise(p * 1.25 + vec2<f32>(-time * 0.16, time * 0.17) + seed + 19.7),
-    ) - vec2<f32>(0.5);
+    let warp = flow_warp(p, time, seed);
     let point = p + warp * 0.42 * flow_scale * motion;
     // The group drifts gently as one body. Local stirring is independent of
     // drift, so reducing travel does not stop colors from mixing internally.

@@ -19,6 +19,21 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [SDF shapes](docs/sdf.md): Boolean geometry, smooth blending, outlines and edge light.
 - [Holographic material](docs/holographic.md): surface normals, directional lighting and foil reflections.
 
+## Local deformation
+
+`subtree_deformation` applies a smooth local displacement to text, images and
+other painted descendants. `DeformationOptions` controls the normalized capture
+anchor, influence radius and translation. Translation is limited to 35% of the
+radius to prevent folded content.
+
+`ElasticOffset` supplies an independent, caller-clocked spring: hold a translation
+with `drag_to`, call `release`, and advance the return with `advance`. Frequency
+and damping are configurable through `spring`.
+
+Use `EffectStage::deformation` to compose deformation with other subtree effects.
+Layout and child hit regions remain unchanged; leave transparent space around
+the content for displaced edges.
+
 ## Examples
 
 Run the frosted-glass example from the workspace root:
@@ -88,6 +103,12 @@ Run the interactive foil-material example:
 
 ```sh
 cargo run -p gpui_effects --example holographic
+```
+
+Run the draggable elastic-card example:
+
+```sh
+cargo run -p gpui_effects --example deformation
 ```
 
 ## License

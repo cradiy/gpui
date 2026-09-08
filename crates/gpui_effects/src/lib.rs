@@ -25,6 +25,7 @@ mod backdrop;
 mod bloom;
 mod builtins;
 mod color_flow;
+mod deformation;
 mod effect_stage;
 mod element;
 mod feedback;
@@ -56,6 +57,7 @@ pub use color_flow::{
     ColorFlow, ColorFlowOptions, ColorFlowPalette, ColorFlowPaletteColor, color_flow,
     color_flow_shader,
 };
+pub use deformation::{DeformationOptions, ElasticOffset, deformation_shader, subtree_deformation};
 pub use effect_stage::EffectStage;
 pub use element::{Effect, effect, four_image_effect, image_effect, two_image_effect};
 pub use feedback::{Feedback, FeedbackOptions, feedback_shader, subtree_feedback};

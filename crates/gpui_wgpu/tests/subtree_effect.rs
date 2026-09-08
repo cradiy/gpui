@@ -10,6 +10,8 @@ use gpui::{
 use gpui_effects::{subtree_blur_shader, subtree_color_adjust_shader, subtree_wave_shader};
 use gpui_wgpu::WgpuOffscreenRenderer;
 
+#[path = "support/deformation.rs"]
+mod deformation;
 #[path = "support/feedback.rs"]
 mod feedback;
 #[path = "support/fluid.rs"]
@@ -135,7 +137,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     sdf::check(&mut renderer)?;
     path_motion::check(&mut renderer)?;
     holographic::check(&mut renderer)?;
-    path_morph::check(&mut renderer)
+    path_morph::check(&mut renderer)?;
+    deformation::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(

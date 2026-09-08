@@ -20,6 +20,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Holographic material](docs/holographic.md): surface normals, directional lighting and foil reflections.
 - [Contour light](docs/contour_glow.md): alpha-contour distance fields and edge-focused glow.
 - [Contour relief](docs/contour_relief.md): raised and recessed bevels with directional lighting.
+- [Contour shadow](docs/contour_shadow.md): directional soft shadows following text and image silhouettes.
 
 ## Local deformation
 
@@ -129,6 +130,12 @@ Run the pointer-lit relief comparison:
 
 ```sh
 cargo run -p gpui_effects --example contour_relief
+```
+
+Run the pointer-lit contour-shadow example:
+
+```sh
+cargo run -p gpui_effects --example contour_shadow
 ```
 
 ## License

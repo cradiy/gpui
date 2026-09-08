@@ -14,6 +14,8 @@ use gpui_wgpu::WgpuOffscreenRenderer;
 mod contour_glow;
 #[path = "support/contour_relief.rs"]
 mod contour_relief;
+#[path = "support/contour_shadow.rs"]
+mod contour_shadow;
 #[path = "support/deformation.rs"]
 mod deformation;
 #[path = "support/feedback.rs"]
@@ -147,7 +149,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     path_morph::check(&mut renderer)?;
     deformation::check(&mut renderer)?;
     contour_glow::check(&mut renderer)?;
-    contour_relief::check(&mut renderer)
+    contour_relief::check(&mut renderer)?;
+    contour_shadow::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(

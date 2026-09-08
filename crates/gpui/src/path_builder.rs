@@ -133,12 +133,15 @@ impl PathBuilder {
     /// Retains transformed geometry with cached arc-length measurements.
     /// Stroke/fill style and dash settings are not retained.
     pub fn measure(self) -> crate::MeasuredPath {
-        let path = if let Some(transform) = self.transform {
+        crate::MeasuredPath::from_path(self.into_geometry())
+    }
+
+    pub(crate) fn into_geometry(self) -> lyon::path::Path {
+        if let Some(transform) = self.transform {
             self.raw.build().transformed(&transform)
         } else {
             self.raw.build()
-        };
-        crate::MeasuredPath::from_path(path)
+        }
     }
 
     /// Move the current point to the given point.

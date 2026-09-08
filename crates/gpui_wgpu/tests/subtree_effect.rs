@@ -20,6 +20,8 @@ mod holographic;
 mod particles;
 #[path = "support/path_motion.rs"]
 mod path_motion;
+#[path = "support/path_morph.rs"]
+mod path_morph;
 #[path = "support/sdf.rs"]
 mod sdf;
 
@@ -132,7 +134,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     fluid::check(&mut renderer)?;
     sdf::check(&mut renderer)?;
     path_motion::check(&mut renderer)?;
-    holographic::check(&mut renderer)
+    holographic::check(&mut renderer)?;
+    path_morph::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(

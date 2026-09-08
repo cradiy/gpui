@@ -111,14 +111,13 @@ each stroke call tessellates its current visible geometry. Cache the finished
 `Path` as well when the stroke is static.
 
 Normal GPUI path rendering applies device scale, parent clipping and opacity.
-A canvas painting these paths can feed a subtree effect chain such as Bloom.
 
 ## Example
 
 ```sh
-cargo run -p gpui_effects --example path_motion
+cargo run -p gpui --example path_motion
 ```
 
 Reveal draws a growing stroke, Travel moves a tangent-aligned marker by distance,
 and Dashes scrolls a repeating pattern. Controls provide pause/resume, speed,
-reverse, Bloom and replay.
+reverse and replay.

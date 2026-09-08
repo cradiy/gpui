@@ -47,6 +47,9 @@ cargo run -p gpui --example hello_world
 - `image_gallery` demonstrates image caching and loading remote images.
 - `image_loading` shows image loading states and asset loading.
 - `painting` demonstrates custom drawing with paths and canvas.
+- [`path_motion`](../docs/path_motion.md) demonstrates stroke reveal, motion along a path,
+  and flowing dashes.
+- [`path_morph`](../docs/path_morph.md) demonstrates continuous vector-shape transitions.
 - `svg` shows SVG rendering.
 
 ## Windows and application behavior

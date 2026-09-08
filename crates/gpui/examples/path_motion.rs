@@ -3,7 +3,6 @@ use gpui::{
     StrokeOptions, Window, WindowBounds, WindowOptions, canvas, div, point, prelude::*, px, quad,
     rgb, size,
 };
-use gpui_effects::{BloomOptions, EffectStage, subtree_effect_chain};
 use gpui_platform::application;
 use std::{cell::RefCell, rc::Rc, time::Instant};
 
@@ -45,7 +44,6 @@ struct PathPreview {
     paused: bool,
     reverse: bool,
     speed: f64,
-    bloom: bool,
 }
 
 impl PathPreview {
@@ -57,7 +55,6 @@ impl PathPreview {
             paused: false,
             reverse: false,
             speed: 1.,
-            bloom: true,
         }
     }
 
@@ -167,17 +164,6 @@ impl PathPreview {
             },
         )
         .size_full();
-        let surface = subtree_effect_chain(
-            source,
-            [EffectStage::bloom(BloomOptions {
-                threshold: 0.35,
-                intensity: 0.8,
-                radius: px(12.),
-                ..Default::default()
-            })
-            .enabled(self.bloom)],
-        )
-        .capture_padding(px(16.));
         let labels = [
             ("01", "Reveal", "Draw by arc length"),
             ("02", "Travel", "120 px/s · Tangent aligned"),
@@ -212,7 +198,7 @@ impl PathPreview {
                     )
                     .child(div().text_xs().text_color(rgb(0x7f8fa9)).child(caption)),
             )
-            .child(div().w_full().flex_1().min_h_0().child(surface))
+            .child(div().w_full().flex_1().min_h_0().child(source))
     }
 }
 
@@ -312,12 +298,6 @@ impl Render for PathPreview {
                                     cx.notify();
                                 }),
                             ))
-                            .child(button("bloom", "Bloom", self.bloom).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.bloom = !this.bloom;
-                                    cx.notify();
-                                },
-                            )))
                             .child(button("replay", "Replay", false).on_click(cx.listener(
                                 |this, _, _, cx| {
                                     this.seconds = 0.;

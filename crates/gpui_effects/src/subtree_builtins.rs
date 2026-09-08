@@ -1,6 +1,6 @@
 use gpui::{EffectShader, IntoElement, Pixels, px};
 
-use crate::{EffectStage, SubtreeEffect, subtree_effect, subtree_effect_chain};
+use crate::{EffectStage, SubtreeEffect, subtree_effect_chain};
 
 /// Wave displacement in logical pixels, driven by `SubtreeEffect::time`.
 #[derive(Clone, Copy, Debug)]
@@ -46,7 +46,7 @@ impl Default for SubtreeColorOptions {
 
 /// Captures content with an identity image shader.
 pub fn subtree_identity<E: IntoElement>(element: E) -> SubtreeEffect<E::Element> {
-    subtree_effect(element, subtree_identity_shader())
+    subtree_effect_chain(element, [EffectStage::identity()])
 }
 
 /// Applies a compact 7 × 7 Gaussian blur with a logical-pixel support radius.
@@ -73,7 +73,7 @@ pub fn subtree_color_adjust<E: IntoElement>(
 impl EffectStage {
     /// Preserves the input pixels.
     pub fn identity() -> Self {
-        Self::new(subtree_identity_shader())
+        Self::new(subtree_identity_shader()).pointer_transform(gpui::PointerTransform::identity())
     }
 
     /// Compact Gaussian blur. Radius is in logical pixels; zero preserves pixels.
@@ -81,6 +81,7 @@ impl EffectStage {
         let radius = radius.max(px(0.));
         Self::new(subtree_blur_shader())
             .uniform_pixels(0, [radius, px(0.), px(0.), px(0.)])
+            .pointer_transform(gpui::PointerTransform::identity())
             .capture_padding(radius)
     }
 
@@ -98,15 +99,17 @@ impl EffectStage {
 
     /// Saturation, contrast and brightness adjustment that preserves alpha.
     pub fn color_adjust(options: SubtreeColorOptions) -> Self {
-        Self::new(subtree_color_adjust_shader()).uniform(
-            0,
-            [
-                options.saturation.max(0.),
-                options.contrast.max(0.),
-                options.brightness.max(0.),
-                0.,
-            ],
-        )
+        Self::new(subtree_color_adjust_shader())
+            .uniform(
+                0,
+                [
+                    options.saturation.max(0.),
+                    options.contrast.max(0.),
+                    options.brightness.max(0.),
+                    0.,
+                ],
+            )
+            .pointer_transform(gpui::PointerTransform::identity())
     }
 }
 

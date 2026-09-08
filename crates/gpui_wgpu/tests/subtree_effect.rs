@@ -26,6 +26,8 @@ mod feedback;
 mod fluid;
 #[path = "support/holographic.rs"]
 mod holographic;
+#[path = "support/interaction_mapping.rs"]
+mod interaction_mapping;
 #[path = "support/particle_mask.rs"]
 mod particle_mask;
 #[path = "support/particle_transition.rs"]
@@ -153,6 +155,7 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     holographic::check(&mut renderer)?;
     path_morph::check(&mut renderer)?;
     deformation::check(&mut renderer)?;
+    interaction_mapping::check(&mut renderer)?;
     displacement_map::check(&mut renderer)?;
     contour_glow::check(&mut renderer)?;
     contour_relief::check(&mut renderer)?;

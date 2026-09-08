@@ -40,6 +40,7 @@ impl StageImages {
 /// One configurable image-processing stage in a subtree effect chain.
 #[derive(Clone, Debug)]
 pub struct EffectStage {
+    pub(crate) pointer_transform: Option<gpui::PointerTransform>,
     pub(crate) images: StageImages,
     pub(crate) shader: EffectShader,
     pub(crate) uniforms: EffectUniforms,
@@ -61,6 +62,7 @@ impl EffectStage {
             "effect stages require a single-image shader"
         );
         Self {
+            pointer_transform: None,
             images: StageImages::default(),
             shader,
             uniforms: EffectUniforms::default(),
@@ -95,21 +97,34 @@ impl EffectStage {
     }
 
     /// Replaces all uniforms, removing logical-pixel conversion.
+    ///
+    /// Clears the pointer transform; supply it again after setting shader parameters.
     pub fn uniforms(mut self, uniforms: EffectUniforms) -> Self {
+        self.pointer_transform = None;
         self.uniforms = uniforms;
         self.pixel_uniform_slots.fill(false);
         self
     }
 
-    /// Sets a raw uniform slot.
+    /// Supplies the displayed-to-source mapping used when interaction mapping is enabled.
+    /// The callback must match the shader and its parameters. Use identity for unchanged geometry.
+    pub fn pointer_transform(mut self, transform: gpui::PointerTransform) -> Self {
+        self.pointer_transform = Some(transform);
+        self
+    }
+
+    /// Sets a raw uniform slot and clears the pointer transform.
     pub fn uniform(mut self, index: usize, value: [f32; 4]) -> Self {
+        self.pointer_transform = None;
         self.uniforms.set_slot(index, value);
         self.pixel_uniform_slots[index] = false;
         self
     }
 
     /// Sets a slot in logical pixels, converted using the current window scale.
+    /// Clears the pointer transform.
     pub fn uniform_pixels(mut self, index: usize, value: [Pixels; 4]) -> Self {
+        self.pointer_transform = None;
         self.uniforms.set_slot(index, value.map(f32::from));
         self.pixel_uniform_slots[index] = true;
         self

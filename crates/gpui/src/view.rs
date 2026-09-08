@@ -287,6 +287,7 @@ struct ViewElementCacheKey {
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
     subtree_effect: bool,
+    pointer_mapping: crate::PointerMapping,
 }
 
 impl<V: View> Element for ViewElement<V> {
@@ -383,6 +384,7 @@ impl<V: View> Element for ViewElement<V> {
                             && element_state.cache_key.content_mask == content_mask
                             && element_state.cache_key.text_style == text_style
                             && element_state.cache_key.subtree_effect == subtree_effect
+                            && element_state.cache_key.pointer_mapping == window.pointer_mapping
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
                         {
@@ -424,6 +426,7 @@ impl<V: View> Element for ViewElement<V> {
                                     content_mask,
                                     text_style,
                                     subtree_effect,
+                                    pointer_mapping: window.pointer_mapping.clone(),
                                 },
                             },
                         )

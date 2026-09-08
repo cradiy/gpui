@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui::{EffectShader, IntoElement, Pixels, Point, point, px};
+use gpui::{Bounds, EffectShader, IntoElement, Pixels, Point, PointerTransform, point, px};
 
 use crate::{EffectStage, SubtreeEffect, subtree_effect_chain};
 
@@ -36,6 +36,37 @@ fn finite_offset(offset: Point<Pixels>) -> Point<f32> {
 }
 
 impl DeformationOptions {
+    /// Maps a displayed point to its source position using the bounded deformation.
+    pub fn source_position(
+        &self,
+        position: Point<Pixels>,
+        bounds: Bounds<Pixels>,
+    ) -> Point<Pixels> {
+        let radius = f32::from(self.radius);
+        let center = point(
+            self.center.x * f32::from(bounds.size.width),
+            self.center.y * f32::from(bounds.size.height),
+        );
+        let destination = (position - bounds.origin).map(f32::from);
+        if !radius.is_finite()
+            || radius <= 0.
+            || !center.x.is_finite()
+            || !center.y.is_finite()
+            || (destination.x - center.x).hypot(destination.y - center.y) >= radius
+        {
+            return position;
+        }
+        let offset = self.constrained_offset().map(f32::from);
+        let mut source = destination;
+        for _ in 0..24 {
+            let x = (source.x - center.x) / radius;
+            let y = (source.y - center.y) / radius;
+            let weight = (1. - x * x - y * y).max(0.).powi(3);
+            source = destination - offset * weight;
+        }
+        bounds.origin + source.map(px)
+    }
+
     /// Returns the bounded translation used by the renderer.
     pub fn constrained_offset(&self) -> Point<Pixels> {
         let offset = finite_offset(self.offset);
@@ -53,7 +84,8 @@ impl DeformationOptions {
 }
 
 impl EffectStage {
-    /// Deforms pixels without changing layout, accessibility or child hit regions.
+    /// Deforms pixels without changing layout or accessibility. Pointer mapping is opt-in
+    /// through [`SubtreeEffect::map_interaction`].
     /// The caller supplies pointer input and animation time. Invalid anchors or
     /// radii, and zero offsets, disable the stage.
     pub fn deformation(options: DeformationOptions) -> Self {
@@ -67,6 +99,9 @@ impl EffectStage {
         Self::new(deformation_shader())
             .uniform(0, [options.center.x, options.center.y, 0., 0.])
             .uniform_pixels(1, [offset.x, offset.y, options.radius, px(0.)])
+            .pointer_transform(PointerTransform::new(move |position, bounds, _| {
+                options.source_position(position, bounds)
+            }))
             .enabled(enabled)
     }
 }

@@ -23,6 +23,7 @@ pub fn subtree_effect_chain<E: IntoElement>(
     );
     effect.first_stage_enabled = first.is_some();
     if let Some(stage) = first {
+        effect.pointer_transform = stage.pointer_transform;
         effect.shader = stage.shader;
         effect.images = stage.images;
         effect.uniforms = stage.uniforms;
@@ -50,10 +51,12 @@ where
 
 /// An element wrapper that composites its children through an offscreen texture.
 ///
-/// Layout, accessibility and hit testing use the wrapped element's coordinates.
-/// Shader displacement affects pixels only. Unsupported platforms draw the
+/// Layout and accessibility use the wrapped element's coordinates. Pointer mapping
+/// is opt-in through [`Self::map_interaction`]. Unsupported platforms draw the
 /// wrapped element normally. Check `Window::supports_subtree_effects` for support.
 pub struct SubtreeEffect<E: Element> {
+    pointer_transform: Option<gpui::PointerTransform>,
+    map_interaction: bool,
     images: crate::effect_stage::StageImages,
     element: E,
     shader: EffectShader,
@@ -80,6 +83,8 @@ impl<E: Element> SubtreeEffect<E> {
             "subtree effects require a single-image shader"
         );
         Self {
+            pointer_transform: None,
+            map_interaction: false,
             images: Default::default(),
             element,
             shader,
@@ -99,22 +104,26 @@ impl<E: Element> SubtreeEffect<E> {
         }
     }
 
-    /// Replaces all uniform slots of the first stage.
+    /// Replaces all uniform slots of the first stage and clears its pointer transform.
     pub fn uniforms(mut self, uniforms: EffectUniforms) -> Self {
+        self.pointer_transform = None;
         self.uniforms = uniforms;
         self.pixel_uniform_slots.fill(false);
         self
     }
 
-    /// Sets one four-component uniform slot of the first stage.
+    /// Sets one four-component uniform slot of the first stage and clears its pointer transform.
     pub fn uniform(mut self, index: usize, value: [f32; 4]) -> Self {
+        self.pointer_transform = None;
         self.uniforms.set_slot(index, value);
         self.pixel_uniform_slots[index] = false;
         self
     }
 
     /// Sets a logical-pixel slot of the first stage, converted at paint time.
+    /// Clears its pointer transform.
     pub fn uniform_pixels(mut self, index: usize, value: [Pixels; 4]) -> Self {
+        self.pointer_transform = None;
         self.uniforms.set_slot(index, value.map(f32::from));
         self.pixel_uniform_slots[index] = true;
         self
@@ -134,9 +143,55 @@ impl<E: Element> SubtreeEffect<E> {
     }
 
     /// Sets the animation time supplied to every stage.
+    /// Custom pointer transforms must use the same clock as their shader.
     pub fn time(mut self, time: f32) -> Self {
         self.time = time;
         self
+    }
+
+    /// Aligns pointer hit testing and event positions with the effect chain.
+    /// Disabled by default. Keyboard focus and layout are unchanged.
+    ///
+    /// # Panics
+    /// Rendering on a supported backend panics if an enabled stage lacks a pointer
+    /// transform or uses external images.
+    pub fn map_interaction(mut self, enabled: bool) -> Self {
+        self.map_interaction = enabled;
+        self
+    }
+
+    fn interaction_transform(&self) -> Option<gpui::PointerTransform> {
+        if !self.enabled || !self.map_interaction {
+            return None;
+        }
+        let mut transforms = Vec::new();
+        if self.first_stage_enabled {
+            assert!(
+                self.images.0.is_empty(),
+                "external image stages do not support interaction mapping"
+            );
+            transforms.push(
+                self.pointer_transform
+                    .clone()
+                    .expect("interaction mapping requires a transform for each enabled stage"),
+            );
+        }
+        for stage in &self.following_stages {
+            assert!(
+                stage.images.0.is_empty(),
+                "external image stages do not support interaction mapping"
+            );
+            transforms.push(
+                stage
+                    .pointer_transform
+                    .clone()
+                    .expect("interaction mapping requires a transform for each enabled stage"),
+            );
+        }
+        if transforms.is_empty() {
+            return None;
+        }
+        Some(gpui::PointerTransform::chain(transforms))
     }
 
     /// Appends a stage without capturing the element again.
@@ -238,10 +293,21 @@ impl<E: Element> Element for SubtreeEffect<E> {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        let transform = window
+            .supports_subtree_effects()
+            .then(|| self.interaction_transform())
+            .flatten();
         if self.enabled && (self.first_stage_enabled || !self.following_stages.is_empty()) {
             window.prepaint_subtree_effect(|window| {
-                self.element
-                    .prepaint(id, inspector_id, bounds, request_layout, window, cx)
+                let mut paint = |window: &mut Window| {
+                    self.element
+                        .prepaint(id, inspector_id, bounds, request_layout, window, cx)
+                };
+                if let Some(transform) = transform {
+                    window.with_pointer_transform(bounds.dilate(self.padding), transform, paint)
+                } else {
+                    paint(window)
+                }
             })
         } else {
             self.element
@@ -321,16 +387,27 @@ impl<E: Element> Element for SubtreeEffect<E> {
         {
             window.request_animation_frame();
         }
+        let transform = window
+            .supports_subtree_effects()
+            .then(|| self.interaction_transform())
+            .flatten();
         window.with_subtree_effect_chain(bounds.dilate(self.padding), &passes, opacity, |window| {
-            self.element.paint(
-                id,
-                inspector_id,
-                bounds,
-                request_layout,
-                prepaint,
-                window,
-                cx,
-            );
+            let mut paint = |window: &mut Window| {
+                self.element.paint(
+                    id,
+                    inspector_id,
+                    bounds,
+                    request_layout,
+                    prepaint,
+                    window,
+                    cx,
+                )
+            };
+            if let Some(transform) = transform {
+                window.with_pointer_transform(bounds.dilate(self.padding), transform, paint)
+            } else {
+                paint(window)
+            }
         });
     }
 }
@@ -365,6 +442,33 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_mapping_reverses_only_enabled_stages() {
+        use gpui::{PointerTransform, point, size};
+        let translate = || {
+            EffectStage::identity()
+                .pointer_transform(PointerTransform::new(|p, _, _| p - point(px(20.), px(0.))))
+        };
+        let effect = subtree_effect_chain(
+            gpui::div(),
+            [
+                translate(),
+                translate().enabled(false),
+                EffectStage::identity().pointer_transform(PointerTransform::new(|p, _, _| p / 2.)),
+            ],
+        )
+        .map_interaction(true);
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(200.), px(100.)));
+        assert_eq!(
+            effect
+                .interaction_transform()
+                .unwrap()
+                .map(point(px(100.), px(40.)), bounds, 1.),
+            point(px(30.), px(20.))
+        );
+        assert!(effect.enabled(false).interaction_transform().is_none());
+    }
 
     #[test]
     fn chains_omit_disabled_stages_and_accumulate_padding() {

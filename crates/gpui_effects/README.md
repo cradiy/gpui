@@ -14,6 +14,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [History feedback](docs/feedback.md): persistent trails, time-based decay and playback controls.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
+- [Interaction mapping](docs/interaction_mapping.md): pointer hit testing and dragging in deformed content.
 - [Displacement maps](docs/displacement_map.md): external RG maps, local masks and texture-driven distortion.
 - [GPU particles](docs/particles.md): light points, streaks, interactive forces and alpha-mask emission.
 - [Particle transition](docs/particle_transition.md): reversible scattering and gathering of text and images.
@@ -36,8 +37,8 @@ with `drag_to`, call `release`, and advance the return with `advance`. Frequency
 and damping are configurable through `spring`.
 
 Use `EffectStage::deformation` to compose deformation with other subtree effects.
-Layout and child hit regions remain unchanged; leave transparent space around
-the content for displaced edges.
+Layout remains unchanged. Enable `.map_interaction(true)` to align child pointer
+targets with the deformation. Leave transparent space around the content for displaced edges.
 
 ## Examples
 
@@ -84,6 +85,12 @@ Run the pointer-following lens example:
 
 ```sh
 cargo run -p gpui_effects --example lens
+```
+
+Run the mapped button and slider example:
+
+```sh
+cargo run -p gpui_effects --example interaction_mapping
 ```
 
 Run the interactive particle example:

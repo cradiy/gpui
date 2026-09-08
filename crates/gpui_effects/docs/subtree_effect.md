@@ -187,10 +187,11 @@ uses premultiplied colors internally to preserve transparent edges.
 When averaging samples for blur, accumulate `sample.rgb * sample.a` and alpha
 separately, then divide the accumulated RGB by the accumulated alpha.
 
-Parent clipping still applies. Layout, accessibility and pointer hit testing
-retain their original coordinates. Shader displacement changes visual pixels;
-it does not relocate interactive targets. Deferred overlays are painted outside
-the capture.
+Parent clipping still applies. Layout and accessibility retain their original
+coordinates. Pointer hit testing uses the original coordinates by default;
+`.map_interaction(true)` enables source-coordinate mapping for supported stages.
+See [Interaction mapping](interaction_mapping.md). Deferred overlays are painted
+outside the capture and are not mapped.
 
 Nested captures are supported. Backdrop effects inside a capture sample earlier
 content within that capture. Text uses grayscale antialiasing on the transparent

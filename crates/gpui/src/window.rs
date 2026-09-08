@@ -677,6 +677,8 @@ impl HitboxId {
 /// See [Window::insert_hitbox] for more details.
 #[derive(Clone, Debug, Deref)]
 pub struct Hitbox {
+    /// Mapping from displayed coordinates into this hitbox's coordinate scope.
+    pub pointer_mapping: crate::PointerMapping,
     /// A unique identifier for the hitbox.
     pub id: HitboxId,
     /// The bounds of the hitbox.
@@ -939,9 +941,19 @@ impl Frame {
     pub(crate) fn hit_test(&self, position: Point<Pixels>) -> HitTest {
         let mut set_hover_hitbox_count = false;
         let mut hit_test = HitTest::default();
+        let mut mapped_scope: Option<(&crate::PointerMapping, Option<Point<Pixels>>)> = None;
         for hitbox in self.hitboxes.iter().rev() {
             let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-            if bounds.contains(&position) {
+            let mapped = if let Some((scope, mapped)) = mapped_scope
+                && *scope == hitbox.pointer_mapping
+            {
+                mapped
+            } else {
+                let mapped = hitbox.pointer_mapping.hit_position(position);
+                mapped_scope = Some((&hitbox.pointer_mapping, mapped));
+                mapped
+            };
+            if mapped.is_some_and(|position| bounds.contains(&position)) {
                 hit_test.ids.push(hitbox.id);
                 if !set_hover_hitbox_count
                     && hitbox.behavior == HitboxBehavior::BlockMouseExceptScroll
@@ -1040,6 +1052,7 @@ pub struct Window {
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
     default_prevented: bool,
     mouse_position: Point<Pixels>,
+    pub(crate) pointer_mapping: crate::PointerMapping,
     mouse_hit_test: HitTest,
     modifiers: Modifiers,
     capslock: Capslock,
@@ -1769,6 +1782,7 @@ impl Window {
             last_input_modality: InputModality::Mouse,
             refreshing: false,
             prepainting_subtree_effect: false,
+            pointer_mapping: Default::default(),
             activation_observers: SubscriberSet::new(),
             focus: None,
             focus_enabled: true,
@@ -2802,9 +2816,39 @@ impl Window {
             .is_action_available(action, node_id)
     }
 
-    /// The position of the mouse relative to the window.
+    /// The position of the mouse relative to the window, in the current pointer scope.
+    /// Mapped mouse listeners receive source coordinates; use [`Self::raw_mouse_position`]
+    /// for displayed window coordinates.
     pub fn mouse_position(&self) -> Point<Pixels> {
+        self.pointer_mapping.map(self.mouse_position)
+    }
+
+    /// Pointer position in displayed window coordinates, outside any inverse mapping.
+    pub fn raw_mouse_position(&self) -> Point<Pixels> {
         self.mouse_position
+    }
+
+    /// Scopes hitbox insertion and mouse listeners to a displayed-to-source mapping.
+    /// Use the same transform around both prepaint and paint. Layout and drawing are unchanged.
+    pub fn with_pointer_transform<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        transform: crate::PointerTransform,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let bounds = self
+            .snap_bounds(bounds)
+            .map(|value| px(value.0 / self.scale_factor()));
+        let mapping = self.pointer_mapping.then(
+            bounds,
+            self.content_mask().bounds,
+            self.scale_factor(),
+            transform,
+        );
+        let previous = mem::replace(&mut self.pointer_mapping, mapping);
+        let result = f(self);
+        self.pointer_mapping = previous;
+        result
     }
 
     /// Captures the pointer for the given hitbox. While captured, all mouse move and mouse up
@@ -5274,6 +5318,7 @@ impl Window {
         let mut id = self.next_hitbox_id;
         self.next_hitbox_id = self.next_hitbox_id.next();
         let hitbox = Hitbox {
+            pointer_mapping: self.pointer_mapping.clone(),
             id,
             bounds,
             content_mask,
@@ -5389,11 +5434,20 @@ impl Window {
         mut listener: impl FnMut(&Event, DispatchPhase, &mut Window, &mut App) + 'static,
     ) {
         self.invalidator.debug_assert_paint();
-
+        let mapping = self.pointer_mapping.clone();
         self.next_frame.mouse_listeners.push(Some(Box::new(
             move |event: &dyn Any, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
-                if let Some(event) = event.downcast_ref() {
-                    listener(event, phase, window, cx)
+                if let Some(event) = event.downcast_ref::<Event>() {
+                    if mapping.is_identity() {
+                        let previous = mem::take(&mut window.pointer_mapping);
+                        listener(event, phase, window, cx);
+                        window.pointer_mapping = previous;
+                        return;
+                    }
+                    let event = event.map_position(|position| mapping.map(position));
+                    let previous = mem::replace(&mut window.pointer_mapping, mapping.clone());
+                    listener(&event, phase, window, cx);
+                    window.pointer_mapping = previous;
                 }
             },
         )));
@@ -5853,7 +5907,7 @@ impl Window {
         preserve_drag_on_mouse_up: bool,
         cx: &mut App,
     ) {
-        let hit_test = self.rendered_frame.hit_test(self.mouse_position());
+        let hit_test = self.rendered_frame.hit_test(self.raw_mouse_position());
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
             self.reset_cursor_style(cx);
@@ -7588,6 +7642,149 @@ mod tests {
         Styled as _, TestAppContext, Window, canvas, div, px, size,
     };
     use std::{cell::Cell, rc::Rc};
+
+    struct PointerProbe {
+        events:
+            Rc<std::cell::RefCell<Vec<(&'static str, crate::Point<Pixels>, crate::Point<Pixels>)>>>,
+    }
+
+    impl Render for PointerProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let events = self.events.clone();
+            let transform = crate::PointerTransform::new(|position, _, _| {
+                position - crate::point(px(100.), px(0.))
+            });
+            let prepaint_transform = transform.clone();
+            canvas(
+                move |bounds, window, _| {
+                    window.with_pointer_transform(bounds, prepaint_transform, |window| {
+                        window.insert_hitbox(
+                            Bounds::new(crate::point(px(20.), px(20.)), size(px(40.), px(40.))),
+                            super::HitboxBehavior::Normal,
+                        )
+                    })
+                },
+                move |bounds, hitbox, window, _| {
+                    let outside = events.clone();
+                    window.on_mouse_event(
+                        move |event: &crate::MouseMoveEvent, phase, window, _| {
+                            if phase == crate::DispatchPhase::Bubble {
+                                outside.borrow_mut().push((
+                                    "raw",
+                                    event.position,
+                                    window.mouse_position(),
+                                ));
+                            }
+                        },
+                    );
+                    window.with_pointer_transform(bounds, transform, |window| {
+                        let down_hitbox = hitbox.clone();
+                        let down_events = events.clone();
+                        window.on_mouse_event(
+                            move |event: &crate::MouseDownEvent, phase, window, _| {
+                                if phase == crate::DispatchPhase::Bubble
+                                    && down_hitbox.is_hovered(window)
+                                {
+                                    window.capture_pointer(down_hitbox.id);
+                                    down_events.borrow_mut().push((
+                                        "down",
+                                        event.position,
+                                        window.mouse_position(),
+                                    ));
+                                }
+                            },
+                        );
+                        let move_hitbox = hitbox.clone();
+                        let move_events = events.clone();
+                        window.on_mouse_event(
+                            move |event: &crate::MouseMoveEvent, phase, window, _| {
+                                if phase == crate::DispatchPhase::Bubble
+                                    && move_hitbox.is_hovered(window)
+                                {
+                                    move_events.borrow_mut().push((
+                                        "move",
+                                        event.position,
+                                        window.mouse_position(),
+                                    ));
+                                }
+                            },
+                        );
+                        window.on_mouse_event(
+                            move |event: &crate::MouseUpEvent, phase, window, _| {
+                                if phase == crate::DispatchPhase::Bubble {
+                                    events.borrow_mut().push((
+                                        "up",
+                                        event.position,
+                                        window.mouse_position(),
+                                    ));
+                                }
+                            },
+                        );
+                    });
+                },
+            )
+            .w(px(400.))
+            .h(px(200.))
+        }
+    }
+
+    #[test]
+    fn pointer_mapping_routes_hits_and_captured_events_in_source_coordinates() {
+        use crate::{MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, point};
+        let mut cx = TestAppContext::single();
+        let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let window = cx.add_window({
+            let events = events.clone();
+            move |_, _| PointerProbe { events }
+        });
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear();
+            window.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent {
+                    position: point(px(30.), px(30.)),
+                    ..Default::default()
+                }),
+                cx,
+            );
+            assert!(events.borrow().is_empty());
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: point(px(130.), px(30.)),
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent {
+                    position: point(px(130.), px(30.)),
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: point(px(450.), px(30.)),
+                    pressed_button: Some(crate::MouseButton::Left),
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                PlatformInput::MouseUp(MouseUpEvent {
+                    position: point(px(450.), px(30.)),
+                    ..Default::default()
+                }),
+                cx,
+            );
+            assert_eq!(window.mouse_position(), point(px(450.), px(30.)));
+        })
+        .unwrap();
+        let events = events.borrow();
+        assert!(events.contains(&("down", point(px(30.), px(30.)), point(px(30.), px(30.)))));
+        assert!(events.contains(&("move", point(px(350.), px(30.)), point(px(350.), px(30.)))));
+        assert!(events.contains(&("up", point(px(350.), px(30.)), point(px(350.), px(30.)))));
+        assert!(events.contains(&("raw", point(px(450.), px(30.)), point(px(450.), px(30.)))));
+    }
 
     struct RootView {
         explicit_size: bool,

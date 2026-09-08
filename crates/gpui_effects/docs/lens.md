@@ -64,8 +64,9 @@ let surface = subtree_effect_chain(content, [
 ```
 
 Stages run in order, and lens coordinates refer to their shared capture bounds.
-The effect changes pixels only: layout, accessibility and hit testing retain
-their original coordinates. It is a visual lens, not an input-coordinate transform.
+Layout and accessibility retain their original coordinates. Enable
+`.map_interaction(true)` to align pointer targets and event positions with the
+lens. See [Interaction mapping](interaction_mapping.md) for supported chains.
 
 Linux WGPU supports subtree effects. Unsupported backends draw the input
 normally; check `window.supports_subtree_effects()` for availability.

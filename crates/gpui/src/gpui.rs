@@ -40,6 +40,7 @@ mod measured_path;
 mod path_builder;
 mod path_morph;
 mod platform;
+mod pointer_mapping;
 pub mod prelude;
 /// Profiling utilities for task, frame, and thread performance tracking.
 pub mod profiler;
@@ -152,6 +153,7 @@ pub use measured_path::*;
 pub use path_builder::*;
 pub use path_morph::*;
 pub use platform::*;
+pub use pointer_mapping::*;
 pub use profiler::*;
 #[cfg(any(target_os = "windows", target_os = "linux", target_family = "wasm"))]
 pub use queue::{PriorityQueueReceiver, PriorityQueueSender};

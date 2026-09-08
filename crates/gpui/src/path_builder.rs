@@ -9,7 +9,7 @@ use lyon::tessellation::{
 };
 
 pub use lyon::math::Transform;
-pub use lyon::tessellation::{FillOptions, FillRule, StrokeOptions};
+pub use lyon::tessellation::{FillOptions, FillRule, LineCap, LineJoin, StrokeOptions};
 
 use crate::{Path, Pixels, Point, point, px};
 
@@ -28,6 +28,7 @@ pub struct PathBuilder {
     /// PathStyle of the PathBuilder
     pub style: PathStyle,
     dash_array: Option<Vec<Pixels>>,
+    dash_offset: Pixels,
 }
 
 impl From<lyon::path::Builder> for PathBuilder {
@@ -79,6 +80,7 @@ impl Default for PathBuilder {
             style: PathStyle::Fill(FillOptions::default()),
             transform: None,
             dash_array: None,
+            dash_offset: px(0.),
         }
     }
 }
@@ -103,6 +105,8 @@ impl PathBuilder {
     }
 
     /// Sets the dash array of the [`PathBuilder`].
+    /// Entries must be finite and positive; invalid patterns fail during `build`.
+    /// An empty array draws a solid stroke.
     ///
     /// [MDN](https://developer.mozilla.org/en-US/docs/Web/SVG/Reference/Attribute/stroke-dasharray)
     pub fn dash_array(mut self, dash_array: &[Pixels]) -> Self {
@@ -118,6 +122,23 @@ impl PathBuilder {
 
         self.dash_array = Some(array);
         self
+    }
+
+    /// Sets the dash phase in logical pixels. Positive values advance into the pattern.
+    pub fn dash_offset(mut self, offset: Pixels) -> Self {
+        self.dash_offset = offset;
+        self
+    }
+
+    /// Retains transformed geometry with cached arc-length measurements.
+    /// Stroke/fill style and dash settings are not retained.
+    pub fn measure(self) -> crate::MeasuredPath {
+        let path = if let Some(transform) = self.transform {
+            self.raw.build().transformed(&transform)
+        } else {
+            self.raw.build()
+        };
+        crate::MeasuredPath::from_path(path)
     }
 
     /// Move the current point to the given point.
@@ -249,7 +270,9 @@ impl PathBuilder {
         };
 
         match self.style {
-            PathStyle::Stroke(options) => Self::tessellate_stroke(self.dash_array, &path, &options),
+            PathStyle::Stroke(options) => {
+                Self::tessellate_stroke(self.dash_array, self.dash_offset, &path, &options)
+            }
             PathStyle::Fill(options) => Self::tessellate_fill(&path, &options),
         }
     }
@@ -272,37 +295,20 @@ impl PathBuilder {
         Ok(Self::build_path(buf))
     }
 
-    fn tessellate_stroke(
+    pub(crate) fn tessellate_stroke(
         dash_array: Option<Vec<Pixels>>,
+        dash_offset: Pixels,
         path: &lyon::path::Path,
         options: &StrokeOptions,
     ) -> Result<Path<Pixels>, Error> {
-        let path = if let Some(dash_array) = dash_array {
-            let measurements = lyon::algorithms::measure::PathMeasurements::from_path(path, 0.01);
-            let mut sampler = measurements
-                .create_sampler(path, lyon::algorithms::measure::SampleType::Normalized);
-            let mut builder = lyon::path::Path::builder();
-
-            let total_length = sampler.length();
-            let dash_array_len = dash_array.len();
-            let mut pos = 0.;
-            let mut dash_index = 0;
-            while pos < total_length {
-                let dash_length = dash_array[dash_index % dash_array_len].0;
-                let next_pos = (pos + dash_length).min(total_length);
-                if dash_index % 2 == 0 {
-                    let start = pos / total_length;
-                    let end = next_pos / total_length;
-                    sampler.split_range(start..end, &mut builder);
-                }
-                pos = next_pos;
-                dash_index += 1;
-            }
-
-            &builder.build()
-        } else {
-            path
-        };
+        if let Some(dash_array) = dash_array {
+            return crate::MeasuredPath::from_path(path.clone()).stroke_dashed(
+                0.0..1.,
+                &dash_array,
+                dash_offset,
+                options,
+            );
+        }
 
         // Will contain the result of the tessellation.
         let mut buf: VertexBuffers<lyon::math::Point, u16> = VertexBuffers::new();

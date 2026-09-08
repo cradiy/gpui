@@ -16,6 +16,8 @@ mod feedback;
 mod fluid;
 #[path = "support/particles.rs"]
 mod particles;
+#[path = "support/path_motion.rs"]
+mod path_motion;
 #[path = "support/sdf.rs"]
 mod sdf;
 
@@ -126,7 +128,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     feedback::check(&mut renderer)?;
     particles::check(&mut renderer)?;
     fluid::check(&mut renderer)?;
-    sdf::check(&mut renderer)
+    sdf::check(&mut renderer)?;
+    path_motion::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(

@@ -18,6 +18,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [GPU fluid](docs/fluid.md): interactive colored ink, momentum and vortices.
 - [SDF shapes](docs/sdf.md): Boolean geometry, smooth blending, outlines and edge light.
 - [Holographic material](docs/holographic.md): surface normals, directional lighting and foil reflections.
+- [Contour light](docs/contour_glow.md): alpha-contour distance fields and edge-focused glow.
 
 ## Local deformation
 
@@ -109,6 +110,12 @@ Run the draggable elastic-card example:
 
 ```sh
 cargo run -p gpui_effects --example deformation
+```
+
+Run the text and icon contour-light comparison:
+
+```sh
+cargo run -p gpui_effects --example contour_glow
 ```
 
 ## License

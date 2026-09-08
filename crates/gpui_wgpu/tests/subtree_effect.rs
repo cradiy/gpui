@@ -10,6 +10,8 @@ use gpui::{
 use gpui_effects::{subtree_blur_shader, subtree_color_adjust_shader, subtree_wave_shader};
 use gpui_wgpu::WgpuOffscreenRenderer;
 
+#[path = "support/contour_glow.rs"]
+mod contour_glow;
 #[path = "support/deformation.rs"]
 mod deformation;
 #[path = "support/feedback.rs"]
@@ -138,7 +140,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     path_motion::check(&mut renderer)?;
     holographic::check(&mut renderer)?;
     path_morph::check(&mut renderer)?;
-    deformation::check(&mut renderer)
+    deformation::check(&mut renderer)?;
+    contour_glow::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(
@@ -226,6 +229,7 @@ fn bloom_pass(downsample: u32) -> gpui::SubtreeEffectPass {
             downsample,
         }),
         feedback: None,
+        distance_field: None,
     }
 }
 
@@ -309,6 +313,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
         time: 0.,
         bloom: None,
         feedback: None,
+        distance_field: None,
     };
     let color = gpui::SubtreeEffectPass {
         shader: subtree_color_adjust_shader(),
@@ -316,6 +321,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
         time: 0.,
         bloom: None,
         feedback: None,
+        distance_field: None,
     };
     let available = [blur, color, bloom_pass(4)];
     for count in [1, 2, 3, 8] {
@@ -351,6 +357,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
                         time: 0.,
                         bloom: None,
                         feedback: None,
+                        distance_field: None,
                     });
                 }
             }

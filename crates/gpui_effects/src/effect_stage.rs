@@ -10,6 +10,7 @@ pub struct EffectStage {
     pub(crate) enabled: bool,
     pub(crate) bloom: Option<gpui::SubtreeBloomPass>,
     pub(crate) feedback: Option<gpui::SubtreeFeedbackPass>,
+    pub(crate) distance_field: Option<gpui::SubtreeDistanceFieldPass>,
 }
 
 impl EffectStage {
@@ -27,6 +28,7 @@ impl EffectStage {
             enabled: true,
             bloom: None,
             feedback: None,
+            distance_field: None,
         }
     }
 
@@ -75,6 +77,7 @@ impl EffectStage {
             uniforms,
             time,
             bloom: self.bloom.clone(),
+            distance_field: self.distance_field.clone(),
             feedback: self.feedback.clone().map(|mut feedback| {
                 feedback.scale_factor = scale;
                 feedback

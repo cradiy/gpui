@@ -817,8 +817,22 @@ pub struct SubtreeEffectPass {
     pub time: f32,
     /// Optional highlight extraction, separable blur and two-image composite.
     pub bloom: Option<SubtreeBloomPass>,
-    /// Optional persistent two-image feedback pass. Mutually exclusive with bloom.
+    /// Optional persistent two-image feedback pass.
     pub feedback: Option<SubtreeFeedbackPass>,
+    /// Optional alpha-contour distance field. Compound pass types are mutually exclusive.
+    pub distance_field: Option<SubtreeDistanceFieldPass>,
+}
+
+/// Generates a signed distance field from the stage input's alpha contour.
+#[derive(Clone, Debug)]
+pub struct SubtreeDistanceFieldPass {
+    /// Alpha contour threshold, clamped to 0.001 through 0.999.
+    pub threshold: f32,
+    /// Two-image shader receiving the source and its distance field.
+    /// Field R is distance in device pixels (negative inside); G is one when
+    /// a contour exists, zero otherwise. Field alpha is one. The field uses
+    /// a full-resolution jump-flood approximation to Euclidean distance.
+    pub composite: EffectShader,
 }
 
 /// A time-indexed update of a persistent feedback texture.
@@ -1399,6 +1413,7 @@ mod tests {
             time: 3.5,
             bloom: None,
             feedback: None,
+            distance_field: None,
         };
         let mut scene = Scene::default();
         scene.start_subtree_chain(composite, vec![pass.clone(); 7].into());

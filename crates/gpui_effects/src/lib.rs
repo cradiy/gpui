@@ -25,6 +25,7 @@ mod backdrop;
 mod bloom;
 mod builtins;
 mod color_flow;
+mod contour_glow;
 mod deformation;
 mod effect_stage;
 mod element;
@@ -57,6 +58,7 @@ pub use color_flow::{
     ColorFlow, ColorFlowOptions, ColorFlowPalette, ColorFlowPaletteColor, color_flow,
     color_flow_shader,
 };
+pub use contour_glow::{ContourGlowOptions, contour_glow_shader, subtree_contour_glow};
 pub use deformation::{DeformationOptions, ElasticOffset, deformation_shader, subtree_deformation};
 pub use effect_stage::EffectStage;
 pub use element::{Effect, effect, four_image_effect, image_effect, two_image_effect};

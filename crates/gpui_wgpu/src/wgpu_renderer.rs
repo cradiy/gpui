@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod distance_field;
 mod fluid;
 mod particles;
 
@@ -426,6 +427,7 @@ struct WgpuResources {
     subtree_effect_pipelines: HashMap<(u64, wgpu::TextureFormat), Option<wgpu::RenderPipeline>>,
     subtree_textures: Vec<wgpu::Texture>,
     bloom_textures: HashMap<u32, [wgpu::Texture; 2]>,
+    distance_field: Option<distance_field::DistanceFieldRenderer>,
     feedback_textures: HashMap<gpui::EffectHistoryId, FeedbackTextures>,
     particles: Option<particles::ParticleRenderer>,
     fluid: Option<fluid::FluidRenderer>,
@@ -463,6 +465,7 @@ impl WgpuResources {
     fn invalidate_intermediate_textures(&mut self) {
         self.subtree_textures.clear();
         self.bloom_textures.clear();
+        self.distance_field = None;
         self.feedback_textures.clear();
         self.particles = None;
         self.fluid = None;
@@ -943,6 +946,7 @@ impl WgpuRenderer {
             subtree_effect_pipelines: HashMap::default(),
             subtree_textures: Vec::new(),
             bloom_textures: HashMap::new(),
+            distance_field: None,
             feedback_textures: HashMap::new(),
             particles: None,
             fluid: None,
@@ -1321,6 +1325,11 @@ impl WgpuRenderer {
                             .chain(pass.feedback.iter().map(|feedback| {
                                 (&feedback.shader, wgpu::TextureFormat::Rgba16Float)
                             }))
+                            .chain(
+                                pass.distance_field
+                                    .iter()
+                                    .map(|field| (&field.composite, surface_format)),
+                            )
                     })
                     .chain(std::iter::once((&layer.composite.shader, surface_format)))
             {
@@ -2192,6 +2201,7 @@ impl WgpuRenderer {
         self.ensure_intermediate_textures(needs_backdrop);
         self.ensure_subtree_textures(scene.subtree_target_count());
         self.ensure_bloom_textures(scene);
+        self.ensure_distance_field(scene);
         self.ensure_feedback_textures(scene);
         self.prepare_surfaces(scene);
         #[cfg(target_os = "linux")]
@@ -2269,6 +2279,7 @@ impl WgpuRenderer {
         self.ensure_intermediate_textures(needs_backdrop);
         self.ensure_subtree_textures(scene.subtree_target_count());
         self.ensure_bloom_textures(scene);
+        self.ensure_distance_field(scene);
         self.ensure_feedback_textures(scene);
         self.prepare_surfaces(scene);
 
@@ -2362,6 +2373,37 @@ impl WgpuRenderer {
                     })
                 })
             });
+        }
+    }
+
+    fn ensure_distance_field(&mut self, scene: &Scene) {
+        let viewport = [self.surface_config.width, self.surface_config.height];
+        let mut required = [0u32; 2];
+        scene.visit(&mut |scene| {
+            for layer in &scene.subtree_layers {
+                if layer
+                    .intermediate_effects
+                    .iter()
+                    .any(|pass| pass.distance_field.is_some())
+                {
+                    let region = distance_field::region(layer.composite.bounds, viewport);
+                    if region[2] > 0 && region[3] > 0 {
+                        required[0] = required[0].max(region[2]);
+                        required[1] = required[1].max(region[3]);
+                    }
+                }
+            }
+        });
+        let resources = self.resources_mut();
+        if required.contains(&0) {
+            resources.distance_field = None;
+        } else if let Some(field) = resources.distance_field.as_mut() {
+            field.reserve(&resources.device, required);
+        } else {
+            resources.distance_field = Some(distance_field::DistanceFieldRenderer::new(
+                &resources.device,
+                required,
+            ));
         }
     }
 
@@ -2562,6 +2604,62 @@ impl WgpuRenderer {
             }));
         }
         true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_subtree_distance_field(
+        &self,
+        quad: &EffectQuad,
+        effect: &gpui::SubtreeEffectPass,
+        field: &gpui::SubtreeDistanceFieldPass,
+        source: &wgpu::TextureView,
+        destination: &wgpu::TextureView,
+        pipeline: &wgpu::RenderPipeline,
+        encoder: &mut wgpu::CommandEncoder,
+        instance_offset: &mut u64,
+    ) -> bool {
+        let resources = self.resources();
+        let region = distance_field::region(
+            quad.bounds,
+            [self.surface_config.width, self.surface_config.height],
+        );
+        let renderer = resources.distance_field.as_ref().unwrap();
+        let distance = renderer.encode(&resources.device, source, region, field.threshold, encoder);
+        let mut instance = EffectInstance::from(quad);
+        instance.opacity = 1.;
+        instance.uniforms = *effect.uniforms.slots();
+        instance.time = effect.time;
+        instance.content_mask = quad.bounds.into();
+        instance.image_bounds = quad.bounds.into();
+        instance.second_image_bounds = PodBounds {
+            origin: [
+                quad.bounds.origin.x.0 - region[0] as f32,
+                quad.bounds.origin.y.0 - region[1] as f32,
+            ],
+            size: [quad.bounds.size.width.0, quad.bounds.size.height.0],
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("distance_field_composite"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: destination,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        self.draw_instances_with_two_textures(
+            bytemuck::bytes_of(&instance),
+            1,
+            source,
+            &distance,
+            pipeline,
+            instance_offset,
+            &mut pass,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2880,6 +2978,42 @@ impl WgpuRenderer {
                                         &source_view,
                                         &destination_view,
                                         effect_pipeline,
+                                        pipeline,
+                                        encoder,
+                                        instance_offset,
+                                    ) {
+                                        did_draw = false;
+                                        break;
+                                    }
+                                    source_view = destination_view;
+                                    source_index = destination_index;
+                                    continue;
+                                }
+                                if let Some(field) = &effect.distance_field {
+                                    let region = distance_field::region(
+                                        layer.composite.bounds,
+                                        [self.surface_config.width, self.surface_config.height],
+                                    );
+                                    if region[2] == 0 || region[3] == 0 {
+                                        continue;
+                                    }
+                                    let Some(pipeline) = self
+                                        .resources()
+                                        .subtree_effect_pipelines
+                                        .get(&(
+                                            field.composite.id().as_u64(),
+                                            self.surface_config.format,
+                                        ))
+                                        .and_then(Option::as_ref)
+                                    else {
+                                        continue;
+                                    };
+                                    if !self.encode_subtree_distance_field(
+                                        &layer.composite,
+                                        effect,
+                                        field,
+                                        &source_view,
+                                        &destination_view,
                                         pipeline,
                                         encoder,
                                         instance_offset,

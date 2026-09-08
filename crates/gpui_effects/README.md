@@ -12,6 +12,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Color flow](docs/color_flow.md): image-derived flowing light and brightness configuration.
 - [Subtree effects](docs/subtree_effect.md): blur, wave, color adjustment and Bloom for element subtrees.
 - [History feedback](docs/feedback.md): persistent trails, time-based decay and playback controls.
+- [Water ripple](docs/ripple.md): local radial refraction for text and images.
 
 ## Examples
 
@@ -46,6 +47,12 @@ Run the history-feedback example:
 
 ```sh
 cargo run -p gpui_effects --example feedback
+```
+
+Run the interactive water-ripple example:
+
+```sh
+cargo run -p gpui_effects --example ripple
 ```
 
 ## License

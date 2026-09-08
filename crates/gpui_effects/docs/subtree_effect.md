@@ -113,6 +113,9 @@ uniforms and padding. `.enabled(false)` omits that stage entirely.
 `Feedback::stage()` supplies a persistent history stage. See
 [History feedback](feedback.md) for input capture, decay and playback controls.
 
+`EffectStage::ripples(options, waves)` applies local radial displacement. See
+[Water ripple](ripple.md) for wave coordinates and playback.
+
 An existing effect can append a stage with `.then(EffectStage::blur(px(2.)))`.
 The wrapper's `uniform`, `uniforms` and `uniform_pixels` methods configure its
 first stage. Configure subsequent stages before appending them. `.time(seconds)`

@@ -146,6 +146,7 @@ mod tests {
             crate::bloom_blur_shader(),
             crate::bloom_composite_shader(),
             crate::feedback_shader(),
+            crate::ripple_shader(),
         ] {
             let source = gpui::compose_subtree_effect_wgsl(&shader);
             let module = naga::front::wgsl::parse_str(&source)

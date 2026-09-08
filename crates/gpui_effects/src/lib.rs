@@ -30,6 +30,7 @@ mod element;
 mod feedback;
 mod flip;
 mod glass;
+mod lens;
 mod liquid_glass;
 mod masked_builtins;
 mod masked_effect;
@@ -62,6 +63,7 @@ pub use flip::{
     rigid_flip_shader, soft_flip_shader,
 };
 pub use glass::{FrostedGlass, FrostedGlassAppearance, FrostedGlassShape};
+pub use lens::{LensOptions, lens_shader, subtree_lens};
 pub use liquid_glass::{LiquidGlass, LiquidGlassAppearance, liquid_glass_shader, paint_liquid_glass};
 pub use masked_builtins::{spectrum_mask_shader, spectrum_svg, spectrum_text};
 pub use masked_effect::{MaskedEffect, effect_svg, effect_text, masked_effect};

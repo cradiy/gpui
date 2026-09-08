@@ -13,6 +13,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Subtree effects](docs/subtree_effect.md): blur, wave, color adjustment and Bloom for element subtrees.
 - [History feedback](docs/feedback.md): persistent trails, time-based decay and playback controls.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
+- [Local lens](docs/lens.md): smooth local magnification and compression.
 
 ## Examples
 
@@ -53,6 +54,12 @@ Run the interactive water-ripple example:
 
 ```sh
 cargo run -p gpui_effects --example ripple
+```
+
+Run the pointer-following lens example:
+
+```sh
+cargo run -p gpui_effects --example lens
 ```
 
 ## License

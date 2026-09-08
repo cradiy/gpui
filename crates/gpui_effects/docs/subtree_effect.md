@@ -116,6 +116,9 @@ uniforms and padding. `.enabled(false)` omits that stage entirely.
 `EffectStage::ripples(options, waves)` applies local radial displacement. See
 [Water ripple](ripple.md) for wave coordinates and playback.
 
+`EffectStage::lens(options)` magnifies or compresses a local region. See
+[Local lens](lens.md) for pointer tracking and falloff controls.
+
 An existing effect can append a stage with `.then(EffectStage::blur(px(2.)))`.
 The wrapper's `uniform`, `uniforms` and `uniform_pixels` methods configure its
 first stage. Configure subsequent stages before appending them. `.time(seconds)`

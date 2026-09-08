@@ -755,8 +755,8 @@ pub struct SubtreeLayer {
 /// An image-processing pass over an isolated subtree texture.
 #[derive(Clone, Debug)]
 pub struct SubtreeEffectPass {
-    /// Single-image shader applied to the preceding texture. With bloom,
-    /// this is used only to resolve a final stage into its parent target.
+    /// Single-image shader applied to the preceding texture.
+    /// Compound stages use it to resolve their output.
     pub shader: EffectShader,
     /// Shader parameters, with pixel dimensions in device pixels.
     pub uniforms: EffectUniforms,
@@ -764,6 +764,34 @@ pub struct SubtreeEffectPass {
     pub time: f32,
     /// Optional highlight extraction, separable blur and two-image composite.
     pub bloom: Option<SubtreeBloomPass>,
+    /// Optional persistent two-image feedback pass. Mutually exclusive with bloom.
+    pub feedback: Option<SubtreeFeedbackPass>,
+}
+
+/// A time-indexed update of a persistent feedback texture.
+#[derive(Clone, Debug)]
+pub struct SubtreeFeedbackPass {
+    /// One identity per feedback surface in a scene.
+    pub id: crate::EffectHistoryId,
+    /// Two-image shader: current input followed by previous history.
+    /// Slot 7 is reserved for `[retention, capture_gain, alpha_cutoff, 0]`.
+    pub shader: EffectShader,
+    /// Changing this value clears the retained pixels.
+    pub generation: u64,
+    /// Monotonic update number. Replaying a frame does not update history twice.
+    pub frame: u64,
+    /// Monotonic simulation time; leave unchanged while paused.
+    pub time: std::time::Duration,
+    /// Time for retained alpha to decay to 1/1024 of its original value.
+    pub fade_duration: std::time::Duration,
+    /// Whether this update adds the current input to history.
+    pub capture: bool,
+    /// Whether a visible element needs another animation frame.
+    pub needs_animation: bool,
+    /// Window scale factor. A change invalidates retained pixels.
+    pub scale_factor: f32,
+    /// History texture size divisor, clamped to 1 through 8.
+    pub downsample: u32,
 }
 
 /// Shaders and target resolution for a bloom stage.
@@ -1317,6 +1345,7 @@ mod tests {
             uniforms: EffectUniforms::new().with_slot(0, [0.2, 0.4, 0.6, 0.8]),
             time: 3.5,
             bloom: None,
+            feedback: None,
         };
         let mut scene = Scene::default();
         scene.start_subtree_chain(composite, vec![pass.clone(); 7].into());

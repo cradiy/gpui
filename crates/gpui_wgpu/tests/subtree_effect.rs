@@ -10,6 +10,9 @@ use gpui::{
 use gpui_effects::{subtree_blur_shader, subtree_color_adjust_shader, subtree_wave_shader};
 use gpui_wgpu::WgpuOffscreenRenderer;
 
+#[path = "support/feedback.rs"]
+mod feedback;
+
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<ScaledPixels> {
     Bounds::new(
         point(ScaledPixels(x), ScaledPixels(y)),
@@ -113,7 +116,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     check_builtin_neutral_states(&mut renderer)?;
     check_bloom_highlights(&mut renderer)?;
     check_effect_chains(&mut renderer)?;
-    check_bloom_spread_and_highlight_contrast(&mut renderer)
+    check_bloom_spread_and_highlight_contrast(&mut renderer)?;
+    feedback::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(
@@ -200,6 +204,7 @@ fn bloom_pass(downsample: u32) -> gpui::SubtreeEffectPass {
             composite: gpui_effects::bloom_composite_shader(),
             downsample,
         }),
+        feedback: None,
     }
 }
 
@@ -282,12 +287,14 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
         uniforms: gpui::EffectUniforms::new().with_slot(0, [2., 0., 0., 0.]),
         time: 0.,
         bloom: None,
+        feedback: None,
     };
     let color = gpui::SubtreeEffectPass {
         shader: subtree_color_adjust_shader(),
         uniforms: gpui::EffectUniforms::new().with_slot(0, [0.7, 1.8, 1.1, 0.]),
         time: 0.,
         bloom: None,
+        feedback: None,
     };
     let available = [blur, color, bloom_pass(4)];
     for count in [1, 2, 3, 8] {
@@ -322,6 +329,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
                         uniforms: Default::default(),
                         time: 0.,
                         bloom: None,
+                        feedback: None,
                     });
                 }
             }

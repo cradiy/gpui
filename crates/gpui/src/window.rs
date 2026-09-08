@@ -3577,6 +3577,7 @@ impl Window {
                 uniforms,
                 time,
                 bloom: None,
+                feedback: None,
             }],
             opacity,
             f,
@@ -3605,14 +3606,19 @@ impl Window {
                         && !bloom.blur.is_mask()
                         && bloom.composite.image_count() == 2
                         && !bloom.composite.is_mask()
+                })
+                && pass.feedback.as_ref().is_none_or(|feedback| {
+                    pass.bloom.is_none()
+                        && feedback.shader.image_count() == 2
+                        && !feedback.shader.is_mask()
                 })),
-            "subtree effects require single-image stages and a two-image bloom composite"
+            "invalid shader inputs for subtree effect passes"
         );
         if passes.is_empty() || !self.supports_subtree_effects() {
             return self.with_element_opacity(Some(opacity.clamp(0.0, 1.0)), f);
         }
         let (last, intermediate) = passes.split_last().unwrap();
-        let intermediate = if last.bloom.is_some() {
+        let intermediate = if last.bloom.is_some() || last.feedback.is_some() {
             passes
         } else {
             intermediate

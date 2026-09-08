@@ -8,6 +8,25 @@ use std::{
 /// Number of four-component floating-point uniform slots available to an effect.
 pub const EFFECT_UNIFORM_SLOTS: usize = 8;
 
+/// Stable identity for one feedback surface in a window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct EffectHistoryId(u64);
+
+impl EffectHistoryId {
+    /// Allocates a unique history identity. Reuse it across frames, not across elements.
+    pub fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for EffectHistoryId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const EFFECT_SOURCE_MARKER: &str = "// __GPUI_EFFECT_SOURCE__";
 const EFFECT_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_IMAGE_SOURCE__";
 const EFFECT_SECOND_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_SECOND_IMAGE_SOURCE__";

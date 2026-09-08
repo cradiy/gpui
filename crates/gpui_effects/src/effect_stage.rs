@@ -9,6 +9,7 @@ pub struct EffectStage {
     pub(crate) padding: Pixels,
     pub(crate) enabled: bool,
     pub(crate) bloom: Option<gpui::SubtreeBloomPass>,
+    pub(crate) feedback: Option<gpui::SubtreeFeedbackPass>,
 }
 
 impl EffectStage {
@@ -25,6 +26,7 @@ impl EffectStage {
             padding: px(0.),
             enabled: true,
             bloom: None,
+            feedback: None,
         }
     }
 
@@ -73,6 +75,10 @@ impl EffectStage {
             uniforms,
             time,
             bloom: self.bloom.clone(),
+            feedback: self.feedback.clone().map(|mut feedback| {
+                feedback.scale_factor = scale;
+                feedback
+            }),
         }
     }
 }

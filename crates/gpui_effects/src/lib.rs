@@ -27,6 +27,7 @@ mod builtins;
 mod color_flow;
 mod effect_stage;
 mod element;
+mod feedback;
 mod flip;
 mod glass;
 mod liquid_glass;
@@ -51,6 +52,7 @@ pub use color_flow::{
 };
 pub use effect_stage::EffectStage;
 pub use element::{Effect, effect, four_image_effect, image_effect, two_image_effect};
+pub use feedback::{Feedback, FeedbackOptions, feedback_shader, subtree_feedback};
 pub use flip::{
     FLIP_APPEARANCE_SLOT, FLIP_BACKGROUND_SLOT, FLIP_INTERACTION_SLOT, FLIP_LAYOUT_SLOT,
     FLIP_REGIONS_SLOT, Flip, FlipDirection, FlipEntry, FlipEvent, FlipImageRegion, FlipJumpResult,

@@ -26,6 +26,7 @@ pub fn subtree_effect_chain<E: IntoElement>(
         effect.pixel_uniform_slots = stage.pixel_uniform_slots;
         effect.padding = stage.padding;
         effect.bloom = stage.bloom;
+        effect.feedback = stage.feedback;
     }
     for stage in stages {
         effect = effect.then(stage);
@@ -57,6 +58,7 @@ pub struct SubtreeEffect<E: Element> {
     enabled: bool,
     first_stage_enabled: bool,
     bloom: Option<gpui::SubtreeBloomPass>,
+    feedback: Option<gpui::SubtreeFeedbackPass>,
     following_stages: Vec<EffectStage>,
 }
 
@@ -78,6 +80,7 @@ impl<E: Element> SubtreeEffect<E> {
             enabled: true,
             first_stage_enabled: true,
             bloom: None,
+            feedback: None,
             following_stages: Vec::new(),
         }
     }
@@ -255,6 +258,10 @@ impl<E: Element> Element for SubtreeEffect<E> {
                 uniforms: self.scaled_uniforms(window.scale_factor()),
                 time: self.time,
                 bloom: self.bloom.clone(),
+                feedback: self.feedback.clone().map(|mut feedback| {
+                    feedback.scale_factor = window.scale_factor();
+                    feedback
+                }),
             });
         }
         passes.extend(
@@ -263,6 +270,19 @@ impl<E: Element> Element for SubtreeEffect<E> {
                 .map(|stage| stage.prepare(window.scale_factor(), self.time)),
         );
         let opacity = self.opacity;
+        if window.supports_subtree_effects()
+            && opacity > 0.
+            && bounds
+                .dilate(self.padding)
+                .intersects(&window.content_mask().bounds)
+            && passes.iter().any(|pass| {
+                pass.feedback
+                    .as_ref()
+                    .is_some_and(|feedback| feedback.needs_animation)
+            })
+        {
+            window.request_animation_frame();
+        }
         window.with_subtree_effect_chain(bounds.dilate(self.padding), &passes, opacity, |window| {
             self.element.paint(
                 id,

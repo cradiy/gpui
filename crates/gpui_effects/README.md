@@ -18,6 +18,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [GPU fluid](docs/fluid.md): interactive colored ink, momentum and vortices.
 - [SDF shapes](docs/sdf.md): Boolean geometry, smooth blending, outlines and edge light.
 - [Path motion](docs/path_motion.md): stroke reveal, arc-length sampling and flowing dashes.
+- [Holographic material](docs/holographic.md): surface normals, directional lighting and foil reflections.
 
 ## Examples
 
@@ -88,6 +89,12 @@ Run the vector-path animation example:
 
 ```sh
 cargo run -p gpui_effects --example path_motion
+```
+
+Run the interactive foil-material example:
+
+```sh
+cargo run -p gpui_effects --example holographic
 ```
 
 ## License

@@ -167,6 +167,9 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
             gpui_effects::plasma_shader(),
             gpui_effects::color_orbs_shader(),
             gpui_effects::color_flow_shader(),
+            gpui_effects::holographic_shader(),
+            gpui_effects::holographic_mask_shader(),
+            gpui_effects::holographic_image_shader(),
             gpui_effects::flip_shader(),
             gpui_effects::rigid_flip_shader(),
             gpui_effects::soft_flip_shader(),
@@ -281,7 +284,9 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
         );
         assert!(msl.contains("vertex"), "{msl}");
         assert!(msl.contains("fragment"), "{msl}");
-        assert!(msl.contains("texture2d"), "{msl}");
+        if shader.uses_image() || shader.is_mask() {
+            assert!(msl.contains("texture2d"), "{msl}");
+        }
         assert_eq!(msl_info.entry_point_names.len(), 2);
         let mut hlsl_options = naga::back::hlsl::Options {
             shader_model: naga::back::hlsl::ShaderModel::V5_0,
@@ -364,7 +369,9 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
         .expect("effect should translate to HLSL");
         assert!(hlsl.contains("vs_effect"));
         assert!(hlsl.contains("fs_effect"));
-        assert!(hlsl.contains("Texture2D"), "{hlsl}");
+        if shader.uses_image() || shader.is_mask() {
+            assert!(hlsl.contains("Texture2D"), "{hlsl}");
+        }
     }
 
     #[test]
@@ -383,6 +390,9 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
         );
         for shader in [
             four_image_shader,
+            gpui_effects::holographic_shader(),
+            gpui_effects::holographic_mask_shader(),
+            gpui_effects::holographic_image_shader(),
             gpui_effects::flip_shader(),
             gpui_effects::spectrum_mask_shader(),
         ] {

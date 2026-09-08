@@ -14,6 +14,8 @@ use gpui_wgpu::WgpuOffscreenRenderer;
 mod feedback;
 #[path = "support/fluid.rs"]
 mod fluid;
+#[path = "support/holographic.rs"]
+mod holographic;
 #[path = "support/particles.rs"]
 mod particles;
 #[path = "support/path_motion.rs"]
@@ -129,7 +131,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     particles::check(&mut renderer)?;
     fluid::check(&mut renderer)?;
     sdf::check(&mut renderer)?;
-    path_motion::check(&mut renderer)
+    path_motion::check(&mut renderer)?;
+    holographic::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(

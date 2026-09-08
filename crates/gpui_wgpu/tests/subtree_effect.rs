@@ -29,6 +29,7 @@ fn quad(bounds: Bounds<ScaledPixels>, color: u32) -> Quad {
 fn layer(mut scene: Scene, bounds: Bounds<ScaledPixels>, opacity: f32) -> Primitive {
     scene.finish();
     Primitive::SubtreeLayer(SubtreeLayer {
+        intermediate_effects: Arc::default(),
         composite: EffectQuad {
             order: 0,
             bounds,
@@ -109,7 +110,83 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
         }
     }
     renderer.resize(size(DevicePixels(64), DevicePixels(48)));
-    check_builtin_neutral_states(&mut renderer)
+    check_builtin_neutral_states(&mut renderer)?;
+    check_effect_chains(&mut renderer)
+}
+
+fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> {
+    let region = bounds(4., 4., 52., 40.);
+    let blur = gpui::SubtreeEffectPass {
+        shader: subtree_blur_shader(),
+        uniforms: gpui::EffectUniforms::new().with_slot(0, [2., 0., 0., 0.]),
+        time: 0.,
+    };
+    let color = gpui::SubtreeEffectPass {
+        shader: subtree_color_adjust_shader(),
+        uniforms: gpui::EffectUniforms::new().with_slot(0, [0.7, 1.8, 1.1, 0.]),
+        time: 0.,
+    };
+    for count in [1, 2, 3, 8] {
+        for reverse in [false, true] {
+            let stages = (0..count)
+                .map(|i| {
+                    if (i % 2 == 0) ^ reverse {
+                        blur.clone()
+                    } else {
+                        color.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let source = || {
+                let mut scene = Scene::default();
+                scene.insert_primitive(quad(bounds(10., 10., 20., 22.), 0xf02080a0));
+                scene.insert_primitive(quad(bounds(22., 18., 22., 18.), 0x30e040b0));
+                scene
+            };
+            let Primitive::SubtreeLayer(mut captured) = layer(source(), region, 0.6) else {
+                unreachable!()
+            };
+            let last = stages.last().unwrap();
+            captured.composite.shader = last.shader.clone();
+            captured.composite.uniforms = last.uniforms;
+            captured.intermediate_effects = stages[..count - 1].into();
+            let mut chained = Scene::default();
+            chained.insert_primitive(Primitive::SubtreeLayer(captured));
+            chained.finish();
+            assert_eq!(chained.subtree_depth(), 1);
+            assert_eq!(
+                chained.subtree_target_count(),
+                if count == 1 { 1 } else { 2 }
+            );
+            let actual = renderer.render_rgba(&chained)?;
+
+            let mut nested = source();
+            for (index, stage) in stages.iter().enumerate() {
+                let Primitive::SubtreeLayer(mut captured) =
+                    layer(nested, region, if index + 1 == count { 0.6 } else { 1. })
+                else {
+                    unreachable!()
+                };
+                captured.composite.shader = stage.shader.clone();
+                captured.composite.uniforms = stage.uniforms;
+                nested = Scene::default();
+                nested.insert_primitive(Primitive::SubtreeLayer(captured));
+            }
+            nested.finish();
+            let expected = renderer.render_rgba(&nested)?;
+            let error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            assert!(
+                error <= 3,
+                "{count} stages, reverse {reverse}: channel error {error}"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn check_builtin_neutral_states(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> {

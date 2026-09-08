@@ -3570,33 +3570,66 @@ impl Window {
         opacity: f32,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        self.with_subtree_effect_chain(
+            bounds,
+            &[crate::SubtreeEffectPass {
+                shader,
+                uniforms,
+                time,
+            }],
+            opacity,
+            f,
+        )
+    }
+
+    /// Captures content once and processes it through ordered image passes.
+    ///
+    /// Opacity applies only to the final composite. An empty chain paints directly.
+    /// Prepaint cached content inside [`Self::prepaint_subtree_effect`].
+    pub fn with_subtree_effect_chain<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        passes: &[crate::SubtreeEffectPass],
+        opacity: f32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
         self.invalidator.debug_assert_paint();
         assert!(
-            shader.image_count() == 1 && !shader.is_mask(),
+            passes
+                .iter()
+                .all(|pass| pass.shader.image_count() == 1 && !pass.shader.is_mask()),
             "subtree effects require a single-image shader"
         );
-        if !self.supports_subtree_effects() {
+        if passes.is_empty() || !self.supports_subtree_effects() {
             return self.with_element_opacity(Some(opacity.clamp(0.0, 1.0)), f);
         }
+        let (last, intermediate) = passes.split_last().unwrap();
         let bounds = self.snap_bounds(bounds);
         let previous_opacity = self.element_opacity;
         self.element_opacity = 1.0;
-        self.next_frame.scene.start_subtree(EffectQuad {
+        let composite = EffectQuad {
             order: 0,
             bounds,
             effect_bounds: bounds,
             transformation: TransformationMatrix::default(),
             content_mask: self.snapped_content_mask(),
-            shader,
-            uniforms,
-            time,
+            shader: last.shader.clone(),
+            uniforms: last.uniforms,
+            time: last.time,
             corner_radii: Corners::default(),
             opacity: previous_opacity * opacity.clamp(0.0, 1.0),
             image_tile: None,
             second_image_tile: None,
             third_image_tile: None,
             fourth_image_tile: None,
-        });
+        };
+        if intermediate.is_empty() {
+            self.next_frame.scene.start_subtree(composite);
+        } else {
+            self.next_frame
+                .scene
+                .start_subtree_chain(composite, intermediate.into());
+        }
         let result = f(self);
         self.next_frame.scene.end_subtree();
         self.element_opacity = previous_opacity;

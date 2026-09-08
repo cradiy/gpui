@@ -1,8 +1,36 @@
+use crate::EffectStage;
 use gpui::{
     A11ySubtreeBuilder, AnyElement, App, Bounds, EffectShader, EffectUniforms, Element, ElementId,
     GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, LayoutId, ParentElement,
     Pixels, StyleRefinement, Styled, Window, px,
 };
+
+/// Captures content once and applies enabled stages in iteration order.
+/// An empty or fully disabled chain paints the content directly.
+pub fn subtree_effect_chain<E: IntoElement>(
+    element: E,
+    stages: impl IntoIterator<Item = EffectStage>,
+) -> SubtreeEffect<E::Element> {
+    let mut stages = stages.into_iter().filter(|stage| stage.enabled);
+    let first = stages.next();
+    let mut effect = SubtreeEffect::new(
+        element.into_element(),
+        first
+            .as_ref()
+            .map(|stage| stage.shader.clone())
+            .unwrap_or_else(crate::subtree_identity_shader),
+    );
+    effect.first_stage_enabled = first.is_some();
+    if let Some(stage) = first {
+        effect.uniforms = stage.uniforms;
+        effect.pixel_uniform_slots = stage.pixel_uniform_slots;
+        effect.padding = stage.padding;
+    }
+    for stage in stages {
+        effect = effect.then(stage);
+    }
+    effect
+}
 
 /// Captures an element subtree and applies a single-image effect to its pixels.
 pub fn subtree_effect<E>(element: E, shader: EffectShader) -> SubtreeEffect<E::Element>
@@ -26,6 +54,8 @@ pub struct SubtreeEffect<E: Element> {
     opacity: f32,
     padding: Pixels,
     enabled: bool,
+    first_stage_enabled: bool,
+    following_stages: Vec<EffectStage>,
 }
 
 impl<E: Element> SubtreeEffect<E> {
@@ -44,24 +74,26 @@ impl<E: Element> SubtreeEffect<E> {
             opacity: 1.0,
             padding: px(0.),
             enabled: true,
+            first_stage_enabled: true,
+            following_stages: Vec::new(),
         }
     }
 
-    /// Replaces all shader uniform slots.
+    /// Replaces all uniform slots of the first stage.
     pub fn uniforms(mut self, uniforms: EffectUniforms) -> Self {
         self.uniforms = uniforms;
         self.pixel_uniform_slots.fill(false);
         self
     }
 
-    /// Sets one four-component shader uniform slot.
+    /// Sets one four-component uniform slot of the first stage.
     pub fn uniform(mut self, index: usize, value: [f32; 4]) -> Self {
         self.uniforms.set_slot(index, value);
         self.pixel_uniform_slots[index] = false;
         self
     }
 
-    /// Sets a logical-pixel slot, converted to device pixels at paint time.
+    /// Sets a logical-pixel slot of the first stage, converted at paint time.
     pub fn uniform_pixels(mut self, index: usize, value: [Pixels; 4]) -> Self {
         self.uniforms.set_slot(index, value.map(f32::from));
         self.pixel_uniform_slots[index] = true;
@@ -81,9 +113,18 @@ impl<E: Element> SubtreeEffect<E> {
         uniforms
     }
 
-    /// Sets the animation time supplied to the shader.
+    /// Sets the animation time supplied to every stage.
     pub fn time(mut self, time: f32) -> Self {
         self.time = time;
+        self
+    }
+
+    /// Appends a stage without capturing the element again.
+    pub fn then(mut self, stage: EffectStage) -> Self {
+        if stage.enabled {
+            self.padding += stage.padding;
+            self.following_stages.push(stage);
+        }
         self
     }
 
@@ -105,7 +146,7 @@ impl<E: Element> SubtreeEffect<E> {
         self
     }
 
-    /// Returns the shader used to composite the subtree.
+    /// Returns the first stage's shader, or identity for an empty chain.
     pub fn shader(&self) -> &EffectShader {
         &self.shader
     }
@@ -171,7 +212,7 @@ impl<E: Element> Element for SubtreeEffect<E> {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        if self.enabled {
+        if self.enabled && (self.first_stage_enabled || !self.following_stages.is_empty()) {
             window.prepaint_subtree_effect(|window| {
                 self.element
                     .prepaint(id, inspector_id, bounds, request_layout, window, cx)
@@ -204,28 +245,31 @@ impl<E: Element> Element for SubtreeEffect<E> {
             );
             return;
         }
-        let shader = self.shader.clone();
-        let uniforms = self.scaled_uniforms(window.scale_factor());
-        let time = self.time;
-        let opacity = self.opacity;
-        window.with_subtree_effect(
-            bounds.dilate(self.padding),
-            shader,
-            uniforms,
-            time,
-            opacity,
-            |window| {
-                self.element.paint(
-                    id,
-                    inspector_id,
-                    bounds,
-                    request_layout,
-                    prepaint,
-                    window,
-                    cx,
-                );
-            },
+        let mut passes = smallvec::SmallVec::<[gpui::SubtreeEffectPass; 2]>::new();
+        if self.first_stage_enabled {
+            passes.push(gpui::SubtreeEffectPass {
+                shader: self.shader.clone(),
+                uniforms: self.scaled_uniforms(window.scale_factor()),
+                time: self.time,
+            });
+        }
+        passes.extend(
+            self.following_stages
+                .iter()
+                .map(|stage| stage.prepare(window.scale_factor(), self.time)),
         );
+        let opacity = self.opacity;
+        window.with_subtree_effect_chain(bounds.dilate(self.padding), &passes, opacity, |window| {
+            self.element.paint(
+                id,
+                inspector_id,
+                bounds,
+                request_layout,
+                prepaint,
+                window,
+                cx,
+            );
+        });
     }
 }
 
@@ -259,6 +303,37 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chains_omit_disabled_stages_and_accumulate_padding() {
+        let effect = subtree_effect_chain(
+            gpui::div(),
+            [
+                EffectStage::blur(px(40.)).enabled(false),
+                EffectStage::blur(px(2.)),
+                EffectStage::wave(Default::default()),
+            ],
+        )
+        .then(EffectStage::blur(px(90.)).enabled(false));
+        assert_eq!(effect.shader().id(), crate::subtree_blur_shader().id());
+        assert_eq!(effect.following_stages.len(), 1);
+        assert_eq!(effect.padding, px(9.));
+        let wave = effect.following_stages[0].prepare(1.5, 2.5);
+        assert_eq!(wave.uniforms.slots()[0], [9., 270., 0., 0.]);
+        assert_eq!(wave.uniforms.slots()[1][0], 1.5);
+        assert_eq!(wave.time, 2.5);
+        let effect = effect
+            .capture_padding(px(20.))
+            .then(EffectStage::blur(px(3.)));
+        assert_eq!(effect.padding, px(23.));
+
+        let empty = subtree_effect_chain(gpui::div(), []);
+        assert!(!empty.first_stage_enabled && empty.following_stages.is_empty());
+        let disabled =
+            subtree_effect_chain(gpui::div(), [EffectStage::blur(px(40.)).enabled(false)]);
+        assert!(!disabled.first_stage_enabled && disabled.following_stages.is_empty());
+        assert_eq!(disabled.padding, px(0.));
+    }
 
     #[test]
     fn pixel_uniforms_follow_scale_and_raw_overrides() {

@@ -1271,20 +1271,26 @@ impl WgpuRenderer {
     fn ensure_effect_pipelines(&mut self, scene: &Scene) {
         for layer in &scene.subtree_layers {
             self.ensure_effect_pipelines(&layer.scene);
-            let shader = &layer.composite.shader;
-            let key = shader.id().as_u64();
-            if !self.resources().subtree_effect_pipelines.contains_key(&key) {
-                let result = Self::create_effect_pipeline(
-                    &self.resources().device,
-                    &self.resources().bind_group_layouts,
-                    self.surface_config.format,
-                    self.surface_config.alpha_mode,
-                    shader,
-                    true,
-                );
-                self.resources_mut()
-                    .subtree_effect_pipelines
-                    .insert(key, result.ok());
+            for shader in layer
+                .intermediate_effects
+                .iter()
+                .map(|pass| &pass.shader)
+                .chain(std::iter::once(&layer.composite.shader))
+            {
+                let key = shader.id().as_u64();
+                if !self.resources().subtree_effect_pipelines.contains_key(&key) {
+                    let result = Self::create_effect_pipeline(
+                        &self.resources().device,
+                        &self.resources().bind_group_layouts,
+                        self.surface_config.format,
+                        self.surface_config.alpha_mode,
+                        shader,
+                        true,
+                    );
+                    self.resources_mut()
+                        .subtree_effect_pipelines
+                        .insert(key, result.ok());
+                }
             }
         }
         let shaders = scene
@@ -2137,7 +2143,7 @@ impl WgpuRenderer {
         let mut needs_backdrop = false;
         scene.visit(&mut |scene| needs_backdrop |= !scene.backdrop_blurs.is_empty());
         self.ensure_intermediate_textures(needs_backdrop);
-        self.ensure_subtree_textures(scene.subtree_depth());
+        self.ensure_subtree_textures(scene.subtree_target_count());
         self.prepare_surfaces(scene);
         #[cfg(target_os = "linux")]
         let dma_buf_leases = {
@@ -2212,7 +2218,7 @@ impl WgpuRenderer {
         let mut needs_backdrop = false;
         scene.visit(&mut |scene| needs_backdrop |= !scene.backdrop_blurs.is_empty());
         self.ensure_intermediate_textures(needs_backdrop);
-        self.ensure_subtree_textures(scene.subtree_depth());
+        self.ensure_subtree_textures(scene.subtree_target_count());
         self.prepare_surfaces(scene);
 
         let encoded = self.encode_scene(
@@ -2354,7 +2360,8 @@ impl WgpuRenderer {
                     PrimitiveBatch::SubtreeLayers(range) => {
                         drop(pass);
                         let texture = &self.resources().subtree_textures[depth];
-                        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        let capture_view =
+                            texture.create_view(&wgpu::TextureViewDescriptor::default());
                         let mut did_draw = true;
                         for layer in &scene.subtree_layers[range] {
                             let pipeline = self
@@ -2377,13 +2384,78 @@ impl WgpuRenderer {
                             if !self.encode_scene_batches(
                                 &layer.scene,
                                 texture,
-                                &view,
+                                &capture_view,
                                 encoder,
                                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                 instance_offset,
                                 depth + 1,
                             ) {
                                 did_draw = false;
+                                break;
+                            }
+                            let mut source_view =
+                                texture.create_view(&wgpu::TextureViewDescriptor::default());
+                            let mut source_index = depth;
+                            for effect in layer.intermediate_effects.iter() {
+                                let Some(effect_pipeline) = self
+                                    .resources()
+                                    .subtree_effect_pipelines
+                                    .get(&effect.shader.id().as_u64())
+                                    .and_then(Option::as_ref)
+                                else {
+                                    continue;
+                                };
+                                let destination_index = if source_index == depth {
+                                    depth + 1
+                                } else {
+                                    depth
+                                };
+                                let destination_view = self.resources().subtree_textures
+                                    [destination_index]
+                                    .create_view(&wgpu::TextureViewDescriptor::default());
+                                {
+                                    let mut effect_pass =
+                                        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                            label: Some("subtree_effect_pass"),
+                                            color_attachments: &[Some(
+                                                wgpu::RenderPassColorAttachment {
+                                                    view: &destination_view,
+                                                    resolve_target: None,
+                                                    ops: wgpu::Operations {
+                                                        load: wgpu::LoadOp::Clear(
+                                                            wgpu::Color::TRANSPARENT,
+                                                        ),
+                                                        store: wgpu::StoreOp::Store,
+                                                    },
+                                                    depth_slice: None,
+                                                },
+                                            )],
+                                            ..Default::default()
+                                        });
+                                    let mut quad = layer.composite.clone();
+                                    quad.shader = effect.shader.clone();
+                                    quad.uniforms = effect.uniforms;
+                                    quad.time = effect.time;
+                                    quad.opacity = 1.;
+                                    quad.content_mask.bounds = quad.bounds;
+                                    let mut instance = EffectInstance::from(&quad);
+                                    instance.image_bounds = quad.bounds.into();
+                                    if !self.draw_instances_with_texture(
+                                        bytemuck::bytes_of(&instance),
+                                        1,
+                                        &source_view,
+                                        effect_pipeline,
+                                        instance_offset,
+                                        &mut effect_pass,
+                                    ) {
+                                        did_draw = false;
+                                        break;
+                                    }
+                                }
+                                source_view = destination_view;
+                                source_index = destination_index;
+                            }
+                            if !did_draw {
                                 break;
                             }
                             let mut composite_pass =
@@ -2405,7 +2477,7 @@ impl WgpuRenderer {
                             did_draw &= self.draw_instances_with_texture(
                                 bytemuck::bytes_of(&instance),
                                 1,
-                                &view,
+                                &source_view,
                                 pipeline,
                                 instance_offset,
                                 &mut composite_pass,

@@ -5,8 +5,8 @@ use gpui::{
     WindowOptions, div, img, prelude::*, px, rgb, rgba, size,
 };
 use gpui_effects::{
-    SubtreeColorOptions, SubtreeWaveOptions, subtree_blur, subtree_color_adjust, subtree_identity,
-    subtree_wave,
+    EffectStage, SubtreeColorOptions, SubtreeWaveOptions, subtree_blur, subtree_color_adjust,
+    subtree_effect_chain, subtree_identity, subtree_wave,
 };
 use gpui_platform::application;
 
@@ -14,6 +14,9 @@ struct SubtreePreview {
     cover: ImageSource,
     mode: usize,
     strength: f32,
+    blur_enabled: bool,
+    color_enabled: bool,
+    reverse_order: bool,
     clicks: usize,
     paused: bool,
     elapsed: f32,
@@ -28,8 +31,11 @@ impl SubtreePreview {
                 include_bytes!("album-cover.svg").to_vec(),
             ))
             .into(),
-            mode: 2,
+            mode: 4,
             strength: 0.5,
+            blur_enabled: true,
+            color_enabled: true,
+            reverse_order: false,
             clicks: 0,
             paused: false,
             elapsed: 0.,
@@ -142,6 +148,21 @@ impl Render for SubtreePreview {
                     ..Default::default()
                 },
             ),
+            4 => {
+                let mut stages = [
+                    EffectStage::blur(px(self.strength * 8.)).enabled(self.blur_enabled),
+                    EffectStage::color_adjust(SubtreeColorOptions {
+                        saturation: 0.65,
+                        contrast: 1. + self.strength * 1.4,
+                        brightness: 1.1,
+                    })
+                    .enabled(self.color_enabled),
+                ];
+                if self.reverse_order {
+                    stages.reverse();
+                }
+                subtree_effect_chain(card, stages)
+            }
             _ => subtree_identity(card),
         }
         .time(self.elapsed);
@@ -174,7 +195,7 @@ impl Render for SubtreePreview {
                     )
                     .child(
                         div().flex().gap_2().children(
-                            ["Original", "Blur", "Wave", "Color"]
+                            ["Original", "Blur", "Wave", "Color", "Chain"]
                                 .into_iter()
                                 .enumerate()
                                 .map(|(index, label)| {
@@ -249,6 +270,70 @@ impl Render for SubtreePreview {
                     .items_center()
                     .justify_center()
                     .gap_4()
+                    .when(self.mode == 4, |row| {
+                        row.child(
+                            div()
+                                .id("blur-enabled")
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(if self.blur_enabled {
+                                    rgb(0x5b4b91)
+                                } else {
+                                    rgb(0x23263a)
+                                })
+                                .cursor_pointer()
+                                .child(if self.blur_enabled {
+                                    "Blur · On"
+                                } else {
+                                    "Blur · Off"
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.blur_enabled = !this.blur_enabled;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("color-enabled")
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(if self.color_enabled {
+                                    rgb(0x5b4b91)
+                                } else {
+                                    rgb(0x23263a)
+                                })
+                                .cursor_pointer()
+                                .child(if self.color_enabled {
+                                    "Color · On"
+                                } else {
+                                    "Color · Off"
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.color_enabled = !this.color_enabled;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("chain-order")
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(rgb(0x23263a))
+                                .cursor_pointer()
+                                .child(if self.reverse_order {
+                                    "Color → Blur"
+                                } else {
+                                    "Blur → Color"
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.reverse_order = !this.reverse_order;
+                                    cx.notify();
+                                })),
+                        )
+                    })
                     .child(div().text_sm().text_color(rgb(0x989fb9)).child(format!(
                         "{} · {:.0}%",
                         match self.mode {

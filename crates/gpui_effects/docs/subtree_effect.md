@@ -46,6 +46,45 @@ renderer’s sampled RGB values.
 Wave speed is measured in radians per second; negative speed reverses motion.
 Wave does not start its own animation loop. Update time and request frames while animating.
 
+## Effect chains
+
+```rust,ignore
+use gpui::{div, prelude::*, px};
+use gpui_effects::{EffectStage, SubtreeColorOptions, subtree_effect_chain};
+
+let content = subtree_effect_chain(
+    div().p_4().child("Layered content"),
+    [
+        EffectStage::blur(px(4.)),
+        EffectStage::color_adjust(SubtreeColorOptions {
+            saturation: 0.7,
+            contrast: 1.4,
+            ..Default::default()
+        }),
+    ],
+).effect_opacity(0.9);
+```
+
+Stages run in iteration order. `EffectStage::identity`, `blur`, `wave` and
+`color_adjust` provide built-in stages; `EffectStage::new(shader)` accepts a
+custom single-image shader. Each stage has its own uniforms, logical-pixel
+uniforms and padding. `.enabled(false)` omits that stage entirely.
+
+An existing effect can append a stage with `.then(EffectStage::blur(px(2.)))`.
+The wrapper's `uniform`, `uniforms` and `uniform_pixels` methods configure its
+first stage. Configure subsequent stages before appending them. `.time(seconds)`
+supplies a common clock to all stages; each animated shader can define its own speed.
+
+The content is painted once per capture. Intermediate passes alternate between
+two GPU textures, independent of stage count; the last pass composites directly
+to the parent target. Chain opacity is applied only at that final step. An empty
+or fully disabled chain paints directly, without allocating capture targets.
+
+Active stages' padding is accumulated. A wrapper-level `capture_padding` replaces
+the accumulated value at that point; further `.then(...)` calls add their padding.
+All passes use the same capture bounds and device-pixel resolution. Changing
+stage order can change the output, especially with clipping or nonlinear color operations.
+
 ## Custom shaders
 
 The `subtree_*_shader()` functions expose each built-in WGSL shader separately.
@@ -72,7 +111,7 @@ let content = subtree_effect(
 
 ## Configuration
 
-- `uniforms` replaces the shader's uniform slots; `uniform` updates one slot.
+- `uniforms` replaces the first stage's uniform slots; `uniform` updates one slot.
 - `uniform_pixels` sets a slot in logical pixels, converted at paint time.
   `uniform` removes pixel conversion for that slot; `uniforms` removes it for all slots.
 - `time` supplies elapsed seconds. The component does not schedule animation frames.
@@ -108,7 +147,7 @@ Linux Wayland and X11 windows support subtree effects through WGPU. Use
 `window.supports_subtree_effects()` to query availability. Unsupported window
 backends paint the original content with the configured effect opacity.
 
-Render targets stay on the GPU and are reused at each nesting depth. Each
+Render targets stay on the GPU and are reused across captures and effect passes. Each
 target currently uses the window's device-pixel dimensions and surface format.
 Window resizing recreates the targets. Captured content is repainted when the
 window renders; it is not a persistent snapshot cache.
@@ -119,6 +158,7 @@ window renders; it is not a persistent snapshot cache.
 cargo run -p gpui_effects --example subtree_effect
 ```
 
-The example compares original and captured content in identity, blur, wave
-and color modes. The controls adjust effect strength.
+The example compares original and captured content in identity, blur, wave,
+color and chain modes. Chain mode combines blur and color adjustment, with
+individual stage toggles and an order switch. The controls adjust effect strength.
 The card buttons remain interactive. Pause stops the wave animation.

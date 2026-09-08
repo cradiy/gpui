@@ -49,7 +49,7 @@ pub struct Scene {
     pub quads: Vec<Quad>,
     pub effects: Vec<EffectQuad>,
     pub subtree_layers: Vec<SubtreeLayer>,
-    pending_subtrees: Vec<(EffectQuad, Scene)>,
+    pending_subtrees: Vec<(EffectQuad, Arc<[SubtreeEffectPass]>, Scene)>,
     pub paths: Vec<Path<ScaledPixels>>,
     pub underlines: Vec<Underline>,
     pub monochrome_sprites: Vec<MonochromeSprite>,
@@ -83,7 +83,7 @@ impl Scene {
     }
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
-        if let Some((_, scene)) = self.pending_subtrees.last_mut() {
+        if let Some((_, _, scene)) = self.pending_subtrees.last_mut() {
             scene.push_layer(bounds);
             self.paint_operations
                 .push(PaintOperation::StartLayer(bounds));
@@ -96,7 +96,7 @@ impl Scene {
     }
 
     pub fn pop_layer(&mut self) {
-        if let Some((_, scene)) = self.pending_subtrees.last_mut() {
+        if let Some((_, _, scene)) = self.pending_subtrees.last_mut() {
             scene.pop_layer();
             self.paint_operations.push(PaintOperation::EndLayer);
             return;
@@ -107,7 +107,7 @@ impl Scene {
 
     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
         let mut primitive = primitive.into();
-        if let Some((_, scene)) = self.pending_subtrees.last_mut() {
+        if let Some((_, _, scene)) = self.pending_subtrees.last_mut() {
             scene.insert_primitive(primitive.clone());
             self.paint_operations
                 .push(PaintOperation::Primitive(primitive));
@@ -183,7 +183,9 @@ impl Scene {
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
-                PaintOperation::StartSubtree(composite) => self.start_subtree(composite.clone()),
+                PaintOperation::StartSubtree(composite, passes) => {
+                    self.start_subtree_chain(composite.clone(), passes.clone())
+                }
                 PaintOperation::EndSubtree => self.end_subtree(),
             }
         }
@@ -208,22 +210,34 @@ impl Scene {
     }
 
     pub(crate) fn start_subtree(&mut self, composite: EffectQuad) {
-        self.paint_operations
-            .push(PaintOperation::StartSubtree(composite.clone()));
-        self.pending_subtrees.push((composite, Scene::default()));
+        self.start_subtree_chain(composite, Arc::default());
+    }
+
+    pub(crate) fn start_subtree_chain(
+        &mut self,
+        composite: EffectQuad,
+        passes: Arc<[SubtreeEffectPass]>,
+    ) {
+        self.paint_operations.push(PaintOperation::StartSubtree(
+            composite.clone(),
+            passes.clone(),
+        ));
+        self.pending_subtrees
+            .push((composite, passes, Scene::default()));
     }
 
     pub(crate) fn end_subtree(&mut self) {
-        let (composite, mut scene) = self
+        let (composite, intermediate_effects, mut scene) = self
             .pending_subtrees
             .pop()
             .expect("unbalanced subtree capture");
         scene.finish();
         let layer = Primitive::SubtreeLayer(SubtreeLayer {
             composite,
+            intermediate_effects,
             scene: Arc::new(scene),
         });
-        if let Some((_, parent)) = self.pending_subtrees.last_mut() {
+        if let Some((_, _, parent)) = self.pending_subtrees.last_mut() {
             parent.insert_primitive(layer);
         } else {
             let operation_count = self.paint_operations.len();
@@ -245,11 +259,28 @@ impl Scene {
         }
     }
 
-    /// Maximum number of simultaneously active subtree render targets.
+    /// Maximum nested subtree capture depth.
     pub fn subtree_depth(&self) -> usize {
         self.subtree_layers
             .iter()
             .map(|layer| 1 + layer.scene.subtree_depth())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Peak render-target count for nested captures and ping-pong effect passes.
+    pub fn subtree_target_count(&self) -> usize {
+        self.subtree_layers
+            .iter()
+            .map(|layer| {
+                (1 + layer.scene.subtree_target_count()).max(
+                    if layer.intermediate_effects.is_empty() {
+                        1
+                    } else {
+                        2
+                    },
+                )
+            })
             .max()
             .unwrap_or(0)
     }
@@ -316,7 +347,7 @@ pub(crate) enum PaintOperation {
     Primitive(Primitive),
     StartLayer(Bounds<ScaledPixels>),
     EndLayer,
-    StartSubtree(EffectQuad),
+    StartSubtree(EffectQuad, Arc<[SubtreeEffectPass]>),
     EndSubtree,
 }
 
@@ -715,8 +746,21 @@ impl From<Quad> for Primitive {
 pub struct SubtreeLayer {
     /// Geometry and shader used to composite the captured texture.
     pub composite: EffectQuad,
+    /// Ordered image passes applied before the final composite.
+    pub intermediate_effects: Arc<[SubtreeEffectPass]>,
     /// Content drawn against transparent black before compositing.
     pub scene: Arc<Scene>,
+}
+
+/// An image-processing pass over an isolated subtree texture.
+#[derive(Clone, Debug)]
+pub struct SubtreeEffectPass {
+    /// Single-image shader applied to the preceding texture.
+    pub shader: EffectShader,
+    /// Shader parameters, with pixel dimensions in device pixels.
+    pub uniforms: EffectUniforms,
+    /// Animation time in seconds.
+    pub time: f32,
 }
 
 /// A custom fragment effect drawn over a rectangular region.
@@ -1247,6 +1291,34 @@ mod tests {
         replayed.replay(0..scene.len(), &scene);
         assert_eq!(replayed.quads.len(), 1);
         assert!(!replayed.is_capturing_subtree());
+    }
+
+    #[test]
+    fn effect_chain_replay_keeps_passes_without_recapturing_content() {
+        let composite = subtree_composite();
+        let pass = SubtreeEffectPass {
+            shader: composite.shader.clone(),
+            uniforms: EffectUniforms::new().with_slot(0, [0.2, 0.4, 0.6, 0.8]),
+            time: 3.5,
+        };
+        let mut scene = Scene::default();
+        scene.start_subtree_chain(composite, vec![pass.clone(); 7].into());
+        insert_test_quad(&mut scene);
+        scene.end_subtree();
+        scene.finish();
+        let mut replayed = Scene::default();
+        replayed.replay(0..scene.len(), &scene);
+        replayed.finish();
+        assert_eq!(replayed.subtree_depth(), 1);
+        assert_eq!(replayed.subtree_target_count(), 2);
+        let layer = &replayed.subtree_layers[0];
+        assert_eq!(layer.scene.quads.len(), 1);
+        assert_eq!(layer.intermediate_effects.len(), 7);
+        for effect in layer.intermediate_effects.iter() {
+            assert_eq!(effect.shader.id(), pass.shader.id());
+            assert_eq!(effect.uniforms, pass.uniforms);
+            assert_eq!(effect.time, pass.time);
+        }
     }
 
     fn test_bounds() -> Bounds<ScaledPixels> {

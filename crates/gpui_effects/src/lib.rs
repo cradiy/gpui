@@ -24,6 +24,7 @@ pub mod timed_text_guide {}
 mod backdrop;
 mod builtins;
 mod color_flow;
+mod effect_stage;
 mod element;
 mod flip;
 mod glass;
@@ -44,6 +45,7 @@ pub use color_flow::{
     ColorFlow, ColorFlowOptions, ColorFlowPalette, ColorFlowPaletteColor, color_flow,
     color_flow_shader,
 };
+pub use effect_stage::EffectStage;
 pub use element::{Effect, effect, four_image_effect, image_effect, two_image_effect};
 pub use flip::{
     FLIP_APPEARANCE_SLOT, FLIP_BACKGROUND_SLOT, FLIP_INTERACTION_SLOT, FLIP_LAYOUT_SLOT,
@@ -67,6 +69,6 @@ pub use subtree_builtins::{
     subtree_color_adjust, subtree_color_adjust_shader, subtree_identity, subtree_identity_shader,
     subtree_wave, subtree_wave_shader,
 };
-pub use subtree_effect::{SubtreeEffect, subtree_effect};
+pub use subtree_effect::{SubtreeEffect, subtree_effect, subtree_effect_chain};
 pub use text_blur::TextBlur;
 pub use timed_text::{TimedText, TimedTextEmphasis, TimedTextRevealWave, TimedTextUnit};

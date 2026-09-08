@@ -1,6 +1,6 @@
 use gpui::{EffectShader, IntoElement, Pixels, px};
 
-use crate::{SubtreeEffect, subtree_effect};
+use crate::{EffectStage, SubtreeEffect, subtree_effect, subtree_effect_chain};
 
 /// Wave displacement in logical pixels, driven by `SubtreeEffect::time`.
 #[derive(Clone, Copy, Debug)]
@@ -49,15 +49,9 @@ pub fn subtree_identity<E: IntoElement>(element: E) -> SubtreeEffect<E::Element>
     subtree_effect(element, subtree_identity_shader())
 }
 
-/// Applies a compact Gaussian blur with a logical-pixel support radius.
-///
-/// Uses a fixed 7 × 7 kernel; small radii suit text and UI content. Padding is
-/// reserved automatically. Zero radius preserves the captured content.
+/// Applies a compact 7 × 7 Gaussian blur with a logical-pixel support radius.
 pub fn subtree_blur<E: IntoElement>(element: E, radius: Pixels) -> SubtreeEffect<E::Element> {
-    let radius = radius.max(px(0.));
-    subtree_effect(element, subtree_blur_shader())
-        .uniform_pixels(0, [radius, px(0.), px(0.), px(0.)])
-        .capture_padding(radius)
+    subtree_effect_chain(element, [EffectStage::blur(radius)])
 }
 
 /// Applies continuous wave displacement with automatic capture padding.
@@ -65,30 +59,55 @@ pub fn subtree_wave<E: IntoElement>(
     element: E,
     options: SubtreeWaveOptions,
 ) -> SubtreeEffect<E::Element> {
-    let amplitude = options.amplitude.max(px(0.));
-    subtree_effect(element, subtree_wave_shader())
-        .uniform_pixels(
-            0,
-            [amplitude, options.wavelength.max(px(1.)), px(0.), px(0.)],
-        )
-        .uniform(1, [options.speed, 0., 0., 0.])
-        .capture_padding(amplitude + px(1.))
+    subtree_effect_chain(element, [EffectStage::wave(options)])
 }
 
-/// Adjusts saturation, contrast and brightness for the entire captured content.
+/// Adjusts saturation, contrast and brightness for the captured content.
 pub fn subtree_color_adjust<E: IntoElement>(
     element: E,
     options: SubtreeColorOptions,
 ) -> SubtreeEffect<E::Element> {
-    subtree_effect(element, subtree_color_adjust_shader()).uniform(
-        0,
-        [
-            options.saturation.max(0.),
-            options.contrast.max(0.),
-            options.brightness.max(0.),
-            0.,
-        ],
-    )
+    subtree_effect_chain(element, [EffectStage::color_adjust(options)])
+}
+
+impl EffectStage {
+    /// Preserves the input pixels.
+    pub fn identity() -> Self {
+        Self::new(subtree_identity_shader())
+    }
+
+    /// Compact Gaussian blur. Radius is in logical pixels; zero preserves pixels.
+    pub fn blur(radius: Pixels) -> Self {
+        let radius = radius.max(px(0.));
+        Self::new(subtree_blur_shader())
+            .uniform_pixels(0, [radius, px(0.), px(0.), px(0.)])
+            .capture_padding(radius)
+    }
+
+    /// Wave displacement driven by the chain's animation time.
+    pub fn wave(options: SubtreeWaveOptions) -> Self {
+        let amplitude = options.amplitude.max(px(0.));
+        Self::new(subtree_wave_shader())
+            .uniform_pixels(
+                0,
+                [amplitude, options.wavelength.max(px(1.)), px(0.), px(0.)],
+            )
+            .uniform(1, [options.speed, 0., 0., 0.])
+            .capture_padding(amplitude + px(1.))
+    }
+
+    /// Saturation, contrast and brightness adjustment that preserves alpha.
+    pub fn color_adjust(options: SubtreeColorOptions) -> Self {
+        Self::new(subtree_color_adjust_shader()).uniform(
+            0,
+            [
+                options.saturation.max(0.),
+                options.contrast.max(0.),
+                options.brightness.max(0.),
+                0.,
+            ],
+        )
+    }
 }
 
 /// Identity image shader; no uniforms are required.

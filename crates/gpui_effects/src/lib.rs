@@ -36,6 +36,7 @@ mod masked_builtins;
 mod masked_effect;
 mod masked_fill;
 mod motion;
+mod particles;
 mod ripple;
 mod sticky;
 mod subtree_builtins;
@@ -72,6 +73,7 @@ pub use motion::{
     MotionEasing, MotionEvent, MotionFrame, MotionId, MotionItem, MotionLayer, MotionOptions,
     MotionPath, MotionPolicy,
 };
+pub use particles::{ParticlePhysics, ParticleSpawn, Particles, particles};
 pub use ripple::{MAX_RIPPLES, Ripple, RippleOptions, ripple_shader, subtree_ripples};
 pub use sticky::{StickyShape, paint_sticky_shapes, sticky_shape_shader};
 pub use subtree_builtins::{

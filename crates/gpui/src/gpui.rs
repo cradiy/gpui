@@ -20,6 +20,7 @@ mod color;
 /// The default colors used by GPUI.
 pub mod colors;
 mod effect;
+mod particles;
 mod element;
 mod elements;
 mod executor;
@@ -99,6 +100,7 @@ pub use backdrop::*;
 pub use color::*;
 pub use ctor::ctor;
 pub use effect::*;
+pub use particles::*;
 pub use element::*;
 pub use elements::*;
 pub use executor::*;

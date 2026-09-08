@@ -24,6 +24,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod particles;
+
 #[derive(Clone, Copy)]
 struct FeedbackSnapshot {
     texture: usize,
@@ -424,6 +426,7 @@ struct WgpuResources {
     subtree_textures: Vec<wgpu::Texture>,
     bloom_textures: HashMap<u32, [wgpu::Texture; 2]>,
     feedback_textures: HashMap<gpui::EffectHistoryId, FeedbackTextures>,
+    particles: Option<particles::ParticleRenderer>,
     failed_effect_pipelines: HashSet<u64>,
     backdrop_effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     failed_backdrop_effect_pipelines: HashSet<u64>,
@@ -459,6 +462,7 @@ impl WgpuResources {
         self.subtree_textures.clear();
         self.bloom_textures.clear();
         self.feedback_textures.clear();
+        self.particles = None;
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
@@ -937,6 +941,7 @@ impl WgpuRenderer {
             subtree_textures: Vec::new(),
             bloom_textures: HashMap::new(),
             feedback_textures: HashMap::new(),
+            particles: None,
             failed_effect_pipelines: HashSet::default(),
             backdrop_effect_pipelines: HashMap::default(),
             failed_backdrop_effect_pipelines: HashSet::default(),
@@ -2667,6 +2672,24 @@ impl WgpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
     ) -> bool {
+        let format = self.surface_config.format;
+        let viewport = [
+            self.surface_config.width as f32,
+            self.surface_config.height as f32,
+        ];
+        let mut has_particles = false;
+        scene.visit(&mut |scene| has_particles |= !scene.particles.is_empty());
+        {
+            let resources = self.resources_mut();
+            if has_particles && resources.particles.is_none() {
+                resources.particles =
+                    Some(particles::ParticleRenderer::new(&resources.device, format));
+            }
+            if let Some(particles) = &mut resources.particles {
+                particles.ensure(&resources.device, scene);
+                particles.encode(&resources.queue, scene, viewport, encoder);
+            }
+        }
         let gamma_params = GammaParams {
             gamma_ratios: self.rendering_params.gamma_ratios,
             grayscale_enhanced_contrast: self.rendering_params.grayscale_enhanced_contrast,
@@ -2719,6 +2742,9 @@ impl WgpuRenderer {
         }
         let encoded =
             self.encode_scene_batches(scene, target_texture, target_view, encoder, load, &mut 0, 0);
+        if let Some(particles) = &self.resources().particles {
+            particles.commit(encoded);
+        }
         for textures in self.resources().feedback_textures.values() {
             if let Some(snapshot) = textures.pending.take()
                 && encoded
@@ -3000,6 +3026,14 @@ impl WgpuRenderer {
                     }
                     PrimitiveBatch::Effects(range) => {
                         self.draw_effects(&scene.effects[range], instance_offset, &mut pass)
+                    }
+                    PrimitiveBatch::Particles(range) => {
+                        if let Some(particles) = &self.resources().particles {
+                            for draw in &scene.particles[range] {
+                                particles.draw(draw, &mut pass);
+                            }
+                        }
+                        true
                     }
                     PrimitiveBatch::Shadows(range) => {
                         self.draw_shadows(&scene.shadows[range], instance_offset, &mut pass)

@@ -12,6 +12,8 @@ use gpui_wgpu::WgpuOffscreenRenderer;
 
 #[path = "support/feedback.rs"]
 mod feedback;
+#[path = "support/particles.rs"]
+mod particles;
 
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<ScaledPixels> {
     Bounds::new(
@@ -117,7 +119,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     check_bloom_highlights(&mut renderer)?;
     check_effect_chains(&mut renderer)?;
     check_bloom_spread_and_highlight_contrast(&mut renderer)?;
-    feedback::check(&mut renderer)
+    feedback::check(&mut renderer)?;
+    particles::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(

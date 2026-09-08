@@ -3541,6 +3541,35 @@ impl Window {
         self.platform_window.supports_subtree_effects()
     }
 
+    /// Whether this window supports GPU particle simulation and drawing.
+    pub fn supports_gpu_particles(&self) -> bool {
+        self.platform_window.supports_gpu_particles()
+    }
+
+    /// Paints a particle surface. Unsupported renderers do not draw particles.
+    pub fn paint_particles(&mut self, bounds: Bounds<Pixels>, frame: Arc<crate::ParticleFrame>) {
+        self.invalidator.debug_assert_paint();
+        if !self.supports_gpu_particles() {
+            return;
+        }
+        let bounds = self.snap_bounds(bounds);
+        let content_mask = self.snapped_content_mask();
+        if self.element_opacity <= 0. || bounds.intersect(&content_mask.bounds).is_empty() {
+            return;
+        }
+        if frame.needs_animation {
+            self.request_animation_frame();
+        }
+        self.next_frame.scene.insert_primitive(crate::ParticleDraw {
+            order: 0,
+            bounds,
+            content_mask,
+            scale_factor: self.scale_factor(),
+            opacity: self.element_opacity,
+            frame,
+        });
+    }
+
     /// Prepaints content that will be painted with [`Self::with_subtree_effect`].
     ///
     /// Cached views distinguish transparent capture from normal window rendering.

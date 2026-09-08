@@ -14,6 +14,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [History feedback](docs/feedback.md): persistent trails, time-based decay and playback controls.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
+- [GPU particles](docs/particles.md): GPU-simulated light points, streaks and interactive forces.
 
 ## Examples
 
@@ -60,6 +61,12 @@ Run the pointer-following lens example:
 
 ```sh
 cargo run -p gpui_effects --example lens
+```
+
+Run the interactive particle example:
+
+```sh
+cargo run -p gpui_effects --example particles
 ```
 
 ## License

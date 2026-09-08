@@ -1862,6 +1862,10 @@ impl PlatformWindow for WaylandWindow {
         true
     }
 
+    fn supports_gpu_particles(&self) -> bool {
+        true
+    }
+
     fn minimize(&self) {
         if let Some(toplevel) = self.borrow().surface_state.toplevel() {
             toplevel.set_minimized();

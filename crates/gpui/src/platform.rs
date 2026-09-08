@@ -829,6 +829,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
 
+    /// Whether the renderer supports GPU particle simulation and drawing.
+    fn supports_gpu_particles(&self) -> bool {
+        false
+    }
+
     // macOS specific methods
     fn get_title(&self) -> String {
         String::new()

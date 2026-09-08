@@ -13,6 +13,7 @@ use std::{
     fmt::Debug,
     iter::Peekable,
     ops::{Add, Range, Sub},
+    rc::Rc,
     slice,
     sync::Arc,
 };
@@ -249,7 +250,7 @@ impl Scene {
         let layer = Primitive::SubtreeLayer(SubtreeLayer {
             composite,
             intermediate_effects,
-            scene: Arc::new(scene),
+            scene: Rc::new(scene),
         });
         if let Some((_, _, parent)) = self.pending_subtrees.last_mut() {
             parent.insert_primitive(layer);
@@ -801,7 +802,7 @@ pub struct SubtreeLayer {
     /// Ordered image passes applied before the final composite.
     pub intermediate_effects: Arc<[SubtreeEffectPass]>,
     /// Content drawn against transparent black before compositing.
-    pub scene: Arc<Scene>,
+    pub scene: Rc<Scene>,
 }
 
 /// An image-processing pass over an isolated subtree texture.

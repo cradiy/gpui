@@ -368,7 +368,7 @@ mod tests {
         );
         for root in [
             a.clone().union(b.clone()).subtract(c.clone()),
-            a.clone().smooth_union(b.clone()).smooth_subtract(c.clone()),
+            a.clone().smooth_union(b.clone()).smooth_subtract(c),
             a.clone().intersect(b.clone()),
             a.smooth_intersect(b),
         ] {

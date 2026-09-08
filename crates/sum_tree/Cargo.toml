@@ -21,7 +21,6 @@ tracing.workspace = true
 proptest = { workspace = true, optional = true }
 
 [dev-dependencies]
-ctor.workspace = true
 rand.workspace = true
 proptest.workspace = true
 
@@ -31,4 +30,3 @@ ignored = ["tracing"]
 
 [features]
 test-support = ["proptest"]
-

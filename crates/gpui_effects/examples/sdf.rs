@@ -32,7 +32,7 @@ impl SdfPreview {
         let scenes = [
             base.clone().smooth_union(capsule.clone()),
             base.clone().smooth_subtract(capsule.clone()),
-            base.smooth_intersect(capsule.clone()),
+            base.smooth_intersect(capsule),
         ]
         .map(|shape| SdfScene::new(shape).expect("invalid shape composition"));
         let mut guide_color = rgb(COLORS[2]);

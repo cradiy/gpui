@@ -325,7 +325,7 @@ pub fn is_open(cx: &App) -> bool {
 mod tests {
     use gpui::{
         Context, Entity, Focusable, IntoElement, Keystroke, Render, TestAppContext,
-        VisualTestContext, Window, div, prelude::*, px, size,
+        VisualTestContext, Window, div, px, size,
     };
 
     use super::*;

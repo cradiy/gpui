@@ -225,7 +225,7 @@ fn indeterminate_geometry(phase: f32) -> (f32, f32) {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{IntoElement as _, relative};
+    use gpui::relative;
 
     use super::*;
 

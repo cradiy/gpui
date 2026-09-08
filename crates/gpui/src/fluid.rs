@@ -73,9 +73,9 @@ impl FluidOptions {
             resolution: self.resolution.clamp(32, 512),
             update_hz: self.update_hz.clamp(15, 120),
             pressure_iterations: self.pressure_iterations.clamp(8, 60),
-            velocity_decay: self.velocity_decay.max(0.).min(20.),
-            dye_decay: self.dye_decay.max(0.).min(20.),
-            vorticity: self.vorticity.max(0.).min(30.),
+            velocity_decay: self.velocity_decay.clamp(0., 20.).max(0.),
+            dye_decay: self.dye_decay.clamp(0., 20.).max(0.),
+            vorticity: self.vorticity.clamp(0., 30.).max(0.),
         }
     }
 }

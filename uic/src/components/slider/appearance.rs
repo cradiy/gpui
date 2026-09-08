@@ -40,7 +40,7 @@ impl Default for SliderAppearance {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{prelude::*, px, rgba};
+    use gpui::{px, rgba};
 
     use super::*;
 

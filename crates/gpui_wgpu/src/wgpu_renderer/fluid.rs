@@ -329,13 +329,13 @@ impl FluidRenderer {
                             f32::from(s.velocity.x).clamp(-2000., 2000.),
                             f32::from(s.velocity.y).clamp(-2000., 2000.),
                             f32::from(s.radius).max(0.5),
-                            s.amount.max(0.).min(4.),
+                            s.amount.clamp(0., 4.).max(0.),
                         ],
                         color: [
-                            s.color.r.max(0.).min(1.),
-                            s.color.g.max(0.).min(1.),
-                            s.color.b.max(0.).min(1.),
-                            s.color.a.max(0.).min(1.),
+                            s.color.r.clamp(0., 1.).max(0.),
+                            s.color.g.clamp(0., 1.).max(0.),
+                            s.color.b.clamp(0., 1.).max(0.),
+                            s.color.a.clamp(0., 1.).max(0.),
                         ],
                     })
                     .collect::<Vec<_>>();

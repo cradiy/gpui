@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     Bounds, ContentMask, DevicePixels, EffectQuad, EffectShader, Primitive, Quad, ScaledPixels,
@@ -59,7 +59,7 @@ fn layer(mut scene: Scene, bounds: Bounds<ScaledPixels>, opacity: f32) -> Primit
             third_image_tile: None,
             fourth_image_tile: None,
         },
-        scene: Arc::new(scene),
+        scene: Rc::new(scene),
     })
 }
 

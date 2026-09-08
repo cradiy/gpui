@@ -166,7 +166,7 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
             gpui_effects::aurora_shader(),
             gpui_effects::plasma_shader(),
             gpui_effects::color_orbs_shader(),
-            gpui_effects::album_glow_shader(),
+            gpui_effects::color_flow_shader(),
             gpui_effects::flip_shader(),
             gpui_effects::rigid_flip_shader(),
             gpui_effects::soft_flip_shader(),

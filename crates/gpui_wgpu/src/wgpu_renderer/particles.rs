@@ -270,7 +270,7 @@ impl ParticleRenderer {
                                 f32::from(spawn.radius.end).max(min_radius),
                             ],
                             color: [spawn.color.r, spawn.color.g, spawn.color.b, spawn.color.a],
-                            shape: [spawn.stretch.max(0.).min(0.25), 0., 0., 0.],
+                            shape: [spawn.stretch.clamp(0., 0.25).max(0.), 0., 0., 0.],
                         }
                     })
                     .collect::<Vec<_>>();

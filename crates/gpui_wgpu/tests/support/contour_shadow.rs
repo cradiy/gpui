@@ -37,6 +37,7 @@ fn scene(scale: f32, offset: f32, softness: f32, alpha: f32, empty: bool) -> Sce
         bloom: None,
         feedback: None,
         particles: None,
+        images: Default::default(),
         particle_transition: None,
         distance_field: Some(SubtreeDistanceFieldPass {
             threshold: 0.5,

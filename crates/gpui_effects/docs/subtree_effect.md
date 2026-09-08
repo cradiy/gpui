@@ -119,6 +119,11 @@ uniforms and padding. `.enabled(false)` omits that stage entirely.
 `EffectStage::lens(options)` magnifies or compresses a local region. See
 [Local lens](lens.md) for pointer tracking and falloff controls.
 
+`EffectStage::displacement_map(map, options)` samples an external RG control map.
+`EffectStage::with_images(shader, images)` binds external images after the captured
+source for custom two-image or four-image shaders. See
+[Displacement maps](displacement_map.md) for map formats, masking and sampling.
+
 An existing effect can append a stage with `.then(EffectStage::blur(px(2.)))`.
 The wrapper's `uniform`, `uniforms` and `uniform_pixels` methods configure its
 first stage. Configure subsequent stages before appending them. `.time(seconds)`

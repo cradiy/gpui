@@ -3634,6 +3634,7 @@ impl Window {
                 shader,
                 uniforms,
                 time,
+                images: Default::default(),
                 bloom: None,
                 feedback: None,
                 distance_field: None,
@@ -3658,36 +3659,48 @@ impl Window {
     ) -> R {
         self.invalidator.debug_assert_paint();
         assert!(
-            passes.iter().all(|pass| pass.shader.image_count() == 1
-                && !pass.shader.is_mask()
-                && pass.bloom.as_ref().is_none_or(|bloom| {
-                    bloom.extract.image_count() == 1
-                        && !bloom.extract.is_mask()
-                        && bloom.blur.image_count() == 1
-                        && !bloom.blur.is_mask()
-                        && bloom.composite.image_count() == 2
-                        && !bloom.composite.is_mask()
-                })
-                && pass.feedback.as_ref().is_none_or(|feedback| {
-                    pass.bloom.is_none()
-                        && feedback.shader.image_count() == 2
-                        && !feedback.shader.is_mask()
-                })
-                && pass.distance_field.as_ref().is_none_or(|field| {
-                    pass.bloom.is_none()
-                        && pass.feedback.is_none()
-                        && field.composite.image_count() == 2
-                        && !field.composite.is_mask()
-                })
-                && pass.particles.as_ref().is_none_or(|_| {
-                    pass.bloom.is_none() && pass.feedback.is_none() && pass.distance_field.is_none()
-                })
-                && pass.particle_transition.as_ref().is_none_or(|_| {
-                    pass.bloom.is_none()
-                        && pass.feedback.is_none()
-                        && pass.distance_field.is_none()
-                        && pass.particles.is_none()
-                })),
+            passes
+                .iter()
+                .all(
+                    |pass| usize::from(pass.shader.image_count()) == 1 + pass.images.len()
+                        && !pass.shader.is_mask()
+                        && (pass.images.is_empty()
+                            || (pass.bloom.is_none()
+                                && pass.feedback.is_none()
+                                && pass.distance_field.is_none()
+                                && pass.particles.is_none()
+                                && pass.particle_transition.is_none()))
+                        && pass.bloom.as_ref().is_none_or(|bloom| {
+                            bloom.extract.image_count() == 1
+                                && !bloom.extract.is_mask()
+                                && bloom.blur.image_count() == 1
+                                && !bloom.blur.is_mask()
+                                && bloom.composite.image_count() == 2
+                                && !bloom.composite.is_mask()
+                        })
+                        && pass.feedback.as_ref().is_none_or(|feedback| {
+                            pass.bloom.is_none()
+                                && feedback.shader.image_count() == 2
+                                && !feedback.shader.is_mask()
+                        })
+                        && pass.distance_field.as_ref().is_none_or(|field| {
+                            pass.bloom.is_none()
+                                && pass.feedback.is_none()
+                                && field.composite.image_count() == 2
+                                && !field.composite.is_mask()
+                        })
+                        && pass.particles.as_ref().is_none_or(|_| {
+                            pass.bloom.is_none()
+                                && pass.feedback.is_none()
+                                && pass.distance_field.is_none()
+                        })
+                        && pass.particle_transition.as_ref().is_none_or(|_| {
+                            pass.bloom.is_none()
+                                && pass.feedback.is_none()
+                                && pass.distance_field.is_none()
+                                && pass.particles.is_none()
+                        })
+                ),
             "invalid shader inputs for subtree effect passes"
         );
         if passes.is_empty() || !self.supports_subtree_effects() {
@@ -3699,6 +3712,7 @@ impl Window {
             || last.distance_field.is_some()
             || last.particles.is_some()
             || last.particle_transition.is_some()
+            || !last.images.is_empty()
         {
             passes
         } else {
@@ -3713,7 +3727,13 @@ impl Window {
             effect_bounds: bounds,
             transformation: TransformationMatrix::default(),
             content_mask: self.snapped_content_mask(),
-            shader: last.shader.clone(),
+            shader: if last.images.is_empty() {
+                last.shader.clone()
+            } else {
+                EffectShader::wgsl_image(
+                    "fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return sample_effect_image(input, input.uv); }",
+                )
+            },
             uniforms: last.uniforms,
             time: last.time,
             corner_radii: Corners::default(),
@@ -4356,6 +4376,32 @@ impl Window {
         });
     }
 
+    /// Resolves a decoded image frame to an atlas tile for an effect input.
+    /// Call during paint. Images retain their straight-alpha BGRA data.
+    pub fn prepare_effect_image(
+        &mut self,
+        image: &RenderImage,
+        frame_index: usize,
+    ) -> Result<AtlasTile> {
+        self.invalidator.debug_assert_paint();
+        let bytes = image
+            .as_bytes(frame_index)
+            .ok_or_else(|| anyhow!("image frame index is out of bounds"))?;
+        let size = image.size(frame_index);
+        if size.width.0 <= 0 || size.height.0 <= 0 {
+            return Err(anyhow!("effect image is empty"));
+        }
+        let params = RenderImageParams {
+            image_id: image.id,
+            frame_index,
+        };
+        self.sprite_atlas
+            .get_or_insert_with(&params.into(), &mut || {
+                Ok(Some((size, Cow::Borrowed(bytes))))
+            })?
+            .ok_or_else(|| anyhow!("effect image has no atlas tile"))
+    }
+
     /// Paints a custom fragment effect into the scene for the next frame.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
@@ -4367,26 +4413,7 @@ impl Window {
                 let (image, frame_index) = source.as_ref().ok_or_else(|| {
                     anyhow!("{label} image is required before this effect can be painted")
                 })?;
-                if *frame_index >= image.frame_count() {
-                    return Err(anyhow!("{label} image frame index is out of bounds"));
-                }
-                let params = RenderImageParams {
-                    image_id: image.id,
-                    frame_index: *frame_index,
-                };
-                Ok(self
-                    .sprite_atlas
-                    .get_or_insert_with(&params.into(), &mut || {
-                        Ok(Some((
-                            image.size(*frame_index),
-                            Cow::Borrowed(
-                                image
-                                    .as_bytes(*frame_index)
-                                    .expect("frame index was checked above"),
-                            ),
-                        )))
-                    })?
-                    .expect("image effect atlas callback always returns a tile"))
+                self.prepare_effect_image(image, *frame_index)
             };
         let image_tile = if effect.shader.image_count() >= 1 {
             Some(insert_effect_image(&effect.image, "primary")?)

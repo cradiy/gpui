@@ -163,5 +163,19 @@ mod tests {
             .validate(&module)
             .expect("subtree shader must validate");
         }
+        for shader in [
+            crate::displacement_map_shader(),
+            crate::masked_displacement_map_shader(),
+        ] {
+            let source = gpui::compose_subtree_image_effect_wgsl(&shader);
+            let module = naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("external image stage must validate");
+        }
     }
 }

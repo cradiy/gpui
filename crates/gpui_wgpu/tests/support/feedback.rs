@@ -39,6 +39,7 @@ fn scene(
         feedback: Some(feedback.clone()),
         distance_field: None,
         particles: None,
+        images: Default::default(),
         particle_transition: None,
     }];
     if bloom {

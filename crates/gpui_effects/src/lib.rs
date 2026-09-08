@@ -29,6 +29,7 @@ mod contour_glow;
 mod contour_relief;
 mod contour_shadow;
 mod deformation;
+mod displacement_map;
 mod effect_stage;
 mod element;
 mod feedback;
@@ -67,6 +68,10 @@ pub use contour_relief::{
 };
 pub use contour_shadow::{ContourShadowOptions, contour_shadow_shader, subtree_contour_shadow};
 pub use deformation::{DeformationOptions, ElasticOffset, deformation_shader, subtree_deformation};
+pub use displacement_map::{
+    DisplacementMapOptions, DisplacementMapPreset, DisplacementMapSampling, DisplacementSourceEdge,
+    displacement_map_shader, masked_displacement_map_shader, subtree_displacement_map,
+};
 pub use effect_stage::EffectStage;
 pub use element::{Effect, effect, four_image_effect, image_effect, two_image_effect};
 pub use feedback::{Feedback, FeedbackOptions, feedback_shader, subtree_feedback};

@@ -18,6 +18,8 @@ mod contour_relief;
 mod contour_shadow;
 #[path = "support/deformation.rs"]
 mod deformation;
+#[path = "support/displacement_map.rs"]
+mod displacement_map;
 #[path = "support/feedback.rs"]
 mod feedback;
 #[path = "support/fluid.rs"]
@@ -151,6 +153,7 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     holographic::check(&mut renderer)?;
     path_morph::check(&mut renderer)?;
     deformation::check(&mut renderer)?;
+    displacement_map::check(&mut renderer)?;
     contour_glow::check(&mut renderer)?;
     contour_relief::check(&mut renderer)?;
     contour_shadow::check(&mut renderer)
@@ -243,6 +246,7 @@ fn bloom_pass(downsample: u32) -> gpui::SubtreeEffectPass {
         feedback: None,
         distance_field: None,
         particles: None,
+        images: Default::default(),
         particle_transition: None,
     }
 }
@@ -329,6 +333,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
         feedback: None,
         distance_field: None,
         particles: None,
+        images: Default::default(),
         particle_transition: None,
     };
     let color = gpui::SubtreeEffectPass {
@@ -339,6 +344,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
         feedback: None,
         distance_field: None,
         particles: None,
+        images: Default::default(),
         particle_transition: None,
     };
     let available = [blur, color, bloom_pass(4)];
@@ -377,6 +383,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
                         feedback: None,
                         distance_field: None,
                         particles: None,
+                        images: Default::default(),
                         particle_transition: None,
                     });
                 }

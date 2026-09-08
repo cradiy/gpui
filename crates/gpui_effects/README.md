@@ -14,6 +14,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [History feedback](docs/feedback.md): persistent trails, time-based decay and playback controls.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
+- [Displacement maps](docs/displacement_map.md): external RG maps, local masks and texture-driven distortion.
 - [GPU particles](docs/particles.md): light points, streaks, interactive forces and alpha-mask emission.
 - [Particle transition](docs/particle_transition.md): reversible scattering and gathering of text and images.
 - [GPU fluid](docs/fluid.md): interactive colored ink, momentum and vortices.
@@ -101,6 +102,12 @@ Run the reversible particle-transition example:
 
 ```sh
 cargo run -p gpui_effects --example particle_transition
+```
+
+Run the displacement-map example:
+
+```sh
+cargo run -p gpui_effects --example displacement_map
 ```
 
 Run the interactive fluid example:

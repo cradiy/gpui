@@ -35,6 +35,7 @@ fn scene(progress: f32, scale: f32, empty: bool, seed: u32) -> Scene {
         feedback: None,
         distance_field: None,
         particles: None,
+        images: Default::default(),
         particle_transition: Some(SubtreeParticleTransitionPass {
             progress,
             scale_factor: scale,

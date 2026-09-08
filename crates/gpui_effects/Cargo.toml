@@ -11,6 +11,7 @@ anyhow.workspace = true
 smallvec.workspace = true
 accesskit.workspace = true
 gpui.workspace = true
+image.workspace = true
 refineable.workspace = true
 uic_macros.workspace = true
 

@@ -39,6 +39,7 @@ fn scene(
         bloom: None,
         feedback: None,
         distance_field: None,
+        images: Default::default(),
         particle_transition: None,
         particles: Some(SubtreeParticlePass {
             frame: Arc::new(frame.clone()),

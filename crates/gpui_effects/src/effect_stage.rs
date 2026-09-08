@@ -1,8 +1,46 @@
-use gpui::{EffectShader, EffectUniforms, Pixels, SubtreeEffectPass, px};
+use gpui::{
+    App, AtlasTile, EffectShader, EffectUniforms, ImageSource, Pixels, SubtreeEffectPass, Window,
+    px,
+};
+use smallvec::SmallVec;
+
+#[derive(Clone, Default)]
+pub(crate) struct StageImages(pub SmallVec<[ImageSource; 3]>);
+
+impl std::fmt::Debug for StageImages {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StageImages")
+            .field("count", &self.0.len())
+            .finish()
+    }
+}
+
+impl StageImages {
+    pub(crate) fn preload(&self, window: &mut Window, cx: &mut App) {
+        for source in &self.0 {
+            let _ = source.use_data(None, window, cx);
+        }
+    }
+
+    pub(crate) fn prepare(
+        &self,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<SmallVec<[AtlasTile; 3]>> {
+        self.0
+            .iter()
+            .map(|source| {
+                let image = source.use_data(None, window, cx)?.ok()?;
+                window.prepare_effect_image(&image, 0).ok()
+            })
+            .collect()
+    }
+}
 
 /// One configurable image-processing stage in a subtree effect chain.
 #[derive(Clone, Debug)]
 pub struct EffectStage {
+    pub(crate) images: StageImages,
     pub(crate) shader: EffectShader,
     pub(crate) uniforms: EffectUniforms,
     pub(crate) pixel_uniform_slots: [bool; gpui::EFFECT_UNIFORM_SLOTS],
@@ -23,6 +61,7 @@ impl EffectStage {
             "effect stages require a single-image shader"
         );
         Self {
+            images: StageImages::default(),
             shader,
             uniforms: EffectUniforms::default(),
             pixel_uniform_slots: [false; gpui::EFFECT_UNIFORM_SLOTS],
@@ -34,6 +73,25 @@ impl EffectStage {
             particles: None,
             particle_transition: None,
         }
+    }
+
+    /// Creates a stage with one or three external images after the captured source.
+    /// Images use the first decoded frame. While an input is unavailable, the stage is skipped.
+    pub fn with_images(
+        shader: EffectShader,
+        images: impl IntoIterator<Item = ImageSource>,
+    ) -> Self {
+        let images: SmallVec<[ImageSource; 3]> = images.into_iter().collect();
+        assert!(
+            matches!(shader.image_count(), 2 | 4)
+                && !shader.is_mask()
+                && images.len() + 1 == usize::from(shader.image_count()),
+            "external images must match the shader inputs after the captured source"
+        );
+        let mut stage = Self::new(crate::subtree_identity_shader());
+        stage.shader = shader;
+        stage.images = StageImages(images);
+        stage
     }
 
     /// Replaces all uniforms, removing logical-pixel conversion.
@@ -77,6 +135,7 @@ impl EffectStage {
             }
         }
         SubtreeEffectPass {
+            images: Default::default(),
             shader: self.shader.clone(),
             uniforms,
             time,

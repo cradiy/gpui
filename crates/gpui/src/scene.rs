@@ -3,6 +3,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 use crate::{
     AtlasTextureId, AtlasTile, BackdropShader, Background, BorderGradient, Bounds, ContentMask,
@@ -808,13 +809,16 @@ pub struct SubtreeLayer {
 /// An image-processing pass over an isolated subtree texture.
 #[derive(Clone, Debug)]
 pub struct SubtreeEffectPass {
-    /// Single-image shader applied to the preceding texture.
+    /// Shader applied to the preceding texture and any external images.
     /// Compound stages use it to resolve their output.
     pub shader: EffectShader,
     /// Shader parameters, with pixel dimensions in device pixels.
     pub uniforms: EffectUniforms,
     /// Animation time in seconds.
     pub time: f32,
+    /// Atlas images bound after the captured source, in shader input order.
+    /// Empty for compound stages; otherwise the count is `shader.image_count() - 1`.
+    pub images: SmallVec<[AtlasTile; 3]>,
     /// Optional highlight extraction, separable blur and two-image composite.
     pub bloom: Option<SubtreeBloomPass>,
     /// Optional persistent two-image feedback pass.
@@ -1420,6 +1424,7 @@ mod tests {
             distance_field: None,
             particles: None,
             particle_transition: None,
+            images: Default::default(),
         };
         let mut scene = Scene::default();
         scene.start_subtree_chain(composite, vec![pass.clone(); 7].into());

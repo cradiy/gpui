@@ -426,6 +426,8 @@ struct WgpuResources {
     pipelines: WgpuPipelines,
     effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     subtree_effect_pipelines: HashMap<(u64, wgpu::TextureFormat), Option<wgpu::RenderPipeline>>,
+    subtree_image_effect_pipelines:
+        HashMap<(u64, wgpu::TextureFormat), Option<wgpu::RenderPipeline>>,
     subtree_textures: Vec<wgpu::Texture>,
     bloom_textures: HashMap<u32, [wgpu::Texture; 2]>,
     distance_field: Option<distance_field::DistanceFieldRenderer>,
@@ -947,6 +949,7 @@ impl WgpuRenderer {
             pipelines,
             effect_pipelines: HashMap::default(),
             subtree_effect_pipelines: HashMap::default(),
+            subtree_image_effect_pipelines: HashMap::default(),
             subtree_textures: Vec::new(),
             bloom_textures: HashMap::new(),
             distance_field: None,
@@ -1235,8 +1238,11 @@ impl WgpuRenderer {
         alpha_mode: wgpu::CompositeAlphaMode,
         shader: &EffectShader,
         subtree: bool,
+        external_images: bool,
     ) -> anyhow::Result<wgpu::RenderPipeline> {
-        let source = if subtree {
+        let source = if external_images {
+            gpui::compose_subtree_image_effect_wgsl(shader)
+        } else if subtree {
             gpui::compose_subtree_effect_wgsl(shader)
         } else {
             gpui::compose_effect_shader_wgsl(shader)
@@ -1313,12 +1319,38 @@ impl WgpuRenderer {
         let surface_format = self.surface_config.format;
         for layer in &scene.subtree_layers {
             self.ensure_effect_pipelines(&layer.scene);
+            for effect in layer
+                .intermediate_effects
+                .iter()
+                .filter(|pass| !pass.images.is_empty())
+            {
+                let key = (effect.shader.id().as_u64(), surface_format);
+                if !self
+                    .resources()
+                    .subtree_image_effect_pipelines
+                    .contains_key(&key)
+                {
+                    let result = Self::create_effect_pipeline(
+                        &self.resources().device,
+                        &self.resources().bind_group_layouts,
+                        surface_format,
+                        self.surface_config.alpha_mode,
+                        &effect.shader,
+                        true,
+                        true,
+                    );
+                    self.resources_mut()
+                        .subtree_image_effect_pipelines
+                        .insert(key, result.ok());
+                }
+            }
             for (shader, format) in
                 layer
                     .intermediate_effects
                     .iter()
                     .flat_map(|pass| {
                         std::iter::once((&pass.shader, surface_format))
+                            .filter(|_| pass.images.is_empty())
                             .chain(pass.bloom.iter().flat_map(|bloom| {
                                 [
                                     (&bloom.extract, wgpu::TextureFormat::Rgba16Float),
@@ -1346,6 +1378,7 @@ impl WgpuRenderer {
                         self.surface_config.alpha_mode,
                         shader,
                         true,
+                        false,
                     );
                     self.resources_mut()
                         .subtree_effect_pipelines
@@ -1373,6 +1406,7 @@ impl WgpuRenderer {
                 self.surface_config.format,
                 self.surface_config.alpha_mode,
                 &shader,
+                false,
                 false,
             );
             match result {
@@ -2071,6 +2105,7 @@ impl WgpuRenderer {
             );
             resources.effect_pipelines.clear();
             resources.subtree_effect_pipelines.clear();
+            resources.subtree_image_effect_pipelines.clear();
             resources.failed_effect_pipelines.clear();
             resources.backdrop_effect_pipelines.clear();
             resources.failed_backdrop_effect_pipelines.clear();
@@ -2969,9 +3004,12 @@ impl WgpuRenderer {
                                 texture.create_view(&wgpu::TextureViewDescriptor::default());
                             let mut source_index = depth;
                             for effect in layer.intermediate_effects.iter() {
-                                let Some(effect_pipeline) = self
-                                    .resources()
-                                    .subtree_effect_pipelines
+                                let pipelines = if effect.images.is_empty() {
+                                    &self.resources().subtree_effect_pipelines
+                                } else {
+                                    &self.resources().subtree_image_effect_pipelines
+                                };
+                                let Some(effect_pipeline) = pipelines
                                     .get(&(effect.shader.id().as_u64(), self.surface_config.format))
                                     .and_then(Option::as_ref)
                                 else {
@@ -3148,16 +3186,51 @@ impl WgpuRenderer {
                                     quad.time = effect.time;
                                     quad.opacity = 1.;
                                     quad.content_mask.bounds = quad.bounds;
+                                    quad.second_image_tile = effect.images.first().copied();
+                                    quad.third_image_tile = effect.images.get(1).copied();
+                                    quad.fourth_image_tile = effect.images.get(2).copied();
                                     let mut instance = EffectInstance::from(&quad);
                                     instance.image_bounds = quad.bounds.into();
-                                    if !self.draw_instances_with_texture(
-                                        bytemuck::bytes_of(&instance),
-                                        1,
-                                        &source_view,
-                                        effect_pipeline,
-                                        instance_offset,
-                                        &mut effect_pass,
-                                    ) {
+                                    let drawn = if effect.images.len() == 3 {
+                                        let textures = [0, 1, 2].map(|index| {
+                                            self.atlas
+                                                .get_texture_info(effect.images[index].texture_id)
+                                        });
+                                        self.draw_instances_with_four_textures(
+                                            bytemuck::bytes_of(&instance),
+                                            1,
+                                            [
+                                                &source_view,
+                                                &textures[0].view,
+                                                &textures[1].view,
+                                                &textures[2].view,
+                                            ],
+                                            effect_pipeline,
+                                            instance_offset,
+                                            &mut effect_pass,
+                                        )
+                                    } else if let Some(tile) = effect.images.first() {
+                                        let texture = self.atlas.get_texture_info(tile.texture_id);
+                                        self.draw_instances_with_two_textures(
+                                            bytemuck::bytes_of(&instance),
+                                            1,
+                                            &source_view,
+                                            &texture.view,
+                                            effect_pipeline,
+                                            instance_offset,
+                                            &mut effect_pass,
+                                        )
+                                    } else {
+                                        self.draw_instances_with_texture(
+                                            bytemuck::bytes_of(&instance),
+                                            1,
+                                            &source_view,
+                                            effect_pipeline,
+                                            instance_offset,
+                                            &mut effect_pass,
+                                        )
+                                    };
+                                    if !drawn {
                                         did_draw = false;
                                         break;
                                     }

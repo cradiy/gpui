@@ -17,11 +17,14 @@ pub fn subtree_effect_chain<E: IntoElement>(
         element.into_element(),
         first
             .as_ref()
+            .filter(|stage| stage.images.0.is_empty())
             .map(|stage| stage.shader.clone())
             .unwrap_or_else(crate::subtree_identity_shader),
     );
     effect.first_stage_enabled = first.is_some();
     if let Some(stage) = first {
+        effect.shader = stage.shader;
+        effect.images = stage.images;
         effect.uniforms = stage.uniforms;
         effect.pixel_uniform_slots = stage.pixel_uniform_slots;
         effect.padding = stage.padding;
@@ -51,6 +54,7 @@ where
 /// Shader displacement affects pixels only. Unsupported platforms draw the
 /// wrapped element normally. Check `Window::supports_subtree_effects` for support.
 pub struct SubtreeEffect<E: Element> {
+    images: crate::effect_stage::StageImages,
     element: E,
     shader: EffectShader,
     uniforms: EffectUniforms,
@@ -76,6 +80,7 @@ impl<E: Element> SubtreeEffect<E> {
             "subtree effects require a single-image shader"
         );
         Self {
+            images: Default::default(),
             element,
             shader,
             uniforms: EffectUniforms::default(),
@@ -215,6 +220,12 @@ impl<E: Element> Element for SubtreeEffect<E> {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        if self.enabled {
+            self.images.preload(window, cx);
+            for stage in &self.following_stages {
+                stage.images.preload(window, cx);
+            }
+        }
         self.element.request_layout(id, inspector_id, window, cx)
     }
 
@@ -261,8 +272,11 @@ impl<E: Element> Element for SubtreeEffect<E> {
             return;
         }
         let mut passes = smallvec::SmallVec::<[gpui::SubtreeEffectPass; 2]>::new();
-        if self.first_stage_enabled {
+        if self.first_stage_enabled
+            && let Some(images) = self.images.prepare(window, cx)
+        {
             passes.push(gpui::SubtreeEffectPass {
+                images,
                 shader: self.shader.clone(),
                 uniforms: self.scaled_uniforms(window.scale_factor()),
                 time: self.time,
@@ -282,11 +296,13 @@ impl<E: Element> Element for SubtreeEffect<E> {
                 }),
             });
         }
-        passes.extend(
-            self.following_stages
-                .iter()
-                .map(|stage| stage.prepare(window.scale_factor(), self.time)),
-        );
+        for stage in &self.following_stages {
+            if let Some(images) = stage.images.prepare(window, cx) {
+                let mut pass = stage.prepare(window.scale_factor(), self.time);
+                pass.images = images;
+                passes.push(pass);
+            }
+        }
         let opacity = self.opacity;
         if window.supports_subtree_effects()
             && opacity > 0.

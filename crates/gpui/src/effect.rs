@@ -69,6 +69,33 @@ pub fn compose_subtree_effect_wgsl(shader: &EffectShader) -> String {
         )
 }
 
+/// Composes a captured source with straight-alpha external atlas images.
+#[doc(hidden)]
+pub fn compose_subtree_image_effect_wgsl(shader: &EffectShader) -> String {
+    assert!(matches!(shader.image_count(), 2 | 4) && !shader.is_mask());
+    let mut source = compose_effect_shader_wgsl(shader).replace(
+        include_str!("effect_image.wgsl"),
+        include_str!("effect_subtree.wgsl"),
+    );
+    source = source.replace(
+        include_str!("effect_second_image.wgsl"),
+        &include_str!("effect_subtree_atlas.wgsl")
+            .replace("INDEX", "second")
+            .replace("BINDING", "3"),
+    );
+    if shader.image_count() == 4 {
+        let additional = [("third", "4"), ("fourth", "5")]
+            .map(|(name, binding)| {
+                include_str!("effect_subtree_atlas.wgsl")
+                    .replace("INDEX", name)
+                    .replace("BINDING", binding)
+            })
+            .join("\n");
+        source = source.replace(include_str!("effect_additional_images.wgsl"), &additional);
+    }
+    source
+}
+
 fn compose_effect_wgsl_impl(effect_source: &str, image_count: u8, is_mask: bool) -> String {
     include_str!("effect.wgsl")
         .replace(

@@ -2954,6 +2954,7 @@ dependencies = [
  "anyhow",
  "gpui",
  "gpui_platform",
+ "image",
  "naga 29.0.4",
  "refineable",
  "smallvec",

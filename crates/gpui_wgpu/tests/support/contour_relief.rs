@@ -31,6 +31,7 @@ fn scene(scale: f32, depth: f32, light_x: f32, opacity: f32, empty: bool) -> Sce
         time: 0.,
         bloom: None,
         feedback: None,
+        particles: None,
         distance_field: Some(SubtreeDistanceFieldPass {
             threshold: 0.5,
             composite: contour_relief_shader(),

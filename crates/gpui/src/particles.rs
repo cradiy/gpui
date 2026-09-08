@@ -9,6 +9,38 @@ pub const MAX_GPU_PARTICLES: u32 = 65_536;
 /// Maximum emission commands in a frame.
 pub const MAX_PARTICLE_SPAWNS: usize = 32;
 
+/// Alpha-based emission from a captured element's painted pixels.
+#[derive(Clone, Copy, Debug)]
+pub struct ParticleMask {
+    /// Minimum source alpha, clamped to 0.001 through 0.999.
+    pub threshold: f32,
+    /// Inward edge sampling band in logical pixels. Zero samples the full shape.
+    pub edge_width: Pixels,
+    /// Uses sampled RGB instead of the emission color; emission opacity still applies.
+    pub inherit_color: bool,
+}
+
+impl Default for ParticleMask {
+    fn default() -> Self {
+        Self {
+            threshold: 0.5,
+            edge_width: px(2.),
+            inherit_color: true,
+        }
+    }
+}
+
+/// A particle simulation emitted from the preceding subtree texture.
+#[derive(Clone, Debug)]
+pub struct SubtreeParticlePass {
+    /// Persistent simulation input. Spawn line positions are replaced by mask samples.
+    pub frame: Arc<ParticleFrame>,
+    /// Selects source pixels and emission colors.
+    pub mask: ParticleMask,
+    /// Logical-to-device conversion for simulation and edge width.
+    pub scale_factor: f32,
+}
+
 /// One emission distributed along a line in surface-local logical pixels.
 #[derive(Clone, Debug)]
 pub struct ParticleSpawn {

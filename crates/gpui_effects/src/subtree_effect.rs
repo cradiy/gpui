@@ -28,6 +28,7 @@ pub fn subtree_effect_chain<E: IntoElement>(
         effect.bloom = stage.bloom;
         effect.feedback = stage.feedback;
         effect.distance_field = stage.distance_field;
+        effect.particles = stage.particles;
     }
     for stage in stages {
         effect = effect.then(stage);
@@ -61,6 +62,7 @@ pub struct SubtreeEffect<E: Element> {
     bloom: Option<gpui::SubtreeBloomPass>,
     feedback: Option<gpui::SubtreeFeedbackPass>,
     distance_field: Option<gpui::SubtreeDistanceFieldPass>,
+    particles: Option<gpui::SubtreeParticlePass>,
     following_stages: Vec<EffectStage>,
 }
 
@@ -84,6 +86,7 @@ impl<E: Element> SubtreeEffect<E> {
             bloom: None,
             feedback: None,
             distance_field: None,
+            particles: None,
             following_stages: Vec::new(),
         }
     }
@@ -262,6 +265,10 @@ impl<E: Element> Element for SubtreeEffect<E> {
                 time: self.time,
                 bloom: self.bloom.clone(),
                 distance_field: self.distance_field.clone(),
+                particles: self.particles.clone().map(|mut particles| {
+                    particles.scale_factor = window.scale_factor();
+                    particles
+                }),
                 feedback: self.feedback.clone().map(|mut feedback| {
                     feedback.scale_factor = window.scale_factor();
                     feedback
@@ -280,9 +287,13 @@ impl<E: Element> Element for SubtreeEffect<E> {
                 .dilate(self.padding)
                 .intersects(&window.content_mask().bounds)
             && passes.iter().any(|pass| {
-                pass.feedback
+                pass.particles
                     .as_ref()
-                    .is_some_and(|feedback| feedback.needs_animation)
+                    .is_some_and(|particles| particles.frame.needs_animation)
+                    || pass
+                        .feedback
+                        .as_ref()
+                        .is_some_and(|feedback| feedback.needs_animation)
             })
         {
             window.request_animation_frame();

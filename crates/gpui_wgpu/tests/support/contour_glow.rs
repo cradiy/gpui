@@ -33,6 +33,7 @@ fn capture(
         time: 0.,
         bloom: None,
         feedback: None,
+        particles: None,
         distance_field: Some(SubtreeDistanceFieldPass {
             threshold: 0.5,
             composite: shader,

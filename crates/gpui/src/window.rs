@@ -3637,6 +3637,7 @@ impl Window {
                 bloom: None,
                 feedback: None,
                 distance_field: None,
+                particles: None,
             }],
             opacity,
             f,
@@ -3676,6 +3677,9 @@ impl Window {
                         && pass.feedback.is_none()
                         && field.composite.image_count() == 2
                         && !field.composite.is_mask()
+                })
+                && pass.particles.as_ref().is_none_or(|_| {
+                    pass.bloom.is_none() && pass.feedback.is_none() && pass.distance_field.is_none()
                 })),
             "invalid shader inputs for subtree effect passes"
         );
@@ -3683,12 +3687,15 @@ impl Window {
             return self.with_element_opacity(Some(opacity.clamp(0.0, 1.0)), f);
         }
         let (last, intermediate) = passes.split_last().unwrap();
-        let intermediate =
-            if last.bloom.is_some() || last.feedback.is_some() || last.distance_field.is_some() {
-                passes
-            } else {
-                intermediate
-            };
+        let intermediate = if last.bloom.is_some()
+            || last.feedback.is_some()
+            || last.distance_field.is_some()
+            || last.particles.is_some()
+        {
+            passes
+        } else {
+            intermediate
+        };
         let bounds = self.snap_bounds(bounds);
         let previous_opacity = self.element_opacity;
         self.element_opacity = 1.0;

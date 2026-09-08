@@ -10,6 +10,19 @@ struct Spawn {
 @group(0) @binding(2) var<storage, read_write> next: array<Particle>;
 @group(0) @binding(3) var<storage, read> spawns: array<Spawn>;
 
+struct MaskSample {
+    position: vec4<f32>,
+    color: vec4<f32>,
+}
+struct MaskSamples {
+    count: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+    samples: array<MaskSample>,
+}
+@group(1) @binding(0) var<storage, read> mask_samples: MaskSamples;
+
 fn random(seed: u32) -> f32 {
     var value = seed;
     value = (value ^ (value >> 16u)) * 0x7feb352du;
@@ -28,7 +41,7 @@ fn update(@builtin(global_invocation_id) invocation: vec3<u32>) {
         particle = Particle(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
     }
     let offset = (index + capacity - params.counts.y) % capacity;
-    if (offset < params.counts.z) {
+    if (offset < params.counts.z && (params.mask.x == 0u || mask_samples.count > 0u)) {
         let emitted = offset + ((params.counts.z - 1u - offset) / capacity) * capacity;
         for (var command = 0u; command < u32(params.timing.z); command += 1u) {
             let spawn = spawns[command];
@@ -37,13 +50,22 @@ fn update(@builtin(global_invocation_id) invocation: vec3<u32>) {
             let angle = random(seed) * 6.2831853;
             let speed = mix(spawn.velocity.z, spawn.velocity.w, random(seed + 1u));
             let along = (f32(emitted - spawn.range.x) + random(seed + 2u)) / f32(spawn.range.y);
-            let position = mix(spawn.line.xy, spawn.line.zw, along);
+            var position = mix(spawn.line.xy, spawn.line.zw, along);
+            var color = spawn.color;
+            if (params.mask.x != 0u) {
+                let count = min(mask_samples.count, arrayLength(&mask_samples.samples));
+                let sample = mask_samples.samples[min(u32(random(seed + 5u) * f32(count)), count - 1u)];
+                position = sample.position.xy;
+                if (params.mask.y != 0u) {
+                    color = vec4<f32>(sample.color.rgb, color.a * sample.color.a);
+                }
+            }
             let velocity = spawn.velocity.xy + vec2<f32>(cos(angle), sin(angle)) * speed;
             particle = Particle(
                 vec4<f32>(position, velocity),
                 vec4<f32>(0.0, mix(spawn.life.x, spawn.life.y, random(seed + 3u)),
                     mix(spawn.life.z, spawn.life.w, random(seed + 4u)), spawn.shape.x),
-                spawn.color,
+                color,
             );
             next[index] = particle;
             return;

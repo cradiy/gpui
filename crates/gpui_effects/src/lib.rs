@@ -91,7 +91,9 @@ pub use motion::{
     MotionEasing, MotionEvent, MotionFrame, MotionId, MotionItem, MotionLayer, MotionOptions,
     MotionPath, MotionPolicy,
 };
-pub use particles::{ParticlePhysics, ParticleSpawn, Particles, particles};
+pub use particles::{
+    ParticleMask, ParticlePhysics, ParticleSpawn, Particles, particles, subtree_particles,
+};
 pub use ripple::{MAX_RIPPLES, Ripple, RippleOptions, ripple_shader, subtree_ripples};
 pub use sdf::{MAX_SDF_SHAPES, SdfOptions, SdfScene, SdfShape, SdfTransform, sdf};
 pub use sticky::{StickyShape, paint_sticky_shapes, sticky_shape_shader};

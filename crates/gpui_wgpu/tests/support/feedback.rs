@@ -38,6 +38,7 @@ fn scene(
         bloom: None,
         feedback: Some(feedback.clone()),
         distance_field: None,
+        particles: None,
     }];
     if bloom {
         passes.push(bloom_pass(2));

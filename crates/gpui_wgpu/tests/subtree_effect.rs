@@ -22,12 +22,14 @@ mod feedback;
 mod fluid;
 #[path = "support/holographic.rs"]
 mod holographic;
+#[path = "support/particle_mask.rs"]
+mod particle_mask;
 #[path = "support/particles.rs"]
 mod particles;
-#[path = "support/path_motion.rs"]
-mod path_motion;
 #[path = "support/path_morph.rs"]
 mod path_morph;
+#[path = "support/path_motion.rs"]
+mod path_motion;
 #[path = "support/sdf.rs"]
 mod sdf;
 
@@ -137,6 +139,7 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     check_bloom_spread_and_highlight_contrast(&mut renderer)?;
     feedback::check(&mut renderer)?;
     particles::check(&mut renderer)?;
+    particle_mask::check(&mut renderer)?;
     fluid::check(&mut renderer)?;
     sdf::check(&mut renderer)?;
     path_motion::check(&mut renderer)?;
@@ -233,6 +236,7 @@ fn bloom_pass(downsample: u32) -> gpui::SubtreeEffectPass {
         }),
         feedback: None,
         distance_field: None,
+        particles: None,
     }
 }
 
@@ -317,6 +321,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
         bloom: None,
         feedback: None,
         distance_field: None,
+        particles: None,
     };
     let color = gpui::SubtreeEffectPass {
         shader: subtree_color_adjust_shader(),
@@ -325,6 +330,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
         bloom: None,
         feedback: None,
         distance_field: None,
+        particles: None,
     };
     let available = [blur, color, bloom_pass(4)];
     for count in [1, 2, 3, 8] {
@@ -361,6 +367,7 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
                         bloom: None,
                         feedback: None,
                         distance_field: None,
+                        particles: None,
                     });
                 }
             }

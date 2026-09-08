@@ -4,7 +4,34 @@ use std::{
 };
 
 use gpui::{Canvas, EffectHistoryId, ParticleFrame, canvas};
-pub use gpui::{ParticlePhysics, ParticleSpawn};
+pub use gpui::{ParticleMask, ParticlePhysics, ParticleSpawn};
+
+impl crate::EffectStage {
+    /// Emits particles from the input alpha mask and draws them over the unchanged source.
+    /// Spawn positions are sampled on the GPU; velocity and forces use capture-local pixels.
+    /// Reserve transparent space with `capture_padding` for particles outside the source.
+    pub fn masked_particles(frame: Arc<ParticleFrame>, mask: ParticleMask) -> Self {
+        let mut stage = Self::new(crate::subtree_identity_shader());
+        stage.particles = Some(gpui::SubtreeParticlePass {
+            frame,
+            mask,
+            scale_factor: 1.,
+        });
+        stage
+    }
+}
+
+/// Adds particles emitted from text, icons or transparent image content.
+pub fn subtree_particles<E: gpui::IntoElement>(
+    element: E,
+    state: &mut Particles,
+    mask: ParticleMask,
+) -> crate::SubtreeEffect<E::Element> {
+    crate::subtree_effect_chain(
+        element,
+        [crate::EffectStage::masked_particles(state.frame(), mask)],
+    )
+}
 
 /// Persistent clock and emission queue for a GPU particle surface.
 /// Particle positions and velocities remain on the GPU.

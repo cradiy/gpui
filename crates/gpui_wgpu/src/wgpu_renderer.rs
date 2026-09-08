@@ -2780,7 +2780,15 @@ impl WgpuRenderer {
             self.surface_config.height as f32,
         ];
         let mut has_particles = false;
-        scene.visit(&mut |scene| has_particles |= !scene.particles.is_empty());
+        scene.visit(&mut |scene| {
+            has_particles |= !scene.particles.is_empty()
+                || scene.subtree_layers.iter().any(|layer| {
+                    layer
+                        .intermediate_effects
+                        .iter()
+                        .any(|effect| effect.particles.is_some())
+                });
+        });
         let mut has_fluid = false;
         scene.visit(&mut |scene| has_fluid |= !scene.fluids.is_empty());
         {
@@ -3057,6 +3065,26 @@ impl WgpuRenderer {
                                     source_index = destination_index;
                                     continue;
                                 }
+                                let particle_draw = effect.particles.as_ref().map(|particles| {
+                                    let draw = particles::ParticleRenderer::masked_draw(
+                                        &layer.composite,
+                                        particles,
+                                    );
+                                    let resources = self.resources();
+                                    resources.particles.as_ref().unwrap().encode_masked(
+                                        &resources.device,
+                                        &resources.queue,
+                                        &draw,
+                                        particles.mask,
+                                        &source_view,
+                                        [
+                                            self.surface_config.width as f32,
+                                            self.surface_config.height as f32,
+                                        ],
+                                        encoder,
+                                    );
+                                    draw
+                                });
                                 {
                                     let mut effect_pass =
                                         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -3094,6 +3122,13 @@ impl WgpuRenderer {
                                     ) {
                                         did_draw = false;
                                         break;
+                                    }
+                                    if let Some(draw) = &particle_draw {
+                                        self.resources()
+                                            .particles
+                                            .as_ref()
+                                            .unwrap()
+                                            .draw(draw, &mut effect_pass);
                                     }
                                 }
                                 source_view = destination_view;

@@ -11,5 +11,6 @@ struct Params {
     clip: vec4<f32>,
     acceleration: vec4<f32>,
     field: vec4<f32>,
+    mask: vec4<u32>,
 }
 @group(0) @binding(0) var<uniform> params: Params;

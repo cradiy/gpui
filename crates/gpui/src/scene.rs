@@ -755,12 +755,28 @@ pub struct SubtreeLayer {
 /// An image-processing pass over an isolated subtree texture.
 #[derive(Clone, Debug)]
 pub struct SubtreeEffectPass {
-    /// Single-image shader applied to the preceding texture.
+    /// Single-image shader applied to the preceding texture. With bloom,
+    /// this is used only to resolve a final stage into its parent target.
     pub shader: EffectShader,
     /// Shader parameters, with pixel dimensions in device pixels.
     pub uniforms: EffectUniforms,
     /// Animation time in seconds.
     pub time: f32,
+    /// Optional highlight extraction, separable blur and two-image composite.
+    pub bloom: Option<SubtreeBloomPass>,
+}
+
+/// Shaders and target resolution for a bloom stage.
+#[derive(Clone, Debug)]
+pub struct SubtreeBloomPass {
+    /// Single-image highlight extraction shader; slot 2.zw supplies the source-pixel footprint.
+    pub extract: EffectShader,
+    /// Single-image blur shader; slot 2.xy supplies the horizontal or vertical axis.
+    pub blur: EffectShader,
+    /// Two-image shader combining the stage input and blurred highlights.
+    pub composite: EffectShader,
+    /// Texture size divisor, clamped to 1 through 8 by the renderer.
+    pub downsample: u32,
 }
 
 /// A custom fragment effect drawn over a rectangular region.
@@ -1300,6 +1316,7 @@ mod tests {
             shader: composite.shader.clone(),
             uniforms: EffectUniforms::new().with_slot(0, [0.2, 0.4, 0.6, 0.8]),
             time: 3.5,
+            bloom: None,
         };
         let mut scene = Scene::default();
         scene.start_subtree_chain(composite, vec![pass.clone(); 7].into());

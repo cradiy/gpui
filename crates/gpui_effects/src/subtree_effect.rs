@@ -25,6 +25,7 @@ pub fn subtree_effect_chain<E: IntoElement>(
         effect.uniforms = stage.uniforms;
         effect.pixel_uniform_slots = stage.pixel_uniform_slots;
         effect.padding = stage.padding;
+        effect.bloom = stage.bloom;
     }
     for stage in stages {
         effect = effect.then(stage);
@@ -55,6 +56,7 @@ pub struct SubtreeEffect<E: Element> {
     padding: Pixels,
     enabled: bool,
     first_stage_enabled: bool,
+    bloom: Option<gpui::SubtreeBloomPass>,
     following_stages: Vec<EffectStage>,
 }
 
@@ -75,6 +77,7 @@ impl<E: Element> SubtreeEffect<E> {
             padding: px(0.),
             enabled: true,
             first_stage_enabled: true,
+            bloom: None,
             following_stages: Vec::new(),
         }
     }
@@ -251,6 +254,7 @@ impl<E: Element> Element for SubtreeEffect<E> {
                 shader: self.shader.clone(),
                 uniforms: self.scaled_uniforms(window.scale_factor()),
                 time: self.time,
+                bloom: self.bloom.clone(),
             });
         }
         passes.extend(
@@ -333,6 +337,21 @@ mod tests {
             subtree_effect_chain(gpui::div(), [EffectStage::blur(px(40.)).enabled(false)]);
         assert!(!disabled.first_stage_enabled && disabled.following_stages.is_empty());
         assert_eq!(disabled.padding, px(0.));
+
+        for options in [
+            crate::BloomOptions {
+                intensity: 0.,
+                ..Default::default()
+            },
+            crate::BloomOptions {
+                radius: px(0.),
+                ..Default::default()
+            },
+        ] {
+            let disabled = crate::subtree_bloom(gpui::div(), options);
+            assert!(!disabled.first_stage_enabled && disabled.following_stages.is_empty());
+            assert_eq!(disabled.padding, px(0.));
+        }
     }
 
     #[test]

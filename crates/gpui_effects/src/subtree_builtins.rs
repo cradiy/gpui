@@ -142,6 +142,9 @@ mod tests {
             subtree_blur_shader(),
             subtree_wave_shader(),
             subtree_color_adjust_shader(),
+            crate::bloom_extract_shader(),
+            crate::bloom_blur_shader(),
+            crate::bloom_composite_shader(),
         ] {
             let source = gpui::compose_subtree_effect_wgsl(&shader);
             let module = naga::front::wgsl::parse_str(&source)

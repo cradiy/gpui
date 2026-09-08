@@ -402,8 +402,9 @@ struct WgpuResources {
     surface: Option<wgpu::Surface<'static>>,
     pipelines: WgpuPipelines,
     effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
-    subtree_effect_pipelines: HashMap<u64, Option<wgpu::RenderPipeline>>,
+    subtree_effect_pipelines: HashMap<(u64, wgpu::TextureFormat), Option<wgpu::RenderPipeline>>,
     subtree_textures: Vec<wgpu::Texture>,
+    bloom_textures: HashMap<u32, [wgpu::Texture; 2]>,
     failed_effect_pipelines: HashSet<u64>,
     backdrop_effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     failed_backdrop_effect_pipelines: HashSet<u64>,
@@ -437,6 +438,7 @@ struct WgpuResources {
 impl WgpuResources {
     fn invalidate_intermediate_textures(&mut self) {
         self.subtree_textures.clear();
+        self.bloom_textures.clear();
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
@@ -913,6 +915,7 @@ impl WgpuRenderer {
             effect_pipelines: HashMap::default(),
             subtree_effect_pipelines: HashMap::default(),
             subtree_textures: Vec::new(),
+            bloom_textures: HashMap::new(),
             failed_effect_pipelines: HashSet::default(),
             backdrop_effect_pipelines: HashMap::default(),
             failed_backdrop_effect_pipelines: HashSet::default(),
@@ -1269,20 +1272,31 @@ impl WgpuRenderer {
     }
 
     fn ensure_effect_pipelines(&mut self, scene: &Scene) {
+        let surface_format = self.surface_config.format;
         for layer in &scene.subtree_layers {
             self.ensure_effect_pipelines(&layer.scene);
-            for shader in layer
+            for (shader, format) in layer
                 .intermediate_effects
                 .iter()
-                .map(|pass| &pass.shader)
-                .chain(std::iter::once(&layer.composite.shader))
+                .flat_map(|pass| {
+                    std::iter::once((&pass.shader, surface_format)).chain(
+                        pass.bloom.iter().flat_map(|bloom| {
+                            [
+                                (&bloom.extract, wgpu::TextureFormat::Rgba16Float),
+                                (&bloom.blur, wgpu::TextureFormat::Rgba16Float),
+                                (&bloom.composite, surface_format),
+                            ]
+                        }),
+                    )
+                })
+                .chain(std::iter::once((&layer.composite.shader, surface_format)))
             {
-                let key = shader.id().as_u64();
+                let key = (shader.id().as_u64(), format);
                 if !self.resources().subtree_effect_pipelines.contains_key(&key) {
                     let result = Self::create_effect_pipeline(
                         &self.resources().device,
                         &self.resources().bind_group_layouts,
-                        self.surface_config.format,
+                        format,
                         self.surface_config.alpha_mode,
                         shader,
                         true,
@@ -2144,6 +2158,7 @@ impl WgpuRenderer {
         scene.visit(&mut |scene| needs_backdrop |= !scene.backdrop_blurs.is_empty());
         self.ensure_intermediate_textures(needs_backdrop);
         self.ensure_subtree_textures(scene.subtree_target_count());
+        self.ensure_bloom_textures(scene);
         self.prepare_surfaces(scene);
         #[cfg(target_os = "linux")]
         let dma_buf_leases = {
@@ -2219,6 +2234,7 @@ impl WgpuRenderer {
         scene.visit(&mut |scene| needs_backdrop |= !scene.backdrop_blurs.is_empty());
         self.ensure_intermediate_textures(needs_backdrop);
         self.ensure_subtree_textures(scene.subtree_target_count());
+        self.ensure_bloom_textures(scene);
         self.prepare_surfaces(scene);
 
         let encoded = self.encode_scene(
@@ -2266,6 +2282,156 @@ impl WgpuRenderer {
                     view_formats: &[],
                 }));
         }
+    }
+
+    fn ensure_bloom_textures(&mut self, scene: &Scene) {
+        fn collect(scene: &Scene, divisors: &mut HashSet<u32>) {
+            for layer in &scene.subtree_layers {
+                for effect in layer.intermediate_effects.iter() {
+                    if let Some(bloom) = &effect.bloom {
+                        divisors.insert(bloom.downsample.clamp(1, 8));
+                    }
+                }
+                collect(&layer.scene, divisors);
+            }
+        }
+        let mut divisors = HashSet::new();
+        collect(scene, &mut divisors);
+        let width = self.surface_config.width;
+        let height = self.surface_config.height;
+        let format = wgpu::TextureFormat::Rgba16Float;
+        let resources = self.resources_mut();
+        resources.bloom_textures.retain(|divisor, textures| {
+            divisors.contains(divisor)
+                && textures[0].width() == width.div_ceil(*divisor)
+                && textures[0].height() == height.div_ceil(*divisor)
+                && textures[0].format() == format
+        });
+        for divisor in divisors {
+            resources.bloom_textures.entry(divisor).or_insert_with(|| {
+                std::array::from_fn(|_| {
+                    resources.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("subtree_bloom_target"),
+                        size: wgpu::Extent3d {
+                            width: width.div_ceil(divisor),
+                            height: height.div_ceil(divisor),
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    })
+                })
+            });
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_subtree_bloom(
+        &self,
+        quad: &EffectQuad,
+        effect: &gpui::SubtreeEffectPass,
+        bloom: &gpui::SubtreeBloomPass,
+        source: &wgpu::TextureView,
+        destination: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        instance_offset: &mut u64,
+    ) -> bool {
+        let resources = self.resources();
+        let textures = &resources.bloom_textures[&bloom.downsample.clamp(1, 8)];
+        let views = textures
+            .each_ref()
+            .map(|texture| texture.create_view(&Default::default()));
+        let scale = [
+            textures[0].width() as f32 / self.surface_config.width as f32,
+            textures[0].height() as f32 / self.surface_config.height as f32,
+        ];
+        let full_bounds: PodBounds = quad.bounds.into();
+        let reduced_bounds = PodBounds {
+            origin: std::array::from_fn(|i| full_bounds.origin[i] * scale[i]),
+            size: std::array::from_fn(|i| full_bounds.size[i] * scale[i]),
+        };
+        for (index, shader) in [&bloom.extract, &bloom.blur, &bloom.blur, &bloom.composite]
+            .into_iter()
+            .enumerate()
+        {
+            let format = if index == 3 {
+                self.surface_config.format
+            } else {
+                wgpu::TextureFormat::Rgba16Float
+            };
+            let pipeline = resources.subtree_effect_pipelines[&(shader.id().as_u64(), format)]
+                .as_ref()
+                .unwrap();
+            let output = match index {
+                0 | 2 => &views[0],
+                1 => &views[1],
+                _ => destination,
+            };
+            let input = match index {
+                1 => &views[0],
+                2 => &views[1],
+                _ => source,
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("subtree_bloom_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                ..Default::default()
+            });
+            let mut instance = EffectInstance::from(quad);
+            instance.opacity = 1.;
+            instance.time = effect.time;
+            instance.uniforms = *effect.uniforms.slots();
+            instance.uniforms[2] = match index {
+                0 => [0., 0., scale[0].recip(), scale[1].recip()],
+                1 => [1., 0., 0., 0.],
+                _ => [0., 1., 0., 0.],
+            };
+            instance.content_mask = full_bounds;
+            instance.image_bounds = if index == 1 || index == 2 {
+                reduced_bounds
+            } else {
+                full_bounds
+            };
+            instance.second_image_bounds = reduced_bounds;
+            let data = bytemuck::bytes_of(&instance);
+            let ok = if index == 3 {
+                self.draw_instances_with_two_textures(
+                    data,
+                    1,
+                    input,
+                    &views[0],
+                    pipeline,
+                    instance_offset,
+                    &mut pass,
+                )
+            } else {
+                self.draw_instances_with_texture(
+                    data,
+                    1,
+                    input,
+                    pipeline,
+                    instance_offset,
+                    &mut pass,
+                )
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
     }
 
     fn encode_scene(
@@ -2367,7 +2533,10 @@ impl WgpuRenderer {
                             let pipeline = self
                                 .resources()
                                 .subtree_effect_pipelines
-                                .get(&layer.composite.shader.id().as_u64())
+                                .get(&(
+                                    layer.composite.shader.id().as_u64(),
+                                    self.surface_config.format,
+                                ))
                                 .and_then(Option::as_ref);
                             let Some(pipeline) = pipeline else {
                                 did_draw &= self.encode_scene_batches(
@@ -2400,7 +2569,7 @@ impl WgpuRenderer {
                                 let Some(effect_pipeline) = self
                                     .resources()
                                     .subtree_effect_pipelines
-                                    .get(&effect.shader.id().as_u64())
+                                    .get(&(effect.shader.id().as_u64(), self.surface_config.format))
                                     .and_then(Option::as_ref)
                                 else {
                                     continue;
@@ -2413,6 +2582,38 @@ impl WgpuRenderer {
                                 let destination_view = self.resources().subtree_textures
                                     [destination_index]
                                     .create_view(&wgpu::TextureViewDescriptor::default());
+                                if let Some(bloom) = &effect.bloom {
+                                    if [
+                                        (&bloom.extract, wgpu::TextureFormat::Rgba16Float),
+                                        (&bloom.blur, wgpu::TextureFormat::Rgba16Float),
+                                        (&bloom.composite, self.surface_config.format),
+                                    ]
+                                    .iter()
+                                    .any(|(shader, format)| {
+                                        self.resources()
+                                            .subtree_effect_pipelines
+                                            .get(&(shader.id().as_u64(), *format))
+                                            .and_then(Option::as_ref)
+                                            .is_none()
+                                    }) {
+                                        continue;
+                                    }
+                                    if !self.encode_subtree_bloom(
+                                        &layer.composite,
+                                        effect,
+                                        bloom,
+                                        &source_view,
+                                        &destination_view,
+                                        encoder,
+                                        instance_offset,
+                                    ) {
+                                        did_draw = false;
+                                        break;
+                                    }
+                                    source_view = destination_view;
+                                    source_index = destination_index;
+                                    continue;
+                                }
                                 {
                                     let mut effect_pass =
                                         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

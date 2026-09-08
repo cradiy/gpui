@@ -8,6 +8,7 @@ pub struct EffectStage {
     pub(crate) pixel_uniform_slots: [bool; gpui::EFFECT_UNIFORM_SLOTS],
     pub(crate) padding: Pixels,
     pub(crate) enabled: bool,
+    pub(crate) bloom: Option<gpui::SubtreeBloomPass>,
 }
 
 impl EffectStage {
@@ -23,6 +24,7 @@ impl EffectStage {
             pixel_uniform_slots: [false; gpui::EFFECT_UNIFORM_SLOTS],
             padding: px(0.),
             enabled: true,
+            bloom: None,
         }
     }
 
@@ -70,6 +72,7 @@ impl EffectStage {
             shader: self.shader.clone(),
             uniforms,
             time,
+            bloom: self.bloom.clone(),
         }
     }
 }

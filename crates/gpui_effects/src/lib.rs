@@ -22,6 +22,7 @@ pub mod liquid_glass_guide {}
 pub mod timed_text_guide {}
 
 mod backdrop;
+mod bloom;
 mod builtins;
 mod color_flow;
 mod effect_stage;
@@ -40,6 +41,9 @@ mod text_blur;
 mod timed_text;
 
 pub use backdrop::*;
+pub use bloom::{
+    BloomOptions, bloom_blur_shader, bloom_composite_shader, bloom_extract_shader, subtree_bloom,
+};
 pub use builtins::*;
 pub use color_flow::{
     ColorFlow, ColorFlowOptions, ColorFlowPalette, ColorFlowPaletteColor, color_flow,

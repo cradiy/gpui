@@ -36,6 +36,7 @@ let grayscale = subtree_color_adjust(
 | `subtree_blur` | Support radius in logical pixels | Radius `0` |
 | `subtree_wave` | Amplitude, wavelength, speed; `.time(seconds)` | Amplitude `0` |
 | `subtree_color_adjust` | Saturation, contrast, brightness | All `1` |
+| `subtree_bloom` | Threshold, soft knee, intensity, radius, downsample | Intensity or radius `0` |
 
 Pixel dimensions follow the window scale factor. Blur and wave reserve capture
 padding automatically; `.capture_padding(...)` replaces that padding. Blur uses
@@ -45,6 +46,45 @@ renderer’s sampled RGB values.
 
 Wave speed is measured in radians per second; negative speed reverses motion.
 Wave does not start its own animation loop. Update time and request frames while animating.
+
+## Bloom
+
+```rust,ignore
+use gpui::{div, prelude::*, px, rgb};
+use gpui_effects::{BloomOptions, subtree_bloom};
+
+let title = subtree_bloom(
+    div().text_size(px(48.)).text_color(rgb(0x9aeeff)).child("Luminous"),
+    BloomOptions {
+        threshold: 0.6,
+        soft_knee: 0.15,
+        intensity: 1.6,
+        radius: px(56.),
+        downsample: 4,
+    },
+);
+```
+
+Bloom extracts highlights, applies horizontal and vertical Gaussian passes, then
+screen-blends the colored glow with the unblurred input. It affects bright text, images and
+other painted content without replacing their sharp details.
+The glow contribution tapers on bright source pixels and remains full in dark
+or transparent regions.
+
+- `threshold`: highlight cutoff from `0` to `1`, evaluated on sampled RGB brightness.
+- `soft_knee`: transition width around the cutoff; `0` gives a hard threshold.
+  Highlights above this transition contribute their full color to the glow.
+- `intensity`: glow contribution; `0` omits the stage.
+- `radius`: Gaussian support radius in logical pixels; `0` omits the stage.
+- `downsample`: texture size divisor, clamped to `1..=8`. The default `4` uses
+  quarter-width, quarter-height textures. Use `1` or `2` for finer highlights.
+
+Capture padding includes the glow radius and sampling margin. Parent clipping
+still applies, so allow room around the content. The composite uses the renderer's
+surface format; colors above its range are clamped, not HDR tone-mapped.
+
+Use `EffectStage::bloom(options)` in a chain. `bloom_extract_shader`,
+`bloom_blur_shader` and `bloom_composite_shader` expose the individual WGSL stages.
 
 ## Effect chains
 
@@ -65,8 +105,8 @@ let content = subtree_effect_chain(
 ).effect_opacity(0.9);
 ```
 
-Stages run in iteration order. `EffectStage::identity`, `blur`, `wave` and
-`color_adjust` provide built-in stages; `EffectStage::new(shader)` accepts a
+Stages run in iteration order. `EffectStage::identity`, `blur`, `wave`,
+`color_adjust` and `bloom` provide built-in stages; `EffectStage::new(shader)` accepts a
 custom single-image shader. Each stage has its own uniforms, logical-pixel
 uniforms and padding. `.enabled(false)` omits that stage entirely.
 
@@ -75,14 +115,15 @@ The wrapper's `uniform`, `uniforms` and `uniform_pixels` methods configure its
 first stage. Configure subsequent stages before appending them. `.time(seconds)`
 supplies a common clock to all stages; each animated shader can define its own speed.
 
-The content is painted once per capture. Intermediate passes alternate between
-two GPU textures, independent of stage count; the last pass composites directly
-to the parent target. Chain opacity is applied only at that final step. An empty
+The content is painted once per capture. Stage outputs alternate between
+two full-resolution GPU textures, independent of stage count. Bloom also uses
+two reduced-resolution textures for highlight extraction and blur. The final
+composite applies chain opacity when drawing to the parent target. An empty
 or fully disabled chain paints directly, without allocating capture targets.
 
 Active stages' padding is accumulated. A wrapper-level `capture_padding` replaces
 the accumulated value at that point; further `.then(...)` calls add their padding.
-All passes use the same capture bounds and device-pixel resolution. Changing
+Stages share the capture bounds; Bloom uses reduced-resolution intermediate textures. Changing
 stage order can change the output, especially with clipping or nonlinear color operations.
 
 ## Custom shaders
@@ -148,7 +189,9 @@ Linux Wayland and X11 windows support subtree effects through WGPU. Use
 backends paint the original content with the configured effect opacity.
 
 Render targets stay on the GPU and are reused across captures and effect passes. Each
-target currently uses the window's device-pixel dimensions and surface format.
+capture target uses the window's device-pixel dimensions and surface format.
+Bloom reuses a pair of reduced-resolution `RGBA16Float` textures per active
+downsample divisor to preserve faint highlights during filtering.
 Window resizing recreates the targets. Captured content is repainted when the
 window renders; it is not a persistent snapshot cache.
 
@@ -162,3 +205,10 @@ The example compares original and captured content in identity, blur, wave,
 color and chain modes. Chain mode combines blur and color adjustment, with
 individual stage toggles and an order switch. The controls adjust effect strength.
 The card buttons remain interactive. Pause stops the wave animation.
+
+```sh
+cargo run -p gpui_effects --example bloom
+```
+
+The Bloom example compares text and artwork with the original content. Controls
+adjust highlight extraction, intensity, radius and intermediate resolution.

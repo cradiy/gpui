@@ -111,7 +111,168 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     }
     renderer.resize(size(DevicePixels(64), DevicePixels(48)));
     check_builtin_neutral_states(&mut renderer)?;
-    check_effect_chains(&mut renderer)
+    check_bloom_highlights(&mut renderer)?;
+    check_effect_chains(&mut renderer)?;
+    check_bloom_spread_and_highlight_contrast(&mut renderer)
+}
+
+fn check_bloom_spread_and_highlight_contrast(
+    renderer: &mut WgpuOffscreenRenderer,
+) -> anyhow::Result<()> {
+    renderer.resize(size(DevicePixels(160), DevicePixels(100)));
+    let region = bounds(0., 0., 160., 100.);
+    let render_scene = |content: &[Quad], options: gpui_effects::BloomOptions| {
+        let mut source = Scene::default();
+        for quad in content {
+            source.insert_primitive(*quad);
+        }
+        let Primitive::SubtreeLayer(mut captured) = layer(source, region, 1.) else {
+            unreachable!()
+        };
+        let mut effect = bloom_pass(options.downsample);
+        effect.uniforms.set_slot(
+            0,
+            [options.threshold, options.soft_knee, options.intensity, 0.],
+        );
+        effect
+            .uniforms
+            .set_slot(1, [f32::from(options.radius), 0., 0., 0.]);
+        captured.intermediate_effects = vec![effect].into();
+        let mut scene = Scene::default();
+        scene.insert_primitive(quad(region, 0x101010ff));
+        scene.insert_primitive(Primitive::SubtreeLayer(captured));
+        scene.finish();
+        scene
+    };
+    let pixel = |x: usize, y: usize| (y * 160 + x) * 4;
+    let thin = [quad(bounds(80., 30., 2., 40.), 0x9aeeffff)];
+    let glow = renderer.render_rgba(&render_scene(&thin, Default::default()))?;
+    let baseline = renderer.render_rgba(&render_scene(
+        &thin,
+        gpui_effects::BloomOptions {
+            intensity: 0.,
+            ..Default::default()
+        },
+    ))?;
+    assert!(
+        glow[pixel(64, 50) + 1] > baseline[pixel(64, 50) + 1] + 4,
+        "thin highlight lost its near glow"
+    );
+    assert!(
+        glow[pixel(50, 50) + 1] > baseline[pixel(50, 50) + 1],
+        "thin highlight lost its outer glow"
+    );
+    let inner = u16::from(glow[pixel(76, 50) + 1].saturating_sub(baseline[pixel(76, 50) + 1]));
+    let shoulder = u16::from(glow[pixel(64, 50) + 1].saturating_sub(baseline[pixel(64, 50) + 1]));
+    assert!(
+        inner > 2 * shoulder,
+        "highlight falloff is too flat: {inner}, {shoulder}"
+    );
+
+    let tones = [
+        quad(bounds(30., 30., 30., 30.), 0xe0e0e0ff),
+        quad(bounds(90., 30., 30., 30.), 0xf0f0f0ff),
+    ];
+    let options = gpui_effects::BloomOptions {
+        radius: gpui::px(12.),
+        ..Default::default()
+    };
+    let glow = renderer.render_rgba(&render_scene(&tones, options))?;
+    let lower = glow[pixel(45, 45)];
+    let upper = glow[pixel(105, 45)];
+    assert!(
+        upper < 255 && upper > lower + 3,
+        "highlight contrast clipped: {lower}, {upper}"
+    );
+    Ok(())
+}
+
+fn bloom_pass(downsample: u32) -> gpui::SubtreeEffectPass {
+    gpui::SubtreeEffectPass {
+        shader: gpui_effects::subtree_identity_shader(),
+        uniforms: gpui::EffectUniforms::new()
+            .with_slot(0, [0.4, 0.1, 1., 0.])
+            .with_slot(1, [12., 0., 0., 0.]),
+        time: 0.,
+        bloom: Some(gpui::SubtreeBloomPass {
+            extract: gpui_effects::bloom_extract_shader(),
+            blur: gpui_effects::bloom_blur_shader(),
+            composite: gpui_effects::bloom_composite_shader(),
+            downsample,
+        }),
+    }
+}
+
+fn check_bloom_highlights(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> {
+    for extent in [(64, 48), (65, 49), (64, 48)] {
+        renderer.resize(size(DevicePixels(extent.0), DevicePixels(extent.1)));
+        for downsample in [1, 2, 4] {
+            let region = bounds(3., 3., 54., 40.);
+            let source = || {
+                let mut scene = Scene::default();
+                scene.insert_primitive(quad(bounds(16., 15., 8., 10.), 0xff4000ff));
+                scene.insert_primitive(quad(bounds(42., 15., 8., 10.), 0x182030ff));
+                scene
+            };
+            let scene = |effect: Option<gpui::SubtreeEffectPass>| {
+                let Primitive::SubtreeLayer(mut captured) = layer(source(), region, 1.) else {
+                    unreachable!()
+                };
+                if let Some(effect) = effect {
+                    captured.intermediate_effects = vec![effect].into();
+                }
+                let mut scene = Scene::default();
+                scene.insert_primitive(quad(
+                    bounds(0., 0., extent.0 as f32, extent.1 as f32),
+                    0x101010ff,
+                ));
+                scene.insert_primitive(Primitive::SubtreeLayer(captured));
+                scene.finish();
+                scene
+            };
+            let expected = renderer.render_rgba(&scene(None))?;
+            let glow = renderer.render_rgba(&scene(Some(bloom_pass(downsample))))?;
+            let pixel = |x: usize, y: usize| (y * extent.0 as usize + x) * 4;
+            let halo = pixel(13, 20);
+            assert!(
+                glow[halo] > expected[halo] + 5,
+                "missing colored halo at 1/{downsample}, {extent:?}"
+            );
+            assert!(
+                glow[halo] > glow[halo + 2] + 5,
+                "halo must retain the highlight hue"
+            );
+            for (x, y) in [(20, 20), (46, 20), (1, 20), (13, 4)] {
+                let offset = pixel(x, y);
+                if x == 20 {
+                    assert!(
+                        glow[offset] >= 253 && glow[offset + 2] <= 2,
+                        "source detail changed"
+                    );
+                } else {
+                    for channel in 0..4 {
+                        assert!(
+                            glow[offset + channel].abs_diff(expected[offset + channel]) <= 2,
+                            "unlit pixels changed at {x}, {y}, divisor {downsample}"
+                        );
+                    }
+                }
+            }
+            for slot in [[1., 0., 1., 0.], [0.4, 0.1, 0., 0.]] {
+                let mut effect = bloom_pass(downsample);
+                effect.uniforms.set_slot(0, slot);
+                let actual = renderer.render_rgba(&scene(Some(effect)))?;
+                let error = actual
+                    .iter()
+                    .zip(&expected)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap_or(0);
+                assert!(error <= 2, "neutral bloom changed pixels by {error}");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> {
@@ -120,22 +281,19 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
         shader: subtree_blur_shader(),
         uniforms: gpui::EffectUniforms::new().with_slot(0, [2., 0., 0., 0.]),
         time: 0.,
+        bloom: None,
     };
     let color = gpui::SubtreeEffectPass {
         shader: subtree_color_adjust_shader(),
         uniforms: gpui::EffectUniforms::new().with_slot(0, [0.7, 1.8, 1.1, 0.]),
         time: 0.,
+        bloom: None,
     };
+    let available = [blur, color, bloom_pass(4)];
     for count in [1, 2, 3, 8] {
         for reverse in [false, true] {
             let stages = (0..count)
-                .map(|i| {
-                    if (i % 2 == 0) ^ reverse {
-                        blur.clone()
-                    } else {
-                        color.clone()
-                    }
-                })
+                .map(|i| available[if reverse { 2 - i % 3 } else { i % 3 }].clone())
                 .collect::<Vec<_>>();
             let source = || {
                 let mut scene = Scene::default();
@@ -149,14 +307,32 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
             let last = stages.last().unwrap();
             captured.composite.shader = last.shader.clone();
             captured.composite.uniforms = last.uniforms;
-            captured.intermediate_effects = stages[..count - 1].into();
+            let intermediate_count = if last.bloom.is_some() {
+                count
+            } else {
+                count - 1
+            };
+            // Match the nested reference's resolve passes and UNORM quantization.
+            let mut intermediate = Vec::new();
+            for (index, stage) in stages[..intermediate_count].iter().enumerate() {
+                intermediate.push(stage.clone());
+                if stage.bloom.is_some() && index + 1 < count {
+                    intermediate.push(gpui::SubtreeEffectPass {
+                        shader: gpui_effects::subtree_identity_shader(),
+                        uniforms: Default::default(),
+                        time: 0.,
+                        bloom: None,
+                    });
+                }
+            }
+            captured.intermediate_effects = intermediate.into();
             let mut chained = Scene::default();
             chained.insert_primitive(Primitive::SubtreeLayer(captured));
             chained.finish();
             assert_eq!(chained.subtree_depth(), 1);
             assert_eq!(
                 chained.subtree_target_count(),
-                if count == 1 { 1 } else { 2 }
+                if intermediate_count == 0 { 1 } else { 2 }
             );
             let actual = renderer.render_rgba(&chained)?;
 
@@ -169,6 +345,9 @@ fn check_effect_chains(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<(
                 };
                 captured.composite.shader = stage.shader.clone();
                 captured.composite.uniforms = stage.uniforms;
+                if stage.bloom.is_some() {
+                    captured.intermediate_effects = vec![stage.clone()].into();
+                }
                 nested = Scene::default();
                 nested.insert_primitive(Primitive::SubtreeLayer(captured));
             }

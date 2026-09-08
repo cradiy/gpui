@@ -3576,6 +3576,7 @@ impl Window {
                 shader,
                 uniforms,
                 time,
+                bloom: None,
             }],
             opacity,
             f,
@@ -3595,15 +3596,27 @@ impl Window {
     ) -> R {
         self.invalidator.debug_assert_paint();
         assert!(
-            passes
-                .iter()
-                .all(|pass| pass.shader.image_count() == 1 && !pass.shader.is_mask()),
-            "subtree effects require a single-image shader"
+            passes.iter().all(|pass| pass.shader.image_count() == 1
+                && !pass.shader.is_mask()
+                && pass.bloom.as_ref().is_none_or(|bloom| {
+                    bloom.extract.image_count() == 1
+                        && !bloom.extract.is_mask()
+                        && bloom.blur.image_count() == 1
+                        && !bloom.blur.is_mask()
+                        && bloom.composite.image_count() == 2
+                        && !bloom.composite.is_mask()
+                })),
+            "subtree effects require single-image stages and a two-image bloom composite"
         );
         if passes.is_empty() || !self.supports_subtree_effects() {
             return self.with_element_opacity(Some(opacity.clamp(0.0, 1.0)), f);
         }
         let (last, intermediate) = passes.split_last().unwrap();
+        let intermediate = if last.bloom.is_some() {
+            passes
+        } else {
+            intermediate
+        };
         let bounds = self.snap_bounds(bounds);
         let previous_opacity = self.element_opacity;
         self.element_opacity = 1.0;

@@ -150,6 +150,7 @@ mod tests {
             crate::lens_shader(),
             crate::deformation_shader(),
             crate::contour_glow_shader(),
+            crate::contour_relief_shader(),
         ] {
             let source = gpui::compose_subtree_effect_wgsl(&shader);
             let module = naga::front::wgsl::parse_str(&source)

@@ -19,6 +19,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [SDF shapes](docs/sdf.md): Boolean geometry, smooth blending, outlines and edge light.
 - [Holographic material](docs/holographic.md): surface normals, directional lighting and foil reflections.
 - [Contour light](docs/contour_glow.md): alpha-contour distance fields and edge-focused glow.
+- [Contour relief](docs/contour_relief.md): raised and recessed bevels with directional lighting.
 
 ## Local deformation
 
@@ -116,6 +117,12 @@ Run the text and icon contour-light comparison:
 
 ```sh
 cargo run -p gpui_effects --example contour_glow
+```
+
+Run the pointer-lit relief comparison:
+
+```sh
+cargo run -p gpui_effects --example contour_relief
 ```
 
 ## License

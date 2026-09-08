@@ -20,11 +20,12 @@ mod color;
 /// The default colors used by GPUI.
 pub mod colors;
 mod effect;
-mod particles;
 mod element;
 mod elements;
 mod executor;
 mod fluid;
+mod particle_transition;
+mod particles;
 mod platform_scheduler;
 pub(crate) use platform_scheduler::PlatformScheduler;
 mod geometry;
@@ -35,9 +36,9 @@ mod inspector;
 mod interactive;
 mod key_dispatch;
 mod keymap;
+mod measured_path;
 mod path_builder;
 mod path_morph;
-mod measured_path;
 mod platform;
 pub mod prelude;
 /// Profiling utilities for task, frame, and thread performance tracking.
@@ -103,7 +104,6 @@ pub use backdrop::*;
 pub use color::*;
 pub use ctor::ctor;
 pub use effect::*;
-pub use particles::*;
 pub use element::*;
 pub use elements::*;
 pub use executor::*;
@@ -114,6 +114,8 @@ pub use global::*;
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };
+pub use particle_transition::*;
+pub use particles::*;
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].
 ///
@@ -146,9 +148,9 @@ pub use inspector::*;
 pub use interactive::*;
 use key_dispatch::*;
 pub use keymap::*;
+pub use measured_path::*;
 pub use path_builder::*;
 pub use path_morph::*;
-pub use measured_path::*;
 pub use platform::*;
 pub use profiler::*;
 #[cfg(any(target_os = "windows", target_os = "linux", target_family = "wasm"))]

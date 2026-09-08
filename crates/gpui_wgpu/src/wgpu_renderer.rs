@@ -26,6 +26,7 @@ use std::time::Duration;
 
 mod distance_field;
 mod fluid;
+mod particle_transition;
 mod particles;
 
 #[derive(Clone, Copy)]
@@ -430,6 +431,7 @@ struct WgpuResources {
     distance_field: Option<distance_field::DistanceFieldRenderer>,
     feedback_textures: HashMap<gpui::EffectHistoryId, FeedbackTextures>,
     particles: Option<particles::ParticleRenderer>,
+    particle_transition: Option<particle_transition::ParticleTransitionRenderer>,
     fluid: Option<fluid::FluidRenderer>,
     failed_effect_pipelines: HashSet<u64>,
     backdrop_effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
@@ -468,6 +470,7 @@ impl WgpuResources {
         self.distance_field = None;
         self.feedback_textures.clear();
         self.particles = None;
+        self.particle_transition = None;
         self.fluid = None;
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
@@ -949,6 +952,7 @@ impl WgpuRenderer {
             distance_field: None,
             feedback_textures: HashMap::new(),
             particles: None,
+            particle_transition: None,
             fluid: None,
             failed_effect_pipelines: HashSet::default(),
             backdrop_effect_pipelines: HashMap::default(),
@@ -2790,9 +2794,23 @@ impl WgpuRenderer {
                 });
         });
         let mut has_fluid = false;
+        let mut has_particle_transition = false;
+        scene.visit(&mut |scene| {
+            has_particle_transition |= scene.subtree_layers.iter().any(|layer| {
+                layer
+                    .intermediate_effects
+                    .iter()
+                    .any(|effect| effect.particle_transition.is_some())
+            });
+        });
         scene.visit(&mut |scene| has_fluid |= !scene.fluids.is_empty());
         {
             let resources = self.resources_mut();
+            if has_particle_transition && resources.particle_transition.is_none() {
+                resources.particle_transition = Some(
+                    particle_transition::ParticleTransitionRenderer::new(&resources.device, format),
+                );
+            }
             if has_fluid && resources.fluid.is_none() {
                 resources.fluid = Some(fluid::FluidRenderer::new(&resources.device, format));
             }
@@ -3061,6 +3079,26 @@ impl WgpuRenderer {
                                         did_draw = false;
                                         break;
                                     }
+                                    source_view = destination_view;
+                                    source_index = destination_index;
+                                    continue;
+                                }
+                                if let Some(transition) = &effect.particle_transition
+                                    && transition.progress > 0.
+                                {
+                                    let resources = self.resources();
+                                    resources.particle_transition.as_ref().unwrap().encode(
+                                        &resources.device,
+                                        &layer.composite,
+                                        transition,
+                                        &source_view,
+                                        &destination_view,
+                                        [
+                                            self.surface_config.width as f32,
+                                            self.surface_config.height as f32,
+                                        ],
+                                        encoder,
+                                    );
                                     source_view = destination_view;
                                     source_index = destination_index;
                                     continue;

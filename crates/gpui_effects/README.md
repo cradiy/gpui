@@ -15,6 +15,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
 - [GPU particles](docs/particles.md): light points, streaks, interactive forces and alpha-mask emission.
+- [Particle transition](docs/particle_transition.md): reversible scattering and gathering of text and images.
 - [GPU fluid](docs/fluid.md): interactive colored ink, momentum and vortices.
 - [SDF shapes](docs/sdf.md): Boolean geometry, smooth blending, outlines and edge light.
 - [Holographic material](docs/holographic.md): surface normals, directional lighting and foil reflections.
@@ -94,6 +95,12 @@ Run the text and artwork particle-emission example:
 
 ```sh
 cargo run -p gpui_effects --example particle_mask
+```
+
+Run the reversible particle-transition example:
+
+```sh
+cargo run -p gpui_effects --example particle_transition
 ```
 
 Run the interactive fluid example:

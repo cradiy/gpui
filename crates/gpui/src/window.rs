@@ -3638,6 +3638,7 @@ impl Window {
                 feedback: None,
                 distance_field: None,
                 particles: None,
+                particle_transition: None,
             }],
             opacity,
             f,
@@ -3680,6 +3681,12 @@ impl Window {
                 })
                 && pass.particles.as_ref().is_none_or(|_| {
                     pass.bloom.is_none() && pass.feedback.is_none() && pass.distance_field.is_none()
+                })
+                && pass.particle_transition.as_ref().is_none_or(|_| {
+                    pass.bloom.is_none()
+                        && pass.feedback.is_none()
+                        && pass.distance_field.is_none()
+                        && pass.particles.is_none()
                 })),
             "invalid shader inputs for subtree effect passes"
         );
@@ -3691,6 +3698,7 @@ impl Window {
             || last.feedback.is_some()
             || last.distance_field.is_some()
             || last.particles.is_some()
+            || last.particle_transition.is_some()
         {
             passes
         } else {

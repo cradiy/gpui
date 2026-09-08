@@ -29,6 +29,7 @@ pub fn subtree_effect_chain<E: IntoElement>(
         effect.feedback = stage.feedback;
         effect.distance_field = stage.distance_field;
         effect.particles = stage.particles;
+        effect.particle_transition = stage.particle_transition;
     }
     for stage in stages {
         effect = effect.then(stage);
@@ -63,6 +64,7 @@ pub struct SubtreeEffect<E: Element> {
     feedback: Option<gpui::SubtreeFeedbackPass>,
     distance_field: Option<gpui::SubtreeDistanceFieldPass>,
     particles: Option<gpui::SubtreeParticlePass>,
+    particle_transition: Option<gpui::SubtreeParticleTransitionPass>,
     following_stages: Vec<EffectStage>,
 }
 
@@ -87,6 +89,7 @@ impl<E: Element> SubtreeEffect<E> {
             feedback: None,
             distance_field: None,
             particles: None,
+            particle_transition: None,
             following_stages: Vec::new(),
         }
     }
@@ -265,6 +268,10 @@ impl<E: Element> Element for SubtreeEffect<E> {
                 time: self.time,
                 bloom: self.bloom.clone(),
                 distance_field: self.distance_field.clone(),
+                particle_transition: self.particle_transition.map(|mut transition| {
+                    transition.scale_factor = window.scale_factor();
+                    transition
+                }),
                 particles: self.particles.clone().map(|mut particles| {
                     particles.scale_factor = window.scale_factor();
                     particles

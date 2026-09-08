@@ -34,6 +34,7 @@ fn capture(
         bloom: None,
         feedback: None,
         particles: None,
+        particle_transition: None,
         distance_field: Some(SubtreeDistanceFieldPass {
             threshold: 0.5,
             composite: shader,

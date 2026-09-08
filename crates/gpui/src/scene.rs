@@ -823,6 +823,8 @@ pub struct SubtreeEffectPass {
     pub distance_field: Option<SubtreeDistanceFieldPass>,
     /// Optional alpha-masked particles composited over the source.
     pub particles: Option<crate::SubtreeParticlePass>,
+    /// Optional reversible source fragmentation. Mutually exclusive with other compound stages.
+    pub particle_transition: Option<crate::SubtreeParticleTransitionPass>,
 }
 
 /// Generates a signed distance field from the stage input's alpha contour.
@@ -1417,6 +1419,7 @@ mod tests {
             feedback: None,
             distance_field: None,
             particles: None,
+            particle_transition: None,
         };
         let mut scene = Scene::default();
         scene.start_subtree_chain(composite, vec![pass.clone(); 7].into());

@@ -824,6 +824,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
 
+    /// Returns whether this window can composite isolated element subtrees.
+    fn supports_subtree_effects(&self) -> bool {
+        false
+    }
+
     // macOS specific methods
     fn get_title(&self) -> String {
         String::new()

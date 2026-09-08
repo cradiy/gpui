@@ -1602,6 +1602,10 @@ impl PlatformWindow for X11Window {
         self.0.state.borrow().renderer.supports_backdrop_blur()
     }
 
+    fn supports_subtree_effects(&self) -> bool {
+        true
+    }
+
     fn minimize(&self) {
         let state = self.0.state.borrow();
         const WINDOW_ICONIC_STATE: u32 = 3;

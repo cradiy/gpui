@@ -1025,6 +1025,9 @@ impl MetalRenderer {
 
         for batch in scene.batches() {
             let ok = match batch {
+                PrimitiveBatch::SubtreeLayers(_) => {
+                    unreachable!("subtree capture is disabled on Metal")
+                }
                 PrimitiveBatch::BackdropBlurs(range) => {
                     command_encoder.end_encoding();
                     let did_draw = self.draw_backdrop_blurs(

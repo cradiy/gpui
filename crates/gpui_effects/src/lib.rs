@@ -33,6 +33,8 @@ mod masked_effect;
 mod masked_fill;
 mod motion;
 mod sticky;
+mod subtree_builtins;
+mod subtree_effect;
 mod text_blur;
 mod timed_text;
 
@@ -60,5 +62,11 @@ pub use motion::{
     MotionPath, MotionPolicy,
 };
 pub use sticky::{StickyShape, paint_sticky_shapes, sticky_shape_shader};
+pub use subtree_builtins::{
+    SubtreeColorOptions, SubtreeWaveOptions, subtree_blur, subtree_blur_shader,
+    subtree_color_adjust, subtree_color_adjust_shader, subtree_identity, subtree_identity_shader,
+    subtree_wave, subtree_wave_shader,
+};
+pub use subtree_effect::{SubtreeEffect, subtree_effect};
 pub use text_blur::TextBlur;
 pub use timed_text::{TimedText, TimedTextEmphasis, TimedTextRevealWave, TimedTextUnit};

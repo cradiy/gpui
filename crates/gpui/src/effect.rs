@@ -35,6 +35,16 @@ pub fn compose_effect_shader_wgsl(shader: &EffectShader) -> String {
     compose_effect_wgsl_impl(shader.wgsl_source(), shader.image_count(), shader.is_mask())
 }
 
+/// Composes an image effect for a premultiplied subtree render target.
+#[doc(hidden)]
+pub fn compose_subtree_effect_wgsl(shader: &EffectShader) -> String {
+    assert!(shader.image_count() == 1 && !shader.is_mask());
+    compose_effect_shader_wgsl(shader).replace(
+        include_str!("effect_image.wgsl"),
+        include_str!("effect_subtree.wgsl"),
+    )
+}
+
 fn compose_effect_wgsl_impl(effect_source: &str, image_count: u8, is_mask: bool) -> String {
     include_str!("effect.wgsl")
         .replace(

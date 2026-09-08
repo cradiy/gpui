@@ -10,6 +10,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Timed text](docs/timed_text.md): arbitrary character/word timings, gradient
   reveal, grouped lift/scale emphasis, and playback-clock integration.
 - [Color flow](docs/color_flow.md): image-derived flowing light and brightness configuration.
+- [Subtree effects](docs/subtree_effect.md): capture and process complete element subtrees.
 
 ## Examples
 

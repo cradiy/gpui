@@ -442,6 +442,7 @@ impl DirectXRenderer {
 
         for batch in scene.batches() {
             match batch {
+                PrimitiveBatch::SubtreeLayers(_) => unreachable!("subtree capture is disabled on DirectX"),
                 PrimitiveBatch::BackdropBlurs(range) => {
                     self.draw_backdrop_blurs(&scene.backdrop_blurs[range])
                 }

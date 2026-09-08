@@ -1858,6 +1858,10 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().renderer.supports_backdrop_blur()
     }
 
+    fn supports_subtree_effects(&self) -> bool {
+        true
+    }
+
     fn minimize(&self) {
         if let Some(toplevel) = self.borrow().surface_state.toplevel() {
             toplevel.set_minimized();

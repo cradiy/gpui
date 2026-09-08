@@ -1058,6 +1058,7 @@ pub struct Window {
     input_latency_tracker: InputLatencyTracker,
     last_input_modality: InputModality,
     pub(crate) refreshing: bool,
+    pub(crate) prepainting_subtree_effect: bool,
     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
     pub(crate) focus: Option<FocusId>,
     focus_enabled: bool,
@@ -1767,6 +1768,7 @@ impl Window {
             input_latency_tracker: InputLatencyTracker::new()?,
             last_input_modality: InputModality::Mouse,
             refreshing: false,
+            prepainting_subtree_effect: false,
             activation_observers: SubscriberSet::new(),
             focus: None,
             focus_enabled: true,
@@ -3534,6 +3536,73 @@ impl Window {
         result
     }
 
+    /// Returns whether isolated subtree effects are available on this window.
+    pub fn supports_subtree_effects(&self) -> bool {
+        self.platform_window.supports_subtree_effects()
+    }
+
+    /// Prepaints content that will be painted with [`Self::with_subtree_effect`].
+    ///
+    /// Cached views distinguish transparent capture from normal window rendering.
+    pub fn prepaint_subtree_effect<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.invalidator.debug_assert_prepaint();
+        let previous = self.prepainting_subtree_effect;
+        self.prepainting_subtree_effect |= self.supports_subtree_effects();
+        let result = f(self);
+        self.prepainting_subtree_effect = previous;
+        result
+    }
+
+    /// Captures the primitives painted by `f` and composites them through an image shader.
+    ///
+    /// The shader samples straight-alpha colors with `sample_effect_image`.
+    /// Samples outside `bounds` are transparent. Layout and hit testing remain
+    /// in their original coordinates; shader displacement is visual only.
+    /// Platforms without subtree support paint the closure normally.
+    /// Prepaint cached content inside [`Self::prepaint_subtree_effect`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_subtree_effect<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        shader: EffectShader,
+        uniforms: EffectUniforms,
+        time: f32,
+        opacity: f32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+        assert!(
+            shader.image_count() == 1 && !shader.is_mask(),
+            "subtree effects require a single-image shader"
+        );
+        if !self.supports_subtree_effects() {
+            return self.with_element_opacity(Some(opacity.clamp(0.0, 1.0)), f);
+        }
+        let bounds = self.snap_bounds(bounds);
+        let previous_opacity = self.element_opacity;
+        self.element_opacity = 1.0;
+        self.next_frame.scene.start_subtree(EffectQuad {
+            order: 0,
+            bounds,
+            effect_bounds: bounds,
+            transformation: TransformationMatrix::default(),
+            content_mask: self.snapped_content_mask(),
+            shader,
+            uniforms,
+            time,
+            corner_radii: Corners::default(),
+            opacity: previous_opacity * opacity.clamp(0.0, 1.0),
+            image_tile: None,
+            second_image_tile: None,
+            third_image_tile: None,
+            fourth_image_tile: None,
+        });
+        let result = f(self);
+        self.next_frame.scene.end_subtree();
+        self.element_opacity = previous_opacity;
+        result
+    }
+
     /// Updates the cursor style at the platform level. This method should only be called
     /// during the paint phase of element drawing.
     pub fn set_cursor_style(&mut self, style: CursorStyle, hitbox: &Hitbox) {
@@ -4546,6 +4615,9 @@ impl Window {
     }
 
     fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
+        if self.next_frame.scene.is_capturing_subtree() {
+            return false;
+        }
         if self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque {
             return false;
         }

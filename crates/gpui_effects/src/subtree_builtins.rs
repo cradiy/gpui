@@ -1,0 +1,138 @@
+use gpui::{EffectShader, IntoElement, Pixels, px};
+
+use crate::{SubtreeEffect, subtree_effect};
+
+/// Wave displacement in logical pixels, driven by `SubtreeEffect::time`.
+#[derive(Clone, Copy, Debug)]
+pub struct SubtreeWaveOptions {
+    /// Maximum displacement along each axis.
+    pub amplitude: Pixels,
+    /// Distance between wave peaks.
+    pub wavelength: Pixels,
+    /// Temporal phase speed in radians per second. Negative values reverse motion.
+    pub speed: f32,
+}
+
+impl Default for SubtreeWaveOptions {
+    fn default() -> Self {
+        Self {
+            amplitude: px(6.),
+            wavelength: px(180.),
+            speed: 1.5,
+        }
+    }
+}
+
+/// Color controls applied without changing the captured alpha channel.
+#[derive(Clone, Copy, Debug)]
+pub struct SubtreeColorOptions {
+    /// Zero is grayscale, one preserves saturation.
+    pub saturation: f32,
+    /// One preserves contrast; zero produces uniform mid-gray before brightness.
+    pub contrast: f32,
+    /// RGB multiplier. One preserves brightness.
+    pub brightness: f32,
+}
+
+impl Default for SubtreeColorOptions {
+    fn default() -> Self {
+        Self {
+            saturation: 1.,
+            contrast: 1.,
+            brightness: 1.,
+        }
+    }
+}
+
+/// Captures content with an identity image shader.
+pub fn subtree_identity<E: IntoElement>(element: E) -> SubtreeEffect<E::Element> {
+    subtree_effect(element, subtree_identity_shader())
+}
+
+/// Applies a compact Gaussian blur with a logical-pixel support radius.
+///
+/// Uses a fixed 7 × 7 kernel; small radii suit text and UI content. Padding is
+/// reserved automatically. Zero radius preserves the captured content.
+pub fn subtree_blur<E: IntoElement>(element: E, radius: Pixels) -> SubtreeEffect<E::Element> {
+    let radius = radius.max(px(0.));
+    subtree_effect(element, subtree_blur_shader())
+        .uniform_pixels(0, [radius, px(0.), px(0.), px(0.)])
+        .capture_padding(radius)
+}
+
+/// Applies continuous wave displacement with automatic capture padding.
+pub fn subtree_wave<E: IntoElement>(
+    element: E,
+    options: SubtreeWaveOptions,
+) -> SubtreeEffect<E::Element> {
+    let amplitude = options.amplitude.max(px(0.));
+    subtree_effect(element, subtree_wave_shader())
+        .uniform_pixels(
+            0,
+            [amplitude, options.wavelength.max(px(1.)), px(0.), px(0.)],
+        )
+        .uniform(1, [options.speed, 0., 0., 0.])
+        .capture_padding(amplitude + px(1.))
+}
+
+/// Adjusts saturation, contrast and brightness for the entire captured content.
+pub fn subtree_color_adjust<E: IntoElement>(
+    element: E,
+    options: SubtreeColorOptions,
+) -> SubtreeEffect<E::Element> {
+    subtree_effect(element, subtree_color_adjust_shader()).uniform(
+        0,
+        [
+            options.saturation.max(0.),
+            options.contrast.max(0.),
+            options.brightness.max(0.),
+            0.,
+        ],
+    )
+}
+
+/// Identity image shader; no uniforms are required.
+pub fn subtree_identity_shader() -> EffectShader {
+    EffectShader::wgsl_image(include_str!("shaders/subtree_identity.wgsl"))
+}
+
+/// Blur shader. Slot 0: `[radius_device_px, 0, 0, 0]`.
+pub fn subtree_blur_shader() -> EffectShader {
+    EffectShader::wgsl_image(include_str!("shaders/subtree_blur.wgsl"))
+}
+
+/// Wave shader. Slot 0: `[amplitude_device_px, wavelength_device_px, 0, 0]`;
+/// slot 1: `[speed_radians_per_second, 0, 0, 0]`.
+pub fn subtree_wave_shader() -> EffectShader {
+    EffectShader::wgsl_image(include_str!("shaders/subtree_wave.wgsl"))
+}
+
+/// Color shader. Slot 0: `[saturation, contrast, brightness, 0]`.
+pub fn subtree_color_adjust_shader() -> EffectShader {
+    EffectShader::wgsl_image(include_str!("shaders/subtree_color_adjust.wgsl"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subtree_builtin_shaders_validate() {
+        for shader in [
+            subtree_identity_shader(),
+            subtree_blur_shader(),
+            subtree_wave_shader(),
+            subtree_color_adjust_shader(),
+        ] {
+            let source = gpui::compose_subtree_effect_wgsl(&shader);
+            let module = naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("subtree shader must validate");
+        }
+    }
+}

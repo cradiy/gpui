@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod fluid;
 mod particles;
 
 #[derive(Clone, Copy)]
@@ -427,6 +428,7 @@ struct WgpuResources {
     bloom_textures: HashMap<u32, [wgpu::Texture; 2]>,
     feedback_textures: HashMap<gpui::EffectHistoryId, FeedbackTextures>,
     particles: Option<particles::ParticleRenderer>,
+    fluid: Option<fluid::FluidRenderer>,
     failed_effect_pipelines: HashSet<u64>,
     backdrop_effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     failed_backdrop_effect_pipelines: HashSet<u64>,
@@ -463,6 +465,7 @@ impl WgpuResources {
         self.bloom_textures.clear();
         self.feedback_textures.clear();
         self.particles = None;
+        self.fluid = None;
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
@@ -942,6 +945,7 @@ impl WgpuRenderer {
             bloom_textures: HashMap::new(),
             feedback_textures: HashMap::new(),
             particles: None,
+            fluid: None,
             failed_effect_pipelines: HashSet::default(),
             backdrop_effect_pipelines: HashMap::default(),
             failed_backdrop_effect_pipelines: HashSet::default(),
@@ -2679,8 +2683,17 @@ impl WgpuRenderer {
         ];
         let mut has_particles = false;
         scene.visit(&mut |scene| has_particles |= !scene.particles.is_empty());
+        let mut has_fluid = false;
+        scene.visit(&mut |scene| has_fluid |= !scene.fluids.is_empty());
         {
             let resources = self.resources_mut();
+            if has_fluid && resources.fluid.is_none() {
+                resources.fluid = Some(fluid::FluidRenderer::new(&resources.device, format));
+            }
+            if let Some(fluid) = &mut resources.fluid {
+                fluid.ensure(&resources.device, scene);
+                fluid.encode(&resources.queue, scene, viewport, encoder);
+            }
             if has_particles && resources.particles.is_none() {
                 resources.particles =
                     Some(particles::ParticleRenderer::new(&resources.device, format));
@@ -2744,6 +2757,9 @@ impl WgpuRenderer {
             self.encode_scene_batches(scene, target_texture, target_view, encoder, load, &mut 0, 0);
         if let Some(particles) = &self.resources().particles {
             particles.commit(encoded);
+        }
+        if let Some(fluid) = &self.resources().fluid {
+            fluid.commit(encoded);
         }
         for textures in self.resources().feedback_textures.values() {
             if let Some(snapshot) = textures.pending.take()
@@ -3031,6 +3047,14 @@ impl WgpuRenderer {
                         if let Some(particles) = &self.resources().particles {
                             for draw in &scene.particles[range] {
                                 particles.draw(draw, &mut pass);
+                            }
+                        }
+                        true
+                    }
+                    PrimitiveBatch::Fluids(range) => {
+                        if let Some(fluid) = &self.resources().fluid {
+                            for draw in &scene.fluids[range] {
+                                fluid.draw(draw, &mut pass);
                             }
                         }
                         true

@@ -49,6 +49,7 @@ pub struct Scene {
     pub quads: Vec<Quad>,
     pub effects: Vec<EffectQuad>,
     pub particles: Vec<crate::ParticleDraw>,
+    pub fluids: Vec<crate::FluidDraw>,
     pub subtree_layers: Vec<SubtreeLayer>,
     pending_subtrees: Vec<(EffectQuad, Arc<[SubtreeEffectPass]>, Scene)>,
     pub paths: Vec<Path<ScaledPixels>>,
@@ -71,6 +72,7 @@ impl Scene {
         self.quads.clear();
         self.effects.clear();
         self.particles.clear();
+        self.fluids.clear();
         self.subtree_layers.clear();
         self.pending_subtrees.clear();
         self.underlines.clear();
@@ -149,6 +151,10 @@ impl Scene {
                 draw.order = order;
                 self.particles.push(draw.clone());
             }
+            Primitive::Fluid(draw) => {
+                draw.order = order;
+                self.fluids.push(draw.clone());
+            }
             Primitive::SubtreeLayer(layer) => {
                 layer.composite.order = order;
                 self.subtree_layers.push(layer.clone());
@@ -203,6 +209,7 @@ impl Scene {
         self.quads.sort_by_key(|quad| quad.order);
         self.effects.sort_by_key(|effect| effect.order);
         self.particles.sort_by_key(|draw| draw.order);
+        self.fluids.sort_by_key(|draw| draw.order);
         self.subtree_layers
             .sort_by_key(|layer| layer.composite.order);
         self.paths.sort_by_key(|path| path.order);
@@ -311,6 +318,8 @@ impl Scene {
             effects_iter: self.effects.iter().peekable(),
             particles_start: 0,
             particles_iter: self.particles.iter().peekable(),
+            fluids_start: 0,
+            fluids_iter: self.fluids.iter().peekable(),
             subtree_layers_start: 0,
             subtree_layers_iter: self.subtree_layers.iter().peekable(),
             paths_start: 0,
@@ -344,6 +353,7 @@ pub(crate) enum PrimitiveKind {
     Quad,
     Effect,
     Particles,
+    Fluid,
     SubtreeLayer,
     Path,
     Underline,
@@ -369,6 +379,7 @@ pub enum Primitive {
     Quad(Quad),
     Effect(EffectQuad),
     Particles(crate::ParticleDraw),
+    Fluid(crate::FluidDraw),
     SubtreeLayer(SubtreeLayer),
     Path(Path<ScaledPixels>),
     Underline(Underline),
@@ -387,6 +398,7 @@ impl Primitive {
             Primitive::Quad(quad) => &quad.bounds,
             Primitive::Effect(effect) => &effect.bounds,
             Primitive::Particles(draw) => &draw.bounds,
+            Primitive::Fluid(draw) => &draw.bounds,
             Primitive::SubtreeLayer(layer) => &layer.composite.bounds,
             Primitive::Path(path) => &path.bounds,
             Primitive::Underline(underline) => &underline.bounds,
@@ -404,6 +416,7 @@ impl Primitive {
             Primitive::Quad(quad) => &quad.content_mask,
             Primitive::Effect(effect) => &effect.content_mask,
             Primitive::Particles(draw) => &draw.content_mask,
+            Primitive::Fluid(draw) => &draw.content_mask,
             Primitive::SubtreeLayer(layer) => &layer.composite.content_mask,
             Primitive::Path(path) => &path.content_mask,
             Primitive::Underline(underline) => &underline.content_mask,
@@ -433,6 +446,8 @@ struct BatchIterator<'a> {
     effects_iter: Peekable<slice::Iter<'a, EffectQuad>>,
     particles_start: usize,
     particles_iter: Peekable<slice::Iter<'a, crate::ParticleDraw>>,
+    fluids_start: usize,
+    fluids_iter: Peekable<slice::Iter<'a, crate::FluidDraw>>,
     subtree_layers_start: usize,
     subtree_layers_iter: Peekable<slice::Iter<'a, SubtreeLayer>>,
     paths_start: usize,
@@ -470,6 +485,10 @@ impl<'a> Iterator for BatchIterator<'a> {
             (
                 self.particles_iter.peek().map(|draw| draw.order),
                 PrimitiveKind::Particles,
+            ),
+            (
+                self.fluids_iter.peek().map(|draw| draw.order),
+                PrimitiveKind::Fluid,
             ),
             (self.paths_iter.peek().map(|q| q.order), PrimitiveKind::Path),
             (
@@ -510,6 +529,12 @@ impl<'a> Iterator for BatchIterator<'a> {
         };
 
         match batch_kind {
+            PrimitiveKind::Fluid => {
+                let start = self.fluids_start;
+                self.fluids_iter.next();
+                self.fluids_start += 1;
+                Some(PrimitiveBatch::Fluids(start..start + 1))
+            }
             PrimitiveKind::Particles => {
                 let start = self.particles_start;
                 self.particles_iter.next();
@@ -704,6 +729,7 @@ pub enum PrimitiveBatch {
     Quads(Range<usize>),
     Effects(Range<usize>),
     Particles(Range<usize>),
+    Fluids(Range<usize>),
     SubtreeLayers(Range<usize>),
     Paths(Range<usize>),
     Underlines(Range<usize>),

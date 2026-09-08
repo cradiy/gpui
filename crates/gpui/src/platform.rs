@@ -834,6 +834,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
 
+    /// Whether the renderer supports GPU fluid simulation and drawing.
+    fn supports_gpu_fluid(&self) -> bool {
+        false
+    }
+
     // macOS specific methods
     fn get_title(&self) -> String {
         String::new()

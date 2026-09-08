@@ -3546,6 +3546,35 @@ impl Window {
         self.platform_window.supports_gpu_particles()
     }
 
+    /// Whether this window supports GPU fluid simulation and drawing.
+    pub fn supports_gpu_fluid(&self) -> bool {
+        self.platform_window.supports_gpu_fluid()
+    }
+
+    /// Paints a fluid surface. Unsupported renderers do not draw the surface.
+    pub fn paint_fluid(&mut self, bounds: Bounds<Pixels>, frame: Arc<crate::FluidFrame>) {
+        self.invalidator.debug_assert_paint();
+        if !self.supports_gpu_fluid() {
+            return;
+        }
+        let bounds = self.snap_bounds(bounds);
+        let content_mask = self.snapped_content_mask();
+        if self.element_opacity <= 0. || bounds.intersect(&content_mask.bounds).is_empty() {
+            return;
+        }
+        if frame.needs_animation {
+            self.request_animation_frame();
+        }
+        self.next_frame.scene.insert_primitive(crate::FluidDraw {
+            order: 0,
+            bounds,
+            content_mask,
+            scale_factor: self.scale_factor(),
+            opacity: self.element_opacity,
+            frame,
+        });
+    }
+
     /// Paints a particle surface. Unsupported renderers do not draw particles.
     pub fn paint_particles(&mut self, bounds: Bounds<Pixels>, frame: Arc<crate::ParticleFrame>) {
         self.invalidator.debug_assert_paint();

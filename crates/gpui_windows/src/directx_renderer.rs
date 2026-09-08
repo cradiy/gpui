@@ -450,6 +450,7 @@ impl DirectXRenderer {
                 PrimitiveBatch::Quads(range) => self.draw_quads(range.start, range.len()),
                 PrimitiveBatch::Effects(range) => self.draw_effects(&scene.effects[range]),
                 PrimitiveBatch::Particles(_) => {},
+                PrimitiveBatch::Fluids(_) => {},
                 PrimitiveBatch::Paths(range) => {
                     let paths = &scene.paths[range];
                     self.draw_paths_to_intermediate(paths)?;

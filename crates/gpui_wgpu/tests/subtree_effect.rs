@@ -12,6 +12,8 @@ use gpui_wgpu::WgpuOffscreenRenderer;
 
 #[path = "support/feedback.rs"]
 mod feedback;
+#[path = "support/fluid.rs"]
+mod fluid;
 #[path = "support/particles.rs"]
 mod particles;
 
@@ -120,7 +122,8 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     check_effect_chains(&mut renderer)?;
     check_bloom_spread_and_highlight_contrast(&mut renderer)?;
     feedback::check(&mut renderer)?;
-    particles::check(&mut renderer)
+    particles::check(&mut renderer)?;
+    fluid::check(&mut renderer)
 }
 
 fn check_bloom_spread_and_highlight_contrast(

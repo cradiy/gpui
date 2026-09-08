@@ -15,6 +15,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
 - [GPU particles](docs/particles.md): GPU-simulated light points, streaks and interactive forces.
+- [GPU fluid](docs/fluid.md): interactive colored ink, momentum and vortices.
 
 ## Examples
 
@@ -67,6 +68,12 @@ Run the interactive particle example:
 
 ```sh
 cargo run -p gpui_effects --example particles
+```
+
+Run the interactive fluid example:
+
+```sh
+cargo run -p gpui_effects --example fluid
 ```
 
 ## License

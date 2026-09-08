@@ -29,6 +29,7 @@ mod effect_stage;
 mod element;
 mod feedback;
 mod flip;
+mod fluid;
 mod glass;
 mod lens;
 mod liquid_glass;
@@ -63,6 +64,7 @@ pub use flip::{
     FlipRequestResult, FlipSlot, FlipStyle, FlipUpdateResult, flip_shader, flip_shader_for,
     rigid_flip_shader, soft_flip_shader,
 };
+pub use fluid::{Fluid, FluidOptions, FluidSplat, fluid};
 pub use glass::{FrostedGlass, FrostedGlassAppearance, FrostedGlassShape};
 pub use lens::{LensOptions, lens_shader, subtree_lens};
 pub use liquid_glass::{LiquidGlass, LiquidGlassAppearance, liquid_glass_shader, paint_liquid_glass};

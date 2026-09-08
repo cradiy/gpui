@@ -1610,6 +1610,10 @@ impl PlatformWindow for X11Window {
         true
     }
 
+    fn supports_gpu_fluid(&self) -> bool {
+        true
+    }
+
     fn minimize(&self) {
         let state = self.0.state.borrow();
         const WINDOW_ICONIC_STATE: u32 = 3;

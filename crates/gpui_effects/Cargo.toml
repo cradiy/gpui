@@ -7,6 +7,7 @@ license = "MIT"
 readme = "README.md"
 
 [dependencies]
+anyhow.workspace = true
 smallvec.workspace = true
 accesskit.workspace = true
 gpui.workspace = true
@@ -17,6 +18,5 @@ uic_macros.workspace = true
 workspace = true
 
 [dev-dependencies]
-anyhow.workspace = true
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 naga.workspace = true

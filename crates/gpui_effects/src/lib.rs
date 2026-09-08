@@ -39,6 +39,7 @@ mod masked_fill;
 mod motion;
 mod particles;
 mod ripple;
+mod sdf;
 mod sticky;
 mod subtree_builtins;
 mod subtree_effect;
@@ -77,6 +78,7 @@ pub use motion::{
 };
 pub use particles::{ParticlePhysics, ParticleSpawn, Particles, particles};
 pub use ripple::{MAX_RIPPLES, Ripple, RippleOptions, ripple_shader, subtree_ripples};
+pub use sdf::{MAX_SDF_SHAPES, SdfOptions, SdfScene, SdfShape, SdfTransform, sdf};
 pub use sticky::{StickyShape, paint_sticky_shapes, sticky_shape_shader};
 pub use subtree_builtins::{
     SubtreeColorOptions, SubtreeWaveOptions, subtree_blur, subtree_blur_shader,

@@ -16,6 +16,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
 - [GPU particles](docs/particles.md): GPU-simulated light points, streaks and interactive forces.
 - [GPU fluid](docs/fluid.md): interactive colored ink, momentum and vortices.
+- [SDF shapes](docs/sdf.md): Boolean geometry, smooth blending, outlines and edge light.
 
 ## Examples
 
@@ -74,6 +75,12 @@ Run the interactive fluid example:
 
 ```sh
 cargo run -p gpui_effects --example fluid
+```
+
+Run the interactive shape-composition example:
+
+```sh
+cargo run -p gpui_effects --example sdf
 ```
 
 ## License

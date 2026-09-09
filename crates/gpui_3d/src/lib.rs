@@ -6,13 +6,14 @@ pub mod guide {}
 
 mod math;
 mod picking;
+mod ui_input;
 mod viewport;
 
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
 use gpui::{ImageSource, Mesh3d, Rgba};
 pub use math::{Camera, Transform};
-pub use picking::Hit;
+pub use picking::{Hit, PickBehavior};
 use std::sync::{Arc, OnceLock};
 pub use viewport::{Viewport3d, viewport3d};
 
@@ -115,6 +116,11 @@ impl Material {
             ..Self::color(gpui::white())
         }
     }
+    /// Sets the color multiplier for sampled RGBA, including alpha cutout.
+    pub fn tint(mut self, color: impl Into<Rgba>) -> Self {
+        self.color = color.into();
+        self
+    }
     /// Bypasses directional and ambient lighting.
     pub fn unlit(mut self, unlit: bool) -> Self {
         self.unlit = unlit;
@@ -132,6 +138,7 @@ impl Material {
 #[derive(Clone)]
 pub struct Object {
     id: Option<ObjectId>,
+    pick_behavior: PickBehavior,
     mesh: Mesh,
     material: Material,
     transform: Transform,
@@ -141,6 +148,7 @@ impl Object {
     pub fn new(mesh: Mesh, material: Material) -> Self {
         Self {
             id: None,
+            pick_behavior: PickBehavior::default(),
             mesh,
             material,
             transform: Transform::default(),
@@ -149,6 +157,11 @@ impl Object {
     /// Assigns a stable application-defined identity for picking callbacks.
     pub fn id(mut self, id: impl Into<ObjectId>) -> Self {
         self.id = Some(id.into());
+        self
+    }
+    /// Controls picking without changing rendering or depth writes.
+    pub fn pick_behavior(mut self, behavior: PickBehavior) -> Self {
+        self.pick_behavior = behavior;
         self
     }
     /// Sets world position.

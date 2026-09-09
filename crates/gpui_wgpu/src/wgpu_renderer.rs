@@ -29,6 +29,7 @@ mod fluid;
 mod particle_transition;
 mod particles;
 mod scene3d;
+mod ui_capture;
 
 #[derive(Clone, Copy)]
 struct FeedbackSnapshot {
@@ -420,6 +421,7 @@ pub type GpuContext = Rc<RefCell<Option<WgpuContext>>>;
 
 /// GPU resources that must be dropped together during device recovery.
 struct WgpuResources {
+    capture_context: WgpuContext,
     instance: wgpu::Instance,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -437,6 +439,8 @@ struct WgpuResources {
     particle_transition: Option<particle_transition::ParticleTransitionRenderer>,
     fluid: Option<fluid::FluidRenderer>,
     scene3d: Option<scene3d::Scene3dRenderer>,
+    ui_captures: Vec<ui_capture::UiCapture>,
+    ui_capture_indices: HashMap<usize, usize>,
     failed_effect_pipelines: HashSet<u64>,
     backdrop_effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     failed_backdrop_effect_pipelines: HashSet<u64>,
@@ -477,6 +481,7 @@ impl WgpuResources {
         self.particle_transition = None;
         self.fluid = None;
         self.scene3d = None;
+        self.ui_capture_indices.clear();
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
@@ -587,6 +592,7 @@ impl WgpuRenderer {
             config.alpha_mode,
             config.alpha_mode,
             backdrop_blur_supported,
+            None,
         )
     }
 
@@ -826,6 +832,7 @@ impl WgpuRenderer {
             transparent_alpha_mode,
             opaque_alpha_mode,
             backdrop_blur_supported,
+            None,
         )
     }
 
@@ -839,6 +846,7 @@ impl WgpuRenderer {
         transparent_alpha_mode: wgpu::CompositeAlphaMode,
         opaque_alpha_mode: wgpu::CompositeAlphaMode,
         backdrop_blur_supported: bool,
+        shared_error: Option<Arc<Mutex<Option<String>>>>,
     ) -> anyhow::Result<Self> {
         let surface_format = surface_config.format;
         let alpha_mode = surface_config.alpha_mode;
@@ -937,14 +945,17 @@ impl WgpuRenderer {
 
         let adapter_info = context.adapter.get_info();
 
-        let last_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let last_error_clone = Arc::clone(&last_error);
-        device.on_uncaptured_error(Arc::new(move |error| {
-            let mut guard = last_error_clone.lock().unwrap();
-            *guard = Some(error.to_string());
-        }));
+        let last_error = shared_error.unwrap_or_else(|| {
+            let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let sink = error.clone();
+            device.on_uncaptured_error(Arc::new(move |error| {
+                *sink.lock().unwrap() = Some(error.to_string());
+            }));
+            error
+        });
 
         let resources = WgpuResources {
+            capture_context: context.clone(),
             instance: context.instance.clone(),
             device,
             queue,
@@ -961,6 +972,8 @@ impl WgpuRenderer {
             particle_transition: None,
             fluid: None,
             scene3d: None,
+            ui_captures: Vec::new(),
+            ui_capture_indices: HashMap::new(),
             failed_effect_pipelines: HashSet::default(),
             backdrop_effect_pipelines: HashMap::default(),
             failed_backdrop_effect_pipelines: HashSet::default(),
@@ -2286,6 +2299,7 @@ impl WgpuRenderer {
                 &mut encoder,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             ) {
+                self.commit_encoded_scene(false);
                 drop(encoder);
                 if self.instance_buffer_capacity >= self.max_buffer_size {
                     log::error!(
@@ -2299,6 +2313,7 @@ impl WgpuRenderer {
                 continue;
             }
 
+            self.commit_encoded_scene(true);
             let resources = self.resources();
             resources.queue.submit(std::iter::once(encoder.finish()));
             #[cfg(target_os = "linux")]
@@ -2313,6 +2328,16 @@ impl WgpuRenderer {
     }
 
     pub fn encode_external(&mut self, scene: &Scene, target: WgpuExternalRenderTarget<'_>) -> bool {
+        let encoded = self.encode_external_scene(scene, target);
+        self.commit_encoded_scene(encoded);
+        encoded
+    }
+
+    fn encode_external_scene(
+        &mut self,
+        scene: &Scene,
+        target: WgpuExternalRenderTarget<'_>,
+    ) -> bool {
         assert!(
             self.resources().surface.is_none(),
             "encode_external() requires an external renderer"
@@ -2823,6 +2848,9 @@ impl WgpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
     ) -> bool {
+        if !self.encode_ui_captures(scene, encoder) {
+            return false;
+        }
         let format = self.surface_config.format;
         let viewport = [
             self.surface_config.width as f32,
@@ -2945,8 +2973,11 @@ impl WgpuRenderer {
         for textures in self.resources().feedback_textures.values() {
             textures.pending.set(None);
         }
-        let encoded =
-            self.encode_scene_batches(scene, target_texture, target_view, encoder, load, &mut 0, 0);
+        self.encode_scene_batches(scene, target_texture, target_view, encoder, load, &mut 0, 0)
+    }
+
+    fn commit_encoded_scene(&self, encoded: bool) {
+        self.commit_ui_captures(encoded);
         if let Some(particles) = &self.resources().particles {
             particles.commit(encoded);
         }
@@ -2960,7 +2991,6 @@ impl WgpuRenderer {
                 textures.committed.set(Some(snapshot));
             }
         }
-        encoded
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3021,20 +3051,28 @@ impl WgpuRenderer {
                                 );
                                 continue;
                             };
-                            if !self.encode_scene_batches(
-                                &layer.scene,
-                                texture,
-                                &capture_view,
-                                encoder,
-                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                instance_offset,
-                                depth + 1,
-                            ) {
+                            let captured = self
+                                .resources()
+                                .ui_capture_indices
+                                .get(&(layer as *const _ as usize))
+                                .map(|index| &self.resources().ui_captures[*index].texture);
+                            if captured.is_none()
+                                && !self.encode_scene_batches(
+                                    &layer.scene,
+                                    texture,
+                                    &capture_view,
+                                    encoder,
+                                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    instance_offset,
+                                    depth + 1,
+                                )
+                            {
                                 did_draw = false;
                                 break;
                             }
-                            let mut source_view =
-                                texture.create_view(&wgpu::TextureViewDescriptor::default());
+                            let mut source_view = captured
+                                .unwrap_or(texture)
+                                .create_view(&wgpu::TextureViewDescriptor::default());
                             let second_view = if let Some(second) = &layer.second_scene {
                                 assert!(
                                     layer.intermediate_effects.is_empty(),

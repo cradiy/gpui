@@ -1,10 +1,11 @@
-use crate::{Hit, Scene, Texture};
+use crate::picking::{PickSnapshot, PickSurface};
+use crate::{Hit, ObjectId, PickBehavior, Scene, Texture, ui_input::UiInput};
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, MeshDraw3d, MeshTexture3d, Pixels, PointerTransform, Scene3dFrame,
-    Style, StyleRefinement, Styled, Window, div, prelude::*,
+    IntoElement, LayoutId, MeshDraw3d, MeshTexture3d, Pixels, PointerTransform, Scene3dFrame, Size,
+    Style, StyleRefinement, Styled, UiTexture3d, Window, div, prelude::*,
 };
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 type HoverListener = Box<dyn Fn(&Option<Hit>, &mut Window, &mut App)>;
 type ClickListener = Box<dyn Fn(&Hit, &mut Window, &mut App)>;
@@ -15,26 +16,32 @@ pub fn viewport3d(id: impl Into<ElementId>, scene: Scene) -> Viewport3d {
         id: id.into(),
         scene,
         texture: None,
+        texture_size: None,
+        texture_scale: 1.,
+        interactive_ui: None,
         style: StyleRefinement::default(),
         on_hover: None,
         on_click: None,
-        pick_bounds: Rc::new(Cell::new(None)),
+        pick_snapshot: Rc::new(RefCell::new(None)),
     }
 }
 
-/// A styled viewport with one optional decorative UI texture.
+/// A styled viewport with one optional UI texture.
 pub struct Viewport3d {
     id: ElementId,
     scene: Scene,
     texture: Option<AnyElement>,
+    texture_size: Option<Size<Pixels>>,
+    texture_scale: f32,
+    interactive_ui: Option<ObjectId>,
     style: StyleRefinement,
     on_hover: Option<HoverListener>,
     on_click: Option<ClickListener>,
-    pick_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pick_snapshot: Rc<RefCell<Option<PickSnapshot>>>,
 }
 impl Viewport3d {
-    /// Reports geometric hits on pointer movement and `None` on exit or a miss.
-    /// Texture alpha is not sampled. This does not request animation frames.
+    /// Reports hits on pointer movement and `None` on exit or a miss.
+    /// Image alpha is sampled; captured UI uses mesh geometry. No frames are scheduled.
     pub fn on_object_hover(
         mut self,
         listener: impl Fn(&Option<Hit>, &mut Window, &mut App) + 'static,
@@ -43,7 +50,7 @@ impl Viewport3d {
         self
     }
     /// Handles a left click whose endpoints hit the same mesh within four logical pixels.
-    /// Texture alpha is not sampled. Callers sharing the button with camera gestures
+    /// Image alpha is sampled; captured UI uses mesh geometry. Callers sharing the button with camera gestures
     /// should ignore clicks after a drag.
     pub fn on_object_click(
         mut self,
@@ -52,18 +59,42 @@ impl Viewport3d {
         self.on_click = Some(Box::new(listener));
         self
     }
-    /// Captures UI at viewport layout size for every `Material::ui()` object.
-    /// This content is visual only; mesh-to-UI input routing is not provided.
+    /// Captures UI for every `Material::ui()` object.
+    /// Content is decorative unless `interactive_ui` enables pointer routing.
     pub fn ui_texture(mut self, content: impl IntoElement) -> Self {
         self.texture = Some(
             div()
                 .id("ui-texture")
-                .absolute()
-                .inset_0()
                 .size_full()
+                .overflow_hidden()
                 .child(content)
                 .into_any_element(),
         );
+        self
+    }
+
+    /// Sets the UI's logical layout dimensions. Defaults to the viewport size.
+    #[track_caller]
+    pub fn ui_texture_size(mut self, size: Size<Pixels>) -> Self {
+        let _ = UiTexture3d::new(size, 1.);
+        self.texture_size = Some(size);
+        self
+    }
+
+    /// Sets raster density relative to display scale without changing layout.
+    /// Defaults to 1. Density is capped uniformly at 2048 pixels on either axis.
+    #[track_caller]
+    pub fn ui_texture_scale(mut self, scale: f32) -> Self {
+        assert!(scale.is_finite() && scale > 0.);
+        self.texture_scale = scale;
+        self
+    }
+
+    /// Routes pointer input into the UI texture on one uniquely named UI object.
+    /// Left-button gestures and scrolling on this surface do not bubble to camera
+    /// controls. Right-button gestures remain available for orbit interaction.
+    pub fn interactive_ui(mut self, object: impl Into<ObjectId>) -> Self {
+        self.interactive_ui = Some(object.into());
         self
     }
 }
@@ -79,14 +110,14 @@ impl IntoElement for Viewport3d {
         container.style().refine(&std::mem::take(&mut self.style));
         if let Some(listener) = self.on_hover.take() {
             let listener = Rc::new(listener);
-            let scene = self.scene.clone();
-            let bounds = self.pick_bounds.clone();
+            let snapshot = self.pick_snapshot.clone();
             let on_move = listener.clone();
             container = container
                 .on_mouse_move(move |event, window, cx| {
-                    let hit = bounds
-                        .get()
-                        .and_then(|bounds| scene.pick(bounds, event.position));
+                    let hit = snapshot
+                        .borrow()
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.pick(event.position));
                     on_move(&hit, window, cx);
                 })
                 .on_hover(move |hovered, window, cx| {
@@ -96,8 +127,7 @@ impl IntoElement for Viewport3d {
                 });
         }
         if let Some(listener) = self.on_click.take() {
-            let scene = self.scene.clone();
-            let bounds = self.pick_bounds.clone();
+            let snapshot = self.pick_snapshot.clone();
             container = container.on_click(move |event, window, cx| {
                 let gpui::ClickEvent::Mouse(event) = event else {
                     return;
@@ -106,16 +136,12 @@ impl IntoElement for Viewport3d {
                 if f32::from(delta.x).hypot(f32::from(delta.y)) > 4. {
                     return;
                 }
-                let Some(bounds) = bounds.get() else {
-                    return;
-                };
-                let Some(down) = scene.pick(bounds, event.down.position) else {
-                    return;
-                };
-                let Some(up) = scene.pick(bounds, event.up.position) else {
-                    return;
-                };
-                if down.object_index == up.object_index {
+                let hit = snapshot.borrow().as_ref().and_then(|snapshot| {
+                    let down = snapshot.pick(event.down.position)?;
+                    let up = snapshot.pick(event.up.position)?;
+                    (down.object_index == up.object_index).then_some(up)
+                });
+                if let Some(up) = hit {
                     listener(&up, window, cx);
                 }
             });
@@ -124,6 +150,12 @@ impl IntoElement for Viewport3d {
     }
 }
 struct Content(Viewport3d);
+struct TexturePrepaint {
+    config: UiTexture3d,
+    transform: PointerTransform,
+    input: Option<gpui::Entity<UiInput>>,
+    hitbox: gpui::Hitbox,
+}
 impl IntoElement for Content {
     type Element = Self;
     fn into_element(self) -> Self {
@@ -132,7 +164,7 @@ impl IntoElement for Content {
 }
 impl Element for Content {
     type RequestLayoutState = ();
-    type PrepaintState = ();
+    type PrepaintState = Option<TexturePrepaint>;
     fn id(&self) -> Option<ElementId> {
         Some("scene".into())
     }
@@ -151,19 +183,13 @@ impl Element for Content {
                 let _ = image.use_data(None, window, cx);
             }
         }
-        let children = self
-            .0
-            .texture
-            .iter_mut()
-            .map(|child| child.request_layout(window, cx))
-            .collect::<Vec<_>>();
         (
             window.request_layout(
                 Style {
                     size: gpui::size(gpui::relative(1.).into(), gpui::relative(1.).into()),
                     ..Default::default()
                 },
-                children,
+                [],
                 cx,
             ),
             (),
@@ -171,25 +197,87 @@ impl Element for Content {
     }
     fn prepaint(
         &mut self,
-        _: Option<&GlobalElementId>,
+        id: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
-    ) {
-        if window.supports_scene3d() {
-            window.prepaint_subtree_effect(|window| {
-                window.with_pointer_transform(
-                    bounds,
-                    PointerTransform::noninteractive(),
-                    |window| {
-                        if let Some(texture) = &mut self.0.texture {
-                            texture.prepaint(window, cx);
-                        }
-                    },
-                );
+    ) -> Option<TexturePrepaint> {
+        let target = self
+            .0
+            .interactive_ui
+            .as_ref()
+            .filter(|target| {
+                let matches = self
+                    .0
+                    .scene
+                    .objects
+                    .iter()
+                    .filter(|object| {
+                        object.id.as_ref() == Some(target)
+                            && matches!(object.material.texture, Texture::Ui)
+                            && object.pick_behavior == PickBehavior::Target
+                    })
+                    .count();
+                assert!(matches <= 1, "interactive UI requires a unique object ID");
+                matches == 1
+            })
+            .cloned();
+        let input = window.with_element_state(
+            id.unwrap(),
+            |state: Option<Option<gpui::Entity<UiInput>>>, window| {
+                let input = state.flatten().or_else(|| {
+                    self.0
+                        .interactive_ui
+                        .as_ref()
+                        .map(|_| cx.new(|cx| UiInput::new(window, cx)))
+                });
+                (input.clone(), input)
+            },
+        );
+        if let Some(input) = &input {
+            input.read(cx).prepare(
+                target.filter(|_| self.0.texture.is_some() && !bounds.is_empty()),
+                self.0.texture_size.unwrap_or(bounds.size),
+                window,
+            );
+        }
+        if window.supports_scene3d() && !bounds.is_empty() && self.0.texture.is_some() {
+            let config = UiTexture3d::new(
+                self.0.texture_size.unwrap_or(bounds.size),
+                window.scale_factor() * self.0.texture_scale,
+            );
+            let transform = input
+                .as_ref()
+                .map_or_else(PointerTransform::noninteractive, |input| {
+                    input.read(cx).transform()
+                });
+            let hitbox = window.prepaint_subtree_effect(|window| {
+                window.with_pointer_transform(bounds, transform.clone(), |window| {
+                    window.with_scene3d_texture(config, |window| {
+                        let hitbox = window.insert_hitbox(
+                            Bounds::new(Default::default(), config.logical_size()),
+                            gpui::HitboxBehavior::Normal,
+                        );
+                        self.0.texture.as_mut().unwrap().prepaint_as_root(
+                            Default::default(),
+                            config.logical_size().into(),
+                            window,
+                            cx,
+                        );
+                        hitbox
+                    })
+                })
             });
+            Some(TexturePrepaint {
+                config,
+                transform,
+                input,
+                hitbox,
+            })
+        } else {
+            None
         }
     }
     fn paint(
@@ -198,25 +286,38 @@ impl Element for Content {
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut (),
-        _: &mut (),
+        texture_state: &mut Option<TexturePrepaint>,
         window: &mut Window,
         cx: &mut App,
     ) {
         if !window.supports_scene3d() || bounds.is_empty() {
             return;
         }
-        self.0.pick_bounds.set(Some(bounds));
         let scene = &self.0.scene;
+        let mut surfaces = Vec::with_capacity(scene.objects.len());
+        let has_ui = self.0.texture.is_some();
         let objects = scene
             .objects
             .iter()
             .filter_map(|object| {
+                surfaces.push(PickSurface::Absent);
+                let surface = surfaces.last_mut().unwrap();
                 let texture = match &object.material.texture {
-                    Texture::None => MeshTexture3d::None,
-                    Texture::Ui => MeshTexture3d::Subtree,
+                    Texture::None => {
+                        *surface = PickSurface::Solid;
+                        MeshTexture3d::None
+                    }
+                    Texture::Ui => {
+                        if has_ui {
+                            *surface = PickSurface::Solid;
+                        }
+                        MeshTexture3d::Subtree
+                    }
                     Texture::Image(source) => {
                         let image = source.use_data(None, window, cx)?.ok()?;
-                        MeshTexture3d::Image(window.prepare_effect_image(&image, 0).ok()?)
+                        let tile = window.prepare_effect_image(&image, 0).ok()?;
+                        *surface = PickSurface::Image(image);
+                        MeshTexture3d::Image(tile)
                     }
                 };
                 let (model, normal) = object.transform.matrices();
@@ -231,6 +332,17 @@ impl Element for Content {
                 })
             })
             .collect::<Vec<_>>();
+        *self.0.pick_snapshot.borrow_mut() = Some(PickSnapshot {
+            scene: scene.clone(),
+            bounds,
+            surfaces,
+        });
+        if let Some(state) = texture_state
+            && let Some(input) = &state.input
+        {
+            input.read(cx).set_snapshot(self.0.pick_snapshot.clone());
+            input.read(cx).paint(&state.hitbox, window);
+        }
         let light = scene.light;
         assert!(
             light
@@ -240,6 +352,7 @@ impl Element for Content {
                 .all(|x| x.is_finite())
         );
         let frame = Arc::new(Scene3dFrame {
+            ui_texture: texture_state.as_ref().map(|state| state.config),
             view_projection: scene
                 .camera
                 .matrix(f32::from(bounds.size.width) / f32::from(bounds.size.height)),
@@ -255,8 +368,12 @@ impl Element for Content {
         });
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.with_scene3d(bounds, frame, |window| {
-                if let Some(texture) = &mut self.0.texture {
-                    texture.paint(window, cx);
+                if let Some(state) = texture_state {
+                    window.with_pointer_transform(bounds, state.transform.clone(), |window| {
+                        window.with_scene3d_texture(state.config, |window| {
+                            self.0.texture.as_mut().unwrap().paint(window, cx);
+                        });
+                    });
                 }
             });
         });

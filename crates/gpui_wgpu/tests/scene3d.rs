@@ -57,6 +57,7 @@ fn layer(
     source.finish();
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
+            ui_texture: None,
             view_projection: IDENTITY,
             light_direction: [0., 0., 1.],
             light: [1.; 4],
@@ -187,6 +188,90 @@ fn mesh_depth_capture_clipping_and_nested_composition() -> anyhow::Result<()> {
         assert_eq!(
             &clipped_depth[pixel(64, 48)..pixel(64, 48) + 3],
             &[0, 0, 255]
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn independent_ui_textures_resize_and_compose_without_source_clipping() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(96)))?;
+    let region = bounds(8., 8., 112., 80.);
+    let sample =
+        |image: &[u8], x: usize, y: usize| image[(y * 128 + x) * 4..(y * 128 + x) * 4 + 3].to_vec();
+    for density in [0.5, 2., 1., 8.] {
+        let config = gpui::UiTexture3d::new(size(gpui::px(640.), gpui::px(400.)), density);
+        let physical = config.pixel_size();
+        let w = physical.width.0 as f32;
+        let h = physical.height.0 as f32;
+        let mut source = Scene::default();
+        source.insert_primitive(quad(bounds(0., 0., w * 0.7, h), 0x00ff00ff));
+        let mut capture = layer(
+            region,
+            source,
+            vec![
+                mesh(0.2, 0xffffffff, MeshTexture3d::Subtree),
+                mesh(0.8, 0x0000ffff, MeshTexture3d::None),
+            ],
+            1.,
+        );
+        Arc::make_mut(capture.scene3d.as_mut().unwrap()).ui_texture = Some(config);
+        let output = renderer.render_rgba(&scene(capture.clone()))?;
+        assert_eq!(sample(&output, 40, 48), [0, 255, 0]);
+        assert_eq!(sample(&output, 70, 48), [0, 255, 0]);
+        assert_eq!(sample(&output, 96, 48), [0, 0, 255]);
+        assert_eq!(sample(&output, 2, 48), [0, 0, 0]);
+
+        capture.composite.content_mask.bounds = bounds(0., 0., 64., 96.);
+        let output = renderer.render_rgba(&scene(capture.clone()))?;
+        assert_eq!(sample(&output, 40, 48), [0, 255, 0]);
+        assert_eq!(sample(&output, 70, 48), [0, 0, 0]);
+
+        capture.composite.content_mask.bounds = region;
+        let mut nested = layer(
+            region,
+            scene(capture),
+            vec![mesh(0.2, 0xffffffff, MeshTexture3d::Subtree)],
+            0.5,
+        );
+        Arc::make_mut(nested.scene3d.as_mut().unwrap()).ui_texture = Some(gpui::UiTexture3d::new(
+            size(gpui::px(128.), gpui::px(96.)),
+            1.,
+        ));
+        let output = renderer.render_rgba(&scene(nested))?;
+        let green = sample(&output, 48, 48)[1];
+        assert!(green > 80 && green < 220);
+    }
+
+    let mut root = Scene::default();
+    for (x, color, width) in [(0., 0xff0000ff, 320.), (64., 0x00ff0080, 640.)] {
+        let config = gpui::UiTexture3d::new(size(gpui::px(width), gpui::px(240.)), 2.);
+        let physical = config.pixel_size();
+        let mut source = Scene::default();
+        source.insert_primitive(quad(
+            bounds(0., 0., physical.width.0 as f32, physical.height.0 as f32),
+            color,
+        ));
+        let mut capture = layer(
+            bounds(x, 0., 64., 96.),
+            source,
+            vec![mesh(0.2, 0xffffffff, MeshTexture3d::Subtree)],
+            1.,
+        );
+        Arc::make_mut(capture.scene3d.as_mut().unwrap()).ui_texture = Some(config);
+        root.insert_primitive(Primitive::SubtreeLayer(capture));
+    }
+    root.finish();
+    let output = renderer.render_rgba(&root)?;
+    assert_eq!(sample(&output, 32, 48), [255, 0, 0]);
+    assert_eq!(sample(&output, 96, 48), [0, 255, 0]);
+    renderer.resize(size(DevicePixels(256), DevicePixels(192)));
+    let resized = renderer.render_rgba(&root)?;
+    for x in [32, 96] {
+        assert_eq!(
+            &resized[(48 * 256 + x) * 4..(48 * 256 + x) * 4 + 3],
+            sample(&output, x, 48)
         );
     }
     Ok(())

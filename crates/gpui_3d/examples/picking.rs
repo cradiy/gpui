@@ -1,9 +1,10 @@
 use gpui::{
-    App, Bounds, Context, MouseButton, Pixels, Point, Render, Window, WindowBounds, WindowOptions,
-    div, prelude::*, px, rgb, size,
+    App, Bounds, Context, Image, ImageFormat, ImageSource, MouseButton, Pixels, Point, Render,
+    Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
-use gpui_3d::{Camera, Material, Mesh, Object, ObjectId, Scene, viewport3d};
+use gpui_3d::{Camera, Material, Mesh, Object, ObjectId, PickBehavior, Scene, viewport3d};
 use gpui_platform::application;
+use std::sync::Arc;
 
 struct CameraDrag {
     origin: Point<Pixels>,
@@ -19,6 +20,8 @@ struct Picking {
     suppress_click: bool,
     hovered: Option<ObjectId>,
     selected: Option<ObjectId>,
+    ring: ImageSource,
+    ring_behavior: PickBehavior,
     _activation: gpui::Subscription,
 }
 
@@ -40,18 +43,31 @@ impl Picking {
             suppress_click: false,
             hovered: None,
             selected: None,
+            ring: Arc::new(Image::from_bytes(
+                ImageFormat::Svg,
+                include_bytes!("picking.svg").to_vec(),
+            ))
+            .into(),
+            ring_behavior: PickBehavior::Target,
             _activation: activation,
         }
     }
 
     fn scene(&self) -> Scene {
+        let backplate = if self.hovered.as_ref() == Some(&"Backplate".into()) {
+            0x416986
+        } else if self.selected.as_ref() == Some(&"Backplate".into()) {
+            0x706048
+        } else {
+            0x1c2e44
+        };
         let mut scene = Scene::new()
             .camera(Camera::orbit(self.yaw, self.pitch, self.distance))
             .object(
-                Object::new(Mesh::plane(), Material::color(rgb(0x18283b)))
-                    .rotation([-std::f32::consts::FRAC_PI_2, 0., 0.])
-                    .position([0., -1., 0.])
-                    .scale([8., 6., 1.]),
+                Object::new(Mesh::plane(), Material::color(rgb(backplate)).unlit(true))
+                    .id("Backplate")
+                    .position([0., 0., -2.4])
+                    .scale([10., 8., 1.]),
             );
         for (name, position, rotation, color, highlight) in [
             ("Coral", [-1.4, -0.2, 0.], [0., 0.4, 0.], 0xd58273, 0xffb09d),
@@ -82,11 +98,28 @@ impl Picking {
                     .scale([1.4; 3]),
             );
         }
-        scene
+        scene.object(
+            Object::new(
+                Mesh::plane(),
+                Material::image(self.ring.clone()).unlit(true).tint(rgb(
+                    if self.hovered.as_ref() == Some(&"Halo".into()) {
+                        0xffffff
+                    } else if self.selected.as_ref() == Some(&"Halo".into()) {
+                        0xffcc55
+                    } else {
+                        0x7797b5
+                    },
+                )),
+            )
+            .id("Halo")
+            .pick_behavior(self.ring_behavior)
+            .position([0., 0., 1.65])
+            .scale([4.8, 3.2, 1.]),
+        )
     }
 
     fn label(id: &Option<ObjectId>) -> &'static str {
-        ["Coral", "Ice", "Iris"]
+        ["Coral", "Ice", "Iris", "Halo", "Backplate"]
             .into_iter()
             .find(|name| id.as_ref() == Some(&ObjectId::from(*name)))
             .unwrap_or("None")
@@ -108,6 +141,62 @@ impl Render for Picking {
                 div()
                     .text_color(rgb(0x96a9c6))
                     .child("Hover to highlight · Click to select · Drag to orbit · Scroll to zoom"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0x96a9c6))
+                            .child("Compare modes on the SOLID RIM, not the empty center"),
+                    )
+                    .child(
+                        div().flex().gap_2().children(
+                            [
+                                (PickBehavior::Target, "Selectable"),
+                                (PickBehavior::Occlude, "Occluder"),
+                                (PickBehavior::Ignore, "Pass through"),
+                            ]
+                            .into_iter()
+                            .map(|(behavior, label)| {
+                                div()
+                                    .id(label)
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_full()
+                                    .bg(rgb(if self.ring_behavior == behavior {
+                                        0x416986
+                                    } else {
+                                        0x263b54
+                                    }))
+                                    .cursor_pointer()
+                                    .child(label)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.ring_behavior = behavior;
+                                        this.hovered = None;
+                                        this.selected = None;
+                                        cx.notify();
+                                    }))
+                            }),
+                        ),
+                    ),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xa8bdd5))
+                    .child(match self.ring_behavior {
+                        PickBehavior::Target => "Solid rim: Halo highlights and can be selected.",
+                        PickBehavior::Occlude => {
+                            "Solid rim: No target. The halo blocks selection behind it."
+                        }
+                        PickBehavior::Ignore => {
+                            "Solid rim: The object behind highlights and can be selected."
+                        }
+                    }),
             )
             .child(
                 div()
@@ -212,11 +301,38 @@ impl Render for Picking {
                     .flex()
                     .justify_between()
                     .items_center()
-                    .child(format!(
-                        "Hovered: {}   /   Selected: {}",
-                        Self::label(&self.hovered),
-                        Self::label(&self.selected)
-                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_6()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(0x96a9c6))
+                                            .child("POINTER TARGET"),
+                                    )
+                                    .child(
+                                        div().text_size(px(24.)).child(Self::label(&self.hovered)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div().text_xs().text_color(rgb(0x96a9c6)).child("SELECTED"),
+                                    )
+                                    .child(
+                                        div().text_size(px(24.)).child(Self::label(&self.selected)),
+                                    ),
+                            ),
+                    )
                     .child(
                         div()
                             .id("clear-selection")

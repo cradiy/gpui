@@ -238,7 +238,13 @@ impl Scene3dRenderer {
             };
             let (texture, texture_rect, premultiplied) = match object.texture {
                 MeshTexture3d::None => (&self.white, [0., 0., 1., 1.], 0.),
-                MeshTexture3d::Subtree => (source, rect, 1.),
+                MeshTexture3d::Subtree => {
+                    let texture_rect = frame.ui_texture.map_or(rect, |texture| {
+                        let size = texture.pixel_size();
+                        [0., 0., size.width.0 as f32, size.height.0 as f32]
+                    });
+                    (source, texture_rect, 1.)
+                }
                 MeshTexture3d::Image(tile) => {
                     let r = tile.bounds;
                     (

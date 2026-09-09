@@ -243,7 +243,12 @@ impl Render for Orbit {
                             (this.distance * (f32::from(delta.y) * 0.002).exp()).clamp(3., 14.);
                         cx.notify();
                     }))
-                    .child(viewport3d("world", scene).ui_texture(self.ui()).size_full()),
+                    .child(
+                        viewport3d("world", scene)
+                            .ui_texture(self.ui())
+                            .ui_texture_size(size(px(1040.), px(640.)))
+                            .size_full(),
+                    ),
             )
             .child(
                 div()

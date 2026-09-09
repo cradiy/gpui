@@ -3600,6 +3600,28 @@ impl Window {
         self.platform_window.supports_scene3d()
     }
 
+    /// Draws UI in texture-local coordinates at its own raster density.
+    /// Use the same configuration during prepaint and paint inside a 3D capture.
+    /// Ancestor masks apply to the final viewport, not to the source texture.
+    pub fn with_scene3d_texture<R>(
+        &mut self,
+        texture: crate::UiTexture3d,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        let scale = std::mem::replace(&mut self.scale_factor, texture.scale_factor());
+        let masks = std::mem::replace(
+            &mut self.content_mask_stack,
+            vec![ContentMask {
+                bounds: Bounds::new(Point::default(), texture.logical_size()),
+            }],
+        );
+        let result = f(self);
+        self.content_mask_stack = masks;
+        self.scale_factor = scale;
+        result
+    }
+
     /// Captures a decorative UI texture and renders a depth-tested mesh scene.
     /// Prepaint the texture with `prepaint_subtree_effect`. Unsupported platforms
     /// draw nothing. The caller owns input routing and animation scheduling.
@@ -7929,5 +7951,101 @@ mod tests {
         .unwrap();
 
         assert_eq!(child_bounds.get().size, size(px(300.), px(200.)));
+    }
+
+    struct TextureContent {
+        renders: Rc<Cell<usize>>,
+        bounds: Rc<Cell<Bounds<Pixels>>>,
+    }
+
+    impl Render for TextureContent {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            let bounds = self.bounds.clone();
+            canvas(
+                move |actual, _, _| bounds.set(actual),
+                |bounds, _, window, _| window.paint_quad(crate::fill(bounds, crate::rgb(0xff0000))),
+            )
+            .size_full()
+        }
+    }
+
+    struct TextureRoot {
+        content: crate::Entity<TextureContent>,
+        density: f32,
+    }
+
+    impl Render for TextureRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let config = crate::UiTexture3d::new(size(px(640.), px(400.)), self.density);
+            let content = self.content.clone();
+            div().size(px(60.)).overflow_hidden().child(
+                canvas(
+                    move |_, window, cx| {
+                        let original_mask = window.content_mask();
+                        let original_scale = window.scale_factor();
+                        let content = window.with_scene3d_texture(config, |window| {
+                            let style = div().w(px(640.)).h(px(400.)).style().clone();
+                            let mut content = content.cached(style).into_any_element();
+                            content.prepaint_as_root(
+                                Default::default(),
+                                config.logical_size().into(),
+                                window,
+                                cx,
+                            );
+                            content
+                        });
+                        assert_eq!(window.content_mask(), original_mask);
+                        assert_eq!(window.scale_factor(), original_scale);
+                        content
+                    },
+                    move |_, mut content, window, cx| {
+                        let original_mask = window.content_mask();
+                        let original_scale = window.scale_factor();
+                        window.with_scene3d_texture(config, |window| content.paint(window, cx));
+                        assert_eq!(window.content_mask(), original_mask);
+                        assert_eq!(window.scale_factor(), original_scale);
+                    },
+                )
+                .size_full(),
+            )
+        }
+    }
+
+    #[crate::test]
+    fn ui_texture_density_invalidates_cached_paint_without_changing_layout(
+        cx: &mut TestAppContext,
+    ) {
+        let renders = Rc::new(Cell::new(0));
+        let bounds = Rc::new(Cell::new(Bounds::default()));
+        let window = cx.add_window({
+            let renders = renders.clone();
+            let bounds = bounds.clone();
+            move |_, cx| TextureRoot {
+                content: cx.new(|_| TextureContent { renders, bounds }),
+                density: 1.,
+            }
+        });
+        for (density, render_count) in [(1., 1), (1., 1), (2., 2), (2., 2), (1., 3)] {
+            window
+                .update(cx, |root, _, cx| {
+                    root.density = density;
+                    cx.notify();
+                })
+                .unwrap();
+            cx.update_window(window.into(), |_, window, cx| {
+                window.draw(cx).clear();
+                let quad = window.rendered_frame.scene.quads.last().unwrap();
+                assert_eq!(quad.bounds.size.width.0, 640. * density);
+                assert_eq!(quad.bounds.size.height.0, 400. * density);
+                assert_eq!(quad.content_mask.bounds.size.width.0, 640. * density);
+            })
+            .unwrap();
+            assert_eq!(
+                bounds.get(),
+                Bounds::new(Default::default(), size(px(640.), px(400.)))
+            );
+            assert_eq!(renders.get(), render_count);
+        }
     }
 }

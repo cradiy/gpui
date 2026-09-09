@@ -1,6 +1,55 @@
 use std::sync::Arc;
 
-use crate::{AtlasTile, Rgba};
+use crate::{AtlasTile, DevicePixels, Pixels, Rgba, Size, size};
+
+/// Logical dimensions and raster density of a decorative UI texture.
+#[derive(Clone, Copy, Debug)]
+pub struct UiTexture3d {
+    logical_size: Size<Pixels>,
+    scale_factor: f32,
+}
+
+impl UiTexture3d {
+    /// Creates a texture with a uniform number of device pixels per logical pixel.
+    /// Density is reduced uniformly when either dimension would exceed 2048 pixels.
+    #[track_caller]
+    pub fn new(logical_size: Size<Pixels>, scale_factor: f32) -> Self {
+        let width = f32::from(logical_size.width);
+        let height = f32::from(logical_size.height);
+        assert!(width.is_finite() && width > 0. && height.is_finite() && height > 0.);
+        assert!(scale_factor.is_finite() && scale_factor > 0.);
+        Self {
+            logical_size,
+            scale_factor: scale_factor.min(2048. / width.max(height)),
+        }
+    }
+
+    /// Layout dimensions, independent of the window and mesh dimensions.
+    pub fn logical_size(self) -> Size<Pixels> {
+        self.logical_size
+    }
+
+    /// Effective raster density after the texture size limit is applied.
+    pub fn scale_factor(self) -> f32 {
+        self.scale_factor
+    }
+
+    /// Allocated pixel dimensions, rounded up to cover the full layout.
+    pub fn pixel_size(self) -> Size<DevicePixels> {
+        size(
+            DevicePixels(
+                (f32::from(self.logical_size.width) * self.scale_factor)
+                    .ceil()
+                    .clamp(1., 2048.) as i32,
+            ),
+            DevicePixels(
+                (f32::from(self.logical_size.height) * self.scale_factor)
+                    .ceil()
+                    .clamp(1., 2048.) as i32,
+            ),
+        )
+    }
+}
 
 /// A position, normal and texture coordinate in mesh-local space.
 #[derive(Clone, Copy, Debug)]
@@ -84,6 +133,9 @@ pub struct MeshDraw3d {
 /// Immutable input for a depth-tested 3D viewport.
 #[derive(Clone, Debug)]
 pub struct Scene3dFrame {
+    /// An origin-zero UI capture with independent dimensions and density.
+    /// `None` samples the viewport rectangle from the ordinary subtree target.
+    pub ui_texture: Option<UiTexture3d>,
     /// Column-major world-to-clip matrix, with depth in 0 through 1.
     pub view_projection: [[f32; 4]; 4],
     /// Direction toward the light in world space.

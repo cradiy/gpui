@@ -13,6 +13,8 @@ gpui.workspace = true
 
 [dev-dependencies]
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+image.workspace = true
+uic = { path = "../../uic" }
 
 [lints]
 workspace = true

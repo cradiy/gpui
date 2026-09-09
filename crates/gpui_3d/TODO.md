@@ -20,9 +20,12 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 - [x] **Geometric object picking**: Stable object IDs, screen rays, and nearest mesh hits returning world position, normal, triangle, and UV; expose hover and click callbacks.
 - [x] **Picking example**: Hover highlighting, click selection, and drag-to-orbit with click/drag disambiguation, without changing object geometry.
-- [ ] **Picking visibility**: Match backface, clipping, alpha cutout, and occlusion rules; allow objects to ignore picking or only block interaction behind them.
-- [ ] **UI texture sizing**: Configure logical layout size independently of render resolution, support multiple UI textures, and preserve text proportions across device scales.
-- [ ] **UI pointer mapping**: Map hit UVs to source UI coordinates for buttons, scrolling, and sliders; preserve event continuity when captured drags leave the mesh.
+- [x] **Image picking visibility**: Sample image alpha with material cutoffs, preserve depth order through cutouts, and skip images unavailable to the renderer.
+- [x] **Picking behavior**: Selectable, occluder-only, and pass-through objects without changing rendering.
+- [ ] **Captured UI picking visibility**: Sample capture alpha and keep hit results synchronized with captured content.
+- [x] **UI texture sizing**: Independent logical layout dimensions and raster density, bounded texture allocation, DPI-aware glyph rendering, and a configurable example.
+- [ ] **Multiple UI textures**: Attach independently sized UI sources to distinct scene materials.
+- [x] **UI pointer mapping**: Route a named UI object's UVs into existing button, hover, scroll, and slider handlers, with gesture continuity outside the mesh and camera-input separation.
 - [ ] **Focus and overlays**: Define ownership, positioning, and dismissal for keyboard focus, input methods, tooltips, and menus; specify unsupported interactions.
 - [ ] **Camera controllers**: Reusable orbit, pan, and zoom with configurable targets, distance and angle limits, optional damping, and input conflict handling.
 - [ ] **Interaction example**: Object selection, highlighting, and interactive 3D UI panels covering occlusion, device scales, and viewport sizes.
@@ -66,8 +69,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Near-Term Order
 
-1. Pixel-aware picking visibility and image availability handling.
-2. Independent UI texture sizing, multiple textures, and pointer mapping.
+1. Multiple UI textures.
+2. Captured UI picking visibility and pointer mapping.
 3. Reusable camera controllers, scene hierarchy, and more geometry primitives.
 4. Texture sampling, transparent materials, and static glTF / GLB loading.
 5. Color pipeline, PBR, lights, and shadows.

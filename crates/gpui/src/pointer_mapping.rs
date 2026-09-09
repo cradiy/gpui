@@ -6,11 +6,16 @@ use std::{fmt, rc::Rc};
 pub struct PointerTransform(TransformKind);
 
 type MapPosition = dyn Fn(Point<Pixels>, Bounds<Pixels>, f32) -> Point<Pixels>;
+type HitPosition = dyn Fn(Point<Pixels>, Bounds<Pixels>, f32) -> Option<Point<Pixels>>;
 
 #[derive(Clone)]
 enum TransformKind {
     Noninteractive,
     Function(Rc<MapPosition>),
+    Projection {
+        map: Rc<MapPosition>,
+        hit: Rc<HitPosition>,
+    },
     Chain(Rc<[PointerTransform]>),
 }
 
@@ -25,6 +30,20 @@ impl PointerTransform {
         map: impl Fn(Point<Pixels>, Bounds<Pixels>, f32) -> Point<Pixels> + 'static,
     ) -> Self {
         Self(TransformKind::Function(Rc::new(map)))
+    }
+
+    /// Maps into a separate source coordinate space with explicit visibility testing.
+    /// `hit` returns `None` for occluded or missing surfaces. `map` also handles
+    /// positions outside the displayed bounds so captured drags can continue.
+    /// The caller validates source bounds; ancestor display clipping still applies.
+    pub fn projected(
+        map: impl Fn(Point<Pixels>, Bounds<Pixels>, f32) -> Point<Pixels> + 'static,
+        hit: impl Fn(Point<Pixels>, Bounds<Pixels>, f32) -> Option<Point<Pixels>> + 'static,
+    ) -> Self {
+        Self(TransformKind::Projection {
+            map: Rc::new(map),
+            hit: Rc::new(hit),
+        })
     }
 
     /// Preserves pointer coordinates.
@@ -48,6 +67,7 @@ impl PointerTransform {
         match &self.0 {
             TransformKind::Noninteractive => position,
             TransformKind::Function(map) => map(position, bounds, scale_factor),
+            TransformKind::Projection { map, .. } => map(position, bounds, scale_factor),
             TransformKind::Chain(transforms) => {
                 transforms.iter().rev().fold(position, |p, transform| {
                     transform.map(p, bounds, scale_factor)
@@ -64,6 +84,7 @@ impl PointerTransform {
     ) -> Option<Point<Pixels>> {
         match &self.0 {
             TransformKind::Noninteractive => None,
+            TransformKind::Projection { hit, .. } => hit(position, bounds, scale_factor),
             TransformKind::Function(map) => {
                 let source = map(position, bounds, scale_factor);
                 bounds.contains(&source).then_some(source)

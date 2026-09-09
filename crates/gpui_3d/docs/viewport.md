@@ -77,6 +77,59 @@ Object transforms apply scale, X/Y/Z Euler rotation, then translation. Normals
 use inverse-transpose transforms for nonuniform scale. Scale components must be
 finite and nonzero. Camera clip distances must satisfy `0 < near < far`.
 
+### Primitive meshes
+
+`Mesh::sphere`, `Mesh::cylinder`, `Mesh::cone`, and `Mesh::subdivided_plane`
+accept configuration structs and return `Result<Mesh, PrimitiveError>`.
+Dimensions are finite positive scene units. Generation is synchronous; build a
+mesh during resource preparation and clone it across objects to share storage.
+
+```rust
+use gpui_3d::{ConeOptions, CylinderOptions, Mesh, PlaneOptions, SphereOptions};
+
+let sphere = Mesh::sphere(SphereOptions {
+    radius: 0.7,
+    segments: [64, 32],
+})?;
+let cylinder = Mesh::cylinder(CylinderOptions {
+    height: 2.,
+    segments: [48, 4],
+    ..Default::default()
+})?;
+let cone = Mesh::cone(ConeOptions { capped: false, ..Default::default() })?;
+let grid = Mesh::subdivided_plane(PlaneOptions {
+    size: [4., 3.],
+    segments: [16, 12],
+})?;
+# Ok::<(), gpui_3d::PrimitiveError>(())
+```
+
+Planes face +Z and default to a unit square with one interval per axis. Their
+segments are `[horizontal, vertical]`, each at least one. Spheres are centered at
+the origin with default radius 0.5 and `[longitude, latitude]` segments `[32, 16]`;
+longitude requires at least three sectors and latitude at least two intervals.
+
+Cylinders and cones use the Y axis, default radius 0.5, height 1, and
+`[radial, height]` segments `[32, 1]`. Radial sectors require at least three and
+height intervals at least one. `capped` defaults to true: both cylinder ends or
+the cone base are closed. A cone's tip is at `+height/2` and its base at
+`-height/2`.
+
+All primitives provide outward counterclockwise triangles, unit normals, and
+analytic tangent frames. Round side surfaces use U from +X toward +Z and V from
+top to bottom. UV seams have coincident positions but distinct U values. Sphere
+poles and cone tips use a separate vertex per sector with midpoint U; the sphere
+normal remains axial at each pole. Flat cap normals and disk UVs use separate
+vertices from the sides. Plane UV `(0, 0)` is upper-left. Bounds describe the
+generated vertices, so coarse round meshes need not reach every ideal radial
+extremum.
+
+Generation rejects invalid dimensions or segment counts before allocation.
+Each mesh is limited to 1,048,576 vertices and 6,291,456 indices. Dimensions that
+collapse a generated triangle in f32 coordinates return `PrimitiveError::Degenerate`
+with its triangle index. Primitive generation does not emit zero-area pole or
+tip triangles.
+
 ### Fixed-topology updates
 
 `Mesh::with_vertices(vertices, tangents)` returns an immutable snapshot with new

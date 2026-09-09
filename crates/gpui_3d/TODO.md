@@ -48,7 +48,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Scene query acceleration**: Lazy object BVHs shared by scene clones and camera views of evaluated states, fresh indices after graph evaluation or object insertion, and preserved snapshot queries.
 - [ ] **Spatial index refitting**: Incremental object-bound updates for changed transforms and visibility without full index reconstruction.
 - [ ] **Camera optics**: Focal-length/sensor-size conversion and explicit off-center projection support.
-- [ ] **Geometry primitives**: Spheres, cylinders, cones, and subdivided planes with segment configuration, bounds, and normal and tangent generation.
+- [x] **Geometry primitives**: Configurable UV spheres, capped/open cylinders and cones, and subdivided XY planes; bounded generation, outward winding, split seams/tips/caps, analytic normal/tangent frames, mesh bounds, and shared query/render storage.
 - [x] **Image sampling**: Affine UV transforms, independent Clamp/Repeat/Mirror addressing, Nearest/Linear filtering, atlas-local interpolation, and matching alpha-aware picking.
 - [ ] **Texture sampling extensions**: Mipmaps and anisotropic filtering.
 

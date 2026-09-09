@@ -4,52 +4,11 @@ use gpui::{
 };
 use gpui_3d::{
     AlphaMode, Camera, ColorOutput, Light, Material, MaterialTexture, Mesh, Object,
-    OrbitController, PbrMaterial, Projection, Scene, TextureAddressMode, TextureFilter,
-    TextureSampling, ToneMapping, UvTransform, Vertex, viewport3d,
+    OrbitController, PbrMaterial, Projection, Scene, SphereOptions, TextureAddressMode,
+    TextureFilter, TextureSampling, ToneMapping, UvTransform, viewport3d,
 };
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc, sync::Arc};
-
-fn sphere() -> Mesh {
-    let (rings, segments) = (48, 96);
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-    let mut tangents = Vec::new();
-    for y in 0..=rings {
-        let v = y as f32 / rings as f32;
-        let theta = v * std::f32::consts::PI;
-        for x in 0..=segments {
-            let u = x as f32 / segments as f32;
-            let phi = u * std::f32::consts::TAU;
-            let normal = [
-                theta.sin() * phi.cos(),
-                theta.cos(),
-                theta.sin() * phi.sin(),
-            ];
-            tangents.push([-phi.sin(), 0., phi.cos(), 1.]);
-            vertices.push(Vertex {
-                position: normal.map(|c| c * 0.7),
-                normal,
-                uv: [u, v],
-            });
-        }
-    }
-    for y in 0..rings {
-        for x in 0..segments {
-            let a = y * (segments + 1) + x;
-            let b = a + segments + 1;
-            if y > 0 {
-                indices.extend([a, a + 1, b]);
-            }
-            if y + 1 < rings {
-                indices.extend([a + 1, b + 1, b]);
-            }
-        }
-    }
-    Mesh::new(vertices, indices)
-        .with_tangents(tangents)
-        .unwrap()
-}
 
 struct Materials {
     mesh: Mesh,
@@ -77,7 +36,11 @@ struct Materials {
 impl Materials {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            mesh: sphere(),
+            mesh: Mesh::sphere(SphereOptions {
+                radius: 0.7,
+                segments: [96, 48],
+            })
+            .unwrap(),
             controls: OrbitController::new(Camera::orbit(0., 0.12, 7.5)).unwrap(),
             bounds: Rc::new(Cell::new(Bounds::default())),
             roughness: 0.4,

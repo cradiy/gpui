@@ -23,8 +23,9 @@ pub use camera::{
     ScreenPoint,
 };
 pub use geometry::{
-    Aabb, AffineTransform, Mesh, MorphAttribute, MorphError, MorphTarget, MorphTargets, Skin,
-    SkinError, SkinInfluence, Transform, TransformError,
+    Aabb, AffineTransform, ConeOptions, CylinderOptions, Mesh, MorphAttribute, MorphError,
+    MorphTarget, MorphTargets, PlaneOptions, PrimitiveError, Skin, SkinError, SkinInfluence,
+    SphereOptions, Transform, TransformError,
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

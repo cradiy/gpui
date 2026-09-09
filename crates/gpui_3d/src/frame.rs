@@ -43,6 +43,28 @@ impl Scene {
                 .all(|value| value.is_finite()),
             "scene light parameters must be finite"
         );
+        let directional_shadow = self
+            .directional_shadow
+            .map(|shadow| {
+                let direction = if let Some(lights) = &self.lights {
+                    let source = lights.get(shadow.light_index as usize).ok_or_else(|| {
+                        anyhow::anyhow!("directional shadow light index is out of range")
+                    })?;
+                    ensure!(
+                        source.kind == gpui::LightKind3d::Directional,
+                        "shadow source must be directional"
+                    );
+                    source.direction
+                } else {
+                    ensure!(
+                        shadow.light_index == 0,
+                        "single light shadow index must be zero"
+                    );
+                    light.direction
+                };
+                shadow.prepare(direction)
+            })
+            .transpose()?;
         ensure!(
             self.objects.len() < u32::MAX as usize,
             "too many objects for 32-bit output IDs"
@@ -153,6 +175,8 @@ impl Scene {
                 continue;
             };
             objects.push(MeshDraw3d {
+                cast_shadows: object.cast_shadows,
+                receive_shadows: object.receive_shadows,
                 output_id: index as u32 + 1,
                 mesh: object.mesh.0.clone(),
                 model,
@@ -175,6 +199,7 @@ impl Scene {
             });
         }
         Ok(Scene3dFrame {
+            directional_shadow,
             diffuse_environment: self.diffuse_environment.map(|environment| environment.0),
             world_to_view: view,
             ui_texture,
@@ -206,6 +231,105 @@ mod tests {
     use super::*;
     use crate::{AffineTransform, Camera, Material, Mesh, Node, Object, SceneGraph};
     use gpui::rgb;
+
+    #[test]
+    fn shadow_state_survives_graph_evaluation_and_is_independent_of_view_camera() {
+        use crate::{DirectionalShadow, PunctualLight};
+        let mut graph = SceneGraph::new();
+        graph
+            .insert(
+                None,
+                Node::new()
+                    .mesh(Mesh::cube(), Material::color(rgb(0xffffff)))
+                    .cast_shadows(false)
+                    .receive_shadows(false),
+            )
+            .unwrap();
+        let scene = graph
+            .evaluate()
+            .unwrap()
+            .scene(Camera::default())
+            .lights([
+                PunctualLight::point([0., 1., 0.]),
+                PunctualLight::directional([1., 2., 3.]),
+            ])
+            .directional_shadow(Some(DirectionalShadow {
+                light_index: 1,
+                ..DirectionalShadow::new([0.; 3], [4.; 3])
+            }));
+        let prepare = |scene: &Scene| {
+            scene
+                .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+                .unwrap()
+        };
+        let original = prepare(&scene);
+        let moved = prepare(&scene.camera(Camera::orbit(1., 0.4, 5.)));
+        assert!(original.shadow_is_valid());
+        assert_eq!(
+            original.directional_shadow.unwrap().view_projection,
+            moved.directional_shadow.unwrap().view_projection
+        );
+        assert_ne!(original.view_projection, moved.view_projection);
+        assert!(!original.objects[0].cast_shadows && !original.objects[0].receive_shadows);
+        assert_eq!(original.objects[0].output_id, moved.objects[0].output_id);
+    }
+
+    #[test]
+    fn invalid_shadow_sources_and_volumes_fail_before_texture_resolution() {
+        use crate::{DirectionalShadow, PunctualLight};
+        let settings = DirectionalShadow::new([0.; 3], [4.; 3]);
+        let scene = Scene::new().object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))));
+        let mut invalid = vec![
+            scene.clone().lights([]).directional_shadow(Some(settings)),
+            scene
+                .clone()
+                .lights([PunctualLight::point([0., 0., 1.])])
+                .directional_shadow(Some(settings)),
+        ];
+        for settings in [
+            DirectionalShadow {
+                light_index: 1,
+                ..settings
+            },
+            DirectionalShadow {
+                center: [f32::NAN, 0., 0.],
+                ..settings
+            },
+            DirectionalShadow {
+                half_extent: [0., 1., 1.],
+                ..settings
+            },
+            DirectionalShadow {
+                resolution: 16384,
+                ..settings
+            },
+            DirectionalShadow {
+                resolution: 1000,
+                ..settings
+            },
+            DirectionalShadow {
+                depth_bias: -0.1,
+                ..settings
+            },
+            DirectionalShadow {
+                normal_bias: f32::INFINITY,
+                ..settings
+            },
+            DirectionalShadow {
+                softness: 5.,
+                ..settings
+            },
+        ] {
+            invalid.push(scene.clone().directional_shadow(Some(settings)));
+        }
+        for scene in invalid {
+            assert!(
+                scene
+                    .prepare_frame(1., None, |_, _, _| unreachable!())
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn blend_sort_depth_uses_camera_forward_and_transformed_bounds() {

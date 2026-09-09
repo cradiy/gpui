@@ -17,6 +17,7 @@ mod light;
 mod math;
 mod orbit;
 mod picking;
+mod shadow;
 mod ui_input;
 mod viewport;
 
@@ -51,6 +52,7 @@ pub use light::PunctualLight;
 pub use math::Transform;
 pub use orbit::{OrbitController, OrbitError, OrbitSettings};
 pub use picking::{Hit, PickBehavior};
+pub use shadow::DirectionalShadow;
 use std::sync::{Arc, OnceLock};
 pub use viewport::{Viewport3d, viewport3d};
 
@@ -372,6 +374,8 @@ impl Material {
 /// One mesh with a material and object-to-world transform.
 #[derive(Clone)]
 pub struct Object {
+    cast_shadows: bool,
+    receive_shadows: bool,
     id: Option<ObjectId>,
     pick_behavior: PickBehavior,
     mesh: Mesh,
@@ -391,6 +395,8 @@ impl Object {
     /// Creates a mesh at the origin.
     pub fn new(mesh: Mesh, material: Material) -> Self {
         Self {
+            cast_shadows: true,
+            receive_shadows: true,
             id: None,
             pick_behavior: PickBehavior::default(),
             mesh,
@@ -408,6 +414,16 @@ impl Object {
     /// Controls picking without changing rendering or depth writes.
     pub fn pick_behavior(mut self, behavior: PickBehavior) -> Self {
         self.pick_behavior = behavior;
+        self
+    }
+    /// Casts opaque or alpha-masked shadows. Defaults to true; Blend never casts.
+    pub fn cast_shadows(mut self, enabled: bool) -> Self {
+        self.cast_shadows = enabled;
+        self
+    }
+    /// Receives directional shadows when lit. Defaults to true.
+    pub fn receive_shadows(mut self, enabled: bool) -> Self {
+        self.receive_shadows = enabled;
         self
     }
     /// Sets world position.
@@ -461,6 +477,7 @@ pub struct Scene {
     camera: Camera,
     light: Light,
     lights: Option<Arc<[gpui::PunctualLight3d]>>,
+    directional_shadow: Option<DirectionalShadow>,
     diffuse_environment: Option<DiffuseEnvironment>,
     color_output: ColorOutput,
     objects: Vec<Object>,
@@ -487,6 +504,11 @@ impl Scene {
     /// Rendering rejects excess lights rather than truncating them.
     pub fn lights(mut self, lights: impl IntoIterator<Item = PunctualLight>) -> Self {
         self.lights = Some(lights.into_iter().map(|light| light.0).collect());
+        self
+    }
+    /// Sets one directional shadow map. None disables shadows; invalid settings fail rendering.
+    pub fn directional_shadow(mut self, shadow: Option<DirectionalShadow>) -> Self {
+        self.directional_shadow = shadow;
         self
     }
     /// Adds distant diffuse illumination without changing the scene background.

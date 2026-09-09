@@ -30,6 +30,8 @@ pub struct Node {
     surface: Option<(Mesh, Material)>,
     bounds: Option<Aabb>,
     picking: PickBehavior,
+    no_shadow_cast: bool,
+    no_shadow_receive: bool,
 }
 
 impl Node {
@@ -62,6 +64,16 @@ impl Node {
     }
     pub fn object_id(&self) -> Option<&ObjectId> {
         self.id.as_ref()
+    }
+    /// Controls this mesh's shadow casting, not its descendants. Defaults to true.
+    pub fn cast_shadows(mut self, enabled: bool) -> Self {
+        self.no_shadow_cast = !enabled;
+        self
+    }
+    /// Controls this mesh's shadow reception, not its descendants. Defaults to true.
+    pub fn receive_shadows(mut self, enabled: bool) -> Self {
+        self.no_shadow_receive = !enabled;
+        self
     }
     pub fn local_transform(&self) -> AffineTransform {
         self.local
@@ -536,6 +548,8 @@ impl SceneGraph {
                 object.node = Some(handle);
                 object.world = Some(world);
                 object.pick_behavior = node.picking;
+                object.cast_shadows = !node.no_shadow_cast;
+                object.receive_shadows = !node.no_shadow_receive;
                 evaluated.objects.push(object);
                 evaluated.bounds = union(evaluated.bounds, bounds);
             }

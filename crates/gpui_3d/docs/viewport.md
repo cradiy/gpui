@@ -515,7 +515,7 @@ alpha cutout, depth writes, object IDs, or picking.
 Direct lighting supports a single `Light` or an explicit `PunctualLight` list,
 alongside uniform ambient and optional diffuse environment illumination. Pure
 metals receive no diffuse ambient or environment light. Environment reflections
-and shadows are not provided.
+are not provided. One directional source can use a shadow map.
 Emission does not illuminate other objects or add a glow outside the surface.
 
 ### Direct lights
@@ -571,13 +571,73 @@ the conventions of [KHR_lights_punctual](https://github.com/KhronosGroup/glTF/bl
 
 AO attenuates indirect illumination only, not these direct sources. Unlit
 materials bypass every light. Lights do not change emission, alpha, picking,
-object IDs, depth, or geometric normals. Occlusion by other geometry and shadow
-maps are not computed. Viewport and headless rendering share the same light list.
+object IDs, depth, or geometric normals. Point and spot lights do not compute
+shadows. Viewport and headless rendering share the same light list.
 
 Run `cargo run -p gpui_3d --example lights` to compare point and spot sources.
 Move the pointer to move both sources, adjust source distance and cone width,
 or add a directional and colored point fill light. Right-drag or scroll in either
 view to control the synchronized cameras.
+
+### Directional shadows
+
+```rust
+use gpui_3d::{DirectionalShadow, Light, Scene};
+
+let scene = Scene::new()
+    .light(Light { direction: [-1., 2., 1.], ..Default::default() })
+    .directional_shadow(Some(DirectionalShadow {
+        resolution: 2048,
+        softness: 1.5,
+        depth_bias: 0.0005,
+        normal_bias: 0.01,
+        ..DirectionalShadow::new([0., 0., 0.], [4., 4., 6.])
+    }));
+```
+
+Shadows are optional and default to off. `light_index` selects a directional
+source in `Scene::lights`; zero selects the source configured by `Scene::light`.
+Rendering rejects missing, point, or spot sources. Reordering or replacing the
+light list does not change the index. `directional_shadow(None)` disables the map.
+
+`center` is a world-space point. `half_extent` gives half-width, half-height and
+half-depth along the light's local axes, with each extent finite and at least
+0.0001. Local Z points toward the source. The projection uses world Y as its up
+reference, or world Z when the direction is near vertical. Receivers outside
+this volume remain lit; casters outside it cannot contribute to its map. Include
+both casters and receivers in the covered volume, including casters outside the
+view camera. The volume does not automatically follow the camera or fit scene bounds.
+
+`resolution` accepts powers of two from 256 to 4096, subject to device limits.
+The default is 2048. A smaller covered volume or larger map gives finer detail.
+`softness` accepts `[0, 4]` in shadow texels: zero uses one hard depth comparison;
+positive values spread a 3-by-3 PCF kernel with bilinear depth comparisons.
+This is filtered shadow mapping, not physical area-light penumbra simulation.
+
+`depth_bias` offsets receiver depth toward the source in normalized light depth;
+it accepts `[0, 0.05]`. `normal_bias` is a finite nonnegative world-space offset
+along the geometric surface normal, weighted by the light/surface angle. Defaults
+are 0.0005 and 0.01. Increase offsets to suppress self-shadowing artifacts; excessive
+values detach shadows from their casters. Normal maps do not change this offset.
+
+`Object::cast_shadows` and `Object::receive_shadows` default to true. The same
+builders on `Node` control its own mesh, not its descendants, and are retained
+by evaluated scenes and subtree copies. Opaque and Mask materials cast shadows;
+Mask uses the base texture's alpha, tint alpha, cutoff and UV sampling, including
+captured UI textures. Blend materials receive shadows when lit but never cast
+them. Unlit meshes can cast shadows but bypass shadow reception.
+
+The shadow affects only its selected light's direct diffuse and specular terms.
+Other lights, ambient/environment illumination, emission, output alpha, picking,
+object IDs, depth and geometric normal outputs are unchanged. Viewport and
+headless color rendering share the depth pass and sampling implementation.
+Maps are reused by resolution within a renderer; disabled shadows allocate no
+full-size map. There is one shadowed directional source per scene, without
+cascades, contact shadows, or colored transparent shadows.
+
+Run `cargo run -p gpui_3d --example shadows`. Move the pointer to steer sunlight,
+right-drag to orbit, and scroll to zoom. Controls toggle shadows and soft edges,
+cycle map resolution, and lift the objects above the ground.
 
 ### Diffuse environment lighting
 

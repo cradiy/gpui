@@ -62,7 +62,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Tangent generation**: MikkTSpace-compatible tangent generation with UV seam splitting and explicit handling of degenerate inputs.
 - [x] **Occlusion textures**: Linear R ambient occlusion maps, independent UV sampling and strength, indirect-only attenuation for basic and PBR materials, shared viewport/headless resource handling, and a side-by-side example.
 - [x] **Light types**: Up to eight world-space directional, point, and spot lights; intensity, finite range, inverse-square distance clamping, soft cone controls, shared viewport/headless shading, and a pointer-driven comparison example.
-- [ ] **Directional shadows**: Shadow maps, soft shadows, bias, and quality settings to control self-shadowing artifacts and resource costs.
+- [x] **Directional shadows**: One selected directional source, explicit camera-independent coverage, 256–4096 shadow maps, PCF filtering, depth/normal bias, opaque/masked casting, per-mesh cast/receive controls, and shared viewport/headless shading.
 - [ ] **Environment lighting**: HDR environment maps and diffuse and specular IBL, with independent background and lighting controls.
   - [x] **Diffuse irradiance**: Decoded linear HDR equirectangular inputs, L2 spherical-harmonic projection, precomputed coefficient inputs, intensity and world-Y rotation, shared viewport/headless shading, and an ambient/IBL comparison example.
   - [ ] **Specular IBL**: Prefiltered environment radiance, BRDF integration, and roughness-dependent reflections.

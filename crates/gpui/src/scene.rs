@@ -1433,6 +1433,7 @@ mod tests {
     #[test]
     fn scene3d_capture_replay_keeps_frame_and_nested_texture_reservations() {
         let frame = Arc::new(crate::Scene3dFrame {
+            directional_shadow: None,
             ui_texture: None,
             view_projection: [[0.; 4]; 4],
             world_to_view: [[0.; 4]; 4],

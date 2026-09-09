@@ -127,6 +127,9 @@ struct Params {
     occlusion_settings: [f32; 4],
     lights: [DirectLight; gpui::MAX_PUNCTUAL_LIGHTS_3D],
     light_count: [u32; 4],
+    shadow_camera: [[f32; 4]; 4],
+    shadow_settings: [f32; 4],
+    shadow_flags: [u32; 4],
 }
 
 struct Geometry {
@@ -145,6 +148,10 @@ pub(crate) struct Scene3dRenderer {
     pipeline: wgpu::RenderPipeline,
     blend_pipeline: Option<wgpu::RenderPipeline>,
     display_pipeline: Option<wgpu::RenderPipeline>,
+    shadow_pipeline: Option<wgpu::RenderPipeline>,
+    shadow_maps: HashMap<u32, wgpu::Texture>,
+    shadow_fallback: wgpu::TextureView,
+    shadow_sampler: wgpu::Sampler,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
     geometry: HashMap<usize, Arc<Geometry>>,
@@ -217,6 +224,46 @@ impl Scene3dRenderer {
                 count: None,
             });
         }
+        if !data_output {
+            bindings.extend([
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ]);
+        }
+        let shadow_pipeline = (!data_output).then(|| {
+            let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("scene3d_shadow_material"),
+                entries: &bindings.iter().filter(|binding| binding.binding <= 2).cloned().collect::<Vec<_>>(),
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("scene3d_shadow"), bind_group_layouts: &[Some(&material)], immediate_size: 0,
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("scene3d_shadow"), layout: Some(&layout),
+                vertex: wgpu::VertexState { module: &shader, entry_point: Some("shadow_vertex"), compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 48, step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] })] },
+                fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("shadow_fragment"), compilation_options: Default::default(), targets: &[] }),
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true), depth_compare: Some(wgpu::CompareFunction::Less), stencil: Default::default(), bias: Default::default() }),
+                multisample: Default::default(), multiview_mask: None, cache: None,
+            })
+        });
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene3d_material"),
             entries: &bindings,
@@ -306,6 +353,15 @@ impl Scene3dRenderer {
             white.size(),
         );
         Self {
+            shadow_pipeline,
+            shadow_maps: HashMap::new(),
+            shadow_fallback: shadow_texture(device, 1).create_view(&Default::default()),
+            shadow_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                compare: Some(wgpu::CompareFunction::LessEqual),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
             pipeline,
             blend_pipeline,
             display_pipeline,
@@ -355,9 +411,23 @@ impl Scene3dRenderer {
         height: u32,
     ) {
         let mut used = HashSet::new();
+        let mut shadow_sizes = HashSet::new();
         let mut slot_count = 0;
         let mut has_frame = false;
         for frame in frames {
+            assert!(
+                frame.shadow_is_valid(),
+                "invalid directional shadow parameters or source"
+            );
+            if self.shadow_pipeline.is_some()
+                && let Some(shadow) = frame.directional_shadow
+            {
+                assert!(
+                    shadow.resolution <= device.limits().max_texture_dimension_2d,
+                    "shadow resolution exceeds device limits"
+                );
+                shadow_sizes.insert(shadow.resolution);
+            }
             has_frame = true;
             slot_count += frame.objects.len();
             for object in frame.objects.iter() {
@@ -394,6 +464,13 @@ impl Scene3dRenderer {
             }
         }
         self.geometry.retain(|key, _| used.contains(key));
+        self.shadow_maps
+            .retain(|size, _| shadow_sizes.contains(size));
+        for resolution in shadow_sizes {
+            self.shadow_maps
+                .entry(resolution)
+                .or_insert_with(|| shadow_texture(device, resolution));
+        }
         self.slots.truncate(slot_count);
         while self.slots.len() < slot_count {
             self.slots
@@ -503,6 +580,16 @@ impl Scene3dRenderer {
         let height = depth.height() as f32;
         let layout = self.pipeline.get_bind_group_layout(0);
         let mut groups = Vec::with_capacity(frame.objects.len());
+        let shadow = frame
+            .directional_shadow
+            .filter(|_| self.shadow_pipeline.is_some());
+        let shadow_view = shadow
+            .map(|shadow| self.shadow_maps[&shadow.resolution].create_view(&Default::default()));
+        let shadow_layout = self
+            .shadow_pipeline
+            .as_ref()
+            .map(|pipeline| pipeline.get_bind_group_layout(0));
+        let mut shadow_groups = Vec::with_capacity(frame.objects.len());
         let mut lights = [DirectLight::zeroed(); gpui::MAX_PUNCTUAL_LIGHTS_3D];
         let light_count = if let Some(sources) = &frame.lights {
             assert!(sources.len() <= lights.len(), "too many direct lights");
@@ -579,6 +666,15 @@ impl Scene3dRenderer {
                 .orthographic_view_direction
                 .unwrap_or(frame.camera_position);
             let params = Params {
+                shadow_camera: shadow.map_or([[0.; 4]; 4], |s| s.view_projection),
+                shadow_settings: shadow
+                    .map_or([0.; 4], |s| [s.depth_bias, s.normal_bias, s.softness, 0.]),
+                shadow_flags: [
+                    u32::from(shadow.is_some() && object.receive_shadows),
+                    shadow.map_or(0, |s| s.light_index),
+                    0,
+                    0,
+                ],
                 model: object.model,
                 normal: object.normal,
                 camera: frame.view_projection,
@@ -671,8 +767,27 @@ impl Scene3dRenderer {
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ];
+            if let Some(layout) = &shadow_layout
+                && shadow.is_some()
+            {
+                shadow_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("mesh_shadow_material"),
+                    layout,
+                    entries: &entries,
+                }));
+            }
             if self.display_pipeline.is_some() {
                 entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::TextureView(
+                            shadow_view.as_ref().unwrap_or(&self.shadow_fallback),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                    },
                     wgpu::BindGroupEntry {
                         binding: 6,
                         resource: wgpu::BindingResource::TextureView(
@@ -712,6 +827,32 @@ impl Scene3dRenderer {
                 layout: &layout,
                 entries: &entries,
             }));
+        }
+        if let (Some(pipeline), Some(view)) = (&self.shadow_pipeline, &shadow_view) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene3d_shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            for (index, object) in frame.objects.iter().enumerate() {
+                if !object.cast_shadows || object.alpha_mode == gpui::AlphaMode3d::Blend {
+                    continue;
+                }
+                let geometry = &self.geometry[&(Arc::as_ptr(&object.mesh) as usize)];
+                pass.set_bind_group(0, &shadow_groups[index], &[]);
+                pass.set_vertex_buffer(0, geometry.vertices.slice(..));
+                pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..geometry.count, 0, 0..1);
+            }
         }
         let depth_view = depth.create_view(&Default::default());
         let hdr_view = targets
@@ -814,6 +955,23 @@ impl Scene3dRenderer {
     }
 }
 
+fn shadow_texture(device: &wgpu::Device, resolution: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("scene3d_shadow_depth"),
+        size: wgpu::Extent3d {
+            width: resolution,
+            height: resolution,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
+}
+
 fn color_draw_order(objects: &[gpui::MeshDraw3d]) -> Vec<usize> {
     let mut order: Vec<_> = (0..objects.len()).collect();
     order.sort_by(|&a, &b| {
@@ -846,6 +1004,8 @@ mod tests {
         ]
         .into_iter()
         .map(|(alpha_mode, sort_depth)| gpui::MeshDraw3d {
+            cast_shadows: true,
+            receive_shadows: true,
             output_id: 1,
             mesh: gpui::Mesh3d::new(
                 [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]
@@ -915,6 +1075,12 @@ mod tests {
             .unwrap();
         assert_eq!(span as usize, std::mem::size_of::<Params>());
         for (name, offset) in [
+            ("shadow_camera", std::mem::offset_of!(Params, shadow_camera)),
+            (
+                "shadow_settings",
+                std::mem::offset_of!(Params, shadow_settings),
+            ),
+            ("shadow_flags", std::mem::offset_of!(Params, shadow_flags)),
             ("ambient", std::mem::offset_of!(Params, ambient)),
             ("lights", std::mem::offset_of!(Params, lights)),
             ("light_count", std::mem::offset_of!(Params, light_count)),

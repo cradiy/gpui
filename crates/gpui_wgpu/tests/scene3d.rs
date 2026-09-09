@@ -39,6 +39,8 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         uv,
     });
     MeshDraw3d {
+        cast_shadows: true,
+        receive_shadows: true,
         output_id: 1,
         mesh: Mesh3d::new(vertices.to_vec(), vec![0, 1, 2, 0, 2, 3]),
         model: IDENTITY,
@@ -69,6 +71,7 @@ fn layer(
     source.finish();
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
+            directional_shadow: None,
             ui_texture: None,
             view_projection: IDENTITY,
             world_to_view: [IDENTITY[0], IDENTITY[1], IDENTITY[2], [0., 0., -3., 1.]],

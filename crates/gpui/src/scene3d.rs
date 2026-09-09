@@ -383,6 +383,37 @@ pub struct MaterialTexture3d {
     pub sampling: crate::TextureSampling3d,
 }
 
+/// Shadow-map projection and sampling for one directional source.
+#[derive(Clone, Copy, Debug)]
+pub struct DirectionalShadow3d {
+    /// Index into explicit lights, or zero for the single directional light.
+    pub light_index: u32,
+    /// Column-major world-to-light clip transform; XY in [-1, 1], depth in [0, 1].
+    pub view_projection: [[f32; 4]; 4],
+    /// Power-of-two side length from 256 through 4096.
+    pub resolution: u32,
+    /// Receiver depth offset in normalized light depth, in [0, 0.05].
+    pub depth_bias: f32,
+    /// Receiver offset along the geometric normal, in nonnegative world units.
+    pub normal_bias: f32,
+    /// PCF radius in shadow texels, in [0, 4]. Zero selects a hard comparison.
+    pub softness: f32,
+}
+impl DirectionalShadow3d {
+    /// Checks finite projection/sampling parameters and supported map dimensions.
+    pub fn is_valid(self) -> bool {
+        self.view_projection.iter().flatten().all(|v| v.is_finite())
+            && self.resolution.is_power_of_two()
+            && (256..=4096).contains(&self.resolution)
+            && self.depth_bias.is_finite()
+            && (0. ..=0.05).contains(&self.depth_bias)
+            && self.normal_bias.is_finite()
+            && self.normal_bias >= 0.
+            && self.softness.is_finite()
+            && (0. ..=4.).contains(&self.softness)
+    }
+}
+
 /// One indexed mesh and its material parameters.
 #[derive(Clone, Debug)]
 pub struct MeshDraw3d {
@@ -426,6 +457,10 @@ pub struct MeshDraw3d {
     pub alpha_cutoff: f32,
     /// Bypass directional lighting.
     pub unlit: bool,
+    /// Cast opaque or alpha-masked shadows. Blend materials never cast shadows.
+    pub cast_shadows: bool,
+    /// Receive direct-light shadows; ignored by unlit materials.
+    pub receive_shadows: bool,
 }
 
 /// Immutable input for a depth-tested 3D viewport.
@@ -449,6 +484,8 @@ pub struct Scene3dFrame {
     pub light: [f32; 4],
     /// Explicit direct lights replacing the single light when present. At most eight.
     pub lights: Option<Arc<[PunctualLight3d]>>,
+    /// Optional shadow map for one directional source.
+    pub directional_shadow: Option<DirectionalShadow3d>,
     /// Ambient light multiplier.
     pub ambient: f32,
     /// Optional distant diffuse illumination. It does not draw a background.
@@ -457,4 +494,27 @@ pub struct Scene3dFrame {
     pub color_output: crate::ColorOutput3d,
     /// Meshes; opaque visibility is independent of submission order.
     pub objects: Arc<[MeshDraw3d]>,
+}
+
+impl Scene3dFrame {
+    /// Checks shadow settings and that their selected source is directional.
+    pub fn shadow_is_valid(&self) -> bool {
+        self.directional_shadow.is_none_or(|shadow| {
+            shadow.is_valid()
+                && self.lights.as_ref().map_or_else(
+                    || {
+                        shadow.light_index == 0
+                            && self.light_direction.iter().all(|v| v.is_finite())
+                            && self.light_direction.iter().any(|v| *v != 0.)
+                    },
+                    |lights| {
+                        lights
+                            .get(shadow.light_index as usize)
+                            .is_some_and(|light| {
+                                light.kind == LightKind3d::Directional && light.is_valid()
+                            })
+                    },
+                )
+        })
+    }
 }

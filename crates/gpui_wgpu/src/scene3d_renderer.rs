@@ -200,6 +200,16 @@ impl WgpuScene3dRenderer {
         config: Scene3dOutputConfig,
     ) -> Result<Scene3dGpuOutput> {
         self.capabilities.validate(config)?;
+        ensure!(
+            frame.shadow_is_valid(),
+            "invalid directional shadow parameters or source"
+        );
+        ensure!(
+            frame
+                .directional_shadow
+                .is_none_or(|shadow| shadow.resolution <= self.capabilities.max_dimension),
+            "shadow resolution exceeds device limits"
+        );
         if let Some(lights) = &frame.lights {
             ensure!(
                 lights.len() <= gpui::MAX_PUNCTUAL_LIGHTS_3D,

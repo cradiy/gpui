@@ -17,6 +17,7 @@ struct Params {
     environment_sh: array<vec4<f32>, 9>, environment: vec4<f32>,
     occlusion_map: ImageParams, occlusion_settings: vec4<f32>,
     lights: array<DirectLight, 8>, light_count: vec4<u32>,
+    shadow_camera: mat4x4<f32>, shadow_settings: vec4<f32>, shadow_flags: vec4<u32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
@@ -25,6 +26,8 @@ struct Params {
 @group(0) @binding(4) var emissive_image: texture_2d<f32>;
 @group(0) @binding(5) var normal_image: texture_2d<f32>;
 @group(0) @binding(6) var occlusion_image: texture_2d<f32>;
+@group(0) @binding(7) var shadow_image: texture_depth_2d;
+@group(0) @binding(8) var shadow_sampler: sampler_comparison;
 struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32 };
 @vertex
 fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) tangent: vec4<f32>) -> Output {
@@ -95,6 +98,44 @@ fn base_color(input: Output) -> vec4<f32> {
     if (params.ids.y == 1u && alpha < params.flags.x) { discard; }
     if (params.ids.y == 2u && alpha <= 0.0) { discard; }
     return vec4<f32>(base.rgb, select(1.0, alpha, params.ids.y == 2u));
+}
+@vertex
+fn shadow_vertex(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>) -> Output {
+    let world = params.model * vec4<f32>(position, 1.0);
+    return Output(params.shadow_camera * world, vec3<f32>(0.0), uv, world.xyz, vec4<f32>(0.0), 1.0);
+}
+@fragment
+fn shadow_fragment(input: Output) {
+    let base = base_color(input);
+}
+
+fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>) -> f32 {
+    if (params.shadow_flags.x == 0u || index != params.shadow_flags.y) { return 1.0; }
+    let light_direction = unit_vector(params.lights[index].direction_range.xyz);
+    let n = unit_vector(geometric_normal);
+    let slope = 1.0 - clamp(dot(n, light_direction), 0.0, 1.0);
+    let clip = params.shadow_camera * vec4<f32>(world + n * params.shadow_settings.y * slope, 1.0);
+    let p = clip.xyz / clip.w;
+    if (!all(abs(p.xy) <= vec2<f32>(1.0)) || !(p.z >= 0.0 && p.z <= 1.0)) { return 1.0; }
+    let uv = p.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+    let reference = p.z - params.shadow_settings.x;
+    let extent = vec2<f32>(textureDimensions(shadow_image));
+    if (params.shadow_settings.z == 0.0) {
+        let pixel = clamp(vec2<i32>(uv * extent), vec2<i32>(0), vec2<i32>(extent) - vec2<i32>(1));
+        return select(0.0, 1.0, reference <= textureLoad(shadow_image, pixel, 0));
+    }
+    var visibility = 0.0;
+    for (var y = -1; y <= 1; y += 1) {
+        for (var x = -1; x <= 1; x += 1) {
+            let sample_uv = uv + vec2<f32>(f32(x), f32(y)) * params.shadow_settings.z / extent;
+            if (any(sample_uv < vec2<f32>(0.0)) || any(sample_uv > vec2<f32>(1.0))) {
+                visibility += 1.0;
+            } else {
+                visibility += textureSampleCompareLevel(shadow_image, shadow_sampler, sample_uv, reference);
+            }
+        }
+    }
+    return visibility / 9.0;
 }
 @fragment
 fn object_id(input: Output) -> @location(0) u32 {
@@ -197,7 +238,7 @@ fn pbr_direct(diffuse: vec3<f32>, f0: vec3<f32>, roughness: f32, normal: vec3<f3
     return reflected * light.energy * nl;
 }
 
-fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     let factors = sample_image(metallic_roughness_image, params.metallic_roughness_map, uv);
     let metal = params.pbr.x * factors.b;
     let roughness = max(params.pbr.y * factors.g, 0.045);
@@ -207,7 +248,7 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f
     let f0 = mix(vec3<f32>(0.04), base, metal);
     var result = diffuse * (vec3<f32>(params.ambient.x) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * occlusion(uv) + emission;
     for (var i = 0u; i < params.light_count.x; i += 1u) {
-        result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world));
+        result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world)) * shadow_visibility(i, world, geometric_normal);
     }
     return result;
 }
@@ -219,13 +260,14 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
     if (params.flags.y < 0.5) {
         if (params.pbr.z > 0.5) {
             let normal = surface_normal(input) * select(-1.0, 1.0, front) * input.orientation;
-            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, input.world, input.uv), vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
+            let geometric_normal = unit_vector(input.normal) * select(-1.0, 1.0, front) * input.orientation;
+            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, geometric_normal, input.world, input.uv), vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
         }
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front) * input.orientation;
         illumination = (vec3<f32>(params.ambient.x) + diffuse_environment(normal)) * occlusion(input.uv);
         for (var i = 0u; i < params.light_count.x; i += 1u) {
             let light = sample_light(params.lights[i], input.world);
-            illumination += light.energy * max(dot(normal, light.direction), 0.0);
+            illumination += light.energy * max(dot(normal, light.direction), 0.0) * shadow_visibility(i, input.world, normal);
         }
     }
     return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);

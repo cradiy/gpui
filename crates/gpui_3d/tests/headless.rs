@@ -5,6 +5,124 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn directional_shadows_preserve_indirect_light_geometry_channels_and_alpha_masks()
+-> anyhow::Result<()> {
+    use gpui_3d::{
+        AlphaMode, DirectionalShadow, Light, Object, PbrMaterial, Projection, PunctualLight, Scene,
+        Scene3dChannels,
+    };
+    use std::sync::Arc;
+    let mut renderer = HeadlessRenderer::new()?;
+    let hole = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 255, 255, 0])),
+    )]));
+    for pbr in [false, true] {
+        let mut receiver = Material::color(rgb(0x908070));
+        if pbr {
+            receiver = receiver.pbr(PbrMaterial {
+                metallic: 0.2,
+                roughness: 0.7,
+                emissive: [0.03, 0.01, 0.02],
+            });
+        }
+        for softness in [0., 1.5] {
+            let mut outputs = Vec::new();
+            for case in 0..9 {
+                let caster_material = if case == 6 || case == 7 {
+                    Material::image(hole.clone()).alpha_mode(if case == 6 {
+                        AlphaMode::Mask
+                    } else {
+                        AlphaMode::Opaque
+                    })
+                } else {
+                    Material::color(rgb(0xffffff))
+                        .unlit(true)
+                        .alpha_mode(if case == 5 {
+                            AlphaMode::Blend
+                        } else {
+                            AlphaMode::Opaque
+                        })
+                };
+                let scene = Scene::new()
+                    .camera(Camera {
+                        projection: Projection::Orthographic { vertical_size: 2. },
+                        ..Default::default()
+                    })
+                    .light(Light {
+                        ambient: 0.12,
+                        ..Default::default()
+                    })
+                    .lights([
+                        PunctualLight::directional([1., 0., 1.]).intensity(0.2),
+                        PunctualLight::directional([1., 0., 1.]).intensity(if case == 1 {
+                            0.
+                        } else {
+                            0.8
+                        }),
+                    ])
+                    .directional_shadow((case >= 2).then_some(DirectionalShadow {
+                        light_index: 1,
+                        resolution: 512,
+                        softness,
+                        ..DirectionalShadow::new([0.; 3], [3.; 3])
+                    }))
+                    .object(
+                        Object::new(Mesh::plane(), receiver.clone())
+                            .scale([4., 4., 1.])
+                            .receive_shadows(case != 4),
+                    )
+                    .object(
+                        Object::new(Mesh::plane(), caster_material)
+                            .position(if case == 8 {
+                                [2.5, 0., 1.5]
+                            } else {
+                                [1.5, 0., 1.5]
+                            })
+                            .scale([0.5, 0.5, 1.])
+                            .cast_shadows(case != 3),
+                    );
+                let frame = renderer.render(
+                    &scene,
+                    Scene3dOutputConfig {
+                        color_samples: 1,
+                        channels: Scene3dChannels::all(),
+                        ..Scene3dOutputConfig::new([65, 65])
+                    },
+                )?;
+                let mut read = frame.readback()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                loop {
+                    if let Some(result) = read.try_read()? {
+                        outputs.push(result.pixels);
+                        break;
+                    }
+                    anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            let pixel = 32 * 65 + 32;
+            let color =
+                |case: usize| &outputs[case].rgba.as_ref().unwrap()[pixel * 4..pixel * 4 + 4];
+            assert!(color(0)[0] > color(1)[0] + 15);
+            for case in 2..9 {
+                let reference = if case == 2 || case == 7 { 1 } else { 0 };
+                for (actual, expected) in color(case).iter().zip(color(reference)) {
+                    assert!(
+                        actual.abs_diff(*expected) <= 2,
+                        "case {case}, PBR {pbr}, softness {softness}"
+                    );
+                }
+                assert_eq!(outputs[0].object_ids, outputs[case].object_ids);
+                assert_eq!(outputs[0].linear_depth, outputs[case].linear_depth);
+                assert_eq!(outputs[0].world_normals, outputs[case].world_normals);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn punctual_sources_match_directional_energy_at_the_surface_center() -> anyhow::Result<()> {
     use gpui_3d::{Light, Object, PbrMaterial, Projection, PunctualLight, Scene};
     let mut renderer = HeadlessRenderer::new()?;

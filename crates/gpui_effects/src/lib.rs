@@ -29,6 +29,7 @@ mod contour_glow;
 mod contour_relief;
 mod contour_shadow;
 mod deformation;
+mod depth_parallax;
 mod displacement_map;
 mod effect_stage;
 mod element;
@@ -70,6 +71,7 @@ pub use contour_relief::{
 };
 pub use contour_shadow::{ContourShadowOptions, contour_shadow_shader, subtree_contour_shadow};
 pub use deformation::{DeformationOptions, ElasticOffset, deformation_shader, subtree_deformation};
+pub use depth_parallax::{DepthParallaxOptions, depth_parallax, depth_parallax_shader};
 pub use displacement_map::{
     DisplacementMapOptions, DisplacementMapPreset, DisplacementMapSampling, DisplacementSourceEdge,
     displacement_map_shader, masked_displacement_map_shader, subtree_displacement_map,

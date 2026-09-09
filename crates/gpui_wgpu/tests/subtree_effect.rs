@@ -18,6 +18,8 @@ mod contour_relief;
 mod contour_shadow;
 #[path = "support/deformation.rs"]
 mod deformation;
+#[path = "support/depth_parallax.rs"]
+mod depth_parallax;
 #[path = "support/displacement_map.rs"]
 mod displacement_map;
 #[path = "support/feedback.rs"]

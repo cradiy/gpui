@@ -222,6 +222,7 @@ impl Scene {
             });
         }
         Ok(Scene3dFrame {
+            viewport_quality: Default::default(),
             specular_environment: self
                 .specular_environment
                 .as_ref()

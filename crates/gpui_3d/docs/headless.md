@@ -67,7 +67,8 @@ can still be stale when queried against a modified graph.
 ## Output contract
 
 `Scene3dOutputConfig` takes physical pixel dimensions, requested channels, and
-one or four color samples. Combine `Scene3dChannels::COLOR`, `OBJECT_ID`,
+one or four color samples. Direct rendering ignores `Scene3dFrame::viewport_quality`.
+Combine `Scene3dChannels::COLOR`, `OBJECT_ID`,
 `LINEAR_COLOR`, `LINEAR_DEPTH`, and `WORLD_NORMAL` with `|`, or use `Scene3dChannels::all()`.
 The default selects color and object IDs with four color samples. Empty or
 unknown channel selections are rejected. Unrequested channels are not allocated

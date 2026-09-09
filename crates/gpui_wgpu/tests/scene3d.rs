@@ -71,6 +71,7 @@ fn layer(
     source.finish();
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
+            viewport_quality: Default::default(),
             background: None,
             specular_environment: None,
             directional_shadow: None,
@@ -822,6 +823,56 @@ fn direct_outputs_preserve_integer_ids_cutouts_and_frame_lifetimes() -> anyhow::
             .render(&input, Scene3dOutputConfig::new([0, 10]))
             .is_err()
     );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn viewport_quality_keeps_mixed_samples_and_ui_texture_coordinates_independent()
+-> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(208), DevicePixels(100)))?;
+    for scale in [0.5, 1., 2., 0.5] {
+        for samples in [1, 4] {
+            let mut source = Scene::default();
+            source.insert_primitive(quad(bounds(8.25, 12.75, 40.25, 64.5), 0x00ff00ff));
+            source.insert_primitive(quad(bounds(48.5, 12.75, 40.25, 64.5), 0x0000ffff));
+            let mut left = layer(
+                bounds(8.25, 12.75, 80.5, 64.5),
+                source,
+                vec![mesh(0.2, 0xffffffff, MeshTexture3d::Subtree)],
+                1.,
+            );
+            Arc::make_mut(left.scene3d.as_mut().unwrap()).viewport_quality =
+                gpui::Scene3dViewportQuality::new(scale, samples);
+            let mut right = layer(
+                bounds(108.25, 12.75, 80.5, 64.5),
+                Scene::default(),
+                vec![mesh(0.2, 0xff0000ff, MeshTexture3d::None)],
+                1.,
+            );
+            Arc::make_mut(right.scene3d.as_mut().unwrap()).viewport_quality =
+                gpui::Scene3dViewportQuality::new(1. / scale, if samples == 1 { 4 } else { 1 });
+            let mut input = Scene::default();
+            input.insert_primitive(Primitive::SubtreeLayer(left));
+            input.insert_primitive(Primitive::SubtreeLayer(right));
+            input.finish();
+            let pixels = renderer.render_rgba(&input)?;
+            for (x, y, expected) in [
+                (30, 45, [0, 255, 0, 255]),
+                (70, 45, [0, 0, 255, 255]),
+                (150, 45, [255, 0, 0, 255]),
+                (100, 45, [0; 4]),
+                (150, 90, [0; 4]),
+            ] {
+                let index = (y * 208 + x) * 4;
+                assert_eq!(
+                    &pixels[index..index + 4],
+                    &expected,
+                    "scale {scale}, samples {samples}, pixel {x}, {y}"
+                );
+            }
+        }
+    }
     Ok(())
 }
 

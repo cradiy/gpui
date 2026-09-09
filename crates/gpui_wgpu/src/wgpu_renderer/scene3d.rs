@@ -8,14 +8,16 @@ mod images;
 mod instances;
 mod specular;
 mod target;
+mod viewport;
 
 pub(crate) use target::RenderRegion;
+pub(super) use viewport::ViewportRenderer;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct DisplayParams {
     settings: [f32; 4],
-    origin: [f32; 4],
+    output_rect: [f32; 4],
 }
 
 #[repr(C)]
@@ -646,6 +648,7 @@ impl Scene3dRenderer {
         scene: &Scene,
         width: u32,
         height: u32,
+        capabilities: gpui::Scene3dViewportCapabilities,
     ) {
         self.offsets.clear();
         self.regions.clear();
@@ -656,6 +659,9 @@ impl Scene3dRenderer {
                 let Some(frame) = &layer.scene3d else {
                     continue;
                 };
+                if capabilities.color_samples_for(frame.viewport_quality) != self.samples {
+                    continue;
+                }
                 let bounds = layer.composite.bounds;
                 let Some(region) = RenderRegion::viewport(
                     [
@@ -665,6 +671,8 @@ impl Scene3dRenderer {
                         bounds.size.height.0,
                     ],
                     [width, height],
+                    frame.viewport_quality.resolution_scale(),
+                    capabilities.max_texture_dimension,
                 ) else {
                     continue;
                 };
@@ -1367,7 +1375,12 @@ impl Scene3dRenderer {
                     f32::from(self.format.is_srgb()),
                     0.,
                 ],
-                origin: [region.origin[0] as f32, region.origin[1] as f32, 0., 0.],
+                output_rect: [
+                    region.origin[0] as f32,
+                    region.origin[1] as f32,
+                    region.output_size[0] as f32,
+                    region.output_size[1] as f32,
+                ],
             };
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("scene3d_display_params"),
@@ -1405,8 +1418,8 @@ impl Scene3dRenderer {
             pass.set_scissor_rect(
                 region.origin[0],
                 region.origin[1],
-                region.size[0],
-                region.size[1],
+                region.output_size[0],
+                region.output_size[1],
             );
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..3, 0..1);
@@ -1494,6 +1507,7 @@ mod tests {
 
     fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
         gpui::Scene3dFrame {
+            viewport_quality: Default::default(),
             ui_texture: None,
             view_projection: IDENTITY,
             world_to_view: IDENTITY,
@@ -1551,6 +1565,11 @@ mod tests {
     #[ignore = "requires a GPU adapter"]
     fn scene3d_target_cache_tracks_viewport_sizes_reuse_and_eviction() -> anyhow::Result<()> {
         let context = crate::WgpuContext::new_headless()?;
+        let capabilities = gpui::Scene3dViewportCapabilities {
+            max_texture_dimension: context.device.limits().max_texture_dimension_2d,
+            color_samples: 1,
+            max_ui_texture_dimension: 2048,
+        };
         let mut renderer = Scene3dRenderer::new(
             &context.device,
             &context.queue,
@@ -1598,7 +1617,14 @@ mod tests {
             [12.25, 100.75, 32.5, 24.5],
             [3000., 0., 64., 48.],
         ]);
-        renderer.prepare(&context.device, &context.queue, &scene, 1024, 768);
+        renderer.prepare(
+            &context.device,
+            &context.queue,
+            &scene,
+            1024,
+            768,
+            capabilities,
+        );
         assert_eq!(renderer.targets.len(), 2);
         assert_eq!(renderer.regions.len(), 3);
         let depth = renderer.targets[&[64, 48]].depth.clone();
@@ -1607,15 +1633,36 @@ mod tests {
         assert_eq!([hdr.width(), hdr.height()], [64, 48]);
         assert_eq!(renderer.targets[&[33, 26]].depth.height(), 26);
 
-        renderer.prepare(&context.device, &context.queue, &scene, 2048, 1536);
+        renderer.prepare(
+            &context.device,
+            &context.queue,
+            &scene,
+            2048,
+            1536,
+            capabilities,
+        );
         assert_eq!(renderer.targets.len(), 2);
         assert_eq!(renderer.targets[&[64, 48]].depth, depth);
         assert_eq!(renderer.targets[&[64, 48]].hdr.as_ref().unwrap(), &hdr);
         let smaller = make_scene(&[[12., 20., 64., 48.]]);
-        renderer.prepare(&context.device, &context.queue, &smaller, 40, 40);
+        renderer.prepare(
+            &context.device,
+            &context.queue,
+            &smaller,
+            40,
+            40,
+            capabilities,
+        );
         assert_eq!(renderer.targets.len(), 1);
         assert!(renderer.targets.contains_key(&[28, 20]));
-        renderer.prepare(&context.device, &context.queue, &Scene::default(), 40, 40);
+        renderer.prepare(
+            &context.device,
+            &context.queue,
+            &Scene::default(),
+            40,
+            40,
+            capabilities,
+        );
         assert!(renderer.targets.is_empty());
         assert!(renderer.regions.is_empty());
         Ok(())
@@ -1978,14 +2025,19 @@ mod tests {
             panic!("display parameters must be a struct");
         };
         assert_eq!(*span as usize, std::mem::size_of::<DisplayParams>());
-        assert_eq!(
-            members[0].offset as usize,
-            std::mem::offset_of!(DisplayParams, settings)
-        );
-        assert_eq!(
-            members[1].offset as usize,
-            std::mem::offset_of!(DisplayParams, origin)
-        );
+        for (name, offset) in [
+            ("settings", std::mem::offset_of!(DisplayParams, settings)),
+            (
+                "output_rect",
+                std::mem::offset_of!(DisplayParams, output_rect),
+            ),
+        ] {
+            let member = members
+                .iter()
+                .find(|member| member.name.as_deref() == Some(name))
+                .unwrap();
+            assert_eq!(member.offset as usize, offset, "{name}");
+        }
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub use gpui::MAX_PUNCTUAL_LIGHTS_3D as MAX_PUNCTUAL_LIGHTS;
 pub use gpui::MeshUpdateError3d as MeshUpdateError;
 pub use gpui::MeshVertex3d as Vertex;
 pub use gpui::PbrMaterial3d as PbrMaterial;
+pub use gpui::Scene3dViewportQuality as ViewportQuality;
 pub use gpui::TangentError3d as TangentError;
 pub use gpui::{
     ColorOutput3d as ColorOutput, TextureColorSpace3d as TextureColorSpace,

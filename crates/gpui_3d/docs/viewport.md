@@ -37,7 +37,7 @@ use gpui::{Scene3dSupport, Window};
 
 fn viewport_status(window: &Window) -> String {
     match window.scene3d_support() {
-        Scene3dSupport::Supported(caps) => format!("3D · {} samples", caps.color_samples),
+        Scene3dSupport::Supported(caps) => format!("3D · up to {} samples", caps.color_samples),
         Scene3dSupport::Unsupported(reason) => reason.to_string(),
     }
 }
@@ -1885,9 +1885,41 @@ DirectX backends do not currently implement the mesh pass.
 
 Each viewport has isolated depth visibility and is composited into GPUI's normal
 paint order. Ancestor opacity applies once to the final image, and ancestor
-clipping still applies. Mesh edges use the sample count reported by
-`window.scene3d_support()`: four samples when supported, otherwise one. Captured
-viewports can be nested in other subtree effects.
+clipping still applies. Mesh edges default to four samples when supported,
+otherwise one. Captured viewports can be nested in other subtree effects.
+
+### Raster quality
+
+`resolution_scale` sets mesh raster density relative to physical render-surface pixels;
+`color_samples` requests one or four samples per mesh pixel. Defaults are `1.0`
+and `4`. These controls do not change logical layout, camera aspect ratio,
+geometric picking, pointer routing, or UI capture density.
+
+```no_run
+use gpui_3d::{Scene, viewport3d};
+
+let viewport = viewport3d("preview", Scene::new())
+    .resolution_scale(0.5)
+    .color_samples(1);
+```
+
+Scale must be finite and positive; invalid scale or sample count panics at the
+builder call. Dimensions are scaled uniformly to fit the device texture limit,
+rounded up, and kept at least one pixel on each axis. Lower scales reduce mesh
+attachment memory and raster work; higher scales increase them. Non-native
+resolutions use bilinear reconstruction of premultiplied display color. This is
+not an area-filtered downsampling chain for large scale factors. Device limits
+are not memory budgets; applications remain responsible for total GPU memory use.
+
+Four samples fall back to one when unavailable. Use
+`window.scene3d_support().capabilities()` and
+`capabilities.color_samples_for(ViewportQuality::new(scale, samples))` to query
+the effective count. Viewports in one window may use different configurations.
+Low-level frames carry `Scene3dFrame::viewport_quality`; direct headless outputs
+use `Scene3dOutputConfig` instead. Use `ui_texture_scale` independently to adjust
+the raster density of captured UI.
+
+### Allocation and visibility
 
 Rendering conservatively rejects indexed mesh bounds outside the camera frustum
 before allocating geometry buffers or uploading instance data. Bounds touching
@@ -1908,9 +1940,9 @@ participates in depth testing.
 Geometry buffers are reused for shared meshes. Intermediate HDR color and depth
 targets cover the viewport's pixel bounds intersected with the render surface,
 rounded outward to whole pixels. Fractional layout positions keep their pixel
-alignment. Viewports with the same target dimensions share temporary attachments;
-other dimensions have separate attachments retained only while used by the current
-scene. A window resize preserves attachments whose viewport dimensions remain
+alignment. Viewports with the same target dimensions and sample count share
+temporary attachments; other configurations have separate attachments retained
+only while used by the current scene. A window resize preserves attachments whose viewport dimensions remain
 unchanged. Fully off-surface viewports do not allocate mesh attachments.
 
 Mesh output is placed back into surface coordinates for subtree composition and

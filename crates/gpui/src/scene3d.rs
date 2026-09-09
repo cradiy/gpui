@@ -7,10 +7,67 @@ use crate::{AtlasTile, DevicePixels, Pixels, Rgba, Size, size};
 pub struct Scene3dViewportCapabilities {
     /// Maximum physical dimension of a render target or image texture.
     pub max_texture_dimension: u32,
-    /// Effective color sampling selected by the renderer.
+    /// Maximum color sample count selected by the renderer (one or four).
     pub color_samples: u32,
     /// Maximum physical dimension of a captured UI texture.
     pub max_ui_texture_dimension: u32,
+}
+
+impl Scene3dViewportCapabilities {
+    /// Effective samples for a viewport, falling back to one when four are unavailable.
+    pub fn color_samples_for(self, quality: Scene3dViewportQuality) -> u32 {
+        if self.color_samples == 4 && quality.color_samples == 4 {
+            4
+        } else {
+            1
+        }
+    }
+}
+
+/// Mesh raster density and color sampling, independent of UI layout and capture density.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Scene3dViewportQuality {
+    resolution_scale: f32,
+    color_samples: u32,
+}
+
+impl Default for Scene3dViewportQuality {
+    fn default() -> Self {
+        Self {
+            resolution_scale: 1.,
+            color_samples: 4,
+        }
+    }
+}
+
+impl Scene3dViewportQuality {
+    /// Creates viewport quality settings. Scale must be finite and positive;
+    /// samples must be one or four. Raster dimensions are capped by the device.
+    #[track_caller]
+    pub fn new(resolution_scale: f32, color_samples: u32) -> Self {
+        assert!(
+            resolution_scale.is_finite() && resolution_scale > 0.,
+            "resolution scale must be finite and positive"
+        );
+        assert!(
+            matches!(color_samples, 1 | 4),
+            "color samples must be one or four"
+        );
+        Self {
+            resolution_scale,
+            color_samples,
+        }
+    }
+
+    /// Requested mesh pixel density relative to the render surface's physical pixels.
+    pub fn resolution_scale(self) -> f32 {
+        self.resolution_scale
+    }
+
+    /// Requested color samples. Use the current capabilities to resolve a fallback.
+    pub fn color_samples(self) -> u32 {
+        self.color_samples
+    }
 }
 
 /// Why a window cannot currently render mesh viewports.
@@ -588,6 +645,8 @@ pub struct MeshDraw3d {
 /// Immutable input for a depth-tested 3D viewport.
 #[derive(Clone, Debug)]
 pub struct Scene3dFrame {
+    /// Window viewport raster quality. Direct renderers use their output configuration instead.
+    pub viewport_quality: Scene3dViewportQuality,
     /// An origin-zero UI capture with independent dimensions and density.
     /// `None` samples the viewport rectangle from the ordinary subtree target.
     pub ui_texture: Option<UiTexture3d>,

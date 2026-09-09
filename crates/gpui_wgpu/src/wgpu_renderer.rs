@@ -438,7 +438,7 @@ struct WgpuResources {
     particles: Option<particles::ParticleRenderer>,
     particle_transition: Option<particle_transition::ParticleTransitionRenderer>,
     fluid: Option<fluid::FluidRenderer>,
-    scene3d: Option<scene3d::Scene3dRenderer>,
+    scene3d: Option<scene3d::ViewportRenderer>,
     ui_captures: Vec<ui_capture::UiCapture>,
     ui_capture_indices: HashMap<usize, usize>,
     failed_effect_pipelines: HashSet<u64>,
@@ -2884,9 +2884,9 @@ impl WgpuRenderer {
                 .iter()
                 .any(|layer| layer.scene3d.is_some());
         });
-        let color_samples = if has_scene3d {
+        let scene3d_capabilities = if has_scene3d {
             match self.scene3d_support() {
-                gpui::Scene3dSupport::Supported(capabilities) => capabilities.color_samples,
+                gpui::Scene3dSupport::Supported(capabilities) => Some(capabilities),
                 gpui::Scene3dSupport::Unsupported(reason) => {
                     *self.last_error.lock().unwrap() =
                         Some(format!("3D viewport unavailable: {reason}"));
@@ -2894,7 +2894,7 @@ impl WgpuRenderer {
                 }
             }
         } else {
-            1
+            None
         };
         if !self.encode_ui_captures(scene, encoder) {
             return false;
@@ -2928,11 +2928,9 @@ impl WgpuRenderer {
         {
             let resources = self.resources_mut();
             if has_scene3d && resources.scene3d.is_none() {
-                resources.scene3d = Some(scene3d::Scene3dRenderer::new(
-                    &resources.device,
-                    &resources.queue,
+                resources.scene3d = Some(scene3d::ViewportRenderer::new(
                     format,
-                    color_samples,
+                    scene3d_capabilities.unwrap(),
                 ));
             }
             if let Some(renderer) = &mut resources.scene3d {

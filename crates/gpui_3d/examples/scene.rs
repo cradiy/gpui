@@ -189,6 +189,8 @@ struct SceneDemo {
     body: NodeHandle,
     camera: NodeHandle,
     rig_camera: bool,
+    resolution: usize,
+    color_samples: u32,
     rig_lights: bool,
     body_mesh: Mesh,
     morphs: MorphTargets,
@@ -296,6 +298,8 @@ impl SceneDemo {
             body,
             camera: camera_node,
             rig_camera: false,
+            resolution: 1,
+            color_samples: 4,
             rig_lights: false,
             body_mesh: geometry,
             morphs,
@@ -536,6 +540,8 @@ impl Render for SceneDemo {
                         self.evaluated.scene(self.controls.camera())
                     },
                 )
+                .resolution_scale([0.5, 1., 2.][self.resolution])
+                .color_samples(self.color_samples)
                 .size_full()
                 .on_object_hover(cx.listener(|this, hit: &Option<gpui_3d::Hit>, _, cx| {
                     let hovered = hit.as_ref().and_then(|hit| {
@@ -693,6 +699,12 @@ impl Render for SceneDemo {
                         this.refresh(cx);
                     }))))
                 .child(format!("Weights {:.2} / {:.2}", self.morph_weights[0], self.morph_weights[1]))))
+            .child(div().flex().flex_wrap().items_center().gap_3()
+                .child(self.button("resolution", ["Resolution 0.5×", "Resolution 1×", "Resolution 2×"][self.resolution], self.resolution != 1)
+                    .on_click(cx.listener(|this, _, _, cx| { this.resolution = (this.resolution + 1) % 3; cx.notify(); })))
+                .child(self.button("samples", if self.color_samples == 4 { "Samples 4×" } else { "Samples 1×" }, self.color_samples == 4)
+                    .on_click(cx.listener(|this, _, _, cx| { this.color_samples = if this.color_samples == 4 { 1 } else { 4 }; cx.notify(); })))
+                .child(format!("Effective samples: {}", window.scene3d_support().capabilities().map_or(0, |caps| caps.color_samples_for(gpui_3d::ViewportQuality::new([0.5, 1., 2.][self.resolution], self.color_samples))))))
             .child(stage)
             .child(div().text_sm().text_color(rgb(0xa4bad2)).child(format!("Instance {} selected · 3 editable subtrees · Shared mesh topology", self.selected + 1)))
             .when(!window.supports_scene3d(), |root| root.child("3D viewports are unavailable on this renderer."))

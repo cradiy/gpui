@@ -22,6 +22,7 @@ pub fn viewport3d(id: impl Into<ElementId>, scene: Scene) -> Viewport3d {
         texture: None,
         texture_size: None,
         texture_scale: 1.,
+        quality: Default::default(),
         interactive_ui: None,
         style: StyleRefinement::default(),
         on_hover: None,
@@ -37,6 +38,7 @@ pub struct Viewport3d {
     texture: Option<AnyElement>,
     texture_size: Option<Size<Pixels>>,
     texture_scale: f32,
+    quality: crate::ViewportQuality,
     interactive_ui: Option<ObjectId>,
     style: StyleRefinement,
     on_hover: Option<HoverListener>,
@@ -44,6 +46,23 @@ pub struct Viewport3d {
     pick_snapshot: Rc<RefCell<Option<PickSnapshot>>>,
 }
 impl Viewport3d {
+    /// Sets mesh raster density relative to physical render-surface pixels. Defaults to one.
+    /// Must be finite and positive; dimensions are capped uniformly by the device.
+    /// Does not change layout, camera projection, picking, or UI capture density.
+    #[track_caller]
+    pub fn resolution_scale(mut self, scale: f32) -> Self {
+        self.quality = crate::ViewportQuality::new(scale, self.quality.color_samples());
+        self
+    }
+
+    /// Requests one or four color samples. Defaults to four, with a fallback to
+    /// one when unsupported by the current backend. Does not change input coordinates.
+    #[track_caller]
+    pub fn color_samples(mut self, samples: u32) -> Self {
+        self.quality = crate::ViewportQuality::new(self.quality.resolution_scale(), samples);
+        self
+    }
+
     /// Reports hits on pointer movement and `None` on exit or a miss.
     /// Image alpha is sampled; captured UI uses mesh geometry. No frames are scheduled.
     pub fn on_object_hover(
@@ -364,7 +383,9 @@ impl Element for Content {
             input.read(cx).set_snapshot(self.0.pick_snapshot.clone());
             input.read(cx).paint(&state.hitbox, window);
         }
-        let frame = Arc::new(prepared.into_frame());
+        let mut frame = prepared.into_frame();
+        frame.viewport_quality = self.0.quality;
+        let frame = Arc::new(frame);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.with_scene3d(bounds, frame, |window| {
                 if let Some(state) = texture_state {
@@ -400,6 +421,42 @@ mod tests {
     use super::*;
     use crate::{Material, MaterialTexture, Mesh, Object, PbrMaterial};
     use gpui::{DevicePixels, point, px, rgb, size};
+
+    #[test]
+    fn viewport_quality_validates_requests_and_resolves_device_sampling() {
+        for (scale, samples) in [
+            (0., 4),
+            (-1., 4),
+            (f32::NAN, 4),
+            (f32::INFINITY, 4),
+            (1., 0),
+            (1., 2),
+            (1., 8),
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| crate::ViewportQuality::new(scale, samples)).is_err()
+            );
+        }
+        for supported in [1, 4] {
+            let capabilities = gpui::Scene3dViewportCapabilities {
+                max_texture_dimension: 4096,
+                color_samples: supported,
+                max_ui_texture_dimension: 2048,
+            };
+            for requested in [1, 4] {
+                let view = viewport3d("quality", Scene::new())
+                    .resolution_scale(0.5)
+                    .color_samples(requested);
+                assert_eq!(view.quality.resolution_scale(), 0.5);
+                assert_eq!(view.quality.color_samples(), requested);
+                assert_eq!(
+                    capabilities.color_samples_for(view.quality),
+                    supported.min(requested)
+                );
+                assert_eq!(view.texture_scale, 1.);
+            }
+        }
+    }
 
     #[test]
     fn pending_lighting_maps_do_not_leave_invisible_pick_surfaces() {

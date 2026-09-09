@@ -1,4 +1,4 @@
-struct Params { settings: vec4<f32>, origin: vec4<f32> };
+struct Params { settings: vec4<f32>, output_rect: vec4<f32> };
 @group(0) @binding(0) var hdr: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var hdr_msaa: texture_multisampled_2d<f32>;
@@ -32,15 +32,41 @@ fn store_color(color: vec4<f32>) -> vec4<f32> {
 
 @fragment
 fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    return store_color(display_sample(textureLoad(hdr, vec2<i32>(position.xy - params.origin.xy), 0)));
+    let extent = vec2<f32>(textureDimensions(hdr));
+    let local = position.xy - params.output_rect.xy;
+    if (all(extent == params.output_rect.zw)) {
+        return store_color(display_sample(textureLoad(hdr, vec2<i32>(local), 0)));
+    }
+    let pixel = clamp(local * extent / params.output_rect.zw - 0.5, vec2<f32>(0.0), extent - 1.0);
+    let low = vec2<i32>(floor(pixel));
+    let high = min(low + 1, vec2<i32>(extent) - 1);
+    let weight = fract(pixel);
+    let top = mix(display_sample(textureLoad(hdr, low, 0)), display_sample(textureLoad(hdr, vec2<i32>(high.x, low.y), 0)), weight.x);
+    let bottom = mix(display_sample(textureLoad(hdr, vec2<i32>(low.x, high.y), 0)), display_sample(textureLoad(hdr, high, 0)), weight.x);
+    return store_color(mix(top, bottom, weight.y));
+}
+
+fn resolve_pixel(pixel: vec2<i32>) -> vec4<f32> {
+    var color = vec4<f32>(0.0);
+    let count = textureNumSamples(hdr_msaa);
+    for (var i = 0u; i < count; i += 1u) {
+        color += display_sample(textureLoad(hdr_msaa, pixel, i32(i)));
+    }
+    return color / f32(count);
 }
 
 @fragment
 fn fragment_msaa(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    var color = vec4<f32>(0.0);
-    let count = textureNumSamples(hdr_msaa);
-    for (var i = 0u; i < count; i += 1u) {
-        color += display_sample(textureLoad(hdr_msaa, vec2<i32>(position.xy - params.origin.xy), i32(i)));
+    let extent = vec2<f32>(textureDimensions(hdr_msaa));
+    let local = position.xy - params.output_rect.xy;
+    if (all(extent == params.output_rect.zw)) {
+        return store_color(resolve_pixel(vec2<i32>(local)));
     }
-    return store_color(color / f32(count));
+    let pixel = clamp(local * extent / params.output_rect.zw - 0.5, vec2<f32>(0.0), extent - 1.0);
+    let low = vec2<i32>(floor(pixel));
+    let high = min(low + 1, vec2<i32>(extent) - 1);
+    let weight = fract(pixel);
+    let top = mix(resolve_pixel(low), resolve_pixel(vec2<i32>(high.x, low.y)), weight.x);
+    let bottom = mix(resolve_pixel(vec2<i32>(low.x, high.y)), resolve_pixel(high), weight.x);
+    return store_color(mix(top, bottom, weight.y));
 }

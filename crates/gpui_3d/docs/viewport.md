@@ -1123,6 +1123,73 @@ with the controlled node handle. Transformed local forward/up and target/world-u
 pairs must have a sine angle greater than `1e-6`. Parallel or nearly parallel
 pairs are errors, not automatic alternate-axis selections.
 
+#### Two-bone inverse kinematics
+
+`TwoBoneIkSettings::solve([root, middle, tip], target, pole)` accepts three world
+transforms and world-space target/pole points. The supplied joint distances
+define the two bone lengths. The result contains three world transforms,
+`reachable_target`, `IkReach`, and `target_error` in scene units. No graph,
+skeleton naming convention, or playback state is required.
+
+```rust
+use gpui_3d::{AffineTransform, IkReach, TwoBoneIkSettings};
+
+let source = [
+    AffineTransform::IDENTITY,
+    AffineTransform::from_translation([1., 0., 0.])?,
+    AffineTransform::from_translation([2., 0., 0.])?,
+];
+let result = TwoBoneIkSettings { weight: 1. }
+    .solve(source, [1., 1., 0.], [0., 0., 2.])?;
+assert_eq!(result.reach, IkReach::Reachable);
+let [root_world, middle_world, tip_world] = result.transforms;
+let middle_local = root_world.inverse().compose(middle_world)?;
+let tip_local = middle_world.inverse().compose(tip_world)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The root position is fixed. The pole selects the side of the root-to-target
+axis toward which the middle joint bends. The solver uses shortest-swing root
+and middle rotations, preserving each joint's affine shape and handedness.
+The tip inherits both rotations; there is no separate tip-orientation target.
+Exact opposed directions use a deterministic orthogonal rotation axis.
+
+`weight` is in `0..=1`, defaulting to one. It blends the root rotation and the
+middle's relative rotation, then evaluates the chain. Intermediate weights
+preserve bone lengths rather than interpolating joint positions. Zero returns
+the supplied transforms unchanged, but inputs and pole geometry are still
+validated. Always solve from the independently sampled source pose when seeking;
+feeding prior solver results back as inputs accumulates motion.
+
+For lengths `a` and `b`, the reachable radial interval is `[abs(a-b), a+b]`.
+Targets outside it are projected onto the closest boundary without stretching,
+with `IkReach::TooClose` or `TooFar`. `Reachable` describes geometry before
+blending, not an assurance that a partially blended tip reaches the target.
+`target_error` is the `f64` distance from the returned, rounded tip to the
+original target. `reachable_target` is the radial projection before blending.
+
+At the root, equal-length bones fold completely with the middle joint toward
+the pole. Unequal-length bones retain the supplied root-to-tip direction when
+choosing the nearest point on their inner reach boundary. A pole coincident
+with the root is invalid. For bent solutions its direction must have a sine
+angle greater than `1e-6` from the target axis; straight or fully folded radial
+boundary solutions do not need a perpendicular pole. No joint-angle limits or
+additional twist controls are imposed.
+
+Zero-length bones, non-finite target/pole data, invalid weights, and ambiguous
+bend poles return `TwoBoneIkError`. Calculations use widened intermediates;
+outputs remain `f32` affine transforms. If rounding changes either bone length
+by more than `1e-4` relative to its supplied length, or a transform cannot be
+represented, the solver returns `Unrepresentable`.
+
+To apply results to a three-node chain, convert each world result into its
+parent's local space and pass the replacements to `evaluate_with_transforms`.
+The root uses its evaluated external parent's inverse (or identity when it has
+no parent); the middle and tip use the solved root and middle inverses as above.
+Retain other sampled parent overrides. This also permits passing solved world
+poses directly into skinning without owning a `SceneGraph`. Applications own
+multi-chain ordering and any conflicting pose overrides.
+
 ## Materials and light
 
 - `Material::color(color)` creates a lit solid surface.

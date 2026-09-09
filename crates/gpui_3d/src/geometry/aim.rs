@@ -1,4 +1,5 @@
 use super::AffineTransform;
+use super::rotation::{Rotation, cross, dot, unit};
 use std::fmt;
 
 /// Stateless orientation settings. Vectors need not be normalized.
@@ -102,13 +103,8 @@ impl AimSettings {
         let rotation: [[f64; 3]; 3] = std::array::from_fn(|c| {
             std::array::from_fn(|r| (0..3).map(|k| destination[k][r] * source[k][c]).sum())
         });
-        let quaternion = rotation_quaternion(rotation);
-        let sine = dot(
-            [quaternion[0], quaternion[1], quaternion[2]],
-            [quaternion[0], quaternion[1], quaternion[2]],
-        )
-        .sqrt();
-        let requested = 2. * sine.atan2(quaternion[3]);
+        let rotation = Rotation::from_matrix(rotation);
+        let requested = rotation.angle();
         let applied = requested.min(f64::from(self.max_angle));
         let status = AimStatus {
             requested_angle: requested as f32,
@@ -118,26 +114,7 @@ impl AimSettings {
         if applied == 0. {
             return Ok(AimResult { transform, status });
         }
-        let factor = (applied * 0.5).sin() / sine;
-        let [x, y, z] = [quaternion[0], quaternion[1], quaternion[2]].map(|value| value * factor);
-        let w = (applied * 0.5).cos();
-        let rotation = [
-            [
-                1. - 2. * (y * y + z * z),
-                2. * (x * y + z * w),
-                2. * (x * z - y * w),
-            ],
-            [
-                2. * (x * y - z * w),
-                1. - 2. * (x * x + z * z),
-                2. * (y * z + x * w),
-            ],
-            [
-                2. * (x * z + y * w),
-                2. * (y * z - x * w),
-                1. - 2. * (x * x + y * y),
-            ],
-        ];
+        let rotation = rotation.scaled(applied / requested).matrix();
         let mut result = matrix;
         for c in 0..3 {
             for r in 0..3 {
@@ -152,20 +129,6 @@ impl AimSettings {
     }
 }
 
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a.into_iter().zip(b).map(|(a, b)| a * b).sum()
-}
-fn unit(value: [f64; 3]) -> Option<[f64; 3]> {
-    let length = dot(value, value).sqrt();
-    (length.is_finite() && length > 0.).then(|| value.map(|value| value / length))
-}
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
 fn basis(forward: [f64; 3], up: [f64; 3]) -> Option<[[f64; 3]; 3]> {
     let right = cross(forward, up);
     if dot(right, right) <= 1e-12 {
@@ -173,32 +136,4 @@ fn basis(forward: [f64; 3], up: [f64; 3]) -> Option<[[f64; 3]; 3]> {
     }
     let right = unit(right)?;
     Some([right, cross(right, forward), forward])
-}
-
-fn rotation_quaternion(m: [[f64; 3]; 3]) -> [f64; 4] {
-    let trace = m[0][0] + m[1][1] + m[2][2];
-    let mut q = if trace > 0. {
-        let s = 2. * (1. + trace).sqrt();
-        [
-            (m[1][2] - m[2][1]) / s,
-            (m[2][0] - m[0][2]) / s,
-            (m[0][1] - m[1][0]) / s,
-            s * 0.25,
-        ]
-    } else {
-        let i = (0..3).max_by(|&a, &b| m[a][a].total_cmp(&m[b][b])).unwrap();
-        let j = (i + 1) % 3;
-        let k = (i + 2) % 3;
-        let s = 2. * (1. + m[i][i] - m[j][j] - m[k][k]).max(0.).sqrt();
-        let mut q = [0.; 4];
-        q[i] = s * 0.25;
-        q[j] = (m[i][j] + m[j][i]) / s;
-        q[k] = (m[i][k] + m[k][i]) / s;
-        q[3] = (m[j][k] - m[k][j]) / s;
-        q
-    };
-    let length = q.iter().map(|value| value * value).sum::<f64>().sqrt();
-    let scale = if q[3] < 0. { -1. / length } else { 1. / length };
-    q.iter_mut().for_each(|value| *value *= scale);
-    q
 }

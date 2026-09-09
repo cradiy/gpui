@@ -82,7 +82,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Attachments and constraints**: Stateless transform dependencies and pose solvers composed with animation evaluation.
   - [x] **Follow transforms**: Stable target handles, full affine offsets, final-pose dependency evaluation, cycle/reference diagnostics, independent visibility inheritance, preserved hierarchy/output ordering, and explicit release poses.
   - [x] **Aim constraints**: Stateless world-point solving and graph target offsets, explicit local forward/up axes and world up, affine-shape preservation, total-rotation limits with retained outcomes, and cycle/degeneracy diagnostics.
-  - [ ] **Two-bone IK**: Target and pole inputs, pose blending, reachability diagnostics, and absolute-pose evaluation.
+  - [x] **Two-bone IK**: Independent three-joint world-pose solving, target/pole inputs, rotation blending with preserved bone lengths, radial reach diagnostics, complete folding, and graph-local pose conversion.
 
 ## Phase 5: Performance and Platforms
 

@@ -13,6 +13,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Subtree effects](docs/subtree_effect.md): blur, wave, color adjustment and Bloom for element subtrees.
 - [Subtree transitions](docs/subtree_transition.md): blur fades, crossfades and soft wipes between two UI subtrees.
 - [History feedback](docs/feedback.md): persistent trails, time-based decay and playback controls.
+- [Motion blur](docs/motion_blur.md): velocity-driven directional blur for moving subtrees.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
 - [Interaction mapping](docs/interaction_mapping.md): pointer hit testing and dragging in deformed content.
@@ -80,6 +81,12 @@ Run the history-feedback example:
 
 ```sh
 cargo run -p gpui_effects --example feedback
+```
+
+Run the draggable motion-blur comparison:
+
+```sh
+cargo run -p gpui_effects --example motion_blur
 ```
 
 Run the interactive water-ripple example:

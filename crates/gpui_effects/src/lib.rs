@@ -43,6 +43,7 @@ mod masked_effect;
 mod masked_fill;
 mod material;
 mod motion;
+mod motion_blur;
 mod particle_transition;
 mod particles;
 mod ripple;
@@ -100,6 +101,7 @@ pub use motion::{
     MotionEasing, MotionEvent, MotionFrame, MotionId, MotionItem, MotionLayer, MotionOptions,
     MotionPath, MotionPolicy,
 };
+pub use motion_blur::{MotionBlurOptions, motion_blur_shader, subtree_motion_blur};
 pub use particle_transition::{ParticleTransitionOptions, subtree_particle_transition};
 pub use particles::{
     ParticleMask, ParticlePhysics, ParticleSpawn, Particles, particles, subtree_particles,

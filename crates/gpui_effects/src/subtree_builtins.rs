@@ -152,6 +152,7 @@ mod tests {
             crate::ripple_shader(),
             crate::lens_shader(),
             crate::deformation_shader(),
+            crate::motion_blur_shader(),
             crate::contour_glow_shader(),
             crate::contour_relief_shader(),
             crate::contour_shadow_shader(),

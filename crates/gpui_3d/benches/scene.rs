@@ -226,7 +226,130 @@ fn draw_planning(c: &mut Criterion) {
 }
 
 #[cfg(feature = "wgpu")]
-criterion_group!(draw_benches, draw_planning);
+fn draw_encoding(c: &mut Criterion) {
+    use gpui_wgpu::{
+        Scene3dChannels, Scene3dDrawStatistics, Scene3dOutputConfig, WgpuContext,
+        WgpuScene3dRenderer, wgpu,
+    };
+    use std::{sync::Arc, time::Instant};
+
+    if std::env::var("GPUI_3D_GPU_BENCH").as_deref() != Ok("1") {
+        return;
+    }
+    let context = WgpuContext::new_headless().expect("create benchmark GPU context");
+    eprintln!("3D benchmark adapter: {:?}", context.adapter.get_info());
+    let wait = || {
+        context
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(30)),
+            })
+            .expect("finish benchmark GPU submission");
+    };
+    let mut group = c.benchmark_group("draw_encoding");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_secs(1));
+    for count in [1024, 16384] {
+        for workload in [
+            "shared_geometry",
+            "mixed_materials",
+            "mostly_culled",
+            "vertex_updates",
+        ] {
+            let input = scene(count, workload)
+                .prepare(1., None, |_| Ok(TextureState::Ready(ResolvedTexture::None)))
+                .unwrap()
+                .into_frame();
+            let mesh = input.objects[0].mesh.clone();
+            for (mode, channels) in [
+                ("color", Scene3dChannels::COLOR),
+                (
+                    "multi_output",
+                    Scene3dChannels::COLOR
+                        | Scene3dChannels::OBJECT_ID
+                        | Scene3dChannels::LINEAR_DEPTH
+                        | Scene3dChannels::WORLD_NORMAL,
+                ),
+            ] {
+                let config = Scene3dOutputConfig {
+                    size: [256, 256],
+                    channels,
+                    color_samples: 1,
+                };
+                let visible = if workload == "mostly_culled" {
+                    count / 4
+                } else {
+                    count
+                };
+                let passes = if mode == "color" { 1 } else { 4 };
+                let mut state = None;
+                group.throughput(Throughput::Elements((visible * passes) as u64));
+                group.bench_function(BenchmarkId::new(format!("{workload}/{mode}"), count), |b| {
+                    let (renderer, expected) = state.get_or_insert_with(|| {
+                        let mut renderer = WgpuScene3dRenderer::new(context.clone()).unwrap();
+                        renderer
+                            .capabilities()
+                            .validate(config)
+                            .expect("benchmark output support");
+                        let expected = Scene3dDrawStatistics::plan(
+                            &input,
+                            channels,
+                            renderer.max_instances_per_batch(),
+                        )
+                        .unwrap();
+                        assert_eq!(expected.camera_instances, (visible * passes) as u64);
+                        let draws = if workload == "mixed_materials" {
+                            visible
+                        } else {
+                            visible.div_ceil(renderer.max_instances_per_batch())
+                        };
+                        assert_eq!(expected.camera_draws, (draws * passes) as u64);
+                        let first = renderer.render(&input, config).unwrap();
+                        wait();
+                        assert_eq!(first.draw_statistics(), expected);
+                        (renderer, expected)
+                    });
+                    b.iter_custom(|iterations| {
+                        let mut elapsed = Duration::ZERO;
+                        for iteration in 0..iterations {
+                            let mut frame = input.clone();
+                            if workload == "vertex_updates" {
+                                let mut vertices = mesh.vertices().to_vec();
+                                let offset = if iteration.is_multiple_of(2) {
+                                    0.01
+                                } else {
+                                    -0.01
+                                };
+                                for vertex in &mut vertices {
+                                    vertex.position[2] += offset;
+                                }
+                                let updated = mesh
+                                    .with_vertices(vertices, mesh.tangents().map(<[_]>::to_vec))
+                                    .unwrap();
+                                for object in Arc::make_mut(&mut frame.objects) {
+                                    object.mesh = updated.clone();
+                                }
+                            }
+                            let start = Instant::now();
+                            let output = renderer.render(black_box(&frame), config).unwrap();
+                            elapsed += start.elapsed();
+                            wait();
+                            assert_eq!(output.draw_statistics(), *expected);
+                            black_box(output);
+                        }
+                        elapsed
+                    });
+                });
+            }
+        }
+    }
+    group.finish();
+}
+
+#[cfg(feature = "wgpu")]
+criterion_group!(draw_benches, draw_planning, draw_encoding);
 #[cfg(feature = "wgpu")]
 criterion_main!(benches, draw_benches);
 #[cfg(not(feature = "wgpu"))]

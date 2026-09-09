@@ -1953,6 +1953,35 @@ These CPU workloads compare shared geometry, mixed materials, culled scenes, and
 ordered transparency. Each workload verifies its expected instance and draw
 counts before timing. Scene preparation is outside the measured region.
 
+### GPU submission benchmarks
+
+The `draw_encoding` group requires an explicit GPU opt-in:
+
+```sh
+GPUI_3D_GPU_BENCH=1 cargo bench -p gpui_3d --features wgpu --bench scene -- draw_encoding
+```
+
+It renders 1,024 and 16,384 cube instances at 256 × 256 with one sample per pixel,
+using shared geometry, mixed PBR materials, mostly culled objects, and fixed-topology
+vertex updates. Color-only and color/ID/depth/normal outputs run separately.
+`vertex_updates` replaces the shared cube's vertices each iteration while retaining
+its index storage; it measures upload and buffer-reuse overhead, not bulk transfer
+bandwidth. Throughput counts visible instances across all selected output passes.
+
+Timing covers `WgpuScene3dRenderer::render`: validation, retained draw preparation,
+resource preparation, command encoding, output allocation, and queue submission.
+Scene construction, vertex generation, initial pipeline warm-up, GPU completion
+waits, result validation, and output release are outside the measured interval.
+Only one submission is outstanding at a time, with a 30-second completion timeout.
+These are CPU submission timings, not GPU timestamps, throughput under a deep
+queue, readback latency, or visual validation.
+
+The harness prints the selected adapter and checks expected draw/instance counts
+against each submitted output. Unsupported selected channels fail explicitly.
+Criterion filters select individual workloads, for example
+`draw_encoding/shared_geometry/color/1024`. Without `GPUI_3D_GPU_BENCH=1`, this
+group does not create a device or submit GPU work.
+
 ## Rendering and support
 
 Linux WGPU supports these viewports. Check `window.supports_scene3d()` before

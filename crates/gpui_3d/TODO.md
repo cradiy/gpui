@@ -102,7 +102,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [ ] **Rendering benchmarks**: Reproducible shared-mesh and mixed-material workloads with CPU preparation and draw-count measurements.
     - [x] **Scene preparation**: CPU-only shared geometry, mixed PBR, off-camera, and pending-image workloads at 1,024 and 16,384 objects.
     - [x] **Draw planning**: CPU-only batching workloads, per-pass mesh/instance/triangle counts, parameter-upload payload sizes, and retained submission statistics.
-    - [ ] **Draw encoding**: GPU upload/encoding workloads.
+    - [x] **Draw encoding**: Opt-in serialized GPU submissions for shared geometry, mixed PBR, culled instances, and vertex updates; color and geometry-output passes with CPU timing and submitted draw-count checks.
+    - [ ] **GPU measurements**: Run encoding workloads on supported hardware and record adapter-specific results separately from CPU planning benchmarks.
 - [ ] **Resource lifecycle**: Handle multiple viewports, resizing, device recovery, and cache eviction within resource budgets.
   - [x] **Explicit cache release**: Window-local mesh cache release preserving shared 2D resources; direct-renderer cache release preserving public atlas tiles; headless cache and private atlas release with retained frame/readback ownership and lazy reconstruction.
   - [x] **Mesh output-cache budgets**: Configurable window/external-renderer quotas shared by nested UI captures, allocation counts and bytes, immediate entry release on budget changes, zero-budget bypass, and recovery-preserved settings.

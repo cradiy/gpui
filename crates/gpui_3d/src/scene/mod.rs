@@ -8,7 +8,10 @@ use crate::{
     AffineTransform, Camera, ColorOutput, DiffuseEnvironment, DirectionalShadow, Light, Material,
     Mesh, ObjectId, PickBehavior, PunctualLight, Ray, Transform, math, spatial::bvh,
 };
-use std::sync::{Arc, OnceLock};
+use std::{
+    borrow::Cow,
+    sync::{Arc, OnceLock},
+};
 
 /// One mesh with a material and object-to-world transform.
 #[derive(Clone)]
@@ -101,6 +104,7 @@ pub struct Scene {
     pub(crate) color_output: ColorOutput,
     pub(crate) objects: Vec<Object>,
     pub(crate) spatial_index: Arc<OnceLock<bvh::ObjectIndex>>,
+    pub(crate) spatial_source: Option<Arc<Vec<bvh::IndexObject>>>,
 }
 impl Scene {
     /// Creates an empty scene with the default camera and light.
@@ -162,6 +166,7 @@ impl Scene {
     pub fn object(mut self, object: Object) -> Self {
         Arc::make_mut(&mut self.preparation_revision);
         self.objects.push(object);
+        self.spatial_source = None;
         if let Some(index) = Arc::get_mut(&mut self.spatial_index) {
             index.take();
         } else {
@@ -174,12 +179,35 @@ impl Scene {
     /// This synchronous CPU operation needs no window or GPU.
     pub fn prepare_spatial_index(&self) {
         self.spatial_index
-            .get_or_init(|| bvh::ObjectIndex::build(&self.objects));
+            .get_or_init(|| bvh::ObjectIndex::build_from(&self.index_source()));
+    }
+
+    /// Prepares this scene's object index using a previously prepared snapshot.
+    /// Compatible object slots retain their partition; changed leaves and ancestors
+    /// receive new bounds. Graph node identities survive ordering and visibility changes.
+    /// Flat scenes use object positions as slots. Slot-set or boundedness changes rebuild
+    /// the tree, as does an unprepared previous scene. Already prepared scenes are unchanged.
+    /// Old snapshots remain queryable. This synchronous CPU operation needs no GPU.
+    pub fn prepare_spatial_index_from(&self, previous: &Scene) {
+        self.spatial_index.get_or_init(|| {
+            let source = self.index_source();
+            previous.spatial_index.get().map_or_else(
+                || bvh::ObjectIndex::build_from(&source),
+                |index| index.refit(&source),
+            )
+        });
+    }
+
+    fn index_source(&self) -> Cow<'_, [bvh::IndexObject]> {
+        self.spatial_source.as_ref().map_or_else(
+            || Cow::Owned(bvh::IndexObject::flat(&self.objects)),
+            |source| Cow::Borrowed(source.as_slice()),
+        )
     }
 
     pub(crate) fn visit_objects(&self, ray: Ray, visit: impl FnMut(usize)) {
         self.spatial_index
-            .get_or_init(|| bvh::ObjectIndex::build(&self.objects))
+            .get_or_init(|| bvh::ObjectIndex::build_from(&self.index_source()))
             .visit(ray, visit);
     }
 }

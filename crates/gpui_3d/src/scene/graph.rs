@@ -605,7 +605,9 @@ impl SceneGraph {
             lights: None,
             bounds: None,
             spatial_index: Arc::default(),
+            spatial_source: Arc::default(),
         };
+        let mut spatial_source = Vec::new();
         let mut pending = self
             .roots
             .iter()
@@ -655,6 +657,14 @@ impl SceneGraph {
                     node: handle,
                     source,
                 })?;
+            if let Some(local_bounds) = node.bounds {
+                spatial_source.push(crate::spatial::bvh::IndexObject::node(
+                    handle,
+                    local_bounds,
+                    world,
+                    visible.then_some(evaluated.objects.len()),
+                ));
+            }
             if visible && let Some((mesh, material)) = &node.surface {
                 let mut object = Object::new(mesh.clone(), material.clone());
                 object.id = node.id.clone();
@@ -689,6 +699,7 @@ impl SceneGraph {
                 parent.subtree_bounds = union(parent.subtree_bounds, bounds);
             }
         }
+        evaluated.spatial_source = Arc::new(spatial_source);
         Ok(evaluated)
     }
 }
@@ -729,6 +740,7 @@ pub struct EvaluatedScene {
     lights: Option<Vec<(NodeHandle, PunctualLight)>>,
     bounds: Option<Aabb>,
     spatial_index: Arc<std::sync::OnceLock<crate::spatial::bvh::ObjectIndex>>,
+    spatial_source: Arc<Vec<crate::spatial::bvh::IndexObject>>,
 }
 impl EvaluatedScene {
     /// Source graph revision. Local transform overrides are not part of this value;
@@ -760,6 +772,7 @@ impl EvaluatedScene {
                 .map(|lights| lights.iter().map(|(_, light)| light.0).collect()),
             objects: self.objects.clone(),
             spatial_index: self.spatial_index.clone(),
+            spatial_source: Some(self.spatial_source.clone()),
             ..Scene::default()
         }
     }
@@ -781,7 +794,21 @@ impl EvaluatedScene {
     /// Prepares the camera-independent object index shared by derived scenes.
     pub fn prepare_spatial_index(&self) {
         self.spatial_index
-            .get_or_init(|| crate::spatial::bvh::ObjectIndex::build(&self.objects));
+            .get_or_init(|| crate::spatial::bvh::ObjectIndex::build_from(&self.spatial_source));
+    }
+
+    /// Prepares the shared object index from an earlier evaluated snapshot when available.
+    /// Mesh-node slots include hidden nodes; motion, reparenting, and visibility updates
+    /// retain the partition. Adding/removing mesh nodes or using another graph rebuilds it.
+    /// Existing prepared indices are unchanged, and previous snapshots remain queryable.
+    /// This synchronous CPU operation does not evaluate transforms or access the GPU.
+    pub fn prepare_spatial_index_from(&self, previous: &EvaluatedScene) {
+        self.spatial_index.get_or_init(|| {
+            previous.spatial_index.get().map_or_else(
+                || crate::spatial::bvh::ObjectIndex::build_from(&self.spatial_source),
+                |index| index.refit(&self.spatial_source),
+            )
+        });
     }
 }
 

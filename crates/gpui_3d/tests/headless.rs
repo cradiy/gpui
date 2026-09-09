@@ -5,6 +5,115 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn linear_hdr_outputs_keep_radiance_coverage_and_owned_frames() -> anyhow::Result<()> {
+    use gpui_3d::{
+        AlphaMode, ColorOutput, Light, Object, PbrMaterial, Projection, RenderedFrame, Scene,
+        Scene3dChannels, Scene3dPixels, ToneMapping,
+    };
+    fn read(frame: &RenderedFrame) -> anyhow::Result<Scene3dPixels> {
+        let mut pending = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(result) = pending.try_read()? {
+                return Ok(result.pixels);
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    let mut renderer = HeadlessRenderer::new()?;
+    let scene = Scene::new()
+        .camera(Camera {
+            projection: Projection::Orthographic { vertical_size: 3. },
+            ..Default::default()
+        })
+        .light(Light {
+            ambient: 0.,
+            ..Default::default()
+        })
+        .lights([])
+        .object(
+            Object::new(
+                Mesh::plane(),
+                Material::color(gpui::Hsla {
+                    h: 0.,
+                    s: 0.,
+                    l: 0.,
+                    a: 0.25,
+                })
+                .pbr(PbrMaterial {
+                    metallic: 0.,
+                    roughness: 0.5,
+                    emissive: [8., 2., 0.5],
+                })
+                .alpha_mode(AlphaMode::Blend),
+            )
+            .rotation([0., 0., 0.2]),
+        );
+    for color_samples in [1, 4] {
+        let config = Scene3dOutputConfig {
+            size: [65, 65],
+            channels: Scene3dChannels::COLOR | Scene3dChannels::LINEAR_COLOR,
+            color_samples,
+        };
+        let first = renderer.render(&scene, config)?;
+        let mapped = renderer.render(
+            &scene.clone().color_output(ColorOutput {
+                exposure: -2.,
+                tone_mapping: ToneMapping::Reinhard,
+            }),
+            config,
+        )?;
+        let hdr_only = renderer.render(
+            &scene,
+            Scene3dOutputConfig {
+                channels: Scene3dChannels::LINEAR_COLOR,
+                ..config
+            },
+        )?;
+        assert!(hdr_only.gpu().color().is_none());
+        assert_eq!(hdr_only.gpu().linear_color().unwrap().sample_count(), 1);
+        assert_eq!(
+            hdr_only.gpu().linear_color().unwrap().format(),
+            gpui_wgpu::wgpu::TextureFormat::Rgba16Float
+        );
+        let replacement = renderer.render(
+            &Scene::new(),
+            Scene3dOutputConfig {
+                size: [9, 7],
+                ..config
+            },
+        )?;
+        assert!(
+            read(&replacement)?
+                .linear_rgba
+                .unwrap()
+                .iter()
+                .all(|p| *p == [0.; 4])
+        );
+        let first = read(&first)?;
+        let mapped = read(&mapped)?;
+        let hdr_only = read(&hdr_only)?;
+        assert_eq!(first.linear_rgba, mapped.linear_rgba);
+        assert_eq!(first.linear_rgba, hdr_only.linear_rgba);
+        assert_ne!(first.rgba, mapped.rgba);
+        let hdr = first.linear_rgba.unwrap();
+        assert_eq!(hdr[32 * 65 + 32], [2., 0.5, 0.125, 0.25]);
+        assert_eq!(hdr[0], [0.; 4]);
+        if color_samples == 4 {
+            assert!(hdr.iter().any(|p| p[3] > 0. && p[3] < 0.25));
+        }
+        for pixel in hdr.iter().filter(|p| p[3] > 0.) {
+            for (actual, radiance) in pixel[..3].iter().zip([8., 2., 0.5]) {
+                assert!((actual - radiance * pixel[3]).abs() < 0.002);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn directional_shadows_preserve_indirect_light_geometry_channels_and_alpha_masks()
 -> anyhow::Result<()> {
     use gpui_3d::{

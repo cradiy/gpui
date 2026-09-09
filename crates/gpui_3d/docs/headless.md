@@ -68,7 +68,7 @@ can still be stale when queried against a modified graph.
 
 `Scene3dOutputConfig` takes physical pixel dimensions, requested channels, and
 one or four color samples. Combine `Scene3dChannels::COLOR`, `OBJECT_ID`,
-`LINEAR_DEPTH`, and `WORLD_NORMAL` with `|`, or use `Scene3dChannels::all()`.
+`LINEAR_COLOR`, `LINEAR_DEPTH`, and `WORLD_NORMAL` with `|`, or use `Scene3dChannels::all()`.
 The default selects color and object IDs with four color samples. Empty or
 unknown channel selections are rejected. Unrequested channels are not allocated
 or read back.
@@ -76,6 +76,7 @@ or read back.
 | Channel | GPU format | CPU layout | Background and coverage |
 | --- | --- | --- | --- |
 | Color | `Rgba8Unorm` | RGBA bytes, width × 4 bytes per row | Transparent black; premultiplied alpha |
+| Linear color | `Rgba16Float` | `[f32; 4]` values in `linear_rgba`, width values per row | Transparent black; premultiplied linear HDR |
 | Object ID | `R32Uint` | `u32` values, width values per row | Zero background; nearest surviving surface at the pixel center |
 | Linear depth | `R32Float` | `f32` values, width values per row | Zero background; positive camera-forward depth in scene units |
 | World normal | `Rgba32Float` | `[f32; 4]` values, width values per row | Zero background; world XYZ normal and validity W |
@@ -85,8 +86,7 @@ sRGB-encoded RGB after linear lighting, `Rgba16Float` intermediate storage,
 the scene's `ColorOutput` exposure and tone mapping per sample, and display-color MSAA resolve.
 Color conversion preserves premultiplied coverage at MSAA edges. The returned
 `Rgba8Unorm` texture stores encoded values; GPU consumers must decode RGB when
-using it in linear calculations. The internal HDR texture is not an exported
-channel. Materials support diffuse or metallic-roughness shading through
+using it in linear calculations. Materials support diffuse or metallic-roughness shading through
 `Material::pbr`, including linear emissive radiance and view-dependent highlights.
 Metallic-roughness and emissive maps accept decoded `ImageSource::Render` inputs
 with independent sampling. Their channels multiply the material factors; map
@@ -110,7 +110,42 @@ averaging. With four color samples, an edge pixel may have partial color coverag
 but a zero ID when its center is outside the mesh. Use one color sample for
 matching pixel-center coverage. Equal-depth ID overlaps keep the first submitted
 surface; equal-depth blended color layers compose in submission order.
-Raw HDR output is not available.
+
+### Linear HDR color
+
+`LINEAR_COLOR` exports linear shaded radiance before exposure, tone mapping,
+clamping to the display range, or sRGB encoding. It can be requested independently
+of `COLOR`; requesting both shares the same scene shading pass.
+
+```no_run
+use gpui_3d::{HeadlessRenderer, Scene, Scene3dChannels, Scene3dOutputConfig};
+# fn capture(renderer: &mut HeadlessRenderer, scene: &Scene) -> anyhow::Result<()> {
+let frame = renderer.render(scene, Scene3dOutputConfig {
+    size: [800, 600],
+    channels: Scene3dChannels::LINEAR_COLOR,
+    color_samples: 1,
+})?;
+let hdr_texture = frame.gpu().linear_color().unwrap();
+let mut pending = frame.readback()?;
+if let Some(result) = pending.try_read()? {
+    let linear_rgba = result.pixels.linear_rgba.as_ref().unwrap();
+}
+# Ok(())
+# }
+```
+
+The GPU texture is single-sampled `Rgba16Float`, retaining values above one up
+to 65504 with binary16 precision. Readback widens each channel to `f32` without
+color conversion; widening does not restore precision lost in half-float storage.
+RGB is premultiplied by alpha, including transparent layers and edge coverage.
+Divide RGB by nonzero alpha when a consumer requires straight color.
+
+Four-sample HDR output averages linear samples. Display output instead applies
+exposure, tone mapping, and sRGB encoding to each sample before averaging.
+Converting resolved HDR to SDR therefore need not reproduce `COLOR` at edges.
+Use `capabilities().linear_color_msaa4` to query four-sample HDR resolve support;
+`color_msaa4` describes display output. Both outputs are independent of geometry
+channel selection, and retained HDR frames survive later renders and resizing.
 
 ### Geometry channels
 
@@ -156,13 +191,15 @@ Lighting changes do not affect these geometric outputs.
 Use `capabilities().geometry_outputs` to check geometry-format support. All
 outputs remain subject to dimension/pixel budgets and the per-buffer
 `max_readback_buffer_bytes` limit, including row padding. The normal channel
-requires 16 bytes per pixel, while the other channels require four.
+requires 16 GPU/readback bytes per pixel, linear color requires eight, and the
+other channels require four. CPU linear-color storage uses 16 bytes per pixel.
 
 ```sh
 cargo run -p gpui_3d --features wgpu --example headless -- /tmp/gpui-3d-outputs
 ```
 
-The example writes aligned `color.png`, `ids.png`, `depth.png`, and `normals.png` previews.
+The example writes aligned `color.png`, `ids.png`, `depth.png`, and `normals.png` previews
+and prints the maximum linear RGB radiance.
 Depth is mapped from the visible range to grayscale with nearer surfaces brighter;
 normal XYZ is mapped from `[-1, 1]` to RGB `[0, 1]`. Preview mappings do not change
 the raw floating-point outputs. The translucent plane contributes blended color
@@ -201,7 +238,7 @@ construct the ready scene on the worker when needed.
 ## Limits and errors
 
 `capabilities()` reports the device dimension limit, the 16,777,216-pixel output
-budget, and four-sample color support. Dimensions must be positive and fit both
+budget, and separate four-sample display/HDR color support. Dimensions must be positive and fit both
 limits. Unsupported sampling, invalid camera/light/object parameters, unavailable
 images, excessive readback buffer dimensions, and a busy readback return errors.
 Device loss is reported when observed by the supplied GPU context; recovery

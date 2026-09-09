@@ -860,7 +860,8 @@ tone mapping. Default output preserves unlit source colors up to numeric precisi
 
 Viewport and headless rendering use the same color pipeline. Exposure and tone
 mapping do not affect alpha cutout, depth, object IDs, or picking. Display outputs
-are sRGB-encoded SDR; the internal HDR texture is not exposed as an output channel.
+are sRGB-encoded SDR. Headless `LINEAR_COLOR` exports premultiplied linear HDR
+before exposure and tone mapping.
 
 ### Image sampling
 
@@ -1089,7 +1090,7 @@ pixel-size changes resize the capture targets independently of the window.
 
 The optional `wgpu` feature provides `HeadlessRenderer` for the same scenes without
 a native window or UI layout. It accepts solid and decoded-image materials and
-returns independently selectable color, object-ID, linear-depth, and world-normal
+returns independently selectable display-color, linear-HDR, object-ID, linear-depth, and world-normal
 textures with a frame-local identity map and bounded
 nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
@@ -1104,7 +1105,7 @@ Each example is an independent executable.
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
 | `lighting` | Directional/point/spot sources, fill light, environment rotation, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |
-| `headless` | Window-free color/ID/depth/normal readback, PNG previews and object identity inspection. |
+| `headless` | Window-free display/HDR/ID/depth/normal readback, PNG previews and object identity inspection. |
 
 ```sh
 cargo run -p gpui_3d --example scene

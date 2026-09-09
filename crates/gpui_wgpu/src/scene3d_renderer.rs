@@ -38,8 +38,8 @@ impl Scene3dChannels {
 }
 
 /// Physical output dimensions and color sampling. Background values are zero
-/// in all channels. Color uses display-encoded RGBA8 after
-/// linear HDR shading, exposure, and tone mapping.
+/// in all channels. COLOR uses display-encoded RGBA8 after exposure and tone
+/// mapping; LINEAR_COLOR uses premultiplied RGBA16Float before display mapping.
 #[derive(Clone, Copy, Debug)]
 pub struct Scene3dOutputConfig {
     pub size: [u32; 2],
@@ -872,5 +872,72 @@ mod tests {
             .validate(config)
             .is_err()
         );
+    }
+
+    #[test]
+    fn scene3d_linear_color_readback_preserves_hdr_alpha_and_row_order() {
+        let mut pixels = Scene3dPixels {
+            size: [2, 2],
+            rgba: None,
+            linear_rgba: None,
+            object_ids: None,
+            linear_depth: None,
+            world_normals: None,
+        };
+        let encoded: [[u16; 4]; 4] = [
+            [0x4000, 0x3800, 0x3000, 0x3400],
+            [0x7bff, 0x0001, 0x3c00, 0x3c00],
+            [0, 0, 0, 0],
+            [0x4400, 0x4200, 0x4000, 0x3800],
+        ];
+        let expected = [
+            [2., 0.5, 0.125, 0.25],
+            [65504., 2_f32.powi(-24), 1., 1.],
+            [0.; 4],
+            [4., 3., 2., 0.5],
+        ];
+        let stride = readback_stride(2, 8) as usize;
+        let mut padded = vec![0xff; stride * 2];
+        for (index, pixel) in encoded.into_iter().enumerate() {
+            let offset = index / 2 * stride + index % 2 * 8;
+            for (channel, bits) in pixel.into_iter().enumerate() {
+                padded[offset + channel * 2..offset + channel * 2 + 2]
+                    .copy_from_slice(&bits.to_le_bytes());
+            }
+        }
+        pixels.read_channel(OutputKind::LinearColor, stride as u32, &padded);
+        assert_eq!(pixels.linear_rgba.as_deref(), Some(expected.as_slice()));
+        assert!(pixels.rgba.is_none());
+    }
+
+    #[test]
+    fn scene3d_linear_color_limits_use_half_float_stride_and_resolve_support() {
+        let mut caps = Scene3dCapabilities {
+            max_dimension: 4096,
+            max_pixels: 1_000_000,
+            color_msaa4: false,
+            linear_color_msaa4: true,
+            max_readback_buffer_bytes: 1024,
+            geometry_outputs: false,
+        };
+        let mut config = Scene3dOutputConfig {
+            size: [32, 3],
+            channels: Scene3dChannels::LINEAR_COLOR,
+            color_samples: 4,
+        };
+        assert!(caps.validate(config).is_ok());
+        config.size[0] = 33;
+        assert!(caps.validate(config).is_err());
+        config.channels = Scene3dChannels::COLOR;
+        config.color_samples = 1;
+        assert!(caps.validate(config).is_ok());
+        config.size[0] = 32;
+        config.channels = Scene3dChannels::LINEAR_COLOR;
+        config.color_samples = 4;
+        caps.linear_color_msaa4 = false;
+        caps.color_msaa4 = true;
+        assert!(caps.validate(config).is_err());
+        config.color_samples = 1;
+        assert!(caps.validate(config).is_ok());
     }
 }

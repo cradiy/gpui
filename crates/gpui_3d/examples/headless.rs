@@ -1,8 +1,8 @@
 use anyhow::{Result, ensure};
 use gpui::{rgb, rgba};
 use gpui_3d::{
-    AlphaMode, Camera, HeadlessRenderer, Material, Mesh, Object, Scene, Scene3dChannels,
-    Scene3dOutputConfig,
+    AlphaMode, Camera, HeadlessRenderer, Material, Mesh, Object, PbrMaterial, Scene,
+    Scene3dChannels, Scene3dOutputConfig,
 };
 use std::{
     path::PathBuf,
@@ -17,10 +17,17 @@ fn main() -> Result<()> {
     let scene = Scene::new()
         .camera(Camera::orbit(0.35, 0.25, 6.))
         .object(
-            Object::new(Mesh::cube(), Material::color(rgb(0xe4b183)))
-                .id("warm cube")
-                .position([-0.7, 0., 0.2])
-                .rotation([0.2, 0.4, 0.]),
+            Object::new(
+                Mesh::cube(),
+                Material::color(rgb(0xe4b183)).pbr(PbrMaterial {
+                    metallic: 0.,
+                    roughness: 0.6,
+                    emissive: [1.5, 0.3, 0.1],
+                }),
+            )
+            .id("warm cube")
+            .position([-0.7, 0., 0.2])
+            .rotation([0.2, 0.4, 0.]),
         )
         .object(
             Object::new(Mesh::cube(), Material::color(rgb(0x71c2d9)))
@@ -61,6 +68,16 @@ fn main() -> Result<()> {
         std::thread::sleep(Duration::from_millis(2));
     };
     let ids = result.pixels.object_ids.as_ref().unwrap();
+    let maximum = result
+        .pixels
+        .linear_rgba
+        .as_ref()
+        .unwrap()
+        .iter()
+        .fold([0_f32; 3], |maximum, pixel| {
+            std::array::from_fn(|i| maximum[i].max(pixel[i]))
+        });
+    println!("Maximum premultiplied linear RGB: {maximum:?}");
     for object in result.objects() {
         let count = ids.iter().filter(|id| **id == object.output_id).count();
         println!(

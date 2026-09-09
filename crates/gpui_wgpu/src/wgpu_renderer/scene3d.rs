@@ -517,7 +517,13 @@ impl Scene3dRenderer {
                         wgpu::TextureFormat::Rgba16Float,
                         "scene3d_hdr",
                         self.samples,
-                        attachment | wgpu::TextureUsages::TEXTURE_BINDING,
+                        attachment
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                            | if self.samples == 1 {
+                                wgpu::TextureUsages::COPY_SRC
+                            } else {
+                                wgpu::TextureUsages::empty()
+                            },
                     )
                 }),
             });
@@ -556,7 +562,7 @@ impl Scene3dRenderer {
             rect,
             start,
             Some(source),
-            destination,
+            Some(destination),
             encoder,
         );
     }
@@ -571,7 +577,7 @@ impl Scene3dRenderer {
         rect: [f32; 4],
         start: usize,
         source: Option<&wgpu::TextureView>,
-        destination: &wgpu::TextureView,
+        destination: Option<&wgpu::TextureView>,
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let targets = self.targets.as_ref().unwrap();
@@ -859,7 +865,10 @@ impl Scene3dRenderer {
             .hdr
             .as_ref()
             .map(|texture| texture.create_view(&Default::default()));
-        let mesh_destination = hdr_view.as_ref().unwrap_or(destination);
+        let mesh_destination = hdr_view
+            .as_ref()
+            .or(destination)
+            .expect("missing mesh output");
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene3d"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -909,7 +918,9 @@ impl Scene3dRenderer {
             }
         }
         drop(pass);
-        if let (Some(pipeline), Some(hdr)) = (&self.display_pipeline, &hdr_view) {
+        if let (Some(pipeline), Some(hdr), Some(destination)) =
+            (&self.display_pipeline, &hdr_view, destination)
+        {
             let settings = [
                 2.0_f32.powf(frame.color_output.exposure),
                 frame.color_output.tone_mapping as u32 as f32,
@@ -951,6 +962,37 @@ impl Scene3dRenderer {
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..3, 0..1);
+        }
+    }
+
+    pub(crate) fn copy_linear_color(
+        &self,
+        destination: &wgpu::Texture,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        let source = self.targets.as_ref().unwrap().hdr.as_ref().unwrap();
+        if self.samples == 1 {
+            encoder.copy_texture_to_texture(
+                source.as_image_copy(),
+                destination.as_image_copy(),
+                source.size(),
+            );
+        } else {
+            let source = source.create_view(&Default::default());
+            let destination = destination.create_view(&Default::default());
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene3d_linear_resolve"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &source,
+                    resolve_target: Some(&destination),
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
         }
     }
 }

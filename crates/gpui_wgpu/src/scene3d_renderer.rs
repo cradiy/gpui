@@ -17,6 +17,7 @@ bitflags::bitflags! {
         const OBJECT_ID = 2;
         const LINEAR_DEPTH = 4;
         const WORLD_NORMAL = 8;
+        const LINEAR_COLOR = 16;
     }
 }
 impl Default for Scene3dChannels {
@@ -25,6 +26,9 @@ impl Default for Scene3dChannels {
     }
 }
 impl Scene3dChannels {
+    fn shaded(self) -> bool {
+        self.intersects(Self::COLOR | Self::LINEAR_COLOR)
+    }
     fn color(self) -> bool {
         self.contains(Self::COLOR)
     }
@@ -59,6 +63,8 @@ pub struct Scene3dCapabilities {
     pub max_dimension: u32,
     pub max_pixels: u64,
     pub color_msaa4: bool,
+    /// Four-sample linear color resolve support.
+    pub linear_color_msaa4: bool,
     /// Maximum size of each staging buffer, including padded rows.
     pub max_readback_buffer_bytes: u64,
     pub geometry_outputs: bool,
@@ -94,8 +100,16 @@ impl Scene3dCapabilities {
             !config.channels.color() || config.color_samples == 1 || self.color_msaa4,
             "4x color MSAA is unavailable on this device"
         );
+        ensure!(
+            !config.channels.contains(Scene3dChannels::LINEAR_COLOR)
+                || config.color_samples == 1
+                || self.linear_color_msaa4,
+            "4x linear color resolve is unavailable on this device"
+        );
         let bytes_per_pixel = if config.channels.contains(Scene3dChannels::WORLD_NORMAL) {
             16
+        } else if config.channels.contains(Scene3dChannels::LINEAR_COLOR) {
+            8
         } else {
             4
         };
@@ -157,6 +171,13 @@ impl WgpuScene3dRenderer {
             max_pixels: 16_777_216,
             color_msaa4: supports_msaa(wgpu::TextureFormat::Rgba16Float)
                 && supports_msaa(wgpu::TextureFormat::Depth32Float),
+            linear_color_msaa4: supports_msaa(wgpu::TextureFormat::Rgba16Float)
+                && supports_msaa(wgpu::TextureFormat::Depth32Float)
+                && context
+                    .adapter
+                    .get_texture_format_features(wgpu::TextureFormat::Rgba16Float)
+                    .flags
+                    .contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE),
             max_readback_buffer_bytes: context.device.limits().max_buffer_size,
             geometry_outputs: [
                 wgpu::TextureFormat::R32Float,
@@ -326,7 +347,8 @@ impl WgpuScene3dRenderer {
             label: Some("scene3d.direct"),
         });
         let rect = [0., 0., width as f32, height as f32];
-        let color = if config.channels.color() {
+        let mut linear_color = None;
+        let color = if config.channels.shaded() {
             if self
                 .color
                 .as_ref()
@@ -344,7 +366,13 @@ impl WgpuScene3dRenderer {
             }
             let renderer = &mut self.color.as_mut().unwrap().1;
             renderer.prepare_frames(device, [frame], width, height);
-            let texture = output_texture(device, config.size, wgpu::TextureFormat::Rgba8Unorm);
+            let texture = config
+                .channels
+                .color()
+                .then(|| output_texture(device, config.size, wgpu::TextureFormat::Rgba8Unorm));
+            let view = texture
+                .as_ref()
+                .map(|texture| texture.create_view(&Default::default()));
             renderer.encode_frame(
                 device,
                 queue,
@@ -353,10 +381,15 @@ impl WgpuScene3dRenderer {
                 rect,
                 0,
                 None,
-                &texture.create_view(&Default::default()),
+                view.as_ref(),
                 &mut encoder,
             );
-            Some(texture)
+            if config.channels.contains(Scene3dChannels::LINEAR_COLOR) {
+                let output = output_texture(device, config.size, wgpu::TextureFormat::Rgba16Float);
+                renderer.copy_linear_color(&output, &mut encoder);
+                linear_color = Some(output);
+            }
+            texture
         } else {
             self.color = None;
             None
@@ -387,7 +420,7 @@ impl WgpuScene3dRenderer {
                 rect,
                 0,
                 None,
-                &texture.create_view(&Default::default()),
+                Some(&texture.create_view(&Default::default())),
                 &mut encoder,
             );
             *output = Some(texture);
@@ -401,6 +434,7 @@ impl WgpuScene3dRenderer {
             ids,
             depth,
             normals,
+            linear_color,
             readback_busy: self.readback_busy.clone(),
         })
     }
@@ -409,6 +443,7 @@ impl WgpuScene3dRenderer {
 #[derive(Clone, Copy)]
 enum OutputKind {
     Color,
+    LinearColor,
     ObjectId,
     LinearDepth,
     WorldNormal,
@@ -417,6 +452,7 @@ impl OutputKind {
     fn channel(self) -> Scene3dChannels {
         match self {
             Self::Color => Scene3dChannels::COLOR,
+            Self::LinearColor => Scene3dChannels::LINEAR_COLOR,
             Self::ObjectId => Scene3dChannels::OBJECT_ID,
             Self::LinearDepth => Scene3dChannels::LINEAR_DEPTH,
             Self::WorldNormal => Scene3dChannels::WORLD_NORMAL,
@@ -425,6 +461,7 @@ impl OutputKind {
     fn format(self) -> wgpu::TextureFormat {
         match self {
             Self::Color => wgpu::TextureFormat::Rgba8Unorm,
+            Self::LinearColor => wgpu::TextureFormat::Rgba16Float,
             Self::ObjectId => wgpu::TextureFormat::R32Uint,
             Self::LinearDepth => wgpu::TextureFormat::R32Float,
             Self::WorldNormal => wgpu::TextureFormat::Rgba32Float,
@@ -433,6 +470,8 @@ impl OutputKind {
     fn bytes_per_pixel(self) -> u32 {
         if matches!(self, Self::WorldNormal) {
             16
+        } else if matches!(self, Self::LinearColor) {
+            8
         } else {
             4
         }
@@ -462,7 +501,12 @@ fn output_texture(
         format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | if format == wgpu::TextureFormat::Rgba16Float {
+                wgpu::TextureUsages::COPY_DST
+            } else {
+                wgpu::TextureUsages::empty()
+            },
         view_formats: &[],
     })
 }
@@ -473,6 +517,7 @@ pub struct Scene3dGpuOutput {
     context: WgpuContext,
     config: Scene3dOutputConfig,
     color: Option<wgpu::Texture>,
+    linear_color: Option<wgpu::Texture>,
     ids: Option<wgpu::Texture>,
     depth: Option<wgpu::Texture>,
     normals: Option<wgpu::Texture>,
@@ -485,6 +530,11 @@ impl Scene3dGpuOutput {
     /// Premultiplied display-encoded RGBA8 after the frame's exposure and tone mapping.
     pub fn color(&self) -> Option<&wgpu::Texture> {
         self.color.as_ref()
+    }
+    /// Rgba16Float: premultiplied linear HDR before exposure, tone mapping or sRGB encoding.
+    /// Four-sample color averages linear samples; the texture itself is single-sampled.
+    pub fn linear_color(&self) -> Option<&wgpu::Texture> {
+        self.linear_color.as_ref()
     }
     /// R32Uint with zero background and exact, unfiltered object IDs.
     pub fn object_ids(&self) -> Option<&wgpu::Texture> {
@@ -530,6 +580,7 @@ impl Scene3dGpuOutput {
                 });
         for (kind, texture) in [
             (OutputKind::Color, self.color.as_ref()),
+            (OutputKind::LinearColor, self.linear_color.as_ref()),
             (OutputKind::ObjectId, self.ids.as_ref()),
             (OutputKind::LinearDepth, self.depth.as_ref()),
             (OutputKind::WorldNormal, self.normals.as_ref()),
@@ -599,6 +650,8 @@ impl Drop for ReadbackPermit {
 pub struct Scene3dPixels {
     pub size: [u32; 2],
     pub rgba: Option<Vec<u8>>,
+    /// Premultiplied linear HDR RGBA, widened from binary16 without display conversion.
+    pub linear_rgba: Option<Vec<[f32; 4]>>,
     pub object_ids: Option<Vec<u32>>,
     /// Positive camera-forward distance per pixel, in scene units; zero background.
     pub linear_depth: Option<Vec<f32>>,
@@ -616,6 +669,21 @@ impl Scene3dPixels {
             .collect::<Vec<_>>();
         match kind {
             OutputKind::Color => self.rgba = Some(packed),
+            OutputKind::LinearColor => {
+                self.linear_rgba = Some(
+                    packed
+                        .chunks_exact(8)
+                        .map(|bytes| {
+                            std::array::from_fn(|i| {
+                                half::f16::from_bits(u16::from_le_bytes(
+                                    bytes[i * 2..i * 2 + 2].try_into().unwrap(),
+                                ))
+                                .to_f32()
+                            })
+                        })
+                        .collect(),
+                );
+            }
             OutputKind::ObjectId => {
                 self.object_ids = Some(
                     packed
@@ -691,6 +759,7 @@ impl Scene3dReadback {
         let mut pixels = Scene3dPixels {
             size: self.size,
             rgba: None,
+            linear_rgba: None,
             object_ids: None,
             linear_depth: None,
             world_normals: None,
@@ -723,6 +792,7 @@ mod tests {
         let mut pixels = Scene3dPixels {
             size: [3, 2],
             rgba: None,
+            linear_rgba: None,
             object_ids: None,
             linear_depth: None,
             world_normals: None,
@@ -763,6 +833,7 @@ mod tests {
             max_dimension: 4096,
             max_pixels: 1_000_000,
             color_msaa4: false,
+            linear_color_msaa4: false,
             max_readback_buffer_bytes: 1024,
             geometry_outputs: true,
         };

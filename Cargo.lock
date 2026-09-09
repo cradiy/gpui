@@ -3185,6 +3185,7 @@ dependencies = [
  "gpui",
  "gpui_effects",
  "gpui_util",
+ "half",
  "itertools 0.14.0",
  "js-sys",
  "log",

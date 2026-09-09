@@ -1618,6 +1618,10 @@ impl PlatformWindow for X11Window {
         self.0.state.borrow().renderer.scene3d_support()
     }
 
+    fn clear_scene3d_caches(&mut self) {
+        self.0.state.borrow_mut().renderer.clear_scene3d_caches();
+    }
+
     fn minimize(&self) {
         let state = self.0.state.borrow();
         const WINDOW_ICONIC_STATE: u32 = 3;

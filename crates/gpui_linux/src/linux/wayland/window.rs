@@ -1874,6 +1874,10 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().renderer.scene3d_support()
     }
 
+    fn clear_scene3d_caches(&mut self) {
+        self.borrow_mut().renderer.clear_scene3d_caches();
+    }
+
     fn minimize(&self) {
         if let Some(toplevel) = self.borrow().surface_state.toplevel() {
             toplevel.set_minimized();

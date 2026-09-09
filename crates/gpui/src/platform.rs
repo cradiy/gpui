@@ -849,6 +849,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         crate::Scene3dSupport::Unsupported(crate::Scene3dUnsupportedReason::BackendUnsupported)
     }
 
+    /// Releases mesh-rendering caches without invalidating shared 2D resources.
+    /// Unsupported backends do nothing. Does not schedule a frame.
+    fn clear_scene3d_caches(&mut self) {}
+
     // macOS specific methods
     fn get_title(&self) -> String {
         String::new()

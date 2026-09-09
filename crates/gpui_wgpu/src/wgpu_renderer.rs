@@ -2199,6 +2199,14 @@ impl WgpuRenderer {
         }
     }
 
+    /// Releases mesh-rendering caches without clearing shared 2D atlas or UI
+    /// capture resources. The next mesh draw rebuilds them lazily.
+    pub fn clear_scene3d_caches(&mut self) {
+        if let Some(resources) = self.resources.as_mut() {
+            resources.scene3d = None;
+        }
+    }
+
     pub fn draw(&mut self, scene: &Scene) -> bool {
         // Bail out early if the surface has been unconfigured (e.g. during
         // Android background/rotation transitions).  Attempting to acquire

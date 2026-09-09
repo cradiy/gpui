@@ -251,6 +251,25 @@ Image decoding and image-file encoding are caller responsibilities. GPUI image
 sources with UI callbacks are not required to be transferable between threads;
 construct the ready scene on the worker when needed.
 
+### Cache release
+
+`HeadlessRenderer::clear_caches()` releases its cached mesh buffers, intermediate
+targets, shadow maps, environment uploads, image mip chains, pipelines, and
+private image atlas. The next render rebuilds resources from the supplied scene.
+It can be called repeatedly, including before the first render. Renderers sharing
+a `WgpuContext` retain independent caches.
+
+Returned frames and pending readbacks remain valid. Clearing caches does not
+cancel a readback or release its concurrency permit. It does not wait for GPU
+completion, destroy the device, or change its capability report. Resources held
+by frames, submitted commands, or other GPU consumers remain allocated until
+those owners release them; immediate physical memory reclamation is not guaranteed.
+
+The lower-level `WgpuScene3dRenderer::clear_caches()` preserves its public image
+atlas and existing tile references. Callers managing that atlas retain ownership
+of its allocation lifetime. Window renderers expose
+`Window::clear_scene3d_caches()` without clearing shared 2D resources.
+
 ## Limits and errors
 
 `capabilities()` reports the device dimension limit, the 16,777,216-pixel output

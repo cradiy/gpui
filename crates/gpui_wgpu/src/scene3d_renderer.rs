@@ -199,6 +199,16 @@ impl WgpuScene3dRenderer {
         &self.device_capabilities
     }
 
+    /// Releases renderer-owned mesh resources, targets, and pipelines.
+    /// Subsequent renders rebuild them lazily. Atlas allocations, returned
+    /// outputs, and pending readbacks remain valid. Does not wait for the GPU.
+    pub fn clear_caches(&mut self) {
+        self.color = None;
+        self.ids = None;
+        self.depth = None;
+        self.normals = None;
+    }
+
     /// Maximum instances in one draw batch for this device's buffer limits.
     pub fn max_instances_per_batch(&self) -> usize {
         crate::wgpu_renderer::scene3d::instance_limit(&self.context.device)

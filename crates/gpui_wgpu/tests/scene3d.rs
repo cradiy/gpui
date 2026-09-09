@@ -119,6 +119,69 @@ fn scene(layer: SubtreeLayer) -> Scene {
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn cache_release_preserves_public_atlas_tiles() -> anyhow::Result<()> {
+    use gpui::{PlatformAtlas, TextureMipFilter3d};
+    use gpui_wgpu::{Scene3dChannels, Scene3dOutputConfig, WgpuScene3dRenderer};
+
+    let mut renderer = WgpuScene3dRenderer::new_headless()?;
+    let atlas = renderer.sprite_atlas().clone();
+    let key = gpui::RenderImageParams {
+        image_id: gpui::ImageId(99002),
+        frame_index: 0,
+    }
+    .into();
+    let tile = atlas
+        .get_or_insert_with(&key, &mut || {
+            Ok(Some((
+                size(DevicePixels(5), DevicePixels(3)),
+                std::borrow::Cow::Owned([128, 128, 128, 255].repeat(15)),
+            )))
+        })?
+        .unwrap();
+    let mut object = mesh(0.2, 0xffffffff, MeshTexture3d::Image(tile));
+    object.sampling.mip_filter = TextureMipFilter3d::Linear;
+    let input = layer(bounds(0., 0., 32., 32.), Scene::default(), vec![object], 1.)
+        .scene3d
+        .unwrap();
+    let config = Scene3dOutputConfig {
+        size: [32, 32],
+        channels: Scene3dChannels::COLOR | Scene3dChannels::OBJECT_ID,
+        color_samples: 1,
+    };
+    let mut outputs = Vec::new();
+    for _ in 0..2 {
+        let output = renderer.render(&input, config)?;
+        renderer.clear_caches();
+        assert!(
+            atlas
+                .get_or_insert_with(&key, &mut || {
+                    anyhow::bail!("a live atlas tile was evicted")
+                })?
+                .is_some()
+        );
+        let mut pending = output.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(pixels) = pending.try_read()? {
+                outputs.push(pixels);
+                break;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    assert_eq!(outputs[0].rgba, outputs[1].rgba);
+    assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+    assert_eq!(outputs[1].object_ids.as_ref().unwrap()[16 * 32 + 16], 1);
+    let offset = (16 * 32 + 16) * 4;
+    let color = &outputs[1].rgba.as_ref().unwrap()[offset..offset + 4];
+    assert!(color[..3].iter().all(|&value| value.abs_diff(128) <= 1));
+    assert_eq!(color[3], 255);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn image_mips_preserve_linear_energy_crop_and_reallocated_atlas_content() -> anyhow::Result<()> {
     use gpui::{PlatformAtlas, TextureColorSpace3d, TextureMipFilter3d};
     use gpui_wgpu::{Scene3dChannels, Scene3dOutputConfig, WgpuScene3dRenderer};

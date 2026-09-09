@@ -44,6 +44,15 @@ impl HeadlessRenderer {
         self.renderer.device_capabilities()
     }
 
+    /// Releases cached GPU resources, including this renderer's image atlas.
+    /// Subsequent renders rebuild resources from the supplied scene. Returned
+    /// frames and pending readbacks remain valid. Does not wait for the GPU.
+    pub fn clear_caches(&mut self) {
+        self.renderer.clear_caches();
+        self.renderer.sprite_atlas().clear();
+        self.images.clear();
+    }
+
     /// Renders the supplied scene without a native window or UI layout. Geometry,
     /// projection, lighting, and alpha modes share the viewport implementation.
     pub fn render(&mut self, scene: &Scene, config: Scene3dOutputConfig) -> Result<RenderedFrame> {

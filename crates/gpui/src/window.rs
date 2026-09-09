@@ -3606,6 +3606,14 @@ impl Window {
         self.platform_window.scene3d_support()
     }
 
+    /// Releases mesh-rendering caches for all 3D viewports in this window.
+    /// Shared 2D atlas and UI capture resources remain valid. The next mesh draw
+    /// rebuilds caches lazily; this does not schedule a frame or wait for the GPU.
+    /// Unsupported backends do nothing.
+    pub fn clear_scene3d_caches(&mut self) {
+        self.platform_window.clear_scene3d_caches();
+    }
+
     /// Draws UI in texture-local coordinates at its own raster density.
     /// Use the same configuration during prepaint and paint inside a 3D capture.
     /// Ancestor masks apply to the final viewport, not to the source texture.

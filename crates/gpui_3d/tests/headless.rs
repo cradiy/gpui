@@ -5,6 +5,99 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn cache_release_preserves_frames_readbacks_and_image_reconstruction() -> anyhow::Result<()> {
+    use gpui_3d::{
+        FrameReadback, Object, Projection, ReadFrame, Scene, Scene3dChannels, TextureMipFilter,
+        TextureSampling,
+    };
+
+    fn read(mut pending: FrameReadback) -> anyhow::Result<ReadFrame> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(result) = pending.try_read()? {
+                return Ok(result);
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_pixel(5, 3, image::Rgba([128, 128, 128, 255])),
+    )]));
+    let camera = Camera {
+        projection: Projection::Orthographic { vertical_size: 3. },
+        ..Default::default()
+    };
+    let scene = Scene::new().camera(camera).object(
+        Object::new(
+            Mesh::plane(),
+            Material::image(image)
+                .unlit(true)
+                .image_sampling(TextureSampling {
+                    mip_filter: TextureMipFilter::Linear,
+                    ..Default::default()
+                }),
+        )
+        .id("image"),
+    );
+    let config = Scene3dOutputConfig {
+        size: [65, 65],
+        channels: Scene3dChannels::all(),
+        color_samples: 1,
+    };
+    let mut renderer = HeadlessRenderer::new()?;
+    renderer.clear_caches();
+    let original = renderer.render(&scene, config)?;
+    let pending = original.readback()?;
+    renderer.clear_caches();
+    renderer.clear_caches();
+    let rebuilt = renderer.render(&scene, config)?;
+    assert!(rebuilt.readback().is_err());
+
+    let resized_scene = Scene::new()
+        .camera(camera)
+        .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff)).unlit(true)).id("solid"));
+    let resized = renderer.render(
+        &resized_scene,
+        Scene3dOutputConfig {
+            size: [33, 33],
+            ..config
+        },
+    )?;
+    renderer.clear_caches();
+    drop(renderer);
+
+    let first = read(pending)?;
+    let second = read(rebuilt.readback()?)?;
+    assert_eq!(first.pixels.size, [65, 65]);
+    assert_eq!(first.pixels.rgba, second.pixels.rgba);
+    assert_eq!(first.pixels.linear_rgba, second.pixels.linear_rgba);
+    assert_eq!(first.pixels.object_ids, second.pixels.object_ids);
+    assert_eq!(first.pixels.linear_depth, second.pixels.linear_depth);
+    assert_eq!(first.pixels.world_normals, second.pixels.world_normals);
+    assert_eq!(first.object_at(32, 32).unwrap().id, Some("image".into()));
+    let offset = (32 * 65 + 32) * 4;
+    let color = &first.pixels.rgba.as_ref().unwrap()[offset..offset + 4];
+    assert!(color[..3].iter().all(|&value| value.abs_diff(128) <= 1));
+    assert_eq!(color[3], 255);
+
+    let third = read(resized.readback()?)?;
+    assert_eq!(third.pixels.size, [33, 33]);
+    assert_eq!(third.object_at(16, 16).unwrap().id, Some("solid".into()));
+    let offset = (16 * 33 + 16) * 4;
+    assert_eq!(
+        &third.pixels.rgba.as_ref().unwrap()[offset..offset + 4],
+        &[255; 4]
+    );
+    let retained = read(original.readback()?)?;
+    assert_eq!(first.pixels.rgba, retained.pixels.rgba);
+    assert_eq!(first.pixels.object_ids, retained.pixels.object_ids);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn specular_ibl_resolves_cube_mips_brdf_energy_and_geometry_independence() -> anyhow::Result<()> {
     use gpui_3d::{
         Light, Object, PbrMaterial, Projection, Scene, Scene3dChannels, SpecularEnvironment,

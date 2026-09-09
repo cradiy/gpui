@@ -1912,6 +1912,14 @@ run when GPUI repaints; there is no autonomous background render loop.
 UI texture targets and their rendering resources are reused while attached;
 pixel-size changes resize the capture targets independently of the window.
 
+`Window::clear_scene3d_caches()` releases mesh buffers, intermediate mesh targets,
+shadow maps, environment uploads, image mip chains, and mesh pipelines for all
+viewports in that window. Shared 2D atlas entries, UI capture textures, and generic
+subtree-effect resources remain intact. The next mesh draw rebuilds its caches.
+The call does not request a repaint or wait for GPU completion, and unsupported
+backends do nothing. In-flight commands retain the resources they use, so release
+does not guarantee an immediate reduction in physical GPU memory use.
+
 ## Headless output
 
 The optional `wgpu` feature provides `HeadlessRenderer` for the same scenes without

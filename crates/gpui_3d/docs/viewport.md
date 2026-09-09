@@ -997,6 +997,62 @@ all channels before evaluating a snapshot. Additive or relative motion can be
 expressed by composing a sampled transform with an authored affine transform
 before passing it to `evaluate_with_transforms`.
 
+### Transform constraints
+
+`SceneGraph::evaluate_with_constraints(transforms, constraints)` evaluates local
+pose overrides and stateless world-transform constraints in one snapshot. Each
+constraint is paired with the handle of the node it controls. `Follow` computes
+`target.world * offset`, replacing the controlled node's world transform. Its
+authored or supplied local transform is not applied; encode the attachment
+offset explicitly. Full affine offsets preserve scale, shear, and reflection.
+
+```rust
+use gpui_3d::{AffineTransform, Node, SceneGraph, TransformConstraint};
+
+let mut graph = SceneGraph::new();
+let target = graph.insert(None, Node::new())?;
+let parent = graph.insert(None, Node::new())?;
+let attached = graph.insert(Some(parent), Node::new())?;
+let target_pose = AffineTransform::from_translation([2., 0., 0.])?;
+let offset = AffineTransform::from_translation([0., 0.5, 0.])?;
+let pose = graph.evaluate_with_constraints(
+    [(target, target_pose)],
+    [(attached, TransformConstraint::Follow { target, offset })],
+)?;
+let world = pose.node(attached).unwrap().world;
+assert_eq!(world.transform_point([0.; 3]), [2., 0.5, 0.]);
+
+let parent_world = pose.node(parent).unwrap().world;
+let released_local = parent_world.inverse().compose(world)?;
+let released = graph.evaluate_with_constraints([(attached, released_local)], [])?;
+assert_eq!(released.node(attached).unwrap().world, world);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Targets use their final constrained transforms, including their own ancestors
+and pose overrides. Input order does not determine evaluation order. Chained
+attachments are supported, while self references, descendant targets, and
+indirect dependency cycles return `SceneError::ConstraintCycle` with a closed
+path of participating handles. Both parent and target links are dependencies.
+Expired or foreign targets identify the owner and target in
+`InvalidConstraintTarget`; duplicate owner constraints are rejected. A node
+may have both a local pose override and a constraint, but only one of each.
+
+Constraints do not reparent nodes or transfer visibility from targets. Hidden
+targets are evaluated normally; controlled nodes retain visibility inherited
+from their authored hierarchy. Children inherit the constrained world transform.
+Camera and light properties, bounds, spatial queries, and renderer preparation
+use the same final transforms. Hierarchy traversal order and frame-local object
+identity ordering are unchanged.
+
+The graph, its revision, and retained snapshots are not modified. Callers own
+the constraint list and can evaluate any sampled pose without playback history.
+Omitting a constraint restores the authored or supplied local transform. To
+release an attachment while preserving its current world transform, supply
+`parent.world.inverse() * node.world` as the replacement local transform and
+retain the same evaluated parent pose; for roots, use the world transform itself.
+Persistent hierarchy changes use `reparent` instead.
+
 ## Materials and light
 
 - `Material::color(color)` creates a lit solid surface.

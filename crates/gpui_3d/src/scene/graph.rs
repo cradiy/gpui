@@ -119,6 +119,12 @@ pub enum SceneError {
     InvalidHandle(NodeHandle),
     DuplicateId(ObjectId),
     DuplicateTransform(NodeHandle),
+    DuplicateConstraint(NodeHandle),
+    InvalidConstraintTarget {
+        node: NodeHandle,
+        target: NodeHandle,
+    },
+    ConstraintCycle(Vec<NodeHandle>),
     Cycle(NodeHandle),
     NoMesh(NodeHandle),
     NoCamera(NodeHandle),
@@ -143,6 +149,14 @@ impl fmt::Display for SceneError {
             Self::DuplicateTransform(node) => {
                 write!(f, "duplicate local transform for node {node:?}")
             }
+            Self::DuplicateConstraint(node) => write!(f, "duplicate constraint for node {node:?}"),
+            Self::InvalidConstraintTarget { node, target } => {
+                write!(
+                    f,
+                    "constraint on node {node:?} references unknown or expired target {target:?}"
+                )
+            }
+            Self::ConstraintCycle(path) => write!(f, "transform dependency cycle: {path:?}"),
             Self::Cycle(node) => write!(f, "parent assignment would create a cycle at {node:?}"),
             Self::NoMesh(node) => write!(f, "node {node:?} has no mesh"),
             Self::NoCamera(node) => write!(f, "node {node:?} has no camera"),
@@ -596,6 +610,28 @@ impl SceneGraph {
                 return Err(SceneError::DuplicateTransform(handle));
             }
         }
+        self.evaluate_using(|handle, parent| {
+            parent
+                .compose(
+                    locals
+                        .get(&handle.key)
+                        .copied()
+                        .unwrap_or(self.nodes[handle.key].node.local),
+                )
+                .map_err(|source| SceneError::InvalidTransform {
+                    node: handle,
+                    source,
+                })
+        })
+    }
+
+    pub(super) fn evaluate_using(
+        &self,
+        mut world_transform: impl FnMut(
+            NodeHandle,
+            AffineTransform,
+        ) -> Result<AffineTransform, SceneError>,
+    ) -> Result<EvaluatedScene, SceneError> {
         let mut evaluated = EvaluatedScene {
             preparation_revision: Arc::new(()),
             revision: self.revision,
@@ -619,13 +655,10 @@ impl SceneGraph {
             let node = &entry.node;
             let handle = self.handle(key);
             let parent: Option<&EvaluatedNode> = parent_index.map(|i| &evaluated.nodes[i]);
-            let world = parent
-                .map_or(AffineTransform::IDENTITY, |parent| parent.world)
-                .compose(locals.get(&key).copied().unwrap_or(node.local))
-                .map_err(|source| SceneError::InvalidTransform {
-                    node: handle,
-                    source,
-                })?;
+            let world = world_transform(
+                handle,
+                parent.map_or(AffineTransform::IDENTITY, |parent| parent.world),
+            )?;
             let visible = !node.hidden && parent.is_none_or(|parent| parent.visible);
             let camera = node
                 .camera
@@ -743,7 +776,7 @@ pub struct EvaluatedScene {
     spatial_source: Arc<Vec<crate::spatial::bvh::IndexObject>>,
 }
 impl EvaluatedScene {
-    /// Source graph revision. Local transform overrides are not part of this value;
+    /// Source graph revision. Transform overrides and constraints are not part of this value;
     /// equal revisions do not imply equal evaluated poses.
     pub fn revision(&self) -> u64 {
         self.revision

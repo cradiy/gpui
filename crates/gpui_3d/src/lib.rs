@@ -45,7 +45,7 @@ pub use render::{
 };
 pub use scene::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ReparentMode, Scene, SceneError,
-    SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode,
+    SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode, TransformConstraint,
 };
 pub use spatial::{Hit, PickBehavior};
 

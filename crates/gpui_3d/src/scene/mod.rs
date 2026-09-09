@@ -1,4 +1,6 @@
+mod constraints;
 mod graph;
+pub use constraints::TransformConstraint;
 pub use graph::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
     SceneSubtree, SubtreeInstance, SubtreeNode,

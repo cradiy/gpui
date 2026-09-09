@@ -10,8 +10,8 @@ pub use crate::RenderObject;
 use crate::{Scene, TextureSource, TextureState};
 
 pub use gpui_wgpu::{
-    Scene3dCapabilities, Scene3dChannels, Scene3dDrawStatistics, Scene3dOutputConfig,
-    Scene3dPixels, WgpuContext,
+    Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities, Scene3dDrawStatistics,
+    Scene3dFormatCapabilities, Scene3dOutputConfig, Scene3dPixels, WgpuContext,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load
@@ -39,6 +39,9 @@ impl HeadlessRenderer {
     }
     pub fn capabilities(&self) -> Scene3dCapabilities {
         self.renderer.capabilities()
+    }
+    pub fn device_capabilities(&self) -> &Scene3dDeviceCapabilities {
+        self.renderer.device_capabilities()
     }
 
     /// Renders the supplied scene without a native window or UI layout. Geometry,

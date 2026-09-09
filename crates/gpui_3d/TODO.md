@@ -86,6 +86,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Depth and normal outputs**: Selectable R32Float camera-forward depth and Rgba32Float world-space vertex normals, pixel-center nearest-surface coverage, owned GPU textures, and bounded floating-point readback. Normal maps do not perturb geometry channels.
 - [x] **HDR output**: Independently selectable premultiplied linear RGBA16Float textures, linear MSAA resolve, owned frames, and f32 readback before exposure and display mapping.
 - [ ] **Capabilities and diagnostics**: Query formats, channels, sample counts, limits, and backend support; return actionable asset and rendering failures.
+  - [x] **WGPU device reports**: Adapter/device feature separation, format usages and flags, output/channel/sample queries, enabled limits, image anisotropy, and pre-construction mesh-pipeline validation.
+  - [ ] **Viewport backend reports**: Surface-path support and unsupported-backend diagnostics independent of direct WGPU rendering.
 - [ ] **Viewport-sized render targets**: Allocate color, depth, and MSAA targets to viewport bounds, with configurable resolution and sample count to limit GPU memory use.
 - [ ] **On-demand updates**: Track scene, camera, and UI texture invalidation separately; reuse results when static, invisible, or paused without continuously requesting frames.
 - [ ] **Culling and instancing**: Frustum culling, instanced rendering of shared geometry, and material batching with reproducible benchmarks.

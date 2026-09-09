@@ -152,6 +152,94 @@ pub(crate) fn instance_limit(device: &wgpu::Device) -> usize {
         .min(u64::from(u32::MAX)) as usize
 }
 
+pub(crate) fn validate_device_limits(limits: &wgpu::Limits) -> anyhow::Result<()> {
+    let bindings = material_bindings(false);
+    let count = |predicate: fn(&wgpu::BindGroupLayoutEntry) -> bool| {
+        bindings.iter().filter(|entry| predicate(entry)).count() as u64
+    };
+    let attributes = 4 + Instance::layout().attributes.len() as u64;
+    let uniform_size = std::mem::size_of::<Params>() as u64;
+    for (name, actual, required) in [
+        ("max_bind_groups", u64::from(limits.max_bind_groups), 1),
+        (
+            "max_bindings_per_bind_group",
+            u64::from(limits.max_bindings_per_bind_group),
+            bindings.len() as u64,
+        ),
+        (
+            "max_sampled_textures_per_shader_stage",
+            u64::from(limits.max_sampled_textures_per_shader_stage),
+            count(|entry| matches!(entry.ty, wgpu::BindingType::Texture { .. })),
+        ),
+        (
+            "max_samplers_per_shader_stage",
+            u64::from(limits.max_samplers_per_shader_stage),
+            count(|entry| matches!(entry.ty, wgpu::BindingType::Sampler(_))),
+        ),
+        (
+            "max_uniform_buffers_per_shader_stage",
+            u64::from(limits.max_uniform_buffers_per_shader_stage),
+            1,
+        ),
+        (
+            "max_uniform_buffer_binding_size",
+            limits.max_uniform_buffer_binding_size,
+            uniform_size,
+        ),
+        (
+            "max_buffer_size",
+            limits.max_buffer_size,
+            uniform_size + std::mem::size_of::<Instance>() as u64,
+        ),
+        (
+            "max_vertex_buffers",
+            u64::from(limits.max_vertex_buffers),
+            2,
+        ),
+        (
+            "max_vertex_attributes",
+            u64::from(limits.max_vertex_attributes),
+            attributes,
+        ),
+        (
+            "max_vertex_buffer_array_stride",
+            u64::from(limits.max_vertex_buffer_array_stride),
+            std::mem::size_of::<Instance>().max(std::mem::size_of::<Vertex>()) as u64,
+        ),
+        (
+            "max_inter_stage_shader_variables",
+            u64::from(limits.max_inter_stage_shader_variables),
+            7,
+        ),
+        (
+            "max_color_attachments",
+            u64::from(limits.max_color_attachments),
+            1,
+        ),
+        (
+            "max_color_attachment_bytes_per_sample",
+            u64::from(limits.max_color_attachment_bytes_per_sample),
+            8,
+        ),
+        (
+            "max_texture_array_layers",
+            u64::from(limits.max_texture_array_layers),
+            6,
+        ),
+        (
+            "max_texture_dimension_2d",
+            u64::from(limits.max_texture_dimension_2d),
+            1024,
+        ),
+    ] {
+        anyhow::ensure!(
+            actual >= required,
+            "3D rendering requires {name} >= {required}, device enables {actual}"
+        );
+    }
+    Ok(())
+}
+
 fn instance_buffer(device: &wgpu::Device, count: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("mesh_instances"),

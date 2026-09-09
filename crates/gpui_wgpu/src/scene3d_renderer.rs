@@ -11,6 +11,8 @@ use crate::{WgpuAtlas, WgpuContext, wgpu_renderer::scene3d::Scene3dRenderer};
 
 mod statistics;
 pub use statistics::Scene3dDrawStatistics;
+mod capabilities;
+pub use capabilities::{Scene3dDeviceCapabilities, Scene3dFormatCapabilities};
 
 bitflags::bitflags! {
     /// Independently selectable outputs. Non-color channels use the pixel center.
@@ -74,17 +76,39 @@ pub struct Scene3dCapabilities {
     pub geometry_outputs: bool,
 }
 impl Scene3dCapabilities {
+    /// Channels exposed by this renderer, including the joint depth/normal path.
+    pub fn channels(self) -> Scene3dChannels {
+        let mut channels =
+            Scene3dChannels::COLOR | Scene3dChannels::LINEAR_COLOR | Scene3dChannels::OBJECT_ID;
+        if self.geometry_outputs {
+            channels |= Scene3dChannels::LINEAR_DEPTH | Scene3dChannels::WORLD_NORMAL;
+        }
+        channels
+    }
+
+    /// Color sample counts accepted for a channel selection. Geometry channels
+    /// remain pixel-center sampled regardless of the chosen color sample count.
+    pub fn color_sample_counts(self, channels: Scene3dChannels) -> &'static [u32] {
+        if channels.is_empty() || !self.channels().contains(channels) {
+            &[]
+        } else if (channels.color() && !self.color_msaa4)
+            || (channels.contains(Scene3dChannels::LINEAR_COLOR) && !self.linear_color_msaa4)
+        {
+            &[1]
+        } else {
+            &[1, 4]
+        }
+    }
+
     pub fn validate(self, config: Scene3dOutputConfig) -> Result<()> {
         ensure!(
             !config.channels.is_empty() && Scene3dChannels::all().contains(config.channels),
             "3D outputs must select known channels"
         );
         ensure!(
-            self.geometry_outputs
-                || !config
-                    .channels
-                    .intersects(Scene3dChannels::LINEAR_DEPTH | Scene3dChannels::WORLD_NORMAL),
-            "3D geometry output formats are unavailable on this device"
+            self.channels().contains(config.channels),
+            "3D output channels {:?} are unavailable on this device",
+            config.channels - self.channels()
         );
         let [width, height] = config.size;
         ensure!(
@@ -137,6 +161,7 @@ pub struct WgpuScene3dRenderer {
     depth: Option<Scene3dRenderer>,
     normals: Option<Scene3dRenderer>,
     capabilities: Scene3dCapabilities,
+    device_capabilities: Scene3dDeviceCapabilities,
     readback_busy: Arc<AtomicBool>,
 }
 impl WgpuScene3dRenderer {
@@ -146,56 +171,8 @@ impl WgpuScene3dRenderer {
     }
 
     pub fn new(context: WgpuContext) -> Result<Self> {
-        let usages = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC;
-        for format in [
-            wgpu::TextureFormat::Rgba8Unorm,
-            wgpu::TextureFormat::Rgba16Float,
-            wgpu::TextureFormat::R32Uint,
-        ] {
-            ensure!(
-                context
-                    .adapter
-                    .get_texture_format_features(format)
-                    .allowed_usages
-                    .contains(usages),
-                "3D output format {format:?} is unavailable"
-            );
-        }
-        let supports_msaa = |format| {
-            context
-                .adapter
-                .get_texture_format_features(format)
-                .flags
-                .contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4)
-        };
-        let capabilities = Scene3dCapabilities {
-            max_dimension: context.device.limits().max_texture_dimension_2d,
-            max_pixels: 16_777_216,
-            color_msaa4: supports_msaa(wgpu::TextureFormat::Rgba16Float)
-                && supports_msaa(wgpu::TextureFormat::Depth32Float),
-            linear_color_msaa4: supports_msaa(wgpu::TextureFormat::Rgba16Float)
-                && supports_msaa(wgpu::TextureFormat::Depth32Float)
-                && context
-                    .adapter
-                    .get_texture_format_features(wgpu::TextureFormat::Rgba16Float)
-                    .flags
-                    .contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE),
-            max_readback_buffer_bytes: context.device.limits().max_buffer_size,
-            geometry_outputs: [
-                wgpu::TextureFormat::R32Float,
-                wgpu::TextureFormat::Rgba32Float,
-            ]
-            .into_iter()
-            .all(|format| {
-                context
-                    .adapter
-                    .get_texture_format_features(format)
-                    .allowed_usages
-                    .contains(usages)
-            }),
-        };
+        let device_capabilities = Scene3dDeviceCapabilities::query(&context);
+        let capabilities = device_capabilities.rendering()?;
         Ok(Self {
             atlas: Arc::new(WgpuAtlas::from_context(&context)),
             context,
@@ -204,6 +181,7 @@ impl WgpuScene3dRenderer {
             depth: None,
             normals: None,
             capabilities,
+            device_capabilities,
             readback_busy: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -215,6 +193,10 @@ impl WgpuScene3dRenderer {
     }
     pub fn capabilities(&self) -> Scene3dCapabilities {
         self.capabilities
+    }
+
+    pub fn device_capabilities(&self) -> &Scene3dDeviceCapabilities {
+        &self.device_capabilities
     }
 
     /// Maximum instances in one draw batch for this device's buffer limits.

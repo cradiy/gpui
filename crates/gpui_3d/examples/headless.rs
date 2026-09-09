@@ -50,6 +50,19 @@ fn main() -> Result<()> {
                 .scale([4., 4., 1.]),
         );
     let mut renderer = HeadlessRenderer::new()?;
+    let device = renderer.device_capabilities();
+    println!(
+        "Adapter: {} ({:?})",
+        device.adapter_info.name, device.adapter_info.backend
+    );
+    println!(
+        "Channels: {:?}; color samples: {:?}; image anisotropy: {}x",
+        renderer.capabilities().channels(),
+        renderer
+            .capabilities()
+            .color_sample_counts(Scene3dChannels::all()),
+        device.max_image_anisotropy,
+    );
     let frame = renderer.render(
         &scene,
         Scene3dOutputConfig {

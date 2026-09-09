@@ -254,12 +254,55 @@ construct the ready scene on the worker when needed.
 ## Limits and errors
 
 `capabilities()` reports the device dimension limit, the 16,777,216-pixel output
-budget, and separate four-sample display/HDR color support. Dimensions must be positive and fit both
-limits. Unsupported sampling, invalid camera/light/object parameters, unavailable
+budget, and separate four-sample display/HDR color support. `channels()` returns
+the available output mask; `color_sample_counts(channels)` returns the supported
+color sample counts for that selection, or an empty slice for unsupported
+channels. Geometry outputs retain pixel-center sampling even when four color
+samples are selected. Dimensions must be positive and fit both limits.
+Unsupported sampling, invalid camera/light/object parameters, unavailable
 images, excessive readback buffer dimensions, and a busy readback return errors.
 Device loss is reported when observed by the supplied GPU context; recovery
 requires replacing the renderer/context. Unrecoverable backend allocation or
 validation failures remain subject to WGPU's device error handling.
+
+### Device capabilities
+
+`device_capabilities()` exposes a snapshot of the current WGPU context: adapter
+name, backend and device type, advertised and enabled features, enabled limits,
+downlevel flags, atlas format, effective image anisotropy, and per-format usage
+and feature flags. Each format distinguishes adapter support from features
+enabled on the device. Inspect the device flags for filtering, blending, sample
+counts, and resolve support; raw format support does not expand the renderer's
+one/four-sample output contract.
+
+Query an existing context before creating a renderer when diagnostics are needed
+even on a device that cannot run the mesh pipeline:
+
+```rust,no_run
+use gpui_3d::{HeadlessRenderer, Scene3dDeviceCapabilities, WgpuContext};
+
+# fn main() -> anyhow::Result<()> {
+let context = WgpuContext::new_headless()?;
+let device = Scene3dDeviceCapabilities::query(&context);
+let outputs = device.rendering()?;
+println!("Backend: {:?}; outputs: {:?}", device.adapter_info.backend, outputs.channels());
+let renderer = HeadlessRenderer::with_context(context)?;
+# Ok(())
+# }
+```
+
+The query does not allocate targets, create pipelines, submit commands, or poll
+the GPU. `rendering()` checks output/image/environment/depth formats, comparison
+samplers, uniform and vertex layouts, binding counts, and resource limits. A
+failure identifies the unavailable format feature or insufficient enabled
+limit. Renderer construction uses the same check. Depth and normal availability
+is reported together through `geometry_outputs`; individual raw format flags
+remain available in the device snapshot.
+
+These reports describe the WGPU mesh path, not native-window presentation or
+other GPUI renderers. They do not guarantee available memory, device health, or
+successful rendering on an unvalidated platform. Query a new context after
+device replacement.
 
 ## Example
 
@@ -268,6 +311,7 @@ cargo run -p gpui_3d --features wgpu --example headless -- /tmp/gpui-3d-outputs
 ```
 
 Creates a scene and writes color, object-ID, depth and normal previews without
-opening a window. It prints each object's identity and visible pixel count.
+opening a window. It prints the adapter and output capabilities, then each
+object's identity and visible pixel count.
 The output directory defaults to `render-output`. ID colors are a display mapping,
 not the exact integer channel. The example uses a bounded polling loop for readback.

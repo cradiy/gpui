@@ -54,6 +54,93 @@ impl Instance {
     }
 }
 
+fn material_bindings(data_output: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
+    let mut bindings = vec![
+        wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Params>() as u64),
+            },
+            count: None,
+        },
+        wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        },
+    ];
+    for binding in if data_output {
+        &[1][..]
+    } else {
+        &[1, 3, 4, 5, 6][..]
+    } {
+        bindings.push(wgpu::BindGroupLayoutEntry {
+            binding: *binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        });
+    }
+    if !data_output {
+        for binding in 12..=15 {
+            bindings.push(wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+        for (binding, dimension) in [
+            (9, wgpu::TextureViewDimension::Cube),
+            (10, wgpu::TextureViewDimension::D2),
+        ] {
+            bindings.push(wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: dimension,
+                    multisampled: false,
+                },
+                count: None,
+            });
+        }
+        bindings.push(wgpu::BindGroupLayoutEntry {
+            binding: 11,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        });
+        bindings.extend([
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 8,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+        ]);
+    }
+    bindings
+}
+
 struct BatchSlot {
     params: wgpu::Buffer,
     instances: wgpu::Buffer,
@@ -310,81 +397,7 @@ impl Scene3dRenderer {
         } else {
             wgpu::TextureFormat::Rgba16Float
         };
-        let mut bindings = vec![
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Params>() as u64),
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ];
-        for binding in if data_output {
-            &[1][..]
-        } else {
-            &[1, 3, 4, 5, 6][..]
-        } {
-            bindings.push(wgpu::BindGroupLayoutEntry {
-                binding: *binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            });
-        }
-        if !data_output {
-            for (binding, dimension) in [
-                (9, wgpu::TextureViewDimension::Cube),
-                (10, wgpu::TextureViewDimension::D2),
-            ] {
-                bindings.push(wgpu::BindGroupLayoutEntry {
-                    binding,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: dimension,
-                        multisampled: false,
-                    },
-                    count: None,
-                });
-            }
-            bindings.push(wgpu::BindGroupLayoutEntry {
-                binding: 11,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
-            bindings.extend([
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                    count: None,
-                },
-            ]);
-        }
+        let bindings = material_bindings(data_output);
         let shadow_pipeline = (!data_output).then(|| {
             let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("scene3d_shadow_material"),
@@ -1746,6 +1759,122 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+    }
+
+    #[test]
+    fn scene3d_pipeline_bindings_cover_each_shader_entry_point() {
+        let module = naga::front::wgsl::parse_str(include_str!("../scene3d.wgsl")).unwrap();
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+        for (index, entry) in module.entry_points.iter().enumerate() {
+            let data_output = matches!(
+                entry.name.as_str(),
+                "object_id" | "linear_depth" | "world_normal"
+            );
+            let mut bindings = material_bindings(data_output);
+            if entry.name.starts_with("shadow_") {
+                bindings.retain(|binding| binding.binding <= 2);
+            }
+            let stage = match entry.stage {
+                naga::ShaderStage::Vertex => wgpu::ShaderStages::VERTEX,
+                naga::ShaderStage::Fragment => wgpu::ShaderStages::FRAGMENT,
+                _ => panic!("unexpected mesh stage"),
+            };
+            for (handle, global) in module.global_variables.iter() {
+                if info.get_entry_point(index)[handle].is_empty() {
+                    continue;
+                }
+                let Some(resource) = &global.binding else {
+                    continue;
+                };
+                assert_eq!(resource.group, 0);
+                let binding = bindings
+                    .iter()
+                    .find(|binding| binding.binding == resource.binding)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{} has no layout for {} at binding {}",
+                            entry.name,
+                            global.name.as_deref().unwrap_or("unnamed"),
+                            resource.binding
+                        )
+                    });
+                assert!(binding.visibility.contains(stage));
+                assert_eq!(binding.count, None);
+                match (&module.types[global.ty].inner, binding.ty) {
+                    (naga::TypeInner::Sampler { comparison }, wgpu::BindingType::Sampler(kind)) => {
+                        assert_eq!(
+                            kind,
+                            if *comparison {
+                                wgpu::SamplerBindingType::Comparison
+                            } else {
+                                wgpu::SamplerBindingType::Filtering
+                            }
+                        );
+                    }
+                    (
+                        naga::TypeInner::Image {
+                            dim,
+                            arrayed,
+                            class,
+                        },
+                        wgpu::BindingType::Texture {
+                            sample_type,
+                            view_dimension,
+                            multisampled,
+                        },
+                    ) => {
+                        assert!(!arrayed);
+                        assert_eq!(
+                            view_dimension,
+                            match dim {
+                                naga::ImageDimension::D2 => wgpu::TextureViewDimension::D2,
+                                naga::ImageDimension::Cube => wgpu::TextureViewDimension::Cube,
+                                _ => panic!("unexpected image dimension"),
+                            }
+                        );
+                        match class {
+                            naga::ImageClass::Sampled {
+                                kind: naga::ScalarKind::Float,
+                                multi,
+                            } => {
+                                assert_eq!(
+                                    sample_type,
+                                    wgpu::TextureSampleType::Float { filterable: true }
+                                );
+                                assert_eq!(multisampled, *multi);
+                            }
+                            naga::ImageClass::Depth { multi } => {
+                                assert_eq!(sample_type, wgpu::TextureSampleType::Depth);
+                                assert_eq!(multisampled, *multi);
+                            }
+                            _ => panic!("unexpected texture class"),
+                        }
+                    }
+                    (
+                        naga::TypeInner::Struct { span, .. },
+                        wgpu::BindingType::Buffer {
+                            ty,
+                            has_dynamic_offset,
+                            min_binding_size,
+                        },
+                    ) => {
+                        assert_eq!(global.space, naga::AddressSpace::Uniform);
+                        assert_eq!(ty, wgpu::BufferBindingType::Uniform);
+                        assert!(!has_dynamic_offset);
+                        assert_eq!(min_binding_size.unwrap().get(), u64::from(*span));
+                    }
+                    _ => panic!(
+                        "{} has an incompatible binding {}",
+                        entry.name, resource.binding
+                    ),
+                }
+            }
+        }
     }
 
     #[test]

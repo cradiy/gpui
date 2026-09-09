@@ -1438,6 +1438,7 @@ mod tests {
             light_direction: [0., 0., 1.],
             light: [1.; 4],
             ambient: 0.3,
+            color_output: Default::default(),
             objects: Arc::default(),
         });
         let mut original = Scene::default();

@@ -36,14 +36,20 @@ struct Geometry {
     count: u32,
 }
 
+struct Targets {
+    depth: wgpu::Texture,
+    hdr: Option<wgpu::Texture>,
+}
+
 pub(crate) struct Scene3dRenderer {
     pipeline: wgpu::RenderPipeline,
+    display_pipeline: Option<wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
     geometry: HashMap<usize, Arc<Geometry>>,
     slots: Vec<wgpu::Buffer>,
     offsets: HashMap<usize, usize>,
-    targets: Option<(wgpu::Texture, wgpu::Texture)>,
+    targets: Option<Targets>,
     format: wgpu::TextureFormat,
     samples: u32,
 }
@@ -59,6 +65,12 @@ impl Scene3dRenderer {
             label: Some("scene3d"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../scene3d.wgsl").into()),
         });
+        let is_id = format == wgpu::TextureFormat::R32Uint;
+        let mesh_format = if is_id {
+            format
+        } else {
+            wgpu::TextureFormat::Rgba16Float
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("scene3d"), layout: None,
             vertex: wgpu::VertexState {
@@ -67,13 +79,48 @@ impl Scene3dRenderer {
                     attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2] })],
             },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(if format == wgpu::TextureFormat::R32Uint { "object_id" } else { "fragment" }), compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+                targets: &[Some(wgpu::ColorTargetState { format: mesh_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(true), depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(), bias: Default::default() }),
             multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
             multiview_mask: None, cache: None,
+        });
+        let display_pipeline = (!is_id).then(|| {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("scene3d_display"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("../scene3d_display.wgsl").into()),
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("scene3d_display"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vertex"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(if samples > 1 {
+                        "fragment_msaa"
+                    } else {
+                        "fragment"
+                    }),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
         });
         let white = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene3d_white"),
@@ -101,6 +148,7 @@ impl Scene3dRenderer {
         );
         Self {
             pipeline,
+            display_pipeline,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
@@ -198,12 +246,10 @@ impl Scene3dRenderer {
             self.targets = None;
             return;
         }
-        if self
-            .targets
-            .as_ref()
-            .is_none_or(|(depth, _)| depth.width() != width || depth.height() != height)
-        {
-            let texture = |format, label| {
+        if self.targets.as_ref().is_none_or(|targets| {
+            targets.depth.width() != width || targets.depth.height() != height
+        }) {
+            let texture = |format, label, sample_count, usage| {
                 device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
                     size: wgpu::Extent3d {
@@ -212,17 +258,30 @@ impl Scene3dRenderer {
                         depth_or_array_layers: 1,
                     },
                     mip_level_count: 1,
-                    sample_count: self.samples,
+                    sample_count,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    usage,
                     view_formats: &[],
                 })
             };
-            self.targets = Some((
-                texture(wgpu::TextureFormat::Depth32Float, "scene3d_depth"),
-                texture(self.format, "scene3d_color"),
-            ));
+            let attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
+            self.targets = Some(Targets {
+                depth: texture(
+                    wgpu::TextureFormat::Depth32Float,
+                    "scene3d_depth",
+                    self.samples,
+                    attachment,
+                ),
+                hdr: self.display_pipeline.as_ref().map(|_| {
+                    texture(
+                        wgpu::TextureFormat::Rgba16Float,
+                        "scene3d_hdr",
+                        self.samples,
+                        attachment | wgpu::TextureUsages::TEXTURE_BINDING,
+                    )
+                }),
+            });
         }
     }
 
@@ -276,7 +335,8 @@ impl Scene3dRenderer {
         destination: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) {
-        let (depth, color) = self.targets.as_ref().unwrap();
+        let targets = self.targets.as_ref().unwrap();
+        let depth = &targets.depth;
         let width = depth.width() as f32;
         let height = depth.height() as f32;
         let layout = self.pipeline.get_bind_group_layout(0);
@@ -296,7 +356,7 @@ impl Scene3dRenderer {
                     (
                         source.expect("UI texture requires a captured subtree"),
                         texture_rect,
-                        1.,
+                        1. + f32::from(self.format.is_srgb()),
                     )
                 }
                 MeshTexture3d::Image(tile) => {
@@ -347,7 +407,7 @@ impl Scene3dRenderer {
                     object.sampling.address_u as u32,
                     object.sampling.address_v as u32,
                     object.sampling.filter as u32,
-                    0,
+                    object.image_color_space as u32,
                 ],
             };
             let buffer = &self.slots[start + index];
@@ -372,16 +432,16 @@ impl Scene3dRenderer {
             }));
         }
         let depth_view = depth.create_view(&Default::default());
-        let color_view = color.create_view(&Default::default());
+        let hdr_view = targets
+            .hdr
+            .as_ref()
+            .map(|texture| texture.create_view(&Default::default()));
+        let mesh_destination = hdr_view.as_ref().unwrap_or(destination);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene3d"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: if self.samples > 1 {
-                    &color_view
-                } else {
-                    destination
-                },
-                resolve_target: (self.samples > 1).then_some(destination),
+                view: mesh_destination,
+                resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -402,17 +462,60 @@ impl Scene3dRenderer {
         let y = rect[1].max(0.).floor() as u32;
         let right = (rect[0] + rect[2]).min(width).ceil().max(0.) as u32;
         let bottom = (rect[1] + rect[3]).min(height).ceil().max(0.) as u32;
-        if right <= x || bottom <= y {
-            return;
+        if right > x && bottom > y {
+            pass.set_scissor_rect(x, y, right - x, bottom - y);
+            pass.set_pipeline(&self.pipeline);
+            for (object, group) in frame.objects.iter().zip(&groups) {
+                let geometry = &self.geometry[&(Arc::as_ptr(&object.mesh) as usize)];
+                pass.set_bind_group(0, group, &[]);
+                pass.set_vertex_buffer(0, geometry.vertices.slice(..));
+                pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..geometry.count, 0, 0..1);
+            }
         }
-        pass.set_scissor_rect(x, y, right - x, bottom - y);
-        pass.set_pipeline(&self.pipeline);
-        for (object, group) in frame.objects.iter().zip(&groups) {
-            let geometry = &self.geometry[&(Arc::as_ptr(&object.mesh) as usize)];
-            pass.set_bind_group(0, group, &[]);
-            pass.set_vertex_buffer(0, geometry.vertices.slice(..));
-            pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..geometry.count, 0, 0..1);
+        drop(pass);
+        if let (Some(pipeline), Some(hdr)) = (&self.display_pipeline, &hdr_view) {
+            let settings = [
+                2.0_f32.powf(frame.color_output.exposure),
+                frame.color_output.tone_mapping as u32 as f32,
+                f32::from(self.format.is_srgb()),
+                0.,
+            ];
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("scene3d_display_params"),
+                contents: bytemuck::cast_slice(&settings),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("scene3d_display"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: if self.samples > 1 { 2 } else { 0 },
+                        resource: wgpu::BindingResource::TextureView(hdr),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: buffer.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene3d_display"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: destination,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..3, 0..1);
         }
     }
 }
@@ -420,6 +523,17 @@ impl Scene3dRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene3d_display_shader_validates() {
+        let module = naga::front::wgsl::parse_str(include_str!("../scene3d_display.wgsl")).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+    }
 
     #[test]
     fn scene3d_shader_validates_and_matches_uniform_layout() {

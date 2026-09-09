@@ -23,6 +23,10 @@ pub use bounds::Aabb;
 pub use camera::{Camera, CameraError, Projection, Ray, RayError, ScreenPoint};
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
+pub use gpui::{
+    ColorOutput3d as ColorOutput, TextureColorSpace3d as TextureColorSpace,
+    ToneMapping3d as ToneMapping,
+};
 use gpui::{ImageSource, Mesh3d, Rgba};
 pub use gpui::{MeshError3d as MeshError, MeshVertexAttribute3d as VertexAttribute};
 pub use gpui::{
@@ -145,9 +149,10 @@ pub struct Material {
     unlit: bool,
     alpha_cutoff: f32,
     sampling: TextureSampling,
+    image_color_space: TextureColorSpace,
 }
 impl Material {
-    /// Creates a lit solid material.
+    /// Creates a lit solid material from an sRGB color.
     pub fn color(color: impl Into<Rgba>) -> Self {
         Self {
             color: color.into(),
@@ -155,6 +160,7 @@ impl Material {
             unlit: false,
             alpha_cutoff: 0.5,
             sampling: TextureSampling::default(),
+            image_color_space: TextureColorSpace::default(),
         }
     }
     /// Uses an image's first decoded frame, stretched over mesh UVs.
@@ -172,7 +178,7 @@ impl Material {
             ..Self::color(gpui::white())
         }
     }
-    /// Sets the color multiplier for sampled RGBA, including alpha cutout.
+    /// Sets an sRGB tint, decoded before multiplication; alpha participates in cutout.
     pub fn tint(mut self, color: impl Into<Rgba>) -> Self {
         self.color = color.into();
         self
@@ -181,6 +187,12 @@ impl Material {
     /// UV mapping and linear edge-clamped sampling.
     pub fn image_sampling(mut self, sampling: TextureSampling) -> Self {
         self.sampling = sampling;
+        self
+    }
+    /// Sets image RGB encoding. Alpha remains linear; solid tint and UI captures
+    /// use sRGB regardless of this setting.
+    pub fn image_color_space(mut self, color_space: TextureColorSpace) -> Self {
+        self.image_color_space = color_space;
         self
     }
     /// Bypasses directional and ambient lighting.
@@ -264,7 +276,7 @@ impl Object {
 pub struct Light {
     /// Direction toward the light in world space.
     pub direction: [f32; 3],
-    /// Light color; alpha is ignored.
+    /// sRGB light color; alpha is ignored.
     pub color: Rgba,
     /// Direct light multiplier.
     pub intensity: f32,
@@ -287,6 +299,7 @@ impl Default for Light {
 pub struct Scene {
     camera: Camera,
     light: Light,
+    color_output: ColorOutput,
     objects: Vec<Object>,
     spatial_index: Arc<OnceLock<bvh::ObjectIndex>>,
 }
@@ -303,6 +316,11 @@ impl Scene {
     /// Sets scene lighting.
     pub fn light(mut self, light: Light) -> Self {
         self.light = light;
+        self
+    }
+    /// Sets exposure and tone mapping for the scene's linear HDR result.
+    pub fn color_output(mut self, output: ColorOutput) -> Self {
+        self.color_output = output;
         self
     }
     /// Adds an object; distinct opaque depths do not depend on insertion order.

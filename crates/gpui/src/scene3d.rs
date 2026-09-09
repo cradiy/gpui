@@ -208,12 +208,14 @@ pub struct MeshDraw3d {
     pub model: [[f32; 4]; 4],
     /// Column-major inverse-transpose model matrix, applied to normals with W = 0.
     pub normal: [[f32; 4]; 4],
-    /// Base tint, multiplied by the texture.
+    /// sRGB base tint, decoded and multiplied by the linear texture color.
     pub color: Rgba,
     /// Material texture.
     pub texture: MeshTexture3d,
     /// Image sampling; solid materials and captured UI textures ignore this.
     pub sampling: crate::TextureSampling3d,
+    /// Image RGB transfer function; does not affect solid colors or captured UI.
+    pub image_color_space: crate::TextureColorSpace3d,
     /// Alpha below this threshold is discarded. Surviving pixels are opaque.
     pub alpha_cutoff: f32,
     /// Bypass directional lighting.
@@ -230,10 +232,12 @@ pub struct Scene3dFrame {
     pub view_projection: [[f32; 4]; 4],
     /// Direction toward the light in world space.
     pub light_direction: [f32; 3],
-    /// Light RGB and intensity multiplier.
+    /// sRGB light RGB and linear intensity multiplier.
     pub light: [f32; 4],
     /// Ambient light multiplier.
     pub ambient: f32,
+    /// HDR-to-display conversion. Does not affect depth or object IDs.
+    pub color_output: crate::ColorOutput3d,
     /// Meshes; opaque visibility is independent of submission order.
     pub objects: Arc<[MeshDraw3d]>,
 }

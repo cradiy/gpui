@@ -5,6 +5,159 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn clipped_highlights_preserve_msaa_edges_against_opaque_surfaces() -> anyhow::Result<()> {
+    use gpui_3d::{Light, Object, Projection, Scene};
+    let mut renderer = HeadlessRenderer::new()?;
+    let mut reference = None;
+    for ambient in [1., 16.] {
+        let scene = Scene::new()
+            .camera(Camera {
+                projection: Projection::Orthographic { vertical_size: 2. },
+                ..Default::default()
+            })
+            .light(Light {
+                ambient,
+                intensity: 0.,
+                ..Default::default()
+            })
+            .object(
+                Object::new(Mesh::plane(), Material::color(rgb(0)))
+                    .position([0., 0., -0.1])
+                    .scale([4., 4., 1.]),
+            )
+            .object(
+                Object::new(Mesh::plane(), Material::color(rgb(0xffffff)))
+                    .rotation([0., 0., 0.37])
+                    .scale([1.35, 0.85, 1.]),
+            );
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(result) = read.try_read()? {
+                break result.pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let rgba = pixels.rgba.as_ref().unwrap();
+        assert!(rgba.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(
+            rgba.chunks_exact(4)
+                .any(|pixel| pixel[0] > 0 && pixel[0] < 255)
+        );
+        if let Some((color, ids)) = &reference {
+            assert_eq!(rgba, color);
+            assert_eq!(&pixels.object_ids, ids);
+        }
+        reference = Some((pixels.rgba.unwrap(), pixels.object_ids));
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn linear_shading_and_display_mapping_preserve_coverage_and_ids() -> anyhow::Result<()> {
+    use gpui_3d::{
+        ColorOutput, Light, Object, Scene, TextureColorSpace, TextureSampling, ToneMapping,
+        UvTransform,
+    };
+    let mut renderer = HeadlessRenderer::new()?;
+    let image = |bytes| {
+        std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::from_raw(2, 1, bytes).unwrap(),
+        )]))
+    };
+    let gray = image(vec![128, 128, 128, 255, 128, 128, 128, 255]);
+    let edges = image(vec![0, 0, 0, 255, 255, 255, 255, 255]);
+    let midpoint = TextureSampling {
+        transform: UvTransform::from_rows([[0., 0., 0.5], [0., 0., 0.5]])?,
+        ..Default::default()
+    };
+    let white = Material::color(rgb(0xffffff));
+    let mut ids = None;
+    let mut coverage = None;
+    for (material, ambient, exposure, tone_mapping, expected) in [
+        (white.clone(), 0.25, 0., ToneMapping::None, 137_u8),
+        (white.clone(), 4., -2., ToneMapping::None, 255),
+        (white.clone(), 4., 0., ToneMapping::Reinhard, 231),
+        (white, 4., -2., ToneMapping::Reinhard, 188),
+        (
+            Material::image(gray.clone()).unlit(true),
+            0.,
+            0.,
+            ToneMapping::None,
+            128,
+        ),
+        (
+            Material::image(gray)
+                .unlit(true)
+                .image_color_space(TextureColorSpace::Linear),
+            0.,
+            0.,
+            ToneMapping::None,
+            188,
+        ),
+        (
+            Material::image(edges).unlit(true).image_sampling(midpoint),
+            0.,
+            0.,
+            ToneMapping::None,
+            188,
+        ),
+    ] {
+        let scene = Scene::new()
+            .light(Light {
+                ambient,
+                intensity: 0.,
+                ..Default::default()
+            })
+            .color_output(ColorOutput {
+                exposure,
+                tone_mapping,
+            })
+            .object(Object::new(Mesh::plane(), material).id("surface"));
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(pixels) = read.try_read()? {
+                break pixels.pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let rgba = pixels.rgba.unwrap();
+        let center = (32 * 65 + 32) * 4;
+        for value in &rgba[center..center + 3] {
+            assert!(value.abs_diff(expected) <= 1, "{value} != {expected}");
+        }
+        assert_eq!(rgba[center + 3], 255);
+        assert_eq!(&rgba[..4], &[0; 4]);
+        for pixel in rgba.chunks_exact(4) {
+            for channel in &pixel[..3] {
+                let expected = f32::from(expected) * f32::from(pixel[3]) / 255.;
+                assert!((f32::from(*channel) - expected).abs() <= 2.);
+            }
+        }
+        let alpha = rgba
+            .chunks_exact(4)
+            .map(|pixel| pixel[3])
+            .collect::<Vec<_>>();
+        if let Some(previous) = &ids {
+            assert_eq!(previous, &pixels.object_ids);
+        }
+        if let Some(previous) = &coverage {
+            assert_eq!(previous, &alpha);
+        }
+        ids = Some(pixels.object_ids);
+        coverage = Some(alpha);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn image_sampler_controls_color_and_id_cutouts() -> anyhow::Result<()> {
     use gpui_3d::{
         Object, Scene, TextureAddressMode as Address, TextureFilter as Filter, TextureSampling,

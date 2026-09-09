@@ -30,10 +30,19 @@ fn address_texel(value: i32, extent: i32, mode: u32) -> i32 {
     if (mode == 1u) { return ((value % extent) + extent) % extent; }
     return clamp(value, 0, extent - 1);
 }
+fn srgb_to_linear(value: vec3<f32>) -> vec3<f32> {
+    let c = clamp(value, vec3<f32>(0.0), vec3<f32>(1.0));
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+}
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * c, c <= vec3<f32>(0.0031308));
+}
 fn image_texel(pixel: vec2<i32>, extent: vec2<i32>) -> vec4<f32> {
     let addressed = vec2<i32>(address_texel(pixel.x, extent.x, params.sampling.x),
         address_texel(pixel.y, extent.y, params.sampling.y));
-    return textureLoad(image, vec2<i32>(params.texture_rect.xy) + addressed, 0);
+    let texel = textureLoad(image, vec2<i32>(params.texture_rect.xy) + addressed, 0);
+    if (params.sampling.w == 0u) { return vec4<f32>(srgb_to_linear(texel.rgb), texel.a); }
+    return texel;
 }
 fn sample_image(uv: vec2<f32>) -> vec4<f32> {
     let mapped = vec2<f32>(dot(params.uv_u.xyz, vec3<f32>(uv, 1.0)),
@@ -58,9 +67,11 @@ fn base_color(input: Output) -> vec4<f32> {
     } else {
         let uv = (params.texture_rect.xy + vec2<f32>(0.5) + clamp(input.uv, vec2<f32>(0.0), vec2<f32>(1.0)) * max(params.texture_rect.zw - 1.0, vec2<f32>(0.0))) / vec2<f32>(textureDimensions(image));
         sampled = textureSampleLevel(image, image_sampler, uv, 0.0);
+        if (params.flags.z > 1.5) { sampled = vec4<f32>(linear_to_srgb(sampled.rgb), sampled.a); }
+        if (params.flags.z > 0.5) { sampled = vec4<f32>(sampled.rgb / max(sampled.a, 0.00001), sampled.a); }
+        sampled = vec4<f32>(srgb_to_linear(sampled.rgb), sampled.a);
     }
-    if (params.flags.z > 0.5) { sampled = vec4<f32>(sampled.rgb / max(sampled.a, 0.00001), sampled.a); }
-    let base = sampled * params.color;
+    let base = sampled * vec4<f32>(srgb_to_linear(params.color.rgb), params.color.a);
     if (base.a < params.flags.x) { discard; }
     return base;
 }
@@ -76,7 +87,7 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
     if (params.flags.y < 0.5) {
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front);
         let light = params.direction.xyz / max(length(params.direction.xyz), 0.00001);
-        illumination = vec3<f32>(params.direction.w) + params.light.rgb * params.light.a * max(dot(normal, light), 0.0);
+        illumination = vec3<f32>(params.direction.w) + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);
     }
-    return vec4<f32>(base.rgb * illumination, 1.0);
+    return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)), 1.0);
 }

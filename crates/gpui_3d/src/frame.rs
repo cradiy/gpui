@@ -10,6 +10,10 @@ impl Scene {
         mut resolve: impl FnMut(usize, &Texture) -> Result<Option<MeshTexture3d>>,
     ) -> Result<Scene3dFrame> {
         let view_projection = self.camera.view_projection(aspect)?;
+        ensure!(
+            self.color_output.is_valid(),
+            "scene exposure must be finite and between -16 and 16 stops"
+        );
         let light = self.light;
         ensure!(
             light
@@ -71,6 +75,7 @@ impl Scene {
                 color,
                 texture,
                 sampling: object.material.sampling,
+                image_color_space: object.material.image_color_space,
                 alpha_cutoff: object.material.alpha_cutoff,
                 unlit: object.material.unlit,
             });
@@ -86,6 +91,7 @@ impl Scene {
                 light.intensity.max(0.),
             ],
             ambient: light.ambient.max(0.),
+            color_output: self.color_output,
             objects: objects.into(),
         })
     }
@@ -173,5 +179,17 @@ mod tests {
                 .prepare_frame(1., None, |_, _| anyhow::bail!("image unavailable"))
                 .is_err()
         );
+        for exposure in [f32::NAN, f32::INFINITY, -17., 17.] {
+            assert!(
+                scene
+                    .clone()
+                    .color_output(crate::ColorOutput {
+                        exposure,
+                        ..Default::default()
+                    })
+                    .prepare_frame(1., None, |_, _| unreachable!())
+                    .is_err()
+            );
+        }
     }
 }

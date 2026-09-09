@@ -433,7 +433,7 @@ capabilities. The viewport still resolves image resources during rendering.
   image source stable across renders. An object is omitted while its image is unavailable.
 - `Material::ui()` samples the viewport's captured UI without lighting.
 - `.unlit(true)` disables lighting for any material.
-- `.tint(color)` sets the sampled RGBA multiplier; its alpha participates in cutout.
+- `.tint(color)` sets an sRGB tint, decoded before multiplication; its alpha participates in cutout.
 - `.alpha_cutoff(value)` discards low-alpha pixels. Remaining pixels are opaque
   and write depth; fractional material transparency is not blended.
 
@@ -442,6 +442,45 @@ ambient strength. Lighting is a basic diffuse model, without shadows, reflection
 or physically based material parameters. Distinct opaque surfaces occlude each
 other independently of object submission order. Coplanar surfaces should be
 separated to avoid depth conflicts.
+
+### Color and exposure
+
+```rust
+use gpui_3d::{ColorOutput, Material, Scene, TextureColorSpace, ToneMapping};
+
+let material = Material::image("albedo.png")
+    .image_color_space(TextureColorSpace::Srgb);
+let scene = Scene::new().color_output(ColorOutput {
+    exposure: -1.,
+    tone_mapping: ToneMapping::Reinhard,
+});
+```
+
+Solid colors, material tints and light colors use sRGB RGB values in `[0, 1]`;
+values outside that range are clamped. Image RGB defaults to `TextureColorSpace::Srgb`
+and is decoded before Nearest or Linear filtering. `TextureColorSpace::Linear`
+treats image RGB as linear values without transfer-function conversion. Alpha is
+always linear and is unaffected by the color-space setting. The setting does not
+interpret texture channels as normals, roughness, or other material parameters.
+
+Lighting and image filtering operate in linear space. Light intensity and ambient
+strength are linear multipliers and may exceed one. Shading uses an `Rgba16Float`
+intermediate, retaining values up to 65504 per channel. Exposure and display
+mapping are applied to each MSAA sample before averaging premultiplied display
+colors. Captured UI colors are unpremultiplied and decoded
+for shading; ordinary GPUI elements outside the viewport are not processed.
+
+`ColorOutput` defaults to zero exposure and `ToneMapping::None`. Exposure is in
+stops: +1 doubles intensity and -1 halves it. Rendering rejects non-finite exposure
+or values outside `[-16, 16]`. `None` clamps the exposed result to the display
+range. `Reinhard` compresses each channel with `x / (1 + x)` before sRGB encoding.
+Both operate on straight color, then restore premultiplied coverage for GPUI
+composition. Unlit materials bypass lighting, but still receive exposure and
+tone mapping. Default output preserves unlit source colors up to numeric precision.
+
+Viewport and headless rendering use the same color pipeline. Exposure and tone
+mapping do not affect alpha cutout, depth, object IDs, or picking. Display outputs
+are sRGB-encoded SDR; the internal HDR texture is not exposed as an output channel.
 
 ### Image sampling
 
@@ -675,6 +714,14 @@ nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
 
 ## Example
+
+```sh
+cargo run -p gpui_3d --example color_pipeline
+```
+
+Compare clipped and Reinhard-compressed highlights on the same textured models.
+Adjust exposure, light intensity, and image encoding. GPUI reference swatches
+remain independent of scene lighting and display settings.
 
 ```sh
 cargo run -p gpui_3d --example texture_sampling

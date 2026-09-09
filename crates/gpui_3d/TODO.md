@@ -50,12 +50,12 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Camera optics**: Focal-length/sensor-size conversion and explicit off-center projection support.
 - [ ] **Geometry primitives**: Spheres, cylinders, cones, and subdivided planes with segment configuration, bounds, and normal and tangent generation.
 - [x] **Image sampling**: Affine UV transforms, independent Clamp/Repeat/Mirror addressing, Nearest/Linear filtering, atlas-local interpolation, and matching alpha-aware picking.
-- [ ] **Texture sampling extensions**: Mipmaps, anisotropic filtering, and distinct handling of color and data textures.
+- [ ] **Texture sampling extensions**: Mipmaps and anisotropic filtering.
 
 ## Phase 3: Materials and Lighting
 
 - [ ] **Transparent materials**: Separate Opaque, Mask, and Blend modes; define transparent object sorting, depth writes, and intersecting-surface limitations.
-- [ ] **Color pipeline**: Define sRGB input, linear lighting, HDR intermediate results, exposure, and tone mapping consistently with GPUI composition.
+- [x] **Color pipeline**: sRGB and linear image inputs, linear filtering and lighting, RGBA16Float intermediate results, exposure, None/Reinhard tone mapping, and premultiplied display composition shared by viewport and headless rendering.
 - [ ] **PBR materials**: Base color, metallic, roughness, normal, occlusion, and emissive parameters with usable defaults.
 - [ ] **Light types**: Multiple directional, point, and spot lights with intensity, range, and attenuation controls.
 - [ ] **Directional shadows**: Shadow maps, soft shadows, bias, and quality settings to control self-shadowing artifacts and resource costs.
@@ -73,6 +73,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Direct headless 3D rendering**: Solid and decoded-image scenes without native windows or UI layout; shared viewport preparation and mesh passes, owned GPU outputs, and bounded nonblocking readback.
 - [x] **Color and object ID outputs**: Display-encoded RGBA8 and exact R32Uint IDs, explicit pixel-center/MSAA coverage, zero ID background, and retained node/application identity maps.
 - [ ] **Depth and normal outputs**: Linear camera depth and normals from the same evaluated state, with explicit space, units, background, format, and coverage contracts.
+- [ ] **HDR output**: Expose linear floating-point color independently of display mapping, with explicit GPU and readback formats.
 - [ ] **Capabilities and diagnostics**: Query formats, channels, sample counts, limits, and backend support; return actionable asset and rendering failures.
 - [ ] **Viewport-sized render targets**: Allocate color, depth, and MSAA targets to viewport bounds, with configurable resolution and sample count to limit GPU memory use.
 - [ ] **On-demand updates**: Track scene, camera, and UI texture invalidation separately; reuse results when static, invisible, or paused without continuously requesting frames.

@@ -46,6 +46,7 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         color: rgba(color),
         texture,
         sampling: Default::default(),
+        image_color_space: Default::default(),
         unlit: true,
         alpha_cutoff: 0.5,
     }
@@ -64,6 +65,7 @@ fn layer(
             light_direction: [0., 0., 1.],
             light: [1.; 4],
             ambient: 0.3,
+            color_output: Default::default(),
             objects: objects.into(),
         })),
         scene: Rc::new(source),

@@ -27,7 +27,8 @@ impl Scene3dChannels {
 }
 
 /// Physical output dimensions and color sampling. The background is transparent
-/// black for color and zero for IDs. Color uses display-encoded RGBA8, not HDR.
+/// black for color and zero for IDs. Color uses display-encoded RGBA8 after
+/// linear HDR shading, exposure, and tone mapping.
 #[derive(Clone, Copy, Debug)]
 pub struct Scene3dOutputConfig {
     pub size: [u32; 2],
@@ -98,6 +99,7 @@ impl WgpuScene3dRenderer {
             | wgpu::TextureUsages::COPY_SRC;
         for format in [
             wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba16Float,
             wgpu::TextureFormat::R32Uint,
         ] {
             ensure!(
@@ -119,7 +121,7 @@ impl WgpuScene3dRenderer {
         let capabilities = Scene3dCapabilities {
             max_dimension: context.device.limits().max_texture_dimension_2d,
             max_pixels: 16_777_216,
-            color_msaa4: supports_msaa(wgpu::TextureFormat::Rgba8Unorm)
+            color_msaa4: supports_msaa(wgpu::TextureFormat::Rgba16Float)
                 && supports_msaa(wgpu::TextureFormat::Depth32Float),
         };
         Ok(Self {
@@ -150,6 +152,10 @@ impl WgpuScene3dRenderer {
     ) -> Result<Scene3dGpuOutput> {
         self.capabilities.validate(config)?;
         ensure!(!self.context.device_lost(), "3D rendering device is lost");
+        ensure!(
+            frame.color_output.is_valid(),
+            "3D exposure must be finite and between -16 and 16 stops"
+        );
         ensure!(
             frame
                 .objects
@@ -311,7 +317,7 @@ impl Scene3dGpuOutput {
     pub fn config(&self) -> Scene3dOutputConfig {
         self.config
     }
-    /// Premultiplied display-encoded RGBA8. No transfer-function conversion is applied.
+    /// Premultiplied display-encoded RGBA8 after the frame's exposure and tone mapping.
     pub fn color(&self) -> Option<&wgpu::Texture> {
         self.color.as_ref()
     }

@@ -76,12 +76,13 @@ with four color samples.
 | Color | `Rgba8Unorm` | RGBA bytes, width × 4 bytes per row | Transparent black; premultiplied alpha at MSAA edges |
 | Object ID | `R32Uint` | `u32` values, width values per row | Zero background; nearest surviving surface at the pixel center |
 
-Both images have a top-left origin. Readback strips GPU row padding. Color is
-display-encoded RGB using the current basic viewport shading convention; the
-pass applies no transfer-function conversion, HDR storage, exposure, or tone
-mapping. Lighting arithmetic follows the existing encoded-color viewport path,
-not a linear-light PBR pipeline. This matches ordinary Unorm viewport targets;
-external sRGB attachments apply their own hardware conversion.
+Both images have a top-left origin. Readback strips GPU row padding. Color uses
+sRGB-encoded RGB after linear lighting, `Rgba16Float` intermediate storage,
+the scene's `ColorOutput` exposure and tone mapping per sample, and display-color MSAA resolve.
+Color conversion preserves premultiplied coverage at MSAA edges. The returned
+`Rgba8Unorm` texture stores encoded values; GPU consumers must decode RGB when
+using it in linear calculations. The internal HDR texture is not an exported
+channel. The lighting model is diffuse, without PBR materials.
 
 Surviving alpha-cutout fragments are opaque. Both channels use the same mesh
 visibility, transforms, clip planes, texture sampling, and alpha threshold.
@@ -89,7 +90,7 @@ IDs are written as integers, without color conversion, filtering, or MSAA
 averaging. With four color samples, an edge pixel may have partial color coverage
 but a zero ID when its center is outside the mesh. Use one color sample for
 matching pixel-center coverage. Equal-depth overlaps follow submission order.
-Blended transparency, depth/normal exports, and HDR output are not available.
+Blended transparency, depth/normal exports, and raw HDR output are not available.
 
 ## GPU ownership and readback
 

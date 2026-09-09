@@ -4,8 +4,8 @@ use gpui::{
 };
 use gpui_3d::{
     AffineTransform, Camera, EvaluatedScene, Interpolation, Keyframe, Material, Mesh, MorphTarget,
-    MorphTargets, Node, NodeHandle, OrbitController, Projection, RotationTrack, SceneGraph, Skin,
-    SkinInfluence, SubtreeInstance, TransformTrack, VectorTrack, viewport3d,
+    MorphTargets, Node, NodeHandle, OrbitController, Projection, PunctualLight, RotationTrack,
+    SceneGraph, Skin, SkinInfluence, SubtreeInstance, TransformTrack, VectorTrack, viewport3d,
 };
 use gpui_platform::application;
 use std::{
@@ -187,6 +187,9 @@ struct SceneDemo {
     evaluated: EvaluatedScene,
     instances: Vec<SubtreeInstance>,
     body: NodeHandle,
+    camera: NodeHandle,
+    rig_camera: bool,
+    rig_lights: bool,
     body_mesh: Mesh,
     morphs: MorphTargets,
     skin: Skin,
@@ -212,6 +215,19 @@ impl SceneDemo {
         let geometry = body_geometry();
         let mut source = SceneGraph::new();
         let root = source.insert(None, Node::new().id("assembly")).unwrap();
+        let camera_node = source
+            .insert(
+                Some(root),
+                Node::new()
+                    .id("camera")
+                    .transform(local([0., 1.5, 4.], [1.; 3]))
+                    .camera(Camera {
+                        eye: [0.; 3],
+                        target: [0., -1.5, -4.],
+                        ..Default::default()
+                    }),
+            )
+            .unwrap();
         let body = source
             .insert(
                 Some(root),
@@ -277,6 +293,9 @@ impl SceneDemo {
             evaluated,
             instances,
             body,
+            camera: camera_node,
+            rig_camera: false,
+            rig_lights: false,
             body_mesh: geometry,
             morphs,
             skin,
@@ -420,6 +439,9 @@ impl Render for SceneDemo {
                 .on_mouse_down(
                     button,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        if this.rig_camera {
+                            return;
+                        }
                         if this
                             .controls
                             .begin_drag(button, event.position, this.bounds.get())
@@ -446,6 +468,9 @@ impl Render for SceneDemo {
         }
         stage = stage
             .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
+                if this.rig_camera {
+                    return;
+                }
                 if this
                     .controls
                     .update_drag(event.position, event.pressed_button, this.bounds.get())
@@ -463,6 +488,9 @@ impl Render for SceneDemo {
                 }
             }))
             .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
+                if this.rig_camera {
+                    return;
+                }
                 if this
                     .controls
                     .scroll(f32::from(event.delta.pixel_delta(px(20.)).y))
@@ -473,27 +501,38 @@ impl Render for SceneDemo {
                 }
             }))
             .child(
-                viewport3d("scene", self.evaluated.scene(self.controls.camera()))
-                    .size_full()
-                    .on_object_hover(cx.listener(|this, hit: &Option<gpui_3d::Hit>, _, cx| {
-                        let hovered = hit.as_ref().and_then(|hit| {
-                            this.instances.iter().position(|instance| {
-                                instance.mappings().any(|(_, node)| Some(node) == hit.node)
-                            })
-                        });
-                        if this.hovered != hovered {
-                            this.hovered = hovered;
-                            cx.notify();
-                        }
-                    }))
-                    .on_object_click(cx.listener(|this, hit: &gpui_3d::Hit, _, cx| {
-                        if let Some(selected) = this.instances.iter().position(|instance| {
+                viewport3d(
+                    "scene",
+                    if self.rig_camera {
+                        self.evaluated
+                            .scene_from_camera(
+                                self.instances[self.selected].node(self.camera).unwrap(),
+                            )
+                            .unwrap()
+                    } else {
+                        self.evaluated.scene(self.controls.camera())
+                    },
+                )
+                .size_full()
+                .on_object_hover(cx.listener(|this, hit: &Option<gpui_3d::Hit>, _, cx| {
+                    let hovered = hit.as_ref().and_then(|hit| {
+                        this.instances.iter().position(|instance| {
                             instance.mappings().any(|(_, node)| Some(node) == hit.node)
-                        }) {
-                            this.selected = selected;
-                            cx.notify();
-                        }
-                    })),
+                        })
+                    });
+                    if this.hovered != hovered {
+                        this.hovered = hovered;
+                        cx.notify();
+                    }
+                }))
+                .on_object_click(cx.listener(|this, hit: &gpui_3d::Hit, _, cx| {
+                    if let Some(selected) = this.instances.iter().position(|instance| {
+                        instance.mappings().any(|(_, node)| Some(node) == hit.node)
+                    }) {
+                        this.selected = selected;
+                        cx.notify();
+                    }
+                })),
             )
             .child(
                 canvas(
@@ -510,7 +549,11 @@ impl Render for SceneDemo {
             );
         div().size_full().p_6().flex().flex_col().gap_4().bg(rgb(0x0b1422)).text_color(rgb(0xeaf2fc))
             .child(div().text_size(px(30.)).child("Shared shapes, independent nodes"))
-            .child(div().text_color(rgb(0x9eb1cb)).child("Click an assembly to select · Right-drag to orbit · Middle-drag to pan · Scroll to zoom"))
+            .child(div().text_color(rgb(0x9eb1cb)).child(if self.rig_camera {
+                "Camera follows the selected assembly · Select 1 / 2 / 3 to switch · Disable Rig camera for orbit controls"
+            } else {
+                "Click an assembly to select · Right-drag to orbit · Middle-drag to pan · Scroll to zoom"
+            }))
             .child(div().flex().flex_wrap().gap_3()
                 .children([("one", "1 · Step"), ("two", "2 · Linear"), ("three", "3 · Cubic")].into_iter().enumerate().map(|(index, (id, label))| {
                     self.button(id, label, self.selected == index || self.hovered == Some(index)).on_click(cx.listener(move |this, _, _, cx| { this.selected = index; cx.notify(); }))
@@ -536,18 +579,34 @@ impl Render for SceneDemo {
                     this.refresh(cx);
                 })))
                 .child(self.button("projection", "Projection", false).on_click(cx.listener(|this, _, _, cx| {
-                    let mut camera = this.controls.camera();
+                    let handle = this.instances[this.selected].node(this.camera).unwrap();
+                    let mut camera = if this.rig_camera { this.graph.node(handle).unwrap().local_camera().unwrap() } else { this.controls.camera() };
                     let distance = camera.eye.iter().zip(camera.target).map(|(a,b)| (a-b).powi(2)).sum::<f32>().sqrt();
                     camera.projection = match camera.projection {
                         Projection::Perspective { vertical_fov } => Projection::Orthographic { vertical_size: 2. * distance * (vertical_fov * 0.5).tan() },
                         Projection::Orthographic { vertical_size } => Projection::Perspective { vertical_fov: 2. * (vertical_size / (2. * distance)).atan() },
                     };
-                    this.controls.set_camera(camera).unwrap(); cx.notify();
+                    if this.rig_camera { this.graph.set_camera(handle, Some(camera)).unwrap(); this.refresh(cx); }
+                    else { this.controls.set_camera(camera).unwrap(); cx.notify(); }
+                })))
+                .child(self.button("rig-camera", "Rig camera", self.rig_camera).on_click(cx.listener(|this, _, _, cx| {
+                    this.rig_camera = !this.rig_camera;
+                    this.controls.cancel_drag(); cx.notify();
+                })))
+                .child(self.button("rig-lights", "Rig lights", self.rig_lights).on_click(cx.listener(|this, _, _, cx| {
+                    this.rig_lights = !this.rig_lights;
+                    for instance in &this.instances {
+                        this.graph.set_light(instance.node(this.camera).unwrap(), this.rig_lights.then(||
+                            PunctualLight::spot([0.; 3], [0., -1.5, -4.]).intensity(30.).range(Some(12.)).cone_angles(0.3, 0.8)
+                        )).unwrap();
+                    }
+                    this.refresh(cx);
                 })))
                 .child(self.button("frame", "Frame selected", false).on_click(cx.listener(|this, _, _, cx| {
                     let rect = this.bounds.get();
                     let aspect = if rect.size.height > px(0.) { rect.size.width / rect.size.height } else { 1.5 };
                     if let Some(bounds) = this.evaluated.node(this.instances[this.selected].root()).and_then(|node| node.subtree_bounds) {
+                        this.rig_camera = false;
                         let camera = this.controls.camera().frame_bounds(bounds, aspect, 1.3).unwrap();
                         this.controls.set_camera(camera).unwrap(); cx.notify();
                     }

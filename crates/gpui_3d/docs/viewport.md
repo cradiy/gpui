@@ -1,7 +1,7 @@
 # 3D viewports
 
 `gpui_3d` embeds depth-tested mesh scenes in ordinary GPUI layouts. A viewport
-supports perspective and orthographic cameras, indexed triangle geometry, one directional light,
+supports perspective and orthographic cameras, indexed triangle geometry, direct lights,
 and solid, image or captured-UI materials.
 
 ```rust
@@ -368,6 +368,12 @@ frame one mesh, or `subtree_bounds` to include its descendants. Subtree bounds
 include hidden geometry. Framing an empty group requires the caller to choose
 another target; zero-extent boxes use a small finite framing extent.
 
+`Camera::transformed(affine)` maps local eye and target positions and the
+orthogonalized up direction into another coordinate space. The result has a
+right-handed orthogonal view basis, including under shear or reflection.
+Projection, near/far distances, and orthographic span are unchanged by scale.
+Invalid inputs or coordinates that lose a representable view return `CameraError`.
+
 ## Camera controls
 
 `OrbitController` owns a camera and applies input immediately, without a window,
@@ -439,7 +445,8 @@ background frame loop.
 
 ## Scene hierarchy
 
-`SceneGraph` manages group and mesh nodes independently of a window or GPU.
+`SceneGraph` manages nodes with optional mesh, camera, and light properties
+independently of a window or GPU.
 Each node has a local `AffineTransform` and inherited visibility. Evaluate the
 graph once, then create scenes for different cameras from the same result.
 
@@ -591,6 +598,73 @@ from the live graph; validate it through `graph.node` before editing.
 
 The viewport resolves image resources during rendering. Constraints and asset
 readiness are independent of hierarchy evaluation.
+
+### Camera and light nodes
+
+`Node::camera` and `Node::light` attach local-space properties independently of
+geometry. A node can have both, with or without a mesh. `local_camera()` and
+`local_light()` inspect authored properties. `SceneGraph::set_camera` and
+`set_light` replace or remove them with `Some(value)` or `None`, preserving the
+node's transform, geometry, material, and children. Subtree snapshots and instances
+copy these properties; subsequent edits remain independent.
+
+```rust
+use gpui_3d::{AffineTransform, Camera, Node, PunctualLight, SceneGraph};
+
+let mut graph = SceneGraph::new();
+let rig = graph.insert(None, Node::new()
+    .transform(AffineTransform::from_translation([0., 1., 5.])?))?;
+let camera = graph.insert(Some(rig), Node::new().camera(Camera {
+    eye: [0.; 3], target: [0., 0., -1.], ..Default::default()
+}))?;
+graph.insert(Some(rig), Node::new().light(
+    PunctualLight::spot([0.; 3], [0., 0., -1.]).intensity(20.)
+))?;
+let evaluated = graph.evaluate()?;
+let scene = evaluated.scene_from_camera(camera)?;
+# let _ = scene;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Evaluation transforms a camera's local `eye`, `target`, and up direction with the
+complete node world matrix. `Camera::default()` retains its local eye offset of
+`[0, 0, 6]`; use eye zero and target negative Z for a camera at the node origin.
+Projection and clipping remain explicit, without inheriting scale. Read the
+world camera from `EvaluatedNode::camera` or select it with `scene_from_camera`.
+Selection is never automatic, and hidden-node cameras remain explicitly usable.
+Missing properties return `SceneError::NoCamera`; foreign or expired handles
+return `InvalidHandle`.
+
+Light positions and normalized directions inherit the complete world transform.
+Directional lights ignore position; point lights ignore direction. Directional
+directions point toward the source, whereas spot directions point outward.
+Intensity, color, range, distance clamp, and cone angles do not inherit scale.
+`PunctualLight::transformed` exposes the same conversion without a scene graph;
+`kind()`, `position()`, and `direction()` inspect the result. `LightKind` identifies
+directional, point, and spot sources.
+
+`EvaluatedNode::light` includes hidden sources for inspection. `evaluated.lights()`
+yields only visible `(NodeHandle, PunctualLight)` pairs in parent-first order.
+`scene(camera)` and `scene_from_camera` use this list as direct lighting if the
+graph contains any attached lights. If all are hidden, direct light is disabled;
+ambient illumination remains. Graphs without light properties retain the default
+scene light. Calling `Scene::light` or `Scene::lights` explicitly replaces the
+derived direct-light configuration. These properties do not add geometry, bounds,
+or picking/output IDs.
+
+Evaluation permits more than `MAX_PUNCTUAL_LIGHTS` sources; rendering rejects an
+excess list before resource resolution. Select a subset with `Scene::lights` when
+needed. Directional-shadow `light_index` addresses the final visible/selected
+light list, not a node index; recompute it from node identities when visibility
+or hierarchy order changes. Cameras and lights use the same pose overrides and
+keep-world reparenting as mesh nodes.
+
+Camera and light validation runs during evaluation, including hidden nodes.
+`SceneError::InvalidCamera` and `InvalidLight` identify the node and underlying
+`CameraError` or `LightError`. Invalid parameters, transformed overflow, or a
+camera view lost to coordinate precision fail evaluation without modifying
+authored data or earlier snapshots. There is no active-camera state, controller,
+light-selection policy, or animation clock inside the graph.
 
 ### Transform tracks
 
@@ -1459,7 +1533,7 @@ Each example is an independent executable.
 
 | Example | Controls and content |
 | --- | --- |
-| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, camera controls, transform tracks, vertex tapering, two-target morph blending, and two-joint skin bending with independent weights and playback controls. |
+| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, free/rig cameras, attached spot lights, transform tracks, vertex tapering, two-target morph blending, and two-joint skin bending with independent weights and playback controls. |
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
 | `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |

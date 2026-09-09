@@ -2,7 +2,7 @@ mod orbit;
 pub use orbit::{OrbitController, OrbitError, OrbitSettings};
 
 use crate::{
-    Aabb,
+    Aabb, AffineTransform,
     math::{Matrix, cross, dot, multiply, sub, transform},
 };
 use gpui::{Bounds, Pixels, Point, point, px};
@@ -125,6 +125,53 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// Transforms local eye/target positions and the orthogonalized up direction.
+    /// Projection and clip distances are unchanged by scale or shear. The result
+    /// retains a right-handed view basis, including under reflected transforms.
+    pub fn transformed(self, transform: AffineTransform) -> Result<Self, CameraError> {
+        let up = self.axes()?[1];
+        self.projection_matrix(1.)?;
+        let matrix = transform.matrix();
+        let point = |value: [f32; 3]| -> [f32; 3] {
+            std::array::from_fn(|r| {
+                ((0..3)
+                    .map(|c| f64::from(matrix[c][r]) * f64::from(value[c]))
+                    .sum::<f64>()
+                    + f64::from(matrix[3][r])) as f32
+            })
+        };
+        let eye = point(self.eye);
+        let target = point(self.target);
+        let backward = std::array::from_fn::<_, 3, _>(|i| f64::from(eye[i]) - f64::from(target[i]));
+        let length = backward.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if length == 0. || !length.is_finite() {
+            return Err(CameraError::Unrepresentable);
+        }
+        let backward = backward.map(|v| v / length);
+        // Orthogonalize in f64 so strong shear does not trigger the parallel-up fallback.
+        let up: [f64; 3] = std::array::from_fn(|r| {
+            (0..3)
+                .map(|c| f64::from(matrix[c][r]) * f64::from(up[c]))
+                .sum()
+        });
+        let projection = up.iter().zip(backward).map(|(a, b)| a * b).sum::<f64>();
+        let up: [f64; 3] = std::array::from_fn(|i| up[i] - projection * backward[i]);
+        let length = up.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if length == 0. || !length.is_finite() {
+            return Err(CameraError::Unrepresentable);
+        }
+        let result = Self {
+            eye,
+            target,
+            up: up.map(|v| (v / length) as f32),
+            ..self
+        };
+        result
+            .view_projection(1.)
+            .map_err(|_| CameraError::Unrepresentable)?;
+        Ok(result)
+    }
+
     /// Orbits the origin. Angles are radians; pitch stays below the poles.
     pub fn orbit(yaw: f32, pitch: f32, distance: f32) -> Self {
         assert!(yaw.is_finite() && pitch.is_finite() && distance.is_finite() && distance > 0.);
@@ -435,6 +482,100 @@ mod tests {
         for (a, b) in a.into_iter().zip(b) {
             assert!((a - b).abs() < 2e-4, "{a} != {b}");
         }
+    }
+
+    #[test]
+    fn transformed_camera_keeps_optics_and_uses_a_right_handed_orthogonal_view() {
+        let camera = Camera {
+            eye: [0.; 3],
+            target: [0., 0., -2.],
+            projection: Projection::Orthographic { vertical_size: 4. },
+            near: 0.2,
+            far: 40.,
+            ..Default::default()
+        };
+        let pose = AffineTransform::from_trs([3., 2., 1.], [0., 1., 0., 1.], [2., 3., 4.]).unwrap();
+        let world = camera.transformed(pose).unwrap();
+        close(world.eye, [3., 2., 1.]);
+        close(world.target, [-5., 2., 1.]);
+        assert_eq!(world.projection, camera.projection);
+        assert_eq!((world.near, world.far), (0.2, 40.));
+        let rect = viewport();
+        close(
+            world
+                .screen_to_ray(rect, rect.center())
+                .unwrap()
+                .direction(),
+            [-1., 0., 0.],
+        );
+        let above = world.world_to_screen(rect, [1., 3., 1.]).unwrap().unwrap();
+        assert!(above.position.y < rect.center().y);
+        let shear = AffineTransform::from_matrix([
+            [-2., 0., 0., 0.],
+            [1., 3., 0., 0.],
+            [0.5, 0., 4., 0.],
+            [0., 0., 0., 1.],
+        ])
+        .unwrap();
+        let reflected = camera.transformed(shear).unwrap();
+        close(reflected.target, [-1., 0., -8.]);
+        let [x, y, z] = reflected.axes().unwrap();
+        assert!(dot(x, y).abs() < 1e-6 && dot(y, z).abs() < 1e-6 && dot(z, x).abs() < 1e-6);
+        assert!((dot(cross(x, y), z) - 1.).abs() < 1e-6);
+        let skew = AffineTransform::from_matrix([
+            [1., 0., 0., 0.],
+            [1., 1., 1000., 0.],
+            [0., 0., 1., 0.],
+            [0., 0., 0., 1.],
+        ])
+        .unwrap();
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        close(
+            camera.transformed(skew).unwrap().axes().unwrap()[1],
+            [k, k, 0.],
+        );
+    }
+
+    #[test]
+    fn transformed_camera_reports_invalid_inputs_and_lost_coordinate_precision() {
+        let identity = AffineTransform::IDENTITY;
+        assert_eq!(
+            Camera {
+                up: [0.; 3],
+                ..Default::default()
+            }
+            .transformed(identity),
+            Err(CameraError::InvalidView)
+        );
+        assert_eq!(
+            Camera {
+                near: 0.,
+                ..Default::default()
+            }
+            .transformed(identity),
+            Err(CameraError::InvalidProjection)
+        );
+        let far = AffineTransform::from_translation([0., 0., 1e20]).unwrap();
+        assert_eq!(
+            Camera::default().transformed(far),
+            Err(CameraError::Unrepresentable)
+        );
+        let huge = AffineTransform::from_trs([0.; 3], [0., 0., 0., 1.], [f32::MAX; 3]).unwrap();
+        assert_eq!(
+            Camera::default().transformed(huge),
+            Err(CameraError::Unrepresentable)
+        );
+        let vertical = Camera {
+            up: [0., 0., 1.],
+            ..Default::default()
+        };
+        let converted = vertical.transformed(identity).unwrap();
+        let rect = viewport();
+        let corner = rect.origin;
+        close(
+            converted.screen_to_ray(rect, corner).unwrap().direction(),
+            vertical.screen_to_ray(rect, corner).unwrap().direction(),
+        );
     }
 
     #[test]

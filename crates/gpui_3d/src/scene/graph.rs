@@ -1,6 +1,6 @@
 use crate::{
-    Aabb, AffineTransform, Camera, Material, Mesh, Object, ObjectId, PickBehavior, Scene,
-    TransformError,
+    Aabb, AffineTransform, Camera, CameraError, LightError, Material, Mesh, Object, ObjectId,
+    PickBehavior, PunctualLight, Scene, TransformError,
 };
 use slotmap::{SlotMap, new_key_type};
 use std::{
@@ -21,13 +21,15 @@ pub struct NodeHandle {
     key: NodeKey,
 }
 
-/// A group or a single mesh surface with a local transform.
+/// A transformed hierarchy node with optional mesh, camera, and light properties.
 #[derive(Clone, Default)]
 pub struct Node {
     id: Option<ObjectId>,
     local: AffineTransform,
     hidden: bool,
     surface: Option<(Mesh, Material)>,
+    camera: Option<Camera>,
+    light: Option<PunctualLight>,
     bounds: Option<Aabb>,
     picking: PickBehavior,
     no_shadow_cast: bool,
@@ -61,6 +63,24 @@ impl Node {
     pub fn pick_behavior(mut self, behavior: PickBehavior) -> Self {
         self.picking = behavior;
         self
+    }
+    /// Attaches a camera whose eye, target and up are in this node's local space.
+    /// Projection and clip distances are not scaled. Validated during evaluation.
+    pub fn camera(mut self, camera: Camera) -> Self {
+        self.camera = Some(camera);
+        self
+    }
+    /// Attaches a local-space light. Inherited visibility controls its emission.
+    /// Physical parameters are not scaled. Validated during evaluation.
+    pub fn light(mut self, light: PunctualLight) -> Self {
+        self.light = Some(light);
+        self
+    }
+    pub fn local_camera(&self) -> Option<Camera> {
+        self.camera
+    }
+    pub fn local_light(&self) -> Option<PunctualLight> {
+        self.light
     }
     pub fn object_id(&self) -> Option<&ObjectId> {
         self.id.as_ref()
@@ -101,6 +121,15 @@ pub enum SceneError {
     DuplicateTransform(NodeHandle),
     Cycle(NodeHandle),
     NoMesh(NodeHandle),
+    NoCamera(NodeHandle),
+    InvalidCamera {
+        node: NodeHandle,
+        source: CameraError,
+    },
+    InvalidLight {
+        node: NodeHandle,
+        source: LightError,
+    },
     InvalidTransform {
         node: NodeHandle,
         source: TransformError,
@@ -116,6 +145,9 @@ impl fmt::Display for SceneError {
             }
             Self::Cycle(node) => write!(f, "parent assignment would create a cycle at {node:?}"),
             Self::NoMesh(node) => write!(f, "node {node:?} has no mesh"),
+            Self::NoCamera(node) => write!(f, "node {node:?} has no camera"),
+            Self::InvalidCamera { node, source } => write!(f, "camera node {node:?}: {source}"),
+            Self::InvalidLight { node, source } => write!(f, "light node {node:?}: {source}"),
             Self::InvalidTransform { node, source } => write!(f, "node {node:?}: {source}"),
         }
     }
@@ -124,6 +156,8 @@ impl std::error::Error for SceneError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidTransform { source, .. } => Some(source),
+            Self::InvalidCamera { source, .. } => Some(source),
+            Self::InvalidLight { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -294,8 +328,8 @@ impl SceneGraph {
     }
 
     /// Appends an editable copy beneath `parent`, or as a new root. Local
-    /// transforms, visibility, picking, and materials are copied; geometry and
-    /// image sources remain shared. Application IDs are cleared.
+    /// transforms, visibility, picking, materials, cameras, and lights are copied;
+    /// geometry and image sources remain shared. Application IDs are cleared.
     pub fn instantiate(
         &mut self,
         parent: Option<NodeHandle>,
@@ -397,6 +431,28 @@ impl SceneGraph {
     pub fn set_visible(&mut self, handle: NodeHandle, visible: bool) -> Result<(), SceneError> {
         let key = self.key(handle)?;
         self.nodes[key].node.hidden = !visible;
+        self.revision += 1;
+        Ok(())
+    }
+    /// Sets or removes only the camera property. Validated on the next evaluation.
+    pub fn set_camera(
+        &mut self,
+        handle: NodeHandle,
+        camera: Option<Camera>,
+    ) -> Result<(), SceneError> {
+        let key = self.key(handle)?;
+        self.nodes[key].node.camera = camera;
+        self.revision += 1;
+        Ok(())
+    }
+    /// Sets or removes only the light property. Validated on the next evaluation.
+    pub fn set_light(
+        &mut self,
+        handle: NodeHandle,
+        light: Option<PunctualLight>,
+    ) -> Result<(), SceneError> {
+        let key = self.key(handle)?;
+        self.nodes[key].node.light = light;
         self.revision += 1;
         Ok(())
     }
@@ -520,7 +576,7 @@ impl SceneGraph {
         Ok(removed)
     }
 
-    /// Resolves world matrices, inherited visibility, and bounds in parent-first order.
+    /// Resolves world matrices, cameras, lights, visibility, and bounds in parent-first order.
     /// No playback history, window, layout, or GPU work is required.
     pub fn evaluate(&self) -> Result<EvaluatedScene, SceneError> {
         self.evaluate_with_transforms([])
@@ -545,6 +601,7 @@ impl SceneGraph {
             nodes: Vec::with_capacity(self.len()),
             indices: HashMap::with_capacity(self.len()),
             objects: Vec::new(),
+            lights: None,
             bounds: None,
             spatial_index: Arc::default(),
         };
@@ -567,6 +624,28 @@ impl SceneGraph {
                     source,
                 })?;
             let visible = !node.hidden && parent.is_none_or(|parent| parent.visible);
+            let camera = node
+                .camera
+                .map(|camera| camera.transformed(world))
+                .transpose()
+                .map_err(|source| SceneError::InvalidCamera {
+                    node: handle,
+                    source,
+                })?;
+            let light = node
+                .light
+                .map(|light| light.transformed(world))
+                .transpose()
+                .map_err(|source| SceneError::InvalidLight {
+                    node: handle,
+                    source,
+                })?;
+            if let Some(light) = light {
+                let lights = evaluated.lights.get_or_insert_with(Vec::new);
+                if visible {
+                    lights.push((handle, light));
+                }
+            }
             let bounds = node
                 .bounds
                 .map(|bounds| bounds.transformed(world))
@@ -594,6 +673,8 @@ impl SceneGraph {
                 parent: entry.parent.map(|key| self.handle(key)),
                 world,
                 visible,
+                camera,
+                light,
                 bounds,
                 subtree_bounds: bounds,
             });
@@ -626,6 +707,10 @@ pub struct EvaluatedNode {
     pub parent: Option<NodeHandle>,
     pub world: AffineTransform,
     pub visible: bool,
+    /// World-space camera, even when this node is hidden. Selection is explicit.
+    pub camera: Option<Camera>,
+    /// World-space source, even when hidden. Only visible sources illuminate scenes.
+    pub light: Option<PunctualLight>,
     /// World-aligned bounds of this node's mesh, regardless of visibility.
     pub bounds: Option<Aabb>,
     /// Union of this node and all descendants, regardless of visibility.
@@ -639,6 +724,7 @@ pub struct EvaluatedScene {
     nodes: Vec<EvaluatedNode>,
     indices: HashMap<NodeHandle, usize>,
     objects: Vec<Object>,
+    lights: Option<Vec<(NodeHandle, PunctualLight)>>,
     bounds: Option<Aabb>,
     spatial_index: Arc<std::sync::OnceLock<crate::spatial::bvh::ObjectIndex>>,
 }
@@ -660,13 +746,33 @@ impl EvaluatedScene {
         self.bounds
     }
     /// Creates a renderable/pickable scene for a camera without reevaluating the hierarchy.
+    /// Attached lights replace default direct lighting; hidden sources are omitted.
+    /// Graphs without light properties retain the default source; all-hidden lights disable it.
     pub fn scene(&self, camera: Camera) -> Scene {
         Scene {
             camera,
+            lights: self
+                .lights
+                .as_ref()
+                .map(|lights| lights.iter().map(|(_, light)| light.0).collect()),
             objects: self.objects.clone(),
             spatial_index: self.spatial_index.clone(),
             ..Scene::default()
         }
+    }
+
+    /// Visible lights in parent-first order, with stable node identities.
+    /// This is also the direct-light order used by `scene` and shadow indices.
+    pub fn lights(&self) -> impl Iterator<Item = (NodeHandle, PunctualLight)> + '_ {
+        self.lights.iter().flatten().copied()
+    }
+
+    /// Selects a camera explicitly, including cameras on hidden nodes.
+    /// Foreign/expired handles and nodes without a camera return errors.
+    pub fn scene_from_camera(&self, handle: NodeHandle) -> Result<Scene, SceneError> {
+        let node = self.node(handle).ok_or(SceneError::InvalidHandle(handle))?;
+        let camera = node.camera.ok_or(SceneError::NoCamera(handle))?;
+        Ok(self.scene(camera))
     }
 
     /// Prepares the camera-independent object index shared by derived scenes.
@@ -695,6 +801,171 @@ mod tests {
         for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
             assert!((a - b).abs() < 3e-5, "{a} != {b}");
         }
+    }
+
+    #[test]
+    fn camera_and_light_nodes_follow_pose_overrides_and_inherited_visibility() {
+        let mut graph = SceneGraph::new();
+        let root = graph.insert(None, Node::new()).unwrap();
+        let local = Camera {
+            eye: [0.; 3],
+            target: [0., 0., -2.],
+            ..Default::default()
+        };
+        let rig = graph
+            .insert(
+                Some(root),
+                Node::new()
+                    .camera(local)
+                    .light(PunctualLight::spot([0.; 3], [0., 0., -1.]))
+                    .transform(at([0., 1., 0.])),
+            )
+            .unwrap();
+        let fill = graph
+            .insert(
+                None,
+                Node::new().light(PunctualLight::directional([0., 1., 0.])),
+            )
+            .unwrap();
+        let pose = AffineTransform::from_trs([3., 2., 1.], [0., 1., 0., 1.], [2., 3., 4.]).unwrap();
+        let revision = graph.revision();
+        let snapshot = graph.evaluate_with_transforms([(root, pose)]).unwrap();
+        assert_eq!(revision, graph.revision());
+        let camera = snapshot.node(rig).unwrap().camera.unwrap();
+        for (a, b) in camera.eye.into_iter().zip([3., 5., 1.]) {
+            assert!((a - b).abs() < 1e-5);
+        }
+        for (a, b) in camera.target.into_iter().zip([-5., 5., 1.]) {
+            assert!((a - b).abs() < 1e-5);
+        }
+        assert_eq!(camera.projection, local.projection);
+        assert_eq!((camera.near, camera.far), (local.near, local.far));
+        let light = snapshot.node(rig).unwrap().light.unwrap();
+        assert_eq!(light.position(), camera.eye);
+        for (a, b) in light.direction().into_iter().zip([-1., 0., 0.]) {
+            assert!((a - b).abs() < 1e-5);
+        }
+        assert_eq!(
+            snapshot.lights().map(|(node, _)| node).collect::<Vec<_>>(),
+            [rig, fill]
+        );
+        assert_eq!(snapshot.scene_from_camera(rig).unwrap().camera, camera);
+        assert!(snapshot.bounds().is_none());
+        assert!(snapshot.scene_from_camera(rig).unwrap().objects.is_empty());
+        graph.set_visible(root, false).unwrap();
+        graph.set_visible(fill, false).unwrap();
+        let hidden = graph.evaluate().unwrap();
+        assert_eq!(hidden.lights().count(), 0);
+        assert!(hidden.scene(Camera::default()).lights.unwrap().is_empty());
+        assert!(hidden.node(rig).unwrap().light.is_some());
+        assert!(hidden.scene_from_camera(rig).is_ok());
+        assert_eq!(snapshot.lights().count(), 2);
+        graph.set_light(rig, None).unwrap();
+        graph.set_light(fill, None).unwrap();
+        assert!(
+            graph
+                .evaluate()
+                .unwrap()
+                .scene(Camera::default())
+                .lights
+                .is_none()
+        );
+        graph.set_camera(rig, None).unwrap();
+        assert!(
+            matches!(graph.evaluate().unwrap().scene_from_camera(rig), Err(SceneError::NoCamera(node)) if node == rig)
+        );
+        assert_eq!(snapshot.scene_from_camera(rig).unwrap().camera, camera);
+    }
+
+    #[test]
+    fn camera_light_subtrees_keep_world_on_reparent_and_copy_bindings_on_instance() {
+        let mut source = SceneGraph::new();
+        let root = source
+            .insert(
+                None,
+                Node::new()
+                    .camera(Camera::default())
+                    .light(PunctualLight::point([1., 0., 0.])),
+            )
+            .unwrap();
+        let snapshot = source.snapshot_subtree(root).unwrap();
+        let mut graph = SceneGraph::new();
+        let parent = graph
+            .insert(None, Node::new().transform(at([5., 2., 0.])))
+            .unwrap();
+        let a = graph.instantiate(Some(parent), &snapshot).unwrap().root();
+        let b = graph.instantiate(None, &snapshot).unwrap().root();
+        let before = graph.evaluate().unwrap();
+        assert_eq!(
+            before.node(a).unwrap().light.unwrap().position(),
+            [6., 2., 0.]
+        );
+        assert_eq!(
+            before.node(b).unwrap().light.unwrap().position(),
+            [1., 0., 0.]
+        );
+        let old_camera = before.scene_from_camera(a).unwrap().camera;
+        graph.reparent(a, None, ReparentMode::KeepWorld).unwrap();
+        let after = graph.evaluate().unwrap();
+        assert_eq!(after.scene_from_camera(a).unwrap().camera, old_camera);
+        assert_eq!(
+            after.node(a).unwrap().light.unwrap().position(),
+            [6., 2., 0.]
+        );
+        source.remove_subtree(root).unwrap();
+        graph.set_camera(a, None).unwrap();
+        graph.set_light(a, None).unwrap();
+        assert!(graph.node(b).unwrap().local_camera().is_some());
+        assert!(graph.node(b).unwrap().local_light().is_some());
+        graph.remove_subtree(a).unwrap();
+        assert!(
+            matches!(graph.evaluate().unwrap().scene_from_camera(a), Err(SceneError::InvalidHandle(node)) if node == a)
+        );
+        assert_eq!(before.scene_from_camera(a).unwrap().camera, old_camera);
+    }
+
+    #[test]
+    fn attachment_errors_identify_nodes_without_invalidating_previous_evaluations() {
+        let mut graph = SceneGraph::new();
+        let rig = graph
+            .insert(
+                None,
+                Node::new()
+                    .camera(Camera::default())
+                    .light(PunctualLight::point([0.; 3])),
+            )
+            .unwrap();
+        let old = graph.evaluate().unwrap();
+        graph
+            .set_camera(
+                rig,
+                Some(Camera {
+                    near: 0.,
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        assert!(
+            matches!(graph.evaluate(), Err(SceneError::InvalidCamera { node, source: CameraError::InvalidProjection }) if node == rig)
+        );
+        graph.set_camera(rig, Some(Camera::default())).unwrap();
+        graph
+            .set_light(rig, Some(PunctualLight::point([0.; 3]).intensity(-1.)))
+            .unwrap();
+        graph.set_visible(rig, false).unwrap();
+        assert!(
+            matches!(graph.evaluate(), Err(SceneError::InvalidLight { node, source: LightError::InvalidParameters }) if node == rig)
+        );
+        let mut foreign = SceneGraph::new();
+        let other = foreign.insert(None, Node::new()).unwrap();
+        let revision = graph.revision();
+        assert!(graph.set_camera(other, None).is_err());
+        assert!(graph.set_light(other, None).is_err());
+        assert_eq!(graph.revision(), revision);
+        assert!(
+            matches!(old.scene_from_camera(other), Err(SceneError::InvalidHandle(node)) if node == other)
+        );
+        assert_eq!(old.scene_from_camera(rig).unwrap().lights.unwrap().len(), 1);
     }
 
     #[test]

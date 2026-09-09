@@ -797,6 +797,96 @@ mod tests {
     }
 
     #[test]
+    fn attached_camera_lights_and_shadows_reach_the_frame_without_extra_geometry() {
+        use crate::{DirectionalShadow, LightKind, PunctualLight};
+        let mut graph = SceneGraph::new();
+        let root = graph
+            .insert(
+                None,
+                Node::new().transform(AffineTransform::from_translation([2., 0., 0.]).unwrap()),
+            )
+            .unwrap();
+        let camera_node = graph
+            .insert(Some(root), Node::new().camera(Camera::default()))
+            .unwrap();
+        let sun = graph
+            .insert(
+                Some(root),
+                Node::new().light(PunctualLight::directional([0., 1., 0.])),
+            )
+            .unwrap();
+        graph
+            .insert(
+                Some(root),
+                Node::new().light(PunctualLight::point([1., 2., 3.])),
+            )
+            .unwrap();
+        let body = graph
+            .insert(
+                Some(root),
+                Node::new().mesh(Mesh::cube(), Material::color(rgb(0xffffff))),
+            )
+            .unwrap();
+        let evaluated = graph.evaluate().unwrap();
+        let scene = evaluated
+            .scene_from_camera(camera_node)
+            .unwrap()
+            .directional_shadow(Some(DirectionalShadow::new([2., 0., 0.], [3.; 3])));
+        let frame = scene
+            .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+            .unwrap();
+        assert_eq!(frame.camera_position, [2., 0., 6.]);
+        assert_eq!(
+            frame.view_projection,
+            scene.camera.view_projection(1.).unwrap()
+        );
+        let lights = frame.lights.as_ref().unwrap();
+        assert_eq!(lights.len(), 2);
+        assert_eq!(lights[0].kind, LightKind::Directional);
+        assert_eq!(lights[1].position, [3., 2., 3.]);
+        assert!(frame.directional_shadow.is_some());
+        assert_eq!(frame.objects.len(), 1);
+        assert_eq!(frame.objects[0].output_id, 1);
+        assert_eq!(scene.objects[0].node, Some(body));
+        graph.set_visible(sun, false).unwrap();
+        assert_eq!(evaluated.lights().count(), 2);
+        let hidden = graph
+            .evaluate()
+            .unwrap()
+            .scene_from_camera(camera_node)
+            .unwrap();
+        assert_eq!(hidden.lights.as_ref().unwrap().len(), 1);
+        assert!(
+            hidden
+                .directional_shadow(Some(DirectionalShadow::new([0.; 3], [3.; 3])))
+                .prepare_frame(1., None, |_, _, _| panic!(
+                    "invalid shadow must fail before texture resolution"
+                ))
+                .is_err()
+        );
+        for _ in 0..crate::MAX_PUNCTUAL_LIGHTS {
+            graph
+                .insert(None, Node::new().light(PunctualLight::point([0.; 3])))
+                .unwrap();
+        }
+        let many = graph.evaluate().unwrap();
+        assert_eq!(many.lights().count(), crate::MAX_PUNCTUAL_LIGHTS + 1);
+        let all = many.scene_from_camera(camera_node).unwrap();
+        assert!(
+            all.prepare_frame(1., None, |_, _, _| panic!(
+                "excess lights must fail before texture resolution"
+            ))
+            .is_err()
+        );
+        let selected = all.lights(many.lights().take(1).map(|(_, light)| light));
+        assert!(
+            selected
+                .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn prepared_frames_share_geometry_and_preserve_evaluated_world_transforms() {
         let mut graph = SceneGraph::new();
         let parent = graph

@@ -30,7 +30,8 @@ pub use geometry::{
 pub use headless::*;
 pub use lighting::{
     DiffuseEnvironment, DirectionalShadow, EnvironmentBackground, EnvironmentError, EnvironmentMap,
-    Light, PunctualLight, SpecularEnvironment, SpecularEnvironmentMap, SpecularPrefilter,
+    Light, LightError, PunctualLight, SpecularEnvironment, SpecularEnvironmentMap,
+    SpecularPrefilter,
 };
 pub use material::{Material, MaterialTexture};
 pub(crate) use material::{Texture, TextureSlot};
@@ -45,6 +46,7 @@ pub use spatial::{Hit, PickBehavior};
 
 pub use gpui::AlphaMode3d as AlphaMode;
 pub use gpui::ElementId as ObjectId;
+pub use gpui::LightKind3d as LightKind;
 pub use gpui::MAX_PUNCTUAL_LIGHTS_3D as MAX_PUNCTUAL_LIGHTS;
 pub use gpui::MeshUpdateError3d as MeshUpdateError;
 pub use gpui::MeshVertex3d as Vertex;

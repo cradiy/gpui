@@ -38,7 +38,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Scene hierarchy**: Group and mesh nodes, graph-scoped generational handles, unique application IDs, inherited visibility, atomic reparenting, and subtree removal.
 - [x] **Affine transforms**: Quaternion TRS and full affine matrices, including shear and negative scale, with keep-local/keep-world reparenting and inverse-transpose normals.
 - [x] **Static scene evaluation**: Camera-independent owned results, world and aggregate bounds, node identities in picking, and hierarchy editing in the scene example.
-- [ ] **Camera and light nodes**: Attach cameras and lights to hierarchy nodes and derive their world-space state during evaluation.
+- [x] **Camera and light nodes**: Optional local camera/light properties, complete world-transform evaluation, explicit camera selection, inherited light visibility, subtree reuse, structured validation, and shared viewport/headless scene preparation without extra geometry or picking IDs.
 - [x] **Subtree reuse**: Immutable local snapshots, atomic cross-graph instantiation, explicit application-ID remapping, source-to-instance handles, shared geometry/images, and independent node properties.
 - [x] **Mesh resource interfaces**: Fallible geometry construction with structured errors, borrowed vertex/index inspection, counts, local bounds, and shared immutable storage.
 - [ ] **Renderer resource interfaces**: Upload/readiness interfaces usable by external importers and resource managers.

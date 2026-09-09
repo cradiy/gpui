@@ -1,11 +1,71 @@
+use crate::AffineTransform;
 use gpui::{LightKind3d, PunctualLight3d, Rgba};
+use std::fmt;
 
-/// A world-space directional, point, or spot light.
-/// Rendering rejects non-finite values and unsupported ranges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightError {
+    InvalidParameters,
+    Unrepresentable,
+}
+
+impl fmt::Display for LightError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidParameters => "light parameters are nonfinite or outside supported ranges",
+            Self::Unrepresentable => "transformed light exceeds finite coordinate precision",
+        })
+    }
+}
+impl std::error::Error for LightError {}
+
+/// A directional, point, or spot light. `Scene` consumes world-space sources;
+/// `Node` consumes local-space sources. Invalid values fail evaluation or rendering.
 #[derive(Clone, Copy, Debug)]
 pub struct PunctualLight(pub(crate) PunctualLight3d);
 
 impl PunctualLight {
+    pub fn kind(self) -> LightKind3d {
+        self.0.kind
+    }
+    /// Source position, ignored for directional lights.
+    pub fn position(self) -> [f32; 3] {
+        self.0.position
+    }
+    /// Direction toward a directional source or outward from a spot; ignored for points.
+    pub fn direction(self) -> [f32; 3] {
+        self.0.direction
+    }
+    /// Transforms local position and direction. Directions use the linear part
+    /// and are normalized. Range, distance clamp, cone angles, color and intensity
+    /// remain unchanged, including under nonuniform scale or shear.
+    pub fn transformed(mut self, transform: AffineTransform) -> Result<Self, LightError> {
+        if !self.0.is_valid() {
+            return Err(LightError::InvalidParameters);
+        }
+        let matrix = transform.matrix();
+        if self.0.kind != LightKind3d::Directional {
+            self.0.position = std::array::from_fn(|r| {
+                ((0..3)
+                    .map(|c| f64::from(matrix[c][r]) * f64::from(self.0.position[c]))
+                    .sum::<f64>()
+                    + f64::from(matrix[3][r])) as f32
+            });
+        }
+        if self.0.kind != LightKind3d::Point {
+            let direction: [f64; 3] = std::array::from_fn(|r| {
+                (0..3)
+                    .map(|c| f64::from(matrix[c][r]) * f64::from(self.0.direction[c]))
+                    .sum()
+            });
+            let length = direction.iter().map(|v| v * v).sum::<f64>().sqrt();
+            self.0.direction = direction.map(|v| (v / length) as f32);
+        }
+        if !self.0.is_valid() {
+            return Err(LightError::Unrepresentable);
+        }
+        Ok(self)
+    }
+
     /// Infinite source. Direction points from the surface toward the light.
     pub fn directional(direction: [f32; 3]) -> Self {
         Self(PunctualLight3d {
@@ -86,5 +146,64 @@ impl Default for Light {
             intensity: 0.75,
             ambient: 0.3,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transformed_lights_preserve_photometric_parameters_and_ignore_unused_coordinates() {
+        let transform = AffineTransform::from_matrix([
+            [-2., 0., 0., 0.],
+            [1., 3., 0., 0.],
+            [0., 0., 4., 0.],
+            [5., 6., 7., 1.],
+        ])
+        .unwrap();
+        let spot = PunctualLight::spot([1., 2., 3.], [1., 1., 0.])
+            .range(Some(10.))
+            .intensity(12.)
+            .minimum_distance(0.5)
+            .cone_angles(0.2, 0.7);
+        let result = spot.transformed(transform).unwrap();
+        assert_eq!(result.kind(), LightKind3d::Spot);
+        assert_eq!(result.position(), [5., 12., 19.]);
+        let k = 1. / 10_f32.sqrt();
+        for (a, b) in result.direction().into_iter().zip([-k, 3. * k, 0.]) {
+            assert!((a - b).abs() < 1e-6);
+        }
+        assert_eq!(result.0.range, spot.0.range);
+        assert_eq!(result.0.intensity, spot.0.intensity);
+        assert_eq!(result.0.minimum_distance, spot.0.minimum_distance);
+        assert_eq!((result.0.inner_angle, result.0.outer_angle), (0.2, 0.7));
+        assert_eq!(result.0.color, spot.0.color);
+        let large = AffineTransform::from_translation([f32::MAX; 3]).unwrap();
+        let sun = PunctualLight::directional([f32::MAX, 0., 0.]);
+        assert_eq!(sun.transformed(large).unwrap().direction(), [1., 0., 0.]);
+        assert_eq!(
+            sun.transformed(transform).unwrap().direction(),
+            [-1., 0., 0.]
+        );
+        assert_eq!(
+            PunctualLight::point([0.; 3])
+                .transformed(transform)
+                .unwrap()
+                .position(),
+            [5., 6., 7.]
+        );
+        assert_eq!(
+            PunctualLight::point([f32::MAX; 3])
+                .transformed(large)
+                .unwrap_err(),
+            LightError::Unrepresentable
+        );
+        assert_eq!(
+            PunctualLight::spot([0.; 3], [0.; 3])
+                .transformed(transform)
+                .unwrap_err(),
+            LightError::InvalidParameters
+        );
     }
 }

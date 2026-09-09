@@ -153,6 +153,7 @@ impl Scene {
             });
         }
         Ok(Scene3dFrame {
+            diffuse_environment: self.diffuse_environment.map(|environment| environment.0),
             world_to_view: view,
             ui_texture,
             view_projection,

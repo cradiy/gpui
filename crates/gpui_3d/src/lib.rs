@@ -8,6 +8,7 @@ mod affine;
 mod bounds;
 mod bvh;
 mod camera;
+mod environment;
 mod frame;
 mod graph;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
@@ -21,6 +22,7 @@ mod viewport;
 pub use affine::{AffineTransform, TransformError};
 pub use bounds::Aabb;
 pub use camera::{Camera, CameraError, Projection, Ray, RayError, ScreenPoint};
+pub use environment::{DiffuseEnvironment, EnvironmentError};
 pub use gpui::AlphaMode3d as AlphaMode;
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
@@ -429,6 +431,7 @@ impl Default for Light {
 pub struct Scene {
     camera: Camera,
     light: Light,
+    diffuse_environment: Option<DiffuseEnvironment>,
     color_output: ColorOutput,
     objects: Vec<Object>,
     spatial_index: Arc<OnceLock<bvh::ObjectIndex>>,
@@ -446,6 +449,11 @@ impl Scene {
     /// Sets scene lighting.
     pub fn light(mut self, light: Light) -> Self {
         self.light = light;
+        self
+    }
+    /// Adds distant diffuse illumination without changing the scene background.
+    pub fn diffuse_environment(mut self, environment: DiffuseEnvironment) -> Self {
+        self.diffuse_environment = Some(environment);
         self
     }
     /// Sets exposure and tone mapping for the scene's linear HDR result.

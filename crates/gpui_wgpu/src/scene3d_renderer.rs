@@ -200,6 +200,12 @@ impl WgpuScene3dRenderer {
         config: Scene3dOutputConfig,
     ) -> Result<Scene3dGpuOutput> {
         self.capabilities.validate(config)?;
+        ensure!(
+            frame
+                .diffuse_environment
+                .is_none_or(|environment| environment.is_valid()),
+            "invalid diffuse environment parameters"
+        );
         ensure!(!self.context.device_lost(), "3D rendering device is lost");
         ensure!(
             frame.color_output.is_valid(),

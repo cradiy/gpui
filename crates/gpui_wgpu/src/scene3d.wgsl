@@ -11,6 +11,7 @@ struct Params {
     metallic_roughness_map: ImageParams, emissive_map: ImageParams,
     normal_map: ImageParams, normal_settings: vec4<f32>,
     depth_plane: vec4<f32>,
+    environment_sh: array<vec4<f32>, 9>, environment: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
@@ -128,6 +129,20 @@ fn surface_normal(input: Output) -> vec3<f32> {
     return unit_vector(t * mapped.x + b * mapped.y + n * mapped.z);
 }
 
+fn diffuse_environment(normal: vec3<f32>) -> vec3<f32> {
+    if (params.environment.z == 0.0) { return vec3<f32>(0.0); }
+    let n = unit_vector(normal);
+    let x = params.environment.x * n.x - params.environment.y * n.z;
+    let y = n.y;
+    let z = params.environment.y * n.x + params.environment.x * n.z;
+    let basis = array<f32, 9>(0.2820947918, 0.4886025119 * y, 0.4886025119 * z, 0.4886025119 * x,
+        1.0925484306 * x * y, 1.0925484306 * y * z, 0.3153915653 * (3.0 * z * z - 1.0),
+        1.0925484306 * x * z, 0.5462742153 * (x * x - y * y));
+    var value = vec3<f32>(0.0);
+    for (var i = 0u; i < 9u; i += 1u) { value += params.environment_sh[i].rgb * basis[i]; }
+    return max(value, vec3<f32>(0.0)) * params.environment.z;
+}
+
 fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     let factors = sample_image(metallic_roughness_image, params.metallic_roughness_map, uv);
     let metal = params.pbr.x * factors.b;
@@ -138,7 +153,8 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f
     let nv = clamp(dot(normal, view), 0.0, 1.0);
     let nl = clamp(dot(normal, light), 0.0, 1.0);
     let diffuse = base * (1.0 - metal);
-    var result = diffuse * params.direction.w + emission;
+    let f0 = mix(vec3<f32>(0.04), base, metal);
+    var result = diffuse * (vec3<f32>(params.direction.w) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) + emission;
     if (nv <= 0.0 || nl <= 0.0) { return result; }
     let half_vector = unit_vector(view + light);
     let nh = clamp(dot(normal, half_vector), 0.0, 1.0);
@@ -149,7 +165,6 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f
     let distribution = a2 / max(3.14159265359 * d * d, 1e-12);
     let visibility = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2)
         + nv * sqrt(nl * nl * (1.0 - a2) + a2), 1e-6);
-    let f0 = mix(vec3<f32>(0.04), base, metal);
     let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vh, 5.0);
     let specular = fresnel * distribution * visibility;
     let reflected = (vec3<f32>(1.0) - fresnel) * diffuse / 3.14159265359 + specular;
@@ -168,7 +183,7 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
         }
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front) * input.orientation;
         let light = params.direction.xyz / max(length(params.direction.xyz), 0.00001);
-        illumination = vec3<f32>(params.direction.w) + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);
+        illumination = vec3<f32>(params.direction.w) + diffuse_environment(normal) + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);
     }
     return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
 }

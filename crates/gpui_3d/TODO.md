@@ -64,6 +64,9 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Light types**: Multiple directional, point, and spot lights with intensity, range, and attenuation controls.
 - [ ] **Directional shadows**: Shadow maps, soft shadows, bias, and quality settings to control self-shadowing artifacts and resource costs.
 - [ ] **Environment lighting**: HDR environment maps and diffuse and specular IBL, with independent background and lighting controls.
+  - [x] **Diffuse irradiance**: Decoded linear HDR equirectangular inputs, L2 spherical-harmonic projection, precomputed coefficient inputs, intensity and world-Y rotation, shared viewport/headless shading, and an ambient/IBL comparison example.
+  - [ ] **Specular IBL**: Prefiltered environment radiance, BRDF integration, and roughness-dependent reflections.
+  - [ ] **Environment background**: Independent background visibility, intensity, and orientation.
 - [ ] **Effect integration**: Compose Bloom and color grading through `gpui_effects`; define depth texture access and coordinate conventions for depth-dependent effects.
 
 ## Phase 4: Animation and Dynamic Content

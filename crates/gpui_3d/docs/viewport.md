@@ -512,10 +512,83 @@ use the eye-to-surface vector; orthographic cameras use a constant direction.
 Both viewport and headless rendering use these conventions. PBR does not alter
 alpha cutout, depth writes, object IDs, or picking.
 
-The light model contains one directional light and diffuse ambient illumination.
-Pure metals receive no ambient diffuse light. Environment reflections, shadows,
-and occlusion maps are not provided.
+The light model contains one directional light, uniform ambient illumination,
+and optional diffuse environment illumination. Pure metals receive no diffuse
+ambient or environment light. Environment reflections, shadows, and occlusion
+maps are not provided.
 Emission does not illuminate other objects or add a glow outside the surface.
+
+### Diffuse environment lighting
+
+```rust
+use gpui_3d::{DiffuseEnvironment, Light, Scene};
+
+// Row-major, linear HDR RGB radiance, with the top row facing +Y.
+let pixels = [
+    [0.2, 0.6, 2.0], [0.2, 0.6, 2.0],
+    [0.4, 0.1, 0.02], [0.4, 0.1, 0.02],
+];
+let environment = DiffuseEnvironment::from_equirectangular([2, 2], &pixels)?;
+let scene = Scene::new()
+    .light(Light { ambient: 0., intensity: 0., ..Default::default() })
+    .diffuse_environment(environment.intensity(1.5).rotation_y(0.5));
+# Ok::<(), gpui_3d::EnvironmentError>(())
+```
+
+`DiffuseEnvironment` accepts decoded equirectangular radiance or nine precomputed
+real spherical-harmonic coefficients. Source RGB must be finite and in
+`[0, 65504]`; values above one retain their HDR energy. Decode image formats and
+convert nonlinear color inputs to linear RGB before projection. The core does
+not load environment files or render them as a background.
+
+Projection integrates each piecewise-constant texel over its spherical area
+and convolves the first three SH bands with the cosine kernel divided by pi.
+Perform this step once when the source changes, then reuse the value across
+scenes and frames. The GPU evaluates nine RGB coefficients per shaded pixel;
+environment image dimensions do not affect per-frame storage or sampling cost.
+
+Coordinates use `theta = pi*v`, `phi = 2*pi*u - pi`, and direction
+`(sin(theta)*cos(phi), cos(theta), sin(theta)*sin(phi))`. Thus the upper pole is
+`+Y`, the image center is `+X`, `u=0.75` is `+Z`, and the seam is `-X`.
+`.rotation_y(radians)` applies a right-handed environment-to-world rotation
+around `+Y` without reprojection. `.intensity(value)` is a finite linear
+multiplier in `[0, 65504]`; zero disables the contribution. Neither control
+changes the camera, objects, or GPUI background.
+
+`from_coefficients` expects **irradiance divided by pi**, not raw radiance.
+The coefficient order and orthonormal real SH basis are:
+
+| Index | Basis |
+| --- | --- |
+| 0 | `0.28209479` |
+| 1 | `0.48860251 * y` |
+| 2 | `0.48860251 * z` |
+| 3 | `0.48860251 * x` |
+| 4 | `1.09254843 * x*y` |
+| 5 | `1.09254843 * y*z` |
+| 6 | `0.31539157 * (3*z*z - 1)` |
+| 7 | `1.09254843 * x*z` |
+| 8 | `0.54627422 * (x*x - y*y)` |
+
+Each coefficient component must be finite and in `[-262016, 262016]`.
+`coefficients()` returns the projected coefficients before intensity and rotation.
+The representation follows the low-order irradiance approximation described in
+[An Efficient Representation for Irradiance Environment Maps](https://graphics.stanford.edu/papers/envmap/).
+It captures broad directional illumination, not sharp environment features.
+Negative reconstructed irradiance from SH ringing is clamped to zero.
+
+Basic lit materials add `base * irradiance/pi` to existing lighting. PBR materials
+add `base * (1 - metallic) * (1 - F0) * irradiance/pi`, where
+`F0 = mix(0.04, base, metallic)`, evaluated with the shading normal, including an
+active normal map. This diffuse approximation is view-independent; it does not
+provide specular IBL, roughness-dependent reflections, or visibility occlusion.
+Uniform ambient and directional lighting remain additive. Unlit materials bypass
+environment lighting. Alpha, picking, object IDs, depth, and geometric normal
+outputs are unchanged. Viewport and headless color rendering share the same path.
+
+Run `cargo run -p gpui_3d --example diffuse_environment` to compare uniform ambient
+light with a colored HDR environment. Rotate the light with the toolbar or orbit
+either view with the right mouse button; both cameras stay synchronized.
 
 ### Material textures
 

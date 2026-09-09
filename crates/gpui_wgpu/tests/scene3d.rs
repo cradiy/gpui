@@ -75,6 +75,7 @@ fn layer(
             light_direction: [0., 0., 1.],
             light: [1.; 4],
             ambient: 0.3,
+            diffuse_environment: None,
             color_output: Default::default(),
             objects: objects.into(),
         })),

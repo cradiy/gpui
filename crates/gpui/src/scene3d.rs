@@ -275,6 +275,31 @@ pub enum AlphaMode3d {
     Blend = 2,
 }
 
+/// L2 real spherical harmonics of diffuse irradiance divided by pi, in linear RGB.
+/// Coefficient order is (0,0), (1,-1), (1,0), (1,1), (2,-2), (2,-1), (2,0), (2,1), (2,2).
+#[derive(Clone, Copy, Debug)]
+pub struct DiffuseEnvironment3d {
+    /// Convolved coefficients; each component is finite and in [-262016, 262016].
+    pub coefficients: [[f32; 3]; 9],
+    /// Nonnegative linear multiplier, at most 65504.
+    pub intensity: f32,
+    /// Environment-to-world rotation around +Y, in radians.
+    pub rotation_y: f32,
+}
+
+impl DiffuseEnvironment3d {
+    /// Whether all coefficients and controls fit the supported finite ranges.
+    pub fn is_valid(&self) -> bool {
+        self.coefficients
+            .iter()
+            .flatten()
+            .all(|v| v.is_finite() && v.abs() <= 4. * 65504.)
+            && self.intensity.is_finite()
+            && (0. ..=65504.).contains(&self.intensity)
+            && self.rotation_y.is_finite()
+    }
+}
+
 /// Color input for a mesh material.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum MeshTexture3d {
@@ -358,6 +383,8 @@ pub struct Scene3dFrame {
     pub light: [f32; 4],
     /// Ambient light multiplier.
     pub ambient: f32,
+    /// Optional distant diffuse illumination. It does not draw a background.
+    pub diffuse_environment: Option<DiffuseEnvironment3d>,
     /// HDR-to-display conversion. Does not affect depth or object IDs.
     pub color_output: crate::ColorOutput3d,
     /// Meshes; opaque visibility is independent of submission order.

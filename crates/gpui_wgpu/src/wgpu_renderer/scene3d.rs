@@ -74,6 +74,8 @@ struct Params {
     normal_map: ImageParams,
     normal_settings: [f32; 4],
     depth_plane: [f32; 4],
+    environment_sh: [[f32; 4]; 9],
+    environment: [f32; 4],
 }
 
 struct Geometry {
@@ -554,6 +556,19 @@ impl Scene3dRenderer {
                 normal_map: ImageParams::new(normal_map, gpui::TextureColorSpace3d::Linear),
                 normal_settings: [object.normal_scale, f32::from(normal_map.is_some()), 0., 0.],
                 depth_plane: frame.world_to_view.map(|column| -column[2]),
+                environment_sh: frame
+                    .diffuse_environment
+                    .map_or([[0.; 4]; 9], |environment| {
+                        environment
+                            .coefficients
+                            .map(|rgb| [rgb[0], rgb[1], rgb[2], 0.])
+                    }),
+                environment: frame
+                    .diffuse_environment
+                    .map_or([1., 0., 0., 0.], |environment| {
+                        let (sin, cos) = environment.rotation_y.sin_cos();
+                        [cos, sin, environment.intensity, 0.]
+                    }),
             };
             let buffer = &self.slots[start + index];
             queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
@@ -811,6 +826,11 @@ mod tests {
             ("sampling", std::mem::offset_of!(Params, sampling)),
             ("view", std::mem::offset_of!(Params, view)),
             ("depth_plane", std::mem::offset_of!(Params, depth_plane)),
+            (
+                "environment_sh",
+                std::mem::offset_of!(Params, environment_sh),
+            ),
+            ("environment", std::mem::offset_of!(Params, environment)),
             ("pbr", std::mem::offset_of!(Params, pbr)),
             ("emissive", std::mem::offset_of!(Params, emissive)),
             (

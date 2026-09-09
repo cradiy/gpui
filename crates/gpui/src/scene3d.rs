@@ -2,6 +2,67 @@ use std::sync::Arc;
 
 use crate::{AtlasTile, DevicePixels, Pixels, Rgba, Size, size};
 
+/// Capabilities of the current window's depth-tested mesh path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scene3dViewportCapabilities {
+    /// Maximum physical dimension of a render target or image texture.
+    pub max_texture_dimension: u32,
+    /// Effective color sampling selected by the renderer.
+    pub color_samples: u32,
+    /// Maximum physical dimension of a captured UI texture.
+    pub max_ui_texture_dimension: u32,
+}
+
+/// Why a window cannot currently render mesh viewports.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Scene3dUnsupportedReason {
+    /// The platform renderer has no mesh viewport implementation.
+    BackendUnsupported,
+    /// Renderer resources are temporarily absent, for example during recovery.
+    RendererUnavailable,
+    /// The renderer has observed loss of its graphics device.
+    DeviceLost,
+    /// A required device limit or format feature is unavailable.
+    MissingCapabilities(crate::SharedString),
+}
+impl std::fmt::Display for Scene3dUnsupportedReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BackendUnsupported => {
+                f.write_str("the window backend does not implement 3D viewports")
+            }
+            Self::RendererUnavailable => f.write_str("the window renderer is unavailable"),
+            Self::DeviceLost => {
+                f.write_str("the graphics device is lost; renderer recovery is required")
+            }
+            Self::MissingCapabilities(reason) => reason.fmt(f),
+        }
+    }
+}
+impl std::error::Error for Scene3dUnsupportedReason {}
+
+/// Current window support, independent of direct headless output capabilities.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Scene3dSupport {
+    /// Mesh viewports can use the reported capabilities.
+    Supported(Scene3dViewportCapabilities),
+    /// Mesh viewports are unavailable for the given reason.
+    Unsupported(Scene3dUnsupportedReason),
+}
+impl Scene3dSupport {
+    /// Whether mesh viewports are currently available.
+    pub fn is_supported(&self) -> bool {
+        matches!(self, Self::Supported(_))
+    }
+    /// The current mesh capabilities, or `None` when unavailable.
+    pub fn capabilities(&self) -> Option<Scene3dViewportCapabilities> {
+        match self {
+            Self::Supported(capabilities) => Some(*capabilities),
+            Self::Unsupported(_) => None,
+        }
+    }
+}
+
 mod environment;
 mod visibility;
 pub use environment::{

@@ -1870,8 +1870,8 @@ impl PlatformWindow for WaylandWindow {
         true
     }
 
-    fn supports_scene3d(&self) -> bool {
-        true
+    fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        self.borrow().renderer.scene3d_support()
     }
 
     fn minimize(&self) {

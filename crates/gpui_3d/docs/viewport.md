@@ -25,6 +25,43 @@ methods control its layout and outer appearance. Use an enclosing interactive
 `div` for pointer handlers; update the camera and notify the view after input.
 The viewport does not schedule animation frames itself.
 
+## Backend support
+
+`Window::scene3d_support()` reports the current window's mesh capabilities or a
+`Scene3dUnsupportedReason`. `Window::supports_scene3d()` is the boolean check.
+Query inside the view's render/update path when choosing between a mesh viewport
+and ordinary UI; querying does not request a frame.
+
+```rust,no_run
+use gpui::{Scene3dSupport, Window};
+
+fn viewport_status(window: &Window) -> String {
+    match window.scene3d_support() {
+        Scene3dSupport::Supported(caps) => format!("3D · {} samples", caps.color_samples),
+        Scene3dSupport::Unsupported(reason) => reason.to_string(),
+    }
+}
+```
+
+The capabilities include the renderer-selected color sample count, maximum
+physical texture dimension, and captured-UI texture limit. The Linux WGPU path
+uses four color samples when its linear-color and depth formats support them,
+otherwise one. UI raster density is uniformly reduced to fit both the 2048-pixel
+capture limit and the device limit without changing logical layout.
+
+Unavailable states distinguish an unimplemented backend, absent renderer
+resources, observed device loss, and missing device limits or format features.
+Unsupported viewports retain layout and outer styling but do not paint a mesh or
+capture UI; object callbacks do not report hits and pending UI routing is cleared
+on the next prepaint. The application chooses its fallback content.
+
+Linux X11 and Wayland query their current WGPU renderer. Other platform windows
+report `BackendUnsupported` unless their renderer implements this capability.
+Support is refreshed when the WGPU renderer is recreated; do not retain a
+support result across device replacement. Viewport support is independent of
+headless output-channel support and does not certify allocation success or
+runtime rendering on an unvalidated platform.
+
 ## Coordinates and geometry
 
 World coordinates are right-handed, with positive Y up. The default camera is

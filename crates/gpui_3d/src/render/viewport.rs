@@ -86,7 +86,8 @@ impl Viewport3d {
     }
 
     /// Sets raster density relative to display scale without changing layout.
-    /// Defaults to 1. Density is capped uniformly at 2048 pixels on either axis.
+    /// Defaults to 1. Density is capped uniformly at 2048 pixels on either axis
+    /// and at the current renderer's UI texture limit.
     #[track_caller]
     pub fn ui_texture_scale(mut self, scale: f32) -> Self {
         assert!(scale.is_finite() && scale > 0.);
@@ -118,6 +119,10 @@ impl IntoElement for Viewport3d {
             let on_move = listener.clone();
             container = container
                 .on_mouse_move(move |event, window, cx| {
+                    if !window.supports_scene3d() {
+                        on_move(&None, window, cx);
+                        return;
+                    }
                     let hit = snapshot
                         .borrow()
                         .as_ref()
@@ -133,6 +138,9 @@ impl IntoElement for Viewport3d {
         if let Some(listener) = self.on_click.take() {
             let snapshot = self.pick_snapshot.clone();
             container = container.on_click(move |event, window, cx| {
+                if !window.supports_scene3d() {
+                    return;
+                }
                 let gpui::ClickEvent::Mouse(event) = event else {
                     return;
                 };
@@ -243,17 +251,26 @@ impl Element for Content {
                 (input.clone(), input)
             },
         );
+        let capabilities = window.scene3d_support().capabilities();
         if let Some(input) = &input {
             input.read(cx).prepare(
-                target.filter(|_| self.0.texture.is_some() && !bounds.is_empty()),
+                target.filter(|_| {
+                    capabilities.is_some() && self.0.texture.is_some() && !bounds.is_empty()
+                }),
                 self.0.texture_size.unwrap_or(bounds.size),
                 window,
             );
         }
-        if window.supports_scene3d() && !bounds.is_empty() && self.0.texture.is_some() {
+        if let Some(capabilities) = capabilities
+            && !bounds.is_empty()
+            && self.0.texture.is_some()
+        {
+            let logical_size = self.0.texture_size.unwrap_or(bounds.size);
+            let limit = capabilities.max_ui_texture_dimension as f32
+                / f32::from(logical_size.width.max(logical_size.height));
             let config = UiTexture3d::new(
-                self.0.texture_size.unwrap_or(bounds.size),
-                window.scale_factor() * self.0.texture_scale,
+                logical_size,
+                (window.scale_factor() * self.0.texture_scale).min(limit),
             );
             let transform = input
                 .as_ref()
@@ -298,6 +315,7 @@ impl Element for Content {
         cx: &mut App,
     ) {
         if !window.supports_scene3d() || bounds.is_empty() {
+            *self.0.pick_snapshot.borrow_mut() = None;
             return;
         }
         let scene = &self.0.scene;

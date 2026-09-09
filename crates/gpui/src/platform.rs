@@ -841,7 +841,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 
     /// Whether depth-tested mesh viewports are supported.
     fn supports_scene3d(&self) -> bool {
-        false
+        self.scene3d_support().is_supported()
+    }
+
+    /// Current mesh viewport support and unsupported-backend diagnostics.
+    fn scene3d_support(&self) -> crate::Scene3dSupport {
+        crate::Scene3dSupport::Unsupported(crate::Scene3dUnsupportedReason::BackendUnsupported)
     }
 
     // macOS specific methods

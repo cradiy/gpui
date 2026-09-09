@@ -304,6 +304,13 @@ other GPUI renderers. They do not guarantee available memory, device health, or
 successful rendering on an unvalidated platform. Query a new context after
 device replacement.
 
+`Scene3dDeviceCapabilities::query_with_formats(context, formats)` includes
+additional target formats. `viewport(target_format)` checks a queried format
+for the composited mesh path without requiring direct geometry outputs. Use
+`Window::scene3d_support()` for a live platform window's actual support state;
+the device snapshot alone does not indicate whether its platform renderer
+implements mesh viewports.
+
 ## Example
 
 ```sh

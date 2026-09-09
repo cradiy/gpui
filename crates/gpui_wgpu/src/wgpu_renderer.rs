@@ -519,6 +519,7 @@ pub struct WgpuRenderer {
     opaque_alpha_mode: wgpu::CompositeAlphaMode,
     max_texture_size: u32,
     backdrop_blur_supported: bool,
+    scene3d_support: gpui::Scene3dSupport,
     last_error: Arc<Mutex<Option<String>>>,
     failed_frame_count: u32,
     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -849,6 +850,15 @@ impl WgpuRenderer {
         shared_error: Option<Arc<Mutex<Option<String>>>>,
     ) -> anyhow::Result<Self> {
         let surface_format = surface_config.format;
+        let scene3d_support =
+            match crate::Scene3dDeviceCapabilities::query_with_formats(context, [surface_format])
+                .viewport(surface_format)
+            {
+                Ok(capabilities) => gpui::Scene3dSupport::Supported(capabilities),
+                Err(error) => gpui::Scene3dSupport::Unsupported(
+                    gpui::Scene3dUnsupportedReason::MissingCapabilities(error.to_string().into()),
+                ),
+            };
         let alpha_mode = surface_config.alpha_mode;
         let device = Arc::clone(&context.device);
         let max_texture_size = device.limits().max_texture_dimension_2d;
@@ -1026,6 +1036,7 @@ impl WgpuRenderer {
             opaque_alpha_mode,
             max_texture_size,
             backdrop_blur_supported,
+            scene3d_support,
             last_error,
             failed_frame_count: 0,
             device_lost: context.device_lost_flag(),
@@ -2178,6 +2189,16 @@ impl WgpuRenderer {
         self.backdrop_blur_supported
     }
 
+    pub fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        if self.device_lost() {
+            gpui::Scene3dSupport::Unsupported(gpui::Scene3dUnsupportedReason::DeviceLost)
+        } else if self.resources.is_none() {
+            gpui::Scene3dSupport::Unsupported(gpui::Scene3dUnsupportedReason::RendererUnavailable)
+        } else {
+            self.scene3d_support.clone()
+        }
+    }
+
     pub fn draw(&mut self, scene: &Scene) -> bool {
         // Bail out early if the surface has been unconfigured (e.g. during
         // Android background/rotation transitions).  Attempting to acquire
@@ -2848,6 +2869,25 @@ impl WgpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
     ) -> bool {
+        let mut has_scene3d = false;
+        scene.visit(&mut |scene| {
+            has_scene3d |= scene
+                .subtree_layers
+                .iter()
+                .any(|layer| layer.scene3d.is_some());
+        });
+        let color_samples = if has_scene3d {
+            match self.scene3d_support() {
+                gpui::Scene3dSupport::Supported(capabilities) => capabilities.color_samples,
+                gpui::Scene3dSupport::Unsupported(reason) => {
+                    *self.last_error.lock().unwrap() =
+                        Some(format!("3D viewport unavailable: {reason}"));
+                    return false;
+                }
+            }
+        } else {
+            1
+        };
         if !self.encode_ui_captures(scene, encoder) {
             return false;
         }
@@ -2877,13 +2917,6 @@ impl WgpuRenderer {
             });
         });
         scene.visit(&mut |scene| has_fluid |= !scene.fluids.is_empty());
-        let mut has_scene3d = false;
-        scene.visit(&mut |scene| {
-            has_scene3d |= scene
-                .subtree_layers
-                .iter()
-                .any(|layer| layer.scene3d.is_some())
-        });
         {
             let resources = self.resources_mut();
             if has_scene3d && resources.scene3d.is_none() {
@@ -2891,7 +2924,7 @@ impl WgpuRenderer {
                     &resources.device,
                     &resources.queue,
                     format,
-                    4,
+                    color_samples,
                 ));
             }
             if let Some(renderer) = &mut resources.scene3d {

@@ -3600,6 +3600,12 @@ impl Window {
         self.platform_window.supports_scene3d()
     }
 
+    /// Current renderer capabilities or the reason mesh viewports are unavailable.
+    /// Query again after renderer/device replacement; this does not schedule a frame.
+    pub fn scene3d_support(&self) -> crate::Scene3dSupport {
+        self.platform_window.scene3d_support()
+    }
+
     /// Draws UI in texture-local coordinates at its own raster density.
     /// Use the same configuration during prepaint and paint inside a 3D capture.
     /// Ancestor masks apply to the final viewport, not to the source texture.

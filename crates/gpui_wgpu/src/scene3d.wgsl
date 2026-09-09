@@ -6,9 +6,9 @@ struct DirectLight {
 };
 struct Params {
     specular_environment: vec4<f32>,
-    model: mat4x4<f32>, normal: mat4x4<f32>, camera: mat4x4<f32>,
+    camera: mat4x4<f32>,
     bounds: vec4<f32>, viewport: vec4<f32>, ambient: vec4<f32>,
-    color: vec4<f32>, texture_rect: vec4<f32>, flags: vec4<f32>,
+    texture_rect: vec4<f32>, flags: vec4<f32>,
     ids: vec4<u32>,
     uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
     view: vec4<f32>, pbr: vec4<f32>, emissive: vec4<f32>,
@@ -32,17 +32,26 @@ struct Params {
 @group(0) @binding(9) var specular_image: texture_cube<f32>;
 @group(0) @binding(10) var specular_brdf: texture_2d<f32>;
 @group(0) @binding(11) var specular_sampler: sampler;
-struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32 };
+struct InstanceInput {
+    @location(4) model_0: vec4<f32>, @location(5) model_1: vec4<f32>,
+    @location(6) model_2: vec4<f32>, @location(7) model_3: vec4<f32>,
+    @location(8) normal_0: vec4<f32>, @location(9) normal_1: vec4<f32>,
+    @location(10) normal_2: vec4<f32>, @location(11) normal_3: vec4<f32>,
+    @location(12) color: vec4<f32>, @location(13) ids: vec4<u32>,
+};
+struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32, @location(5) @interpolate(flat) color: vec4<f32>, @location(6) @interpolate(flat) output_id: u32 };
 @vertex
-fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) tangent: vec4<f32>) -> Output {
-    var clip = params.camera * params.model * vec4<f32>(position, 1.0);
+fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) tangent: vec4<f32>, instance: InstanceInput) -> Output {
+    let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
+    let normal_matrix = mat4x4<f32>(instance.normal_0, instance.normal_1, instance.normal_2, instance.normal_3);
+    var clip = params.camera * model * vec4<f32>(position, 1.0);
     let origin = params.bounds.xy / params.viewport.xy;
     let extent = params.bounds.zw / params.viewport.xy;
     clip.x = (origin.x * 2.0 - 1.0) * clip.w + (clip.x + clip.w) * extent.x;
     clip.y = (1.0 - origin.y * 2.0) * clip.w + (clip.y - clip.w) * extent.y;
-    let handedness = sign(dot(cross(unit_vector(params.model[0].xyz), unit_vector(params.model[1].xyz)), unit_vector(params.model[2].xyz)));
-    let world_tangent = vec4<f32>((params.model * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w * handedness);
-    return Output(clip, (params.normal * vec4<f32>(normal, 0.0)).xyz, uv, (params.model * vec4<f32>(position, 1.0)).xyz, world_tangent, handedness);
+    let handedness = sign(dot(cross(unit_vector(model[0].xyz), unit_vector(model[1].xyz)), unit_vector(model[2].xyz)));
+    let world_tangent = vec4<f32>((model * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w * handedness);
+    return Output(clip, (normal_matrix * vec4<f32>(normal, 0.0)).xyz, uv, (model * vec4<f32>(position, 1.0)).xyz, world_tangent, handedness, instance.color, instance.ids.x);
 }
 fn address_coordinate(value: f32, mode: u32) -> f32 {
     if (mode == 1u) { return value - floor(value); }
@@ -97,16 +106,17 @@ fn base_color(input: Output) -> vec4<f32> {
         if (params.flags.z > 0.5) { sampled = vec4<f32>(sampled.rgb / max(sampled.a, 0.00001), sampled.a); }
         sampled = vec4<f32>(srgb_to_linear(sampled.rgb), sampled.a);
     }
-    let base = sampled * vec4<f32>(srgb_to_linear(params.color.rgb), params.color.a);
+    let base = sampled * vec4<f32>(srgb_to_linear(input.color.rgb), input.color.a);
     let alpha = clamp(base.a, 0.0, 1.0);
     if (params.ids.y == 1u && alpha < params.flags.x) { discard; }
     if (params.ids.y == 2u && alpha <= 0.0) { discard; }
     return vec4<f32>(base.rgb, select(1.0, alpha, params.ids.y == 2u));
 }
 @vertex
-fn shadow_vertex(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>) -> Output {
-    let world = params.model * vec4<f32>(position, 1.0);
-    return Output(params.shadow_camera * world, vec3<f32>(0.0), uv, world.xyz, vec4<f32>(0.0), 1.0);
+fn shadow_vertex(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>, instance: InstanceInput) -> Output {
+    let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
+    let world = model * vec4<f32>(position, 1.0);
+    return Output(params.shadow_camera * world, vec3<f32>(0.0), uv, world.xyz, vec4<f32>(0.0), 1.0, instance.color, instance.ids.x);
 }
 @fragment
 fn shadow_fragment(input: Output) {
@@ -144,7 +154,7 @@ fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>) 
 @fragment
 fn object_id(input: Output) -> @location(0) u32 {
     let base = base_color(input);
-    return params.ids.x;
+    return input.output_id;
 }
 
 @fragment

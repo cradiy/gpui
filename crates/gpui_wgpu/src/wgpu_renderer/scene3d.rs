@@ -4,6 +4,7 @@ use wgpu::util::DeviceExt;
 
 mod background;
 mod geometry;
+mod instances;
 mod specular;
 
 #[repr(C)]
@@ -13,6 +14,64 @@ struct Vertex {
     normal: [f32; 3],
     uv: [f32; 2],
     tangent: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Instance {
+    model: [[f32; 4]; 4],
+    normal: [[f32; 4]; 4],
+    color: [f32; 4],
+    ids: [u32; 4],
+}
+
+impl Instance {
+    fn new(object: &gpui::MeshDraw3d) -> Self {
+        Self {
+            model: object.model,
+            normal: object.normal,
+            color: [
+                object.color.r,
+                object.color.g,
+                object.color.b,
+                object.color.a,
+            ],
+            ids: [object.output_id, 0, 0, 0],
+        }
+    }
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
+            4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
+            8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4,
+            12 => Float32x4, 13 => Uint32x4
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &ATTRIBUTES,
+        }
+    }
+}
+
+struct BatchSlot {
+    params: wgpu::Buffer,
+    instances: wgpu::Buffer,
+}
+
+fn instance_limit(device: &wgpu::Device) -> usize {
+    ((device.limits().max_buffer_size - std::mem::size_of::<Params>() as u64)
+        / std::mem::size_of::<Instance>() as u64)
+        .min(u64::from(u32::MAX)) as usize
+}
+
+fn instance_buffer(device: &wgpu::Device, count: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("mesh_instances"),
+        size: (instances::capacity(count, instance_limit(device)) * std::mem::size_of::<Instance>())
+            as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 
 #[repr(C)]
@@ -105,13 +164,10 @@ impl From<gpui::PunctualLight3d> for DirectLight {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Params {
     specular_environment: [f32; 4],
-    model: [[f32; 4]; 4],
-    normal: [[f32; 4]; 4],
     camera: [[f32; 4]; 4],
     bounds: [f32; 4],
     viewport: [f32; 4],
     ambient: [f32; 4],
-    color: [f32; 4],
     texture_rect: [f32; 4],
     flags: [f32; 4],
     ids: [u32; 4],
@@ -211,7 +267,7 @@ pub(crate) struct Scene3dRenderer {
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
     geometry: geometry::GeometryCache<Geometry>,
-    slots: Vec<wgpu::Buffer>,
+    slots: Vec<BatchSlot>,
     offsets: HashMap<usize, usize>,
     targets: Option<Targets>,
     format: wgpu::TextureFormat,
@@ -333,7 +389,7 @@ impl Scene3dRenderer {
                 label: Some("scene3d_shadow"), layout: Some(&layout),
                 vertex: wgpu::VertexState { module: &shader, entry_point: Some("shadow_vertex"), compilation_options: Default::default(),
                     buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 48, step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] })] },
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] }), Some(Instance::layout())] },
                 fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("shadow_fragment"), compilation_options: Default::default(), targets: &[] }),
                 primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
                 depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
@@ -356,7 +412,7 @@ impl Scene3dRenderer {
             vertex: wgpu::VertexState {
                 module: &shader, entry_point: Some("vertex"), compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 48, step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] })],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] }), Some(Instance::layout())],
             },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(fragment), compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format: mesh_format, blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }),
@@ -477,7 +533,13 @@ impl Scene3dRenderer {
                     continue;
                 };
                 self.offsets.insert(layer as *const _ as usize, slot_count);
-                slot_count += frame.objects.len();
+                slot_count += instances::BatchPlan::new(
+                    &frame.objects,
+                    self.blend_pipeline.is_some(),
+                    instance_limit(device),
+                )
+                .batches
+                .len();
                 frames.push(frame.clone());
             }
         });
@@ -522,7 +584,7 @@ impl Scene3dRenderer {
             |previous, mesh| Geometry::prepare(device, previous, mesh),
         );
         let mut shadow_sizes = HashSet::new();
-        let mut slot_count = 0;
+        let mut batch_sizes = Vec::new();
         let mut has_frame = false;
         for frame in frames {
             assert!(
@@ -539,7 +601,16 @@ impl Scene3dRenderer {
                 shadow_sizes.insert(shadow.resolution);
             }
             has_frame = true;
-            slot_count += frame.objects.len();
+            batch_sizes.extend(
+                instances::BatchPlan::new(
+                    &frame.objects,
+                    self.blend_pipeline.is_some(),
+                    instance_limit(device),
+                )
+                .batches
+                .iter()
+                .map(|batch| batch.len()),
+            );
         }
         self.shadow_maps
             .retain(|size, _| shadow_sizes.contains(size));
@@ -548,15 +619,23 @@ impl Scene3dRenderer {
                 .entry(resolution)
                 .or_insert_with(|| shadow_texture(device, resolution));
         }
-        self.slots.truncate(slot_count);
-        while self.slots.len() < slot_count {
-            self.slots
-                .push(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("mesh_params"),
-                    size: std::mem::size_of::<Params>() as u64,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
+        self.slots.truncate(batch_sizes.len());
+        for (index, count) in batch_sizes.into_iter().enumerate() {
+            if index == self.slots.len() {
+                self.slots.push(BatchSlot {
+                    params: device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("mesh_params"),
+                        size: std::mem::size_of::<Params>() as u64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }),
+                    instances: instance_buffer(device, count),
+                });
+            } else if self.slots[index].instances.size()
+                < (count * std::mem::size_of::<Instance>()) as u64
+            {
+                self.slots[index].instances = instance_buffer(device, count);
+            }
         }
         if !has_frame {
             self.targets = None;
@@ -656,7 +735,7 @@ impl Scene3dRenderer {
     pub(crate) fn encode_frame(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         atlas: &WgpuAtlas,
         frame: &gpui::Scene3dFrame,
         rect: [f32; 4],
@@ -680,7 +759,12 @@ impl Scene3dRenderer {
         let width = depth.width() as f32;
         let height = depth.height() as f32;
         let layout = self.pipeline.get_bind_group_layout(0);
-        let mut groups = Vec::with_capacity(frame.objects.len());
+        let plan = instances::BatchPlan::new(
+            &frame.objects,
+            self.blend_pipeline.is_some(),
+            instance_limit(device),
+        );
+        let mut groups = Vec::with_capacity(plan.batches.len());
         let shadow = frame
             .directional_shadow
             .filter(|_| self.shadow_pipeline.is_some());
@@ -690,7 +774,7 @@ impl Scene3dRenderer {
             .shadow_pipeline
             .as_ref()
             .map(|pipeline| pipeline.get_bind_group_layout(0));
-        let mut shadow_groups = Vec::with_capacity(frame.objects.len());
+        let mut shadow_groups = Vec::with_capacity(plan.batches.len());
         let mut lights = [DirectLight::zeroed(); gpui::MAX_PUNCTUAL_LIGHTS_3D];
         let light_count = if let Some(sources) = &frame.lights {
             assert!(sources.len() <= lights.len(), "too many direct lights");
@@ -713,7 +797,8 @@ impl Scene3dRenderer {
             };
             1
         };
-        for (index, object) in frame.objects.iter().enumerate() {
+        for (index, batch) in plan.batches.iter().enumerate() {
+            let object = &frame.objects[plan.order[batch.start]];
             let atlas_texture = match object.texture {
                 MeshTexture3d::Image(tile) => Some(atlas.get_texture_info(tile.texture_id)),
                 _ => None,
@@ -784,20 +869,12 @@ impl Scene3dRenderer {
                     0,
                     0,
                 ],
-                model: object.model,
-                normal: object.normal,
                 camera: frame.view_projection,
                 bounds: rect,
                 viewport: [width, height, 0., 0.],
                 ambient: [frame.ambient, 0., 0., 0.],
                 lights,
                 light_count: [light_count, 0, 0, 0],
-                color: [
-                    object.color.r,
-                    object.color.g,
-                    object.color.b,
-                    object.color.a,
-                ],
                 texture_rect,
                 flags: [
                     object.alpha_cutoff.clamp(0.001, 1.),
@@ -805,7 +882,7 @@ impl Scene3dRenderer {
                     premultiplied,
                     f32::from(matches!(object.texture, MeshTexture3d::Image(_))),
                 ],
-                ids: [object.output_id, object.alpha_mode as u32, 0, 0],
+                ids: [0, object.alpha_mode as u32, 0, 0],
                 uv_u: [rows[0][0], rows[0][1], rows[0][2], 0.],
                 uv_v: [rows[1][0], rows[1][1], rows[1][2], 0.],
                 sampling: [
@@ -860,12 +937,31 @@ impl Scene3dRenderer {
                         [cos, sin, environment.intensity, 0.]
                     }),
             };
-            let buffer = &self.slots[start + index];
-            queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
+            let slot = &self.slots[start + index];
+            let instance_data: Vec<_> = plan.order[batch.clone()]
+                .iter()
+                .map(|&i| Instance::new(&frame.objects[i]))
+                .collect();
+            let mut upload = bytemuck::bytes_of(&params).to_vec();
+            upload.extend_from_slice(bytemuck::cast_slice(&instance_data));
+            let upload = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh_batch_upload"),
+                contents: &upload,
+                usage: wgpu::BufferUsages::COPY_SRC,
+            });
+            let params_size = std::mem::size_of::<Params>() as u64;
+            encoder.copy_buffer_to_buffer(&upload, 0, &slot.params, 0, params_size);
+            encoder.copy_buffer_to_buffer(
+                &upload,
+                params_size,
+                &slot.instances,
+                0,
+                upload.size() - params_size,
+            );
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: buffer.as_entire_binding(),
+                    resource: slot.params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -969,15 +1065,17 @@ impl Scene3dRenderer {
                 ..Default::default()
             });
             pass.set_pipeline(pipeline);
-            for (index, object) in frame.objects.iter().enumerate() {
+            for (index, batch) in plan.batches.iter().enumerate() {
+                let object = &frame.objects[plan.order[batch.start]];
                 if !object.cast_shadows || object.alpha_mode == gpui::AlphaMode3d::Blend {
                     continue;
                 }
                 let geometry = self.geometry.get(&object.mesh);
                 pass.set_bind_group(0, &shadow_groups[index], &[]);
                 pass.set_vertex_buffer(0, geometry.vertices.slice(..));
+                pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
                 pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..geometry.count, 0, 0..1);
+                pass.draw_indexed(0..geometry.count, 0, 0..batch.len() as u32);
             }
         }
         let depth_view = depth.create_view(&Default::default());
@@ -1026,13 +1124,8 @@ impl Scene3dRenderer {
                 pass.set_bind_group(0, group, &[]);
                 pass.draw(0..3, 0..1);
             }
-            let order = if self.blend_pipeline.is_some() {
-                color_draw_order(&frame.objects)
-            } else {
-                (0..frame.objects.len()).collect()
-            };
-            for index in order {
-                let object = &frame.objects[index];
+            for (index, batch) in plan.batches.iter().enumerate() {
+                let object = &frame.objects[plan.order[batch.start]];
                 let group = &groups[index];
                 let pipeline = if object.alpha_mode == gpui::AlphaMode3d::Blend {
                     self.blend_pipeline.as_ref().unwrap_or(&self.pipeline)
@@ -1043,8 +1136,9 @@ impl Scene3dRenderer {
                 let geometry = self.geometry.get(&object.mesh);
                 pass.set_bind_group(0, group, &[]);
                 pass.set_vertex_buffer(0, geometry.vertices.slice(..));
+                pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
                 pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..geometry.count, 0, 0..1);
+                pass.draw_indexed(0..geometry.count, 0, 0..batch.len() as u32);
             }
         }
         drop(pass);
@@ -1164,18 +1258,8 @@ fn color_draw_order(objects: &[gpui::MeshDraw3d]) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn scene3d_color_order_keeps_depth_writers_first_and_blend_ties_stable() {
-        use gpui::AlphaMode3d::{Blend, Mask, Opaque};
-        let objects: Vec<_> = [
-            (Blend, 2.),
-            (Mask, 9.),
-            (Blend, 5.),
-            (Opaque, 1.),
-            (Blend, 5.),
-        ]
-        .into_iter()
-        .map(|(alpha_mode, sort_depth)| gpui::MeshDraw3d {
+    fn object() -> gpui::MeshDraw3d {
+        gpui::MeshDraw3d {
             cast_shadows: true,
             receive_shadows: true,
             output_id: 1,
@@ -1204,8 +1288,176 @@ mod tests {
             occlusion_strength: 1.,
             unlit: true,
             alpha_cutoff: 0.5,
+            alpha_mode: gpui::AlphaMode3d::Opaque,
+            sort_depth: 0.,
+        }
+    }
+
+    #[test]
+    fn scene3d_batches_preserve_instance_values_order_and_capacity_boundaries() {
+        let source = object();
+        let objects: Vec<_> = (0..7)
+            .map(|index| {
+                let mut object = source.clone();
+                object.model[3][0] = index as f32;
+                object.normal[2][1] = index as f32 * 0.25;
+                object.color = gpui::rgba(0x224488ff + index * 0x10000);
+                object.output_id = index + 7;
+                object
+            })
+            .collect();
+        let plan = instances::BatchPlan::new(&objects, true, 3);
+        assert_eq!(plan.order, (0..7).collect::<Vec<_>>());
+        assert_eq!(plan.batches, vec![0..3, 3..6, 6..7]);
+        let data: Vec<_> = plan
+            .order
+            .iter()
+            .map(|&i| Instance::new(&objects[i]))
+            .collect();
+        for (index, instance) in data.iter().enumerate() {
+            let object = &objects[index];
+            assert_eq!(instance.model, object.model);
+            assert_eq!(instance.normal, object.normal);
+            assert_eq!(
+                instance.color,
+                [
+                    object.color.r,
+                    object.color.g,
+                    object.color.b,
+                    object.color.a
+                ]
+            );
+            assert_eq!(instance.ids[0], object.output_id);
+        }
+        for required in 1..=37 {
+            let capacity = instances::capacity(required, 37);
+            assert!((required..=37).contains(&capacity));
+            assert!(capacity.is_power_of_two() || capacity == 37);
+        }
+        assert!(instances::BatchPlan::new(&[], true, 3).batches.is_empty());
+    }
+
+    #[test]
+    fn scene3d_batches_split_materials_geometry_and_blended_objects() {
+        use gpui::AlphaMode3d::{Blend, Mask};
+        let source = object();
+        let mut variants = Vec::new();
+        let mut push = |edit: fn(&mut gpui::MeshDraw3d)| {
+            let mut changed = source.clone();
+            edit(&mut changed);
+            variants.push(changed);
+        };
+        push(|v| v.mesh = object().mesh);
+        push(|v| v.alpha_mode = Mask);
+        push(|v| v.alpha_cutoff = 0.9);
+        push(|v| v.cast_shadows = false);
+        push(|v| v.receive_shadows = false);
+        push(|v| v.unlit = false);
+        push(|v| v.texture = MeshTexture3d::Subtree);
+        push(|v| v.pbr = Some(Default::default()));
+        push(|v| v.normal_scale = 0.4);
+        push(|v| v.occlusion_strength = 0.4);
+        for changed in variants {
+            let objects = [source.clone(), changed.clone(), changed, source.clone()];
+            let plan = instances::BatchPlan::new(&objects, false, 100);
+            assert_eq!(plan.order, vec![0, 1, 2, 3]);
+            assert_eq!(plan.batches, vec![0..1, 1..3, 3..4]);
+        }
+        let mut near = source.clone();
+        near.alpha_mode = Blend;
+        near.sort_depth = 2.;
+        let mut far = near.clone();
+        far.sort_depth = 7.;
+        let objects = [near, source.clone(), far.clone(), source, far];
+        let plan = instances::BatchPlan::new(&objects, true, 100);
+        assert_eq!(plan.order, vec![1, 3, 2, 4, 0]);
+        assert_eq!(plan.batches, vec![0..2, 2..3, 3..4, 4..5]);
+        let data_plan = instances::BatchPlan::new(&objects, false, 100);
+        assert_eq!(data_plan.order, vec![0, 1, 2, 3, 4]);
+        assert_eq!(data_plan.batches, vec![0..1, 1..2, 2..3, 3..4, 4..5]);
+    }
+
+    #[test]
+    fn scene3d_batches_keep_image_tiles_and_sampling_independent() {
+        let tile = gpui::AtlasTile {
+            texture_id: gpui::AtlasTextureId {
+                index: 0,
+                kind: gpui::AtlasTextureKind::Polychrome,
+            },
+            tile_id: gpui::TileId(1),
+            padding: 0,
+            bounds: gpui::Bounds::new(
+                gpui::point(gpui::DevicePixels(0), gpui::DevicePixels(0)),
+                gpui::size(gpui::DevicePixels(16), gpui::DevicePixels(16)),
+            ),
+        };
+        let map = gpui::MaterialTexture3d {
+            tile,
+            sampling: Default::default(),
+        };
+        let mut source = object();
+        source.unlit = false;
+        source.pbr = Some(Default::default());
+        source.texture = MeshTexture3d::Image(tile);
+        source.metallic_roughness_texture = Some(map);
+        source.emissive_texture = Some(map);
+        source.normal_texture = Some(map);
+        source.occlusion_texture = Some(map);
+        let mut variants = Vec::new();
+        for slot in 0..4 {
+            for change_sampling in [false, true] {
+                let mut changed = source.clone();
+                let target = match slot {
+                    0 => &mut changed.metallic_roughness_texture,
+                    1 => &mut changed.emissive_texture,
+                    2 => &mut changed.normal_texture,
+                    _ => &mut changed.occlusion_texture,
+                }
+                .as_mut()
+                .unwrap();
+                if change_sampling {
+                    target.sampling.address_u = gpui::TextureAddressMode3d::Repeat;
+                } else {
+                    target.tile.bounds.origin.x = gpui::DevicePixels(16);
+                    target.tile.tile_id = gpui::TileId(2);
+                }
+                variants.push(changed);
+            }
+        }
+        let mut changed = source.clone();
+        changed.texture = MeshTexture3d::Image(gpui::AtlasTile {
+            tile_id: gpui::TileId(3),
+            ..tile
+        });
+        variants.push(changed);
+        let mut changed = source.clone();
+        changed.sampling.filter = gpui::TextureFilter3d::Nearest;
+        variants.push(changed);
+        let mut changed = source.clone();
+        changed.image_color_space = gpui::TextureColorSpace3d::Linear;
+        variants.push(changed);
+        for changed in variants {
+            let plan =
+                instances::BatchPlan::new(&[source.clone(), changed.clone(), changed], true, 100);
+            assert_eq!(plan.batches, vec![0..1, 1..3]);
+        }
+    }
+
+    #[test]
+    fn scene3d_color_order_keeps_depth_writers_first_and_blend_ties_stable() {
+        use gpui::AlphaMode3d::{Blend, Mask, Opaque};
+        let objects: Vec<_> = [
+            (Blend, 2.),
+            (Mask, 9.),
+            (Blend, 5.),
+            (Opaque, 1.),
+            (Blend, 5.),
+        ]
+        .into_iter()
+        .map(|(alpha_mode, sort_depth)| gpui::MeshDraw3d {
             alpha_mode,
             sort_depth,
+            ..object()
         })
         .collect();
         assert_eq!(color_draw_order(&objects), vec![1, 3, 2, 4, 0]);
@@ -1231,6 +1483,81 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+        let instance_layout = Instance::layout();
+        let (instance_type, members) = module
+            .types
+            .iter()
+            .find_map(|(handle, ty)| {
+                if ty.name.as_deref() == Some("InstanceInput")
+                    && let naga::TypeInner::Struct { members, .. } = &ty.inner
+                {
+                    Some((handle, members))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(instance_layout.step_mode, wgpu::VertexStepMode::Instance);
+        assert_eq!(
+            instance_layout.array_stride as usize,
+            std::mem::size_of::<Instance>()
+        );
+        assert_eq!(members.len(), instance_layout.attributes.len());
+        for (member, attribute) in members.iter().zip(instance_layout.attributes) {
+            let Some(naga::Binding::Location { location, .. }) = member.binding else {
+                panic!("instance input must have a vertex location");
+            };
+            assert_eq!(location, attribute.shader_location);
+            let (offset, kind) = match member.name.as_deref().unwrap() {
+                "color" => (
+                    std::mem::offset_of!(Instance, color),
+                    naga::ScalarKind::Float,
+                ),
+                "ids" => (std::mem::offset_of!(Instance, ids), naga::ScalarKind::Uint),
+                name => {
+                    let (field, column) = name.rsplit_once('_').unwrap();
+                    let base = match field {
+                        "model" => std::mem::offset_of!(Instance, model),
+                        "normal" => std::mem::offset_of!(Instance, normal),
+                        _ => panic!("unknown instance field"),
+                    };
+                    (
+                        base + column.parse::<usize>().unwrap() * 16,
+                        naga::ScalarKind::Float,
+                    )
+                }
+            };
+            assert_eq!(attribute.offset as usize, offset);
+            assert_eq!(
+                attribute.format,
+                if kind == naga::ScalarKind::Uint {
+                    wgpu::VertexFormat::Uint32x4
+                } else {
+                    wgpu::VertexFormat::Float32x4
+                }
+            );
+            assert_eq!(
+                module.types[member.ty].inner,
+                naga::TypeInner::Vector {
+                    size: naga::VectorSize::Quad,
+                    scalar: naga::Scalar { kind, width: 4 },
+                }
+            );
+        }
+        for entry in ["vertex", "shadow_vertex"] {
+            let entry = module
+                .entry_points
+                .iter()
+                .find(|v| v.name == entry)
+                .unwrap();
+            assert!(
+                entry
+                    .function
+                    .arguments
+                    .iter()
+                    .any(|v| v.ty == instance_type)
+            );
+        }
         let (members, span) = module
             .types
             .iter()

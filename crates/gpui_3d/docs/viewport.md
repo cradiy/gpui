@@ -123,6 +123,40 @@ Cache entries absent from the prepared scenes are released. Vertex/index count
 changes require a new `Mesh`; batched instance streams are separate from vertex
 replacement.
 
+### Instanced draws
+
+Reuse a `Mesh` across objects to share GPU geometry and allow automatic WGPU
+batching. Each object retains its own transform, base tint, visibility, and
+picking identity.
+
+```rust
+use gpui_3d::{Material, Mesh, Object, Scene};
+
+let mesh = Mesh::cube();
+let mut scene = Scene::new();
+for (index, color) in [0x8dd8e8, 0xf4cf89, 0x526a87].into_iter().enumerate() {
+    scene = scene.object(
+        Object::new(mesh.clone(), Material::color(gpui::rgb(color)))
+            .id(format!("cube-{index}"))
+            .position([index as f32 * 1.5, 0., 0.]),
+    );
+}
+```
+
+Adjacent opaque or masked objects with the same mesh storage, textures, sampling,
+shading factors, and shadow settings share one instanced draw. Transforms, normal
+matrices, base tints, and output IDs are per-instance inputs. Separately constructed
+meshes are not deduplicated, even when their vertices match. Material changes
+split batches. Blended objects retain their back-to-front order and individual
+draws; batching does not reorder opaque or masked objects.
+
+Use ordinary object values or `SceneGraph` edits followed by evaluation to supply
+new instance data. Instance buffers retain their allocation while capacity fits
+and grow within device limits. Unused batch slots are released. Uniform and
+instance uploads are encoded before their draws, including shadows and headless
+geometry channels, so previously encoded frames retain their inputs. CPU picking
+and bounds remain per object; batching does not add frustum culling.
+
 ### Morph targets
 
 `MorphTargets` binds immutable target deltas to a base `Mesh`.
@@ -558,8 +592,9 @@ existence. `remove_subtree(instance.root())` removes the root's current subtree,
 not nodes that have since been reparented elsewhere. Snapshot handles remain
 valid lookup keys after source deletion, but are not persistent file IDs.
 
-Instantiation copies editable scene nodes while sharing resources; it does not
-batch them into an instanced GPU draw call.
+Instantiation copies editable scene nodes while sharing resources. Rendering
+batches compatible adjacent mesh nodes under the same rules as ordinary objects;
+a subtree instance does not define a draw-call boundary.
 
 ### Transforms and bounds
 

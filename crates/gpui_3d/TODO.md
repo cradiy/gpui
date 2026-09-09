@@ -75,9 +75,9 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Deformation**: CPU linear-blend skeletal skinning and morph targets from explicit pose/weight inputs, shared by rendering and queries.
   - [x] **Morph targets**: Shared dense position/normal/tangent deltas, validated signed weights, normalized direction blending, preserved handedness, and immutable CPU-evaluated meshes reused by rendering, bounds, and picking.
   - [x] **Skeletal skinning**: Shared inverse bind matrices, arbitrary per-vertex influences with validated normalized weights, mesh-local/world-space joint inputs, inverse-transpose normals, reflection-aware tangents, morph composition, and immutable deformed geometry for rendering and queries.
-- [ ] **Dynamic geometry**: Update vertex and instance data while reusing GPU buffers instead of rebuilding mesh resources each frame.
+- [x] **Dynamic geometry**: Update vertex and instance data while reusing GPU buffers instead of rebuilding mesh resources each frame.
   - [x] **Fixed-topology vertex updates**: Validated immutable vertex snapshots sharing index storage; fresh bounds/query indices, node mesh replacement, and topology-compatible GPU vertex/index buffer reuse with concurrent snapshot preservation.
-  - [ ] **Instance streams**: Explicit per-instance data updates and reusable instance buffers for batched draws.
+  - [x] **Instance streams**: Explicit object transforms, normal matrices, base tints, and output IDs in reusable WGPU instance buffers; adjacent compatible opaque/masked draws share geometry, while blended objects retain independent ordered draws.
 
 ## Phase 5: Performance and Platforms
 
@@ -89,6 +89,9 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Viewport-sized render targets**: Allocate color, depth, and MSAA targets to viewport bounds, with configurable resolution and sample count to limit GPU memory use.
 - [ ] **On-demand updates**: Track scene, camera, and UI texture invalidation separately; reuse results when static, invisible, or paused without continuously requesting frames.
 - [ ] **Culling and instancing**: Frustum culling, instanced rendering of shared geometry, and material batching with reproducible benchmarks.
+  - [x] **Instanced material batches**: Shared-mesh, compatible-material batching for color, shadow, and geometry outputs without reordering depth writers.
+  - [ ] **Frustum culling**: Conservative camera-frustum rejection before uploads and draw encoding.
+  - [ ] **Rendering benchmarks**: Reproducible shared-mesh and mixed-material workloads with CPU preparation and draw-count measurements.
 - [ ] **Resource lifecycle**: Handle multiple viewports, resizing, device recovery, and cache eviction within resource budgets.
 - [ ] **Platform coverage**: Add macOS and Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
 - [ ] **Cross-platform validation**: Cover depth, transparency, texture colors, nested composition, input mapping, and high DPI; distinguish automated checks from manual visual confirmation.

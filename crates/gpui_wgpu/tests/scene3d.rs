@@ -119,6 +119,129 @@ fn scene(layer: SubtreeLayer) -> Scene {
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn instance_updates_preserve_owned_color_and_geometry_outputs() -> anyhow::Result<()> {
+    use gpui_wgpu::{Scene3dChannels, Scene3dOutputConfig, WgpuScene3dRenderer};
+    let mut renderer = WgpuScene3dRenderer::new_headless()?;
+    let mut left = mesh(0.2, 0xff0000ff, MeshTexture3d::None);
+    left.model[0][0] = 0.4;
+    left.model[1][1] = 0.4;
+    left.model[3][0] = -0.5;
+    left.output_id = 7;
+    let mut right = left.clone();
+    right.model[3] = [0.5, 0., 0.2, 1.];
+    right.normal[2] = [0.6, 0., 0.8, 0.];
+    right.color = rgba(0x00ff00ff);
+    right.output_id = 19;
+    let mut masked = left.clone();
+    masked.model[3][2] = -0.1;
+    masked.color.a = 0.;
+    masked.output_id = 99;
+    let mut grown = vec![left.clone(), right.clone()];
+    grown.extend(std::iter::repeat_n(masked, 19));
+    let mut outputs = Vec::new();
+    for (objects, shaded, ids) in [
+        (vec![left.clone(), right.clone()], true, [7, 19]),
+        (vec![right.clone()], true, [0, 19]),
+        (grown, true, [7, 19]),
+        (vec![], true, [0, 0]),
+        (vec![left.clone(), right.clone()], false, [7, 19]),
+        (vec![left, right], true, [7, 19]),
+    ] {
+        let input = layer(bounds(0., 0., 64., 64.), Scene::default(), objects, 1.)
+            .scene3d
+            .unwrap();
+        let channels = if shaded {
+            Scene3dChannels::all()
+        } else {
+            Scene3dChannels::OBJECT_ID
+                | Scene3dChannels::LINEAR_DEPTH
+                | Scene3dChannels::WORLD_NORMAL
+        };
+        outputs.push((
+            renderer.render(
+                &input,
+                Scene3dOutputConfig {
+                    size: [64, 64],
+                    channels,
+                    color_samples: 1,
+                },
+            )?,
+            ids,
+        ));
+    }
+    for (output, ids) in outputs {
+        let mut read = output.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(pixels) = read.try_read()? {
+                break pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        for (x, id) in [16, 48].into_iter().zip(ids) {
+            let index = 32 * 64 + x;
+            assert_eq!(pixels.object_ids.as_ref().unwrap()[index], id);
+            let (color, depth, normal) = match id {
+                7 => ([255, 0, 0, 255], 2.8, [0., 0., 1., 1.]),
+                19 => ([0, 255, 0, 255], 2.6, [0.6, 0., 0.8, 1.]),
+                _ => ([0; 4], 0., [0.; 4]),
+            };
+            if let Some(rgba) = &pixels.rgba {
+                assert_eq!(&rgba[index * 4..index * 4 + 4], &color);
+            }
+            assert!((pixels.linear_depth.as_ref().unwrap()[index] - depth).abs() < 1e-5);
+            for (actual, expected) in pixels.world_normals.as_ref().unwrap()[index]
+                .into_iter()
+                .zip(normal)
+            {
+                assert!((actual - expected).abs() < 1e-5);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn instance_batches_keep_concurrent_viewport_uploads_independent() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(64)))?;
+    let mut left = mesh(0.2, 0xff0000ff, MeshTexture3d::None);
+    left.model[0][0] = 0.4;
+    left.model[1][1] = 0.4;
+    left.model[3][0] = -0.5;
+    let mut right = left.clone();
+    right.model[3][0] = 0.5;
+    right.color = rgba(0x0000ffff);
+    let mut other = left.clone();
+    other.color = rgba(0x00ff00ff);
+    let mut input = Scene::default();
+    for (x, objects) in [(0., vec![left, right]), (64., vec![other])] {
+        input.insert_primitive(Primitive::SubtreeLayer(layer(
+            bounds(x, 0., 64., 64.),
+            Scene::default(),
+            objects,
+            1.,
+        )));
+    }
+    input.finish();
+    for _ in 0..2 {
+        let pixels = renderer.render_rgba(&input)?;
+        for (x, color) in [
+            (16, [255, 0, 0, 255]),
+            (48, [0, 0, 255, 255]),
+            (80, [0, 255, 0, 255]),
+            (112, [0; 4]),
+        ] {
+            let index = (32 * 128 + x) * 4;
+            assert_eq!(&pixels[index..index + 4], &color);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn vertex_snapshots_preserve_concurrent_views_and_replayed_frames() -> anyhow::Result<()> {
     let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(64)))?;
     let original = mesh(0.2, 0xff0000ff, MeshTexture3d::None);

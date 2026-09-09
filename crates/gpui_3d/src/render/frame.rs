@@ -143,6 +143,18 @@ impl Scene {
                     .all(|value| value.is_finite()),
                 "object {index} has non-finite render parameters"
             );
+            let camera_visible = object.mesh.0.intersects_clip_volume(model, view_projection);
+            let shadow_visible = object.cast_shadows
+                && object.material.alpha_mode != crate::AlphaMode::Blend
+                && directional_shadow.is_some_and(|shadow| {
+                    object
+                        .mesh
+                        .0
+                        .intersects_clip_volume(model, shadow.view_projection)
+                });
+            if !camera_visible && !shadow_visible {
+                continue;
+            }
             let mut metallic_roughness_texture = None;
             let mut emissive_texture = None;
             let mut normal_texture = None;
@@ -240,6 +252,90 @@ mod tests {
     use super::*;
     use crate::{AffineTransform, Camera, Material, Mesh, Node, Object, SceneGraph};
     use gpui::rgb;
+
+    #[test]
+    fn frame_culling_skips_resources_but_keeps_shadow_casters_and_original_ids() {
+        let material = Material::color(rgb(0xffffff));
+        let camera = Camera {
+            eye: [0., 0., 4.],
+            target: [0.; 3],
+            near: 0.1,
+            far: 10.,
+            projection: crate::Projection::Orthographic { vertical_size: 2. },
+            ..Default::default()
+        };
+        let scene = Scene::new()
+            .camera(camera)
+            .lights([crate::PunctualLight::directional([0., 0., 1.])])
+            .directional_shadow(Some(crate::DirectionalShadow::new(
+                [3., 0., 0.],
+                [1., 2., 2.],
+            )))
+            .object(
+                Object::new(Mesh::cube(), material.clone())
+                    .position([100., 0., 0.])
+                    .id("distant"),
+            )
+            .object(Object::new(Mesh::cube(), material.clone()))
+            .object(Object::new(Mesh::cube(), material.clone()).position([3., 0., 0.]))
+            .object(
+                Object::new(Mesh::cube(), material.clone())
+                    .position([3., 0., 0.])
+                    .cast_shadows(false),
+            )
+            .object(
+                Object::new(Mesh::cube(), material.alpha_mode(crate::AlphaMode::Blend))
+                    .position([3., 0., 0.]),
+            );
+        let mut resolved = Vec::new();
+        let frame = scene
+            .prepare_frame(1., None, |index, _, _| {
+                resolved.push(index);
+                Ok(Some(MeshTexture3d::None))
+            })
+            .unwrap();
+        assert_eq!(resolved, vec![1, 2]);
+        assert_eq!(
+            frame
+                .objects
+                .iter()
+                .map(|o| o.output_id)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(
+            scene
+                .raycast(crate::Ray::new([100., 0., 4.], [0., 0., -1.]).unwrap())
+                .unwrap()
+                .object_id,
+            Some("distant".into())
+        );
+        let scene = scene.directional_shadow(None);
+        let frame = scene
+            .prepare_frame(1., None, |index, _, _| {
+                assert_eq!(index, 1);
+                Ok(Some(MeshTexture3d::None))
+            })
+            .unwrap();
+        assert_eq!(frame.objects.len(), 1);
+        assert_eq!(frame.objects[0].output_id, 2);
+        let moved = scene.camera(Camera {
+            eye: [3., 0., 4.],
+            target: [3., 0., 0.],
+            ..camera
+        });
+        let frame = moved
+            .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+            .unwrap();
+        assert_eq!(
+            frame
+                .objects
+                .iter()
+                .map(|o| o.output_id)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+    }
 
     #[test]
     fn shadow_state_survives_graph_evaluation_and_is_independent_of_view_camera() {
@@ -345,6 +441,9 @@ mod tests {
         let camera = Camera {
             eye: [4., 0., 0.],
             target: [0.; 3],
+            projection: crate::Projection::Orthographic {
+                vertical_size: 220.,
+            },
             ..Default::default()
         };
         let material = Material::color(rgb(0xffffff)).alpha_mode(crate::AlphaMode::Blend);
@@ -684,7 +783,11 @@ mod tests {
                     .transform(AffineTransform::from_translation([0.5, 0., 0.]).unwrap()),
             )
             .unwrap();
-        let scene = graph.evaluate().unwrap().scene(Camera::default());
+        let evaluated = graph.evaluate().unwrap();
+        let camera = Camera::default()
+            .frame_bounds(evaluated.bounds().unwrap(), 1., 1.2)
+            .unwrap();
+        let scene = evaluated.scene(camera);
         let frame = scene
             .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
             .unwrap();
@@ -777,7 +880,7 @@ mod tests {
         let bounds = evaluated.bounds().unwrap();
         assert_eq!(bounds.min(), [1., 2.5, 0.]);
         assert_eq!(bounds.max(), [3., 3.5, 1.]);
-        let scene = evaluated.scene(Camera::default());
+        let scene = evaluated.scene(Camera::default().frame_bounds(bounds, 1., 1.2).unwrap());
         let frame = scene
             .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
             .unwrap();
@@ -905,7 +1008,10 @@ mod tests {
             )
             .unwrap();
         let evaluated = graph.evaluate().unwrap();
-        let scene = evaluated.scene(Camera::default());
+        let camera = Camera::default()
+            .frame_bounds(evaluated.bounds().unwrap(), 0.5, 1.2)
+            .unwrap();
+        let scene = evaluated.scene(camera);
         let a = scene
             .prepare_frame(1.5, None, |_, _, _| Ok(Some(MeshTexture3d::None)))
             .unwrap();

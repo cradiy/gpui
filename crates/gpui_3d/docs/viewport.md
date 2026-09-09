@@ -155,7 +155,7 @@ new instance data. Instance buffers retain their allocation while capacity fits
 and grow within device limits. Unused batch slots are released. Uniform and
 instance uploads are encoded before their draws, including shadows and headless
 geometry channels, so previously encoded frames retain their inputs. CPU picking
-and bounds remain per object; batching does not add frustum culling.
+and bounds remain per object.
 
 ### Morph targets
 
@@ -1544,6 +1544,22 @@ Each viewport has isolated depth visibility and is composited into GPUI's normal
 paint order. Ancestor opacity applies once to the final image, and ancestor
 clipping still applies. Mesh edges use four-sample MSAA. Captured viewports can
 be nested in other subtree effects.
+
+Rendering conservatively rejects indexed mesh bounds outside the camera frustum
+before allocating geometry buffers or uploading instance data. Bounds touching
+a clip plane or crossing the camera plane remain eligible. Local bounds follow
+vertex snapshots and are transformed with the object's full matrix, including
+shear and reflections. Numerically uncertain cases remain eligible for GPU
+clipping. Unreferenced vertices do not enlarge render-culling bounds.
+
+Directional shadows use their own light-space clip volume. A mesh outside the
+camera can still cast a visible shadow; disabling shadow casting or using Blend
+removes that shadow-only work. Scene preparation resolves material images only
+for meshes eligible for the camera or shadow volume. Moving a camera, changing
+geometry, or changing shadow coverage reevaluates visibility on the next render.
+This does not hide scene nodes, alter bounds or world-ray queries, or renumber
+output IDs. It is not occlusion culling: geometry behind other objects still
+participates in depth testing.
 
 Geometry buffers are reused for shared meshes. Intermediate color and depth
 targets are reused at a stable window size; they are recreated on resize and

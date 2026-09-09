@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{AtlasTile, DevicePixels, Pixels, Rgba, Size, size};
 
 mod environment;
+mod visibility;
 pub use environment::{
     EnvironmentBackground3d, EnvironmentError3d, EnvironmentMap3d, SpecularEnvironment3d,
     SpecularEnvironmentMap3d,
@@ -74,6 +75,7 @@ pub struct Mesh3d {
     vertices: Arc<[MeshVertex3d]>,
     indices: Arc<[u32]>,
     tangents: Option<Arc<[[f32; 4]]>>,
+    bounds: [[f32; 3]; 2],
 }
 
 /// Invalid fixed-topology vertex replacement.
@@ -206,6 +208,7 @@ impl Mesh3d {
         }
         Self::validate_vertices(&vertices)?;
         Ok(Arc::new(Self {
+            bounds: visibility::bounds(&vertices, &indices),
             vertices: vertices.into(),
             indices: indices.into(),
             tangents: None,
@@ -247,6 +250,7 @@ impl Mesh3d {
         }
         Self::validate_vertices(&vertices)?;
         let mesh = Self {
+            bounds: visibility::bounds(&vertices, &self.indices),
             vertices: vertices.into(),
             indices: self.indices.clone(),
             tangents: None,
@@ -311,6 +315,7 @@ impl Mesh3d {
             }
         }
         Ok(Arc::new(Self {
+            bounds: self.bounds,
             vertices: self.vertices.clone(),
             indices: self.indices.clone(),
             tangents: Some(tangents.into()),

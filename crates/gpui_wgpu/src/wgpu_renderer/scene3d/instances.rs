@@ -1,23 +1,63 @@
-use gpui::{AlphaMode3d, MaterialTexture3d, MeshDraw3d, MeshTexture3d};
+use gpui::{AlphaMode3d, MaterialTexture3d, MeshDraw3d, MeshTexture3d, Scene3dFrame};
 use std::{ops::Range, sync::Arc};
 
 pub(super) struct BatchPlan {
     pub order: Vec<usize>,
     pub batches: Vec<Range<usize>>,
+    pub passes: Vec<Visibility>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct Visibility {
+    pub camera: bool,
+    pub shadow: bool,
+}
+
+impl Visibility {
+    pub fn new(frame: &Scene3dFrame, object: &MeshDraw3d, shadows: bool) -> Self {
+        Self {
+            camera: object
+                .mesh
+                .intersects_clip_volume(object.model, frame.view_projection),
+            shadow: shadows
+                && object.cast_shadows
+                && object.alpha_mode != AlphaMode3d::Blend
+                && frame.directional_shadow.is_some_and(|s| {
+                    object
+                        .mesh
+                        .intersects_clip_volume(object.model, s.view_projection)
+                }),
+        }
+    }
+    pub fn any(self) -> bool {
+        self.camera || self.shadow
+    }
 }
 
 impl BatchPlan {
-    pub fn new(objects: &[MeshDraw3d], color: bool, limit: usize) -> Self {
+    pub fn new(frame: &Scene3dFrame, color: bool, limit: usize) -> Self {
         assert!(limit > 0);
-        let order = if color {
+        let objects = &frame.objects;
+        let mut order = if color {
             super::color_draw_order(objects)
         } else {
             (0..objects.len()).collect()
         };
+        let mut passes = Vec::with_capacity(order.len());
+        order.retain(|&index| {
+            let visibility = Visibility::new(frame, &objects[index], color);
+            if visibility.any() {
+                passes.push(visibility);
+                true
+            } else {
+                false
+            }
+        });
         let mut batches: Vec<Range<usize>> = Vec::new();
         for (position, &index) in order.iter().enumerate() {
             if let Some(batch) = batches.last_mut()
                 && batch.len() < limit
+                && passes[batch.start] == passes[position]
                 && compatible(&objects[order[batch.start]], &objects[index])
             {
                 batch.end += 1;
@@ -25,7 +65,11 @@ impl BatchPlan {
                 batches.push(position..position + 1);
             }
         }
-        Self { order, batches }
+        Self {
+            order,
+            batches,
+            passes,
+        }
     }
 }
 

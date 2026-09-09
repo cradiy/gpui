@@ -269,6 +269,7 @@ pub(crate) struct Scene3dRenderer {
     geometry: geometry::GeometryCache<Geometry>,
     slots: Vec<BatchSlot>,
     offsets: HashMap<usize, usize>,
+    plans: HashMap<usize, instances::BatchPlan>,
     targets: Option<Targets>,
     format: wgpu::TextureFormat,
     samples: u32,
@@ -510,6 +511,7 @@ impl Scene3dRenderer {
             geometry: geometry::GeometryCache::default(),
             slots: Vec::new(),
             offsets: HashMap::new(),
+            plans: HashMap::new(),
             targets: None,
             format,
             samples,
@@ -526,20 +528,13 @@ impl Scene3dRenderer {
     ) {
         self.offsets.clear();
         let mut frames = Vec::new();
-        let mut slot_count = 0;
+        let mut layers = Vec::new();
         scene.visit(&mut |scene| {
             for layer in &scene.subtree_layers {
                 let Some(frame) = &layer.scene3d else {
                     continue;
                 };
-                self.offsets.insert(layer as *const _ as usize, slot_count);
-                slot_count += instances::BatchPlan::new(
-                    &frame.objects,
-                    self.blend_pipeline.is_some(),
-                    instance_limit(device),
-                )
-                .batches
-                .len();
+                layers.push(layer as *const _ as usize);
                 frames.push(frame.clone());
             }
         });
@@ -550,6 +545,15 @@ impl Scene3dRenderer {
             width,
             height,
         );
+        let mut slot_count = 0;
+        for (layer, frame) in layers.into_iter().zip(&frames) {
+            self.offsets.insert(layer, slot_count);
+            slot_count += self.plan(frame).batches.len();
+        }
+    }
+
+    fn plan(&self, frame: &gpui::Scene3dFrame) -> &instances::BatchPlan {
+        &self.plans[&(frame as *const _ as usize)]
     }
 
     pub(crate) fn prepare_frames<'a>(
@@ -561,6 +565,18 @@ impl Scene3dRenderer {
         height: u32,
     ) {
         let frames: Vec<_> = frames.into_iter().collect();
+        self.plans.clear();
+        for frame in &frames {
+            self.plans
+                .entry(*frame as *const _ as usize)
+                .or_insert_with(|| {
+                    instances::BatchPlan::new(
+                        frame,
+                        self.blend_pipeline.is_some(),
+                        instance_limit(device),
+                    )
+                });
+        }
         if let Some(specular) = &mut self.specular {
             specular.prepare(
                 device,
@@ -577,12 +593,18 @@ impl Scene3dRenderer {
                 frames.iter().filter_map(|frame| frame.background.as_ref()),
             );
         }
-        self.geometry.prepare(
-            frames
-                .iter()
-                .flat_map(|frame| frame.objects.iter().map(|object| object.mesh.clone())),
-            |previous, mesh| Geometry::prepare(device, previous, mesh),
-        );
+        let meshes: Vec<_> = frames
+            .iter()
+            .flat_map(|frame| {
+                self.plan(frame)
+                    .order
+                    .iter()
+                    .map(|&index| frame.objects[index].mesh.clone())
+            })
+            .collect();
+        self.geometry.prepare(meshes, |previous, mesh| {
+            Geometry::prepare(device, previous, mesh)
+        });
         let mut shadow_sizes = HashSet::new();
         let mut batch_sizes = Vec::new();
         let mut has_frame = false;
@@ -601,16 +623,7 @@ impl Scene3dRenderer {
                 shadow_sizes.insert(shadow.resolution);
             }
             has_frame = true;
-            batch_sizes.extend(
-                instances::BatchPlan::new(
-                    &frame.objects,
-                    self.blend_pipeline.is_some(),
-                    instance_limit(device),
-                )
-                .batches
-                .iter()
-                .map(|batch| batch.len()),
-            );
+            batch_sizes.extend(self.plan(frame).batches.iter().map(|batch| batch.len()));
         }
         self.shadow_maps
             .retain(|size, _| shadow_sizes.contains(size));
@@ -691,11 +704,14 @@ impl Scene3dRenderer {
     }
 
     pub(crate) fn retain_geometry_for(&mut self, frame: Option<&gpui::Scene3dFrame>) {
-        self.geometry.retain(
+        let shadows = self.shadow_pipeline.is_some();
+        self.geometry.retain(frame.into_iter().flat_map(|frame| {
             frame
-                .into_iter()
-                .flat_map(|frame| frame.objects.iter().map(|object| object.mesh.clone())),
-        );
+                .objects
+                .iter()
+                .filter(move |object| instances::Visibility::new(frame, object, shadows).any())
+                .map(|object| object.mesh.clone())
+        }));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -745,8 +761,10 @@ impl Scene3dRenderer {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let targets = self.targets.as_ref().unwrap();
+        let plan = self.plan(frame);
         let mut uploaded = HashSet::new();
-        for object in frame.objects.iter() {
+        for &index in &plan.order {
+            let object = &frame.objects[index];
             if uploaded.insert(Arc::as_ptr(&object.mesh)) {
                 self.geometry.get(&object.mesh).encode_upload(encoder);
             }
@@ -759,11 +777,6 @@ impl Scene3dRenderer {
         let width = depth.width() as f32;
         let height = depth.height() as f32;
         let layout = self.pipeline.get_bind_group_layout(0);
-        let plan = instances::BatchPlan::new(
-            &frame.objects,
-            self.blend_pipeline.is_some(),
-            instance_limit(device),
-        );
         let mut groups = Vec::with_capacity(plan.batches.len());
         let shadow = frame
             .directional_shadow
@@ -1067,7 +1080,7 @@ impl Scene3dRenderer {
             pass.set_pipeline(pipeline);
             for (index, batch) in plan.batches.iter().enumerate() {
                 let object = &frame.objects[plan.order[batch.start]];
-                if !object.cast_shadows || object.alpha_mode == gpui::AlphaMode3d::Blend {
+                if !plan.passes[batch.start].shadow {
                     continue;
                 }
                 let geometry = self.geometry.get(&object.mesh);
@@ -1125,6 +1138,9 @@ impl Scene3dRenderer {
                 pass.draw(0..3, 0..1);
             }
             for (index, batch) in plan.batches.iter().enumerate() {
+                if !plan.passes[batch.start].camera {
+                    continue;
+                }
                 let object = &frame.objects[plan.order[batch.start]];
                 let group = &groups[index];
                 let pipeline = if object.alpha_mode == gpui::AlphaMode3d::Blend {
@@ -1258,6 +1274,33 @@ fn color_draw_order(objects: &[gpui::MeshDraw3d]) -> Vec<usize> {
 mod tests {
     use super::*;
 
+    const IDENTITY: [[f32; 4]; 4] = [
+        [1., 0., 0., 0.],
+        [0., 1., 0., 0.],
+        [0., 0., 1., 0.],
+        [0., 0., 0., 1.],
+    ];
+
+    fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
+        gpui::Scene3dFrame {
+            ui_texture: None,
+            view_projection: IDENTITY,
+            world_to_view: IDENTITY,
+            camera_position: [0., 0., 3.],
+            orthographic_view_direction: None,
+            light_direction: [0., 0., 1.],
+            light: [1.; 4],
+            lights: None,
+            directional_shadow: None,
+            ambient: 0.3,
+            diffuse_environment: None,
+            background: None,
+            specular_environment: None,
+            color_output: Default::default(),
+            objects: objects.into(),
+        }
+    }
+
     fn object() -> gpui::MeshDraw3d {
         gpui::MeshDraw3d {
             cast_shadows: true,
@@ -1273,8 +1316,8 @@ mod tests {
                     .to_vec(),
                 vec![0, 1, 2],
             ),
-            model: [[0.; 4]; 4],
-            normal: [[0.; 4]; 4],
+            model: IDENTITY,
+            normal: IDENTITY,
             color: gpui::rgb(0xffffff),
             texture: gpui::MeshTexture3d::None,
             sampling: Default::default(),
@@ -1294,19 +1337,60 @@ mod tests {
     }
 
     #[test]
+    fn scene3d_batch_plans_separate_camera_and_shadow_visibility_without_renumbering() {
+        let visible = object();
+        let mut caster = visible.clone();
+        caster.model[3][0] = 3.;
+        caster.output_id = 7;
+        let mut outside = visible.clone();
+        outside.model[3][0] = 10.;
+        let mut blend = caster.clone();
+        blend.alpha_mode = gpui::AlphaMode3d::Blend;
+        let mut noncaster = caster.clone();
+        noncaster.cast_shadows = false;
+        let mut input = frame(&[outside, visible.clone(), caster, blend, noncaster, visible]);
+        let mut shadow_matrix = IDENTITY;
+        shadow_matrix[3][0] = -3.;
+        input.directional_shadow = Some(gpui::DirectionalShadow3d {
+            light_index: 0,
+            view_projection: shadow_matrix,
+            resolution: 256,
+            depth_bias: 0.,
+            normal_bias: 0.,
+            softness: 0.,
+        });
+        let plan = instances::BatchPlan::new(&input, true, 100);
+        assert_eq!(plan.order, vec![1, 2, 5]);
+        assert_eq!(plan.batches, vec![0..1, 1..2, 2..3]);
+        assert!(plan.passes[0].camera && !plan.passes[0].shadow);
+        assert!(!plan.passes[1].camera && plan.passes[1].shadow);
+        assert!(plan.passes[2].camera && !plan.passes[2].shadow);
+        assert_eq!(input.objects[plan.order[1]].output_id, 7);
+        let data = instances::BatchPlan::new(&input, false, 100);
+        assert_eq!(data.order, vec![1, 5]);
+        assert_eq!(data.batches, vec![0..2]);
+        input.view_projection = shadow_matrix;
+        let moved = instances::BatchPlan::new(&input, false, 100);
+        assert_eq!(moved.order, vec![2, 3, 4]);
+        input.directional_shadow = None;
+        let no_shadow = instances::BatchPlan::new(&input, true, 100);
+        assert!(no_shadow.passes.iter().all(|v| !v.shadow));
+    }
+
+    #[test]
     fn scene3d_batches_preserve_instance_values_order_and_capacity_boundaries() {
         let source = object();
         let objects: Vec<_> = (0..7)
             .map(|index| {
                 let mut object = source.clone();
-                object.model[3][0] = index as f32;
+                object.model[3][0] = index as f32 * 0.05;
                 object.normal[2][1] = index as f32 * 0.25;
                 object.color = gpui::rgba(0x224488ff + index * 0x10000);
                 object.output_id = index + 7;
                 object
             })
             .collect();
-        let plan = instances::BatchPlan::new(&objects, true, 3);
+        let plan = instances::BatchPlan::new(&frame(&objects), true, 3);
         assert_eq!(plan.order, (0..7).collect::<Vec<_>>());
         assert_eq!(plan.batches, vec![0..3, 3..6, 6..7]);
         let data: Vec<_> = plan
@@ -1334,7 +1418,11 @@ mod tests {
             assert!((required..=37).contains(&capacity));
             assert!(capacity.is_power_of_two() || capacity == 37);
         }
-        assert!(instances::BatchPlan::new(&[], true, 3).batches.is_empty());
+        assert!(
+            instances::BatchPlan::new(&frame(&[]), true, 3)
+                .batches
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1359,7 +1447,7 @@ mod tests {
         push(|v| v.occlusion_strength = 0.4);
         for changed in variants {
             let objects = [source.clone(), changed.clone(), changed, source.clone()];
-            let plan = instances::BatchPlan::new(&objects, false, 100);
+            let plan = instances::BatchPlan::new(&frame(&objects), false, 100);
             assert_eq!(plan.order, vec![0, 1, 2, 3]);
             assert_eq!(plan.batches, vec![0..1, 1..3, 3..4]);
         }
@@ -1369,10 +1457,10 @@ mod tests {
         let mut far = near.clone();
         far.sort_depth = 7.;
         let objects = [near, source.clone(), far.clone(), source, far];
-        let plan = instances::BatchPlan::new(&objects, true, 100);
+        let plan = instances::BatchPlan::new(&frame(&objects), true, 100);
         assert_eq!(plan.order, vec![1, 3, 2, 4, 0]);
         assert_eq!(plan.batches, vec![0..2, 2..3, 3..4, 4..5]);
-        let data_plan = instances::BatchPlan::new(&objects, false, 100);
+        let data_plan = instances::BatchPlan::new(&frame(&objects), false, 100);
         assert_eq!(data_plan.order, vec![0, 1, 2, 3, 4]);
         assert_eq!(data_plan.batches, vec![0..1, 1..2, 2..3, 3..4, 4..5]);
     }
@@ -1437,8 +1525,11 @@ mod tests {
         changed.image_color_space = gpui::TextureColorSpace3d::Linear;
         variants.push(changed);
         for changed in variants {
-            let plan =
-                instances::BatchPlan::new(&[source.clone(), changed.clone(), changed], true, 100);
+            let plan = instances::BatchPlan::new(
+                &frame(&[source.clone(), changed.clone(), changed]),
+                true,
+                100,
+            );
             assert_eq!(plan.batches, vec![0..1, 1..3]);
         }
     }

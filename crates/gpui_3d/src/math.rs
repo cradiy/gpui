@@ -19,7 +19,6 @@ pub(crate) fn unit(v: [f32; 3]) -> [f32; 3] {
 pub(crate) fn multiply(a: Matrix, b: Matrix) -> Matrix {
     std::array::from_fn(|c| std::array::from_fn(|r| (0..4).map(|k| a[k][r] * b[c][k]).sum()))
 }
-#[cfg(test)]
 pub(crate) fn transform(m: Matrix, p: [f32; 4]) -> [f32; 4] {
     std::array::from_fn(|r| (0..4).map(|c| m[c][r] * p[c]).sum())
 }
@@ -124,7 +123,7 @@ impl Camera {
             ..Default::default()
         }
     }
-    pub(crate) fn matrix(self, aspect: f32) -> Matrix {
+    pub(crate) fn basis(self) -> [[f32; 3]; 3] {
         assert!(self.eye.iter().chain(&self.target).all(|x| x.is_finite()));
         assert!(self.fov.is_finite() && self.fov > 0. && self.fov < std::f32::consts::PI);
         assert!(
@@ -140,6 +139,10 @@ impl Camera {
         };
         let x = unit(cross(up, z));
         let y = cross(z, x);
+        [x, y, z]
+    }
+    pub(crate) fn matrix(self, aspect: f32) -> Matrix {
+        let [x, y, z] = self.basis();
         let view = [
             [x[0], y[0], z[0], 0.],
             [x[1], y[1], z[1], 0.],

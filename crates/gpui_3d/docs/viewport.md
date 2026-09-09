@@ -77,9 +77,58 @@ shared by all UI materials in the viewport. Text, images and ordinary descendant
 are captured; deferred overlays are not part of the texture.
 
 UI textures are decorative: pointer hits inside the source subtree are disabled,
-without blocking camera controls on the enclosing viewport. Mesh picking and
-mesh-to-UI event mapping are not provided. Do not use focusable controls or global
+without blocking camera controls on the enclosing viewport. Mesh-to-UI event
+mapping is not provided. Do not use focusable controls or global
 input listeners inside the capture.
+
+## Object picking
+
+Assign stable IDs to objects and attach handlers to the viewport:
+
+```rust
+use gpui::{Styled, rgb};
+use gpui_3d::{Material, Mesh, Object, Scene, viewport3d};
+
+let world = Scene::new().object(
+    Object::new(Mesh::cube(), Material::color(rgb(0x89c8ee))).id("cube"),
+);
+let viewport = viewport3d("world", world)
+    .size_full()
+    .on_object_hover(|hit, _window, _cx| {
+        // Update application hover state from hit.as_ref().and_then(|h| h.object_id.as_ref()).
+    })
+    .on_object_click(|hit, _window, _cx| {
+        // Use hit.object_id and hit.uv to select an object or inspect its surface.
+    });
+```
+
+`ObjectId` uses GPUI's `ElementId` representation. Keep IDs unique within a
+viewport and stable across scene rebuilds. Unnamed objects remain pickable and
+occlude objects behind them; their hit carries `object_id: None`.
+
+`Hit` provides the object and triangle indices, world position, interpolated
+world-space shading normal, UV, barycentric weights, and distance from the camera.
+Both faces are pickable; backface normals follow the renderer's flipped shading
+normal convention. Hits respect the camera's near and far clip planes. Equal-depth
+ties use scene insertion order.
+
+Hover callbacks run on pointer movement, with `None` on a miss or viewport exit.
+They do not schedule frames or recompute hover for a stationary pointer when a
+scene changes. Click callbacks handle left clicks with endpoints on the same
+mesh and at most four logical pixels apart. When sharing the button with camera
+gestures, ignore clicks after a drag, including drags returning to their starting
+position. Application state changes should notify the view as usual.
+
+Picking is geometric: constant material alpha is respected, but texture alpha
+and image loading state are not sampled. Transparent texture regions and images
+that are still loading can therefore receive hits. Viewport callbacks use GPUI's
+normal hitbox routing for ancestor clipping and overlapping UI. They do not map
+events into captured UI controls or account for visual effect deformation.
+
+`Scene::pick(bounds, position)` exposes the same triangle query for custom input
+handling. Both arguments use logical window coordinates; the caller supplies
+the viewport bounds and handles UI clipping and input routing. Queries scan the
+scene's triangles on the CPU, so use modest meshes for interactive picking.
 
 ## Rendering and support
 
@@ -106,3 +155,12 @@ cargo run -p gpui_3d --example orbit
 
 Drag to orbit the scene and scroll to change distance. Toggle the UI plane to
 inspect the image plane and textured cube behind it. `Reset` restores the camera.
+
+```sh
+cargo run -p gpui_3d --example picking
+```
+
+Hover to highlight a cube, click to select it, left- or right-drag to orbit, and
+scroll to zoom. Movement beyond four logical pixels starts an orbit gesture and
+suppresses selection on release. Selection changes color without changing geometry. The floor occludes
+objects normally and clears selection when clicked.

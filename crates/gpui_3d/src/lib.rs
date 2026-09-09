@@ -5,11 +5,14 @@
 pub mod guide {}
 
 mod math;
+mod picking;
 mod viewport;
 
+pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
 use gpui::{ImageSource, Mesh3d, Rgba};
 pub use math::{Camera, Transform};
+pub use picking::Hit;
 use std::sync::{Arc, OnceLock};
 pub use viewport::{Viewport3d, viewport3d};
 
@@ -128,6 +131,7 @@ impl Material {
 /// One mesh with a material and object-to-world transform.
 #[derive(Clone)]
 pub struct Object {
+    id: Option<ObjectId>,
     mesh: Mesh,
     material: Material,
     transform: Transform,
@@ -136,10 +140,16 @@ impl Object {
     /// Creates a mesh at the origin.
     pub fn new(mesh: Mesh, material: Material) -> Self {
         Self {
+            id: None,
             mesh,
             material,
             transform: Transform::default(),
         }
+    }
+    /// Assigns a stable application-defined identity for picking callbacks.
+    pub fn id(mut self, id: impl Into<ObjectId>) -> Self {
+        self.id = Some(id.into());
+        self
     }
     /// Sets world position.
     pub fn position(mut self, position: [f32; 3]) -> Self {

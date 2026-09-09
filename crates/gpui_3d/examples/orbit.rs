@@ -13,15 +13,22 @@ struct Orbit {
     drag: Option<Point<Pixels>>,
     texture: ImageSource,
     show_ui: bool,
+    _activation: gpui::Subscription,
 }
 impl Orbit {
-    fn new() -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let activation = cx.observe_window_activation(window, |this, window, _| {
+            if !window.is_window_active() {
+                this.drag = None;
+            }
+        });
         Self {
             yaw: 0.35,
             pitch: 0.24,
             distance: 6.8,
             drag: None,
             show_ui: true,
+            _activation: activation,
             texture: Arc::new(Image::from_bytes(
                 ImageFormat::Svg,
                 include_bytes!("orbit.svg").to_vec(),
@@ -87,9 +94,6 @@ impl Orbit {
 }
 impl Render for Orbit {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !window.is_window_active() {
-            self.drag = None;
-        }
         let mut scene = Scene::new()
             .camera(Camera::orbit(self.yaw, self.pitch, self.distance))
             .light(Light::default())
@@ -263,7 +267,7 @@ fn main() {
                 ))),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| Orbit::new()),
+            |window, cx| cx.new(|cx| Orbit::new(window, cx)),
         )
         .expect("failed to open 3D example");
     });

@@ -1,10 +1,13 @@
-use crate::{Scene, Texture};
+use crate::{Hit, Scene, Texture};
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, MeshDraw3d, MeshTexture3d, Pixels, PointerTransform, Scene3dFrame,
     Style, StyleRefinement, Styled, Window, div, prelude::*,
 };
-use std::sync::Arc;
+use std::{cell::Cell, rc::Rc, sync::Arc};
+
+type HoverListener = Box<dyn Fn(&Option<Hit>, &mut Window, &mut App)>;
+type ClickListener = Box<dyn Fn(&Hit, &mut Window, &mut App)>;
 
 /// Creates a layout-sized 3D viewport. The caller owns camera interaction and animation.
 pub fn viewport3d(id: impl Into<ElementId>, scene: Scene) -> Viewport3d {
@@ -13,6 +16,9 @@ pub fn viewport3d(id: impl Into<ElementId>, scene: Scene) -> Viewport3d {
         scene,
         texture: None,
         style: StyleRefinement::default(),
+        on_hover: None,
+        on_click: None,
+        pick_bounds: Rc::new(Cell::new(None)),
     }
 }
 
@@ -22,8 +28,30 @@ pub struct Viewport3d {
     scene: Scene,
     texture: Option<AnyElement>,
     style: StyleRefinement,
+    on_hover: Option<HoverListener>,
+    on_click: Option<ClickListener>,
+    pick_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 impl Viewport3d {
+    /// Reports geometric hits on pointer movement and `None` on exit or a miss.
+    /// Texture alpha is not sampled. This does not request animation frames.
+    pub fn on_object_hover(
+        mut self,
+        listener: impl Fn(&Option<Hit>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_hover = Some(Box::new(listener));
+        self
+    }
+    /// Handles a left click whose endpoints hit the same mesh within four logical pixels.
+    /// Texture alpha is not sampled. Callers sharing the button with camera gestures
+    /// should ignore clicks after a drag.
+    pub fn on_object_click(
+        mut self,
+        listener: impl Fn(&Hit, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(listener));
+        self
+    }
     /// Captures UI at viewport layout size for every `Material::ui()` object.
     /// This content is visual only; mesh-to-UI input routing is not provided.
     pub fn ui_texture(mut self, content: impl IntoElement) -> Self {
@@ -49,6 +77,49 @@ impl IntoElement for Viewport3d {
     fn into_element(mut self) -> Self::Element {
         let mut container = div().id(self.id.clone()).relative();
         container.style().refine(&std::mem::take(&mut self.style));
+        if let Some(listener) = self.on_hover.take() {
+            let listener = Rc::new(listener);
+            let scene = self.scene.clone();
+            let bounds = self.pick_bounds.clone();
+            let on_move = listener.clone();
+            container = container
+                .on_mouse_move(move |event, window, cx| {
+                    let hit = bounds
+                        .get()
+                        .and_then(|bounds| scene.pick(bounds, event.position));
+                    on_move(&hit, window, cx);
+                })
+                .on_hover(move |hovered, window, cx| {
+                    if !hovered {
+                        listener(&None, window, cx);
+                    }
+                });
+        }
+        if let Some(listener) = self.on_click.take() {
+            let scene = self.scene.clone();
+            let bounds = self.pick_bounds.clone();
+            container = container.on_click(move |event, window, cx| {
+                let gpui::ClickEvent::Mouse(event) = event else {
+                    return;
+                };
+                let delta = event.up.position - event.down.position;
+                if f32::from(delta.x).hypot(f32::from(delta.y)) > 4. {
+                    return;
+                }
+                let Some(bounds) = bounds.get() else {
+                    return;
+                };
+                let Some(down) = scene.pick(bounds, event.down.position) else {
+                    return;
+                };
+                let Some(up) = scene.pick(bounds, event.up.position) else {
+                    return;
+                };
+                if down.object_index == up.object_index {
+                    listener(&up, window, cx);
+                }
+            });
+        }
         container.child(Content(self))
     }
 }
@@ -134,6 +205,7 @@ impl Element for Content {
         if !window.supports_scene3d() || bounds.is_empty() {
             return;
         }
+        self.0.pick_bounds.set(Some(bounds));
         let scene = &self.0.scene;
         let objects = scene
             .objects

@@ -5,6 +5,100 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn target_budget_rejects_before_images_and_preserves_retained_outputs() -> anyhow::Result<()> {
+    use gpui_3d::{Object, ResolvedTexture, Scene, TextureState};
+    let mut renderer = HeadlessRenderer::new()?;
+    let scene = Scene::new().object(Object::new(Mesh::cube(), Material::color(rgb(0x80a0c0))));
+    let config = Scene3dOutputConfig {
+        size: [17, 13],
+        channels: renderer.capabilities().channels(),
+        color_samples: 1,
+    };
+    let memory = config.target_memory(None)?;
+    let prepared = scene.prepare(17. / 13., None, |_| {
+        Ok(TextureState::Ready(ResolvedTexture::None))
+    })?;
+    let mut direct = gpui_wgpu::WgpuScene3dRenderer::new(renderer.context().clone())?;
+    direct.set_target_byte_limit(Some(memory.total_bytes - 1));
+    assert!(direct.render(prepared.frame(), config).is_err());
+    assert!(direct.validate_target_memory(config, None).is_err());
+    direct.set_target_byte_limit(Some(memory.total_bytes));
+    assert_eq!(direct.validate_target_memory(config, None)?, memory);
+    let accepted = direct.render(prepared.frame(), config)?;
+    assert_eq!(accepted.target_memory(), memory);
+    direct.clear_caches();
+    assert_eq!(direct.target_byte_limit(), Some(memory.total_bytes));
+    drop(direct);
+    assert_eq!(renderer.target_byte_limit(), None);
+    renderer.set_target_byte_limit(Some(memory.total_bytes));
+    let original = renderer.render(&scene, config)?;
+    assert_eq!(original.gpu().target_memory(), memory);
+    let outputs = [
+        original.gpu().color(),
+        original.gpu().linear_color(),
+        original.gpu().object_ids(),
+        original.gpu().linear_depth(),
+        original.gpu().world_normals(),
+    ];
+    let actual: u64 = outputs
+        .into_iter()
+        .flatten()
+        .map(|texture| {
+            u64::from(texture.width())
+                * u64::from(texture.height())
+                * u64::from(texture.format().block_copy_size(None).unwrap())
+        })
+        .sum();
+    assert_eq!(memory.output_bytes, actual);
+    let pending = original.readback()?;
+    renderer.set_target_byte_limit(Some(memory.total_bytes - 1));
+    assert!(renderer.render(&scene, config).is_err());
+    renderer.set_target_byte_limit(Some(0));
+    let unresolved = Scene::new().object(Object::new(
+        Mesh::plane(),
+        Material::image("unresolved.png"),
+    ));
+    let error = renderer
+        .render(&unresolved, config)
+        .err()
+        .expect("over-budget request accepted");
+    assert!(error.to_string().contains("target request"));
+    renderer.clear_caches();
+    assert_eq!(renderer.target_byte_limit(), Some(0));
+    renderer.set_target_byte_limit(None);
+    let error = renderer
+        .render(&unresolved, config)
+        .err()
+        .expect("unresolved image accepted");
+    assert!(format!("{error:#}").contains("decoded pixels"));
+    let later = renderer.render(
+        &scene,
+        Scene3dOutputConfig {
+            size: [34, 26],
+            ..config
+        },
+    )?;
+    assert_eq!(
+        later.gpu().target_memory().total_bytes,
+        memory.total_bytes * 4
+    );
+    drop(renderer);
+    let mut pending = pending;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Some(read) = pending.try_read()? {
+            assert_eq!(read.pixels.size, config.size);
+            assert!(read.pixels.object_ids.as_ref().unwrap().contains(&1));
+            break;
+        }
+        anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn cache_release_preserves_frames_readbacks_and_image_reconstruction() -> anyhow::Result<()> {
     use gpui_3d::{
         FrameReadback, Object, Projection, ReadFrame, Scene, Scene3dChannels, TextureMipFilter,

@@ -16,6 +16,8 @@ mod statistics;
 pub use statistics::Scene3dDrawStatistics;
 mod capabilities;
 pub use capabilities::{Scene3dDeviceCapabilities, Scene3dFormatCapabilities};
+mod memory;
+pub use memory::Scene3dTargetMemory;
 
 bitflags::bitflags! {
     /// Independently selectable outputs. Non-color channels use the pixel center.
@@ -166,6 +168,7 @@ pub struct WgpuScene3dRenderer {
     capabilities: Scene3dCapabilities,
     device_capabilities: Scene3dDeviceCapabilities,
     readback_busy: Arc<AtomicBool>,
+    target_byte_limit: Option<u64>,
 }
 impl WgpuScene3dRenderer {
     #[cfg(not(target_family = "wasm"))]
@@ -186,6 +189,7 @@ impl WgpuScene3dRenderer {
             capabilities,
             device_capabilities,
             readback_busy: Arc::new(AtomicBool::new(false)),
+            target_byte_limit: None,
         })
     }
     pub fn context(&self) -> &WgpuContext {
@@ -200,6 +204,42 @@ impl WgpuScene3dRenderer {
 
     pub fn device_capabilities(&self) -> &Scene3dDeviceCapabilities {
         &self.device_capabilities
+    }
+
+    /// Optional per-request target payload limit; `None` is unlimited (the default).
+    pub fn target_byte_limit(&self) -> Option<u64> {
+        self.target_byte_limit
+    }
+
+    /// Limits output, attachment, and shadow texture payload for future requests.
+    /// Zero rejects every render. Does not release existing resources, poll the
+    /// device, or bound total GPU residency. Use `clear_caches` to release caches.
+    pub fn set_target_byte_limit(&mut self, bytes: Option<u64>) {
+        self.target_byte_limit = bytes;
+    }
+
+    /// Checks device output limits and this renderer's per-request target budget
+    /// before resource uploads. Does not validate scene content or access the GPU.
+    pub fn validate_target_memory(
+        &self,
+        config: Scene3dOutputConfig,
+        shadow_resolution: Option<u32>,
+    ) -> Result<Scene3dTargetMemory> {
+        self.capabilities.validate(config)?;
+        ensure!(
+            shadow_resolution.is_none_or(|size| size <= self.capabilities.max_dimension),
+            "shadow resolution exceeds device limits"
+        );
+        let memory = config.target_memory(shadow_resolution)?;
+        if let Some(limit) = self.target_byte_limit {
+            ensure!(
+                memory.total_bytes <= limit,
+                "3D target request requires {} bytes, exceeding the {} byte limit",
+                memory.total_bytes,
+                limit
+            );
+        }
+        Ok(memory)
     }
 
     /// Releases renderer-owned mesh resources, targets, and pipelines.
@@ -224,16 +264,13 @@ impl WgpuScene3dRenderer {
         frame: &Scene3dFrame,
         config: Scene3dOutputConfig,
     ) -> Result<Scene3dGpuOutput> {
-        self.capabilities.validate(config)?;
+        let target_memory = self.validate_target_memory(
+            config,
+            frame.directional_shadow.map(|shadow| shadow.resolution),
+        )?;
         ensure!(
             frame.shadow_is_valid(),
             "invalid directional shadow parameters or source"
-        );
-        ensure!(
-            frame
-                .directional_shadow
-                .is_none_or(|shadow| shadow.resolution <= self.capabilities.max_dimension),
-            "shadow resolution exceeds device limits"
         );
         if let Some(lights) = &frame.lights {
             ensure!(
@@ -533,6 +570,7 @@ impl WgpuScene3dRenderer {
             normals,
             linear_color,
             readback_busy: self.readback_busy.clone(),
+            target_memory,
         })
     }
 }
@@ -620,8 +658,13 @@ pub struct Scene3dGpuOutput {
     depth: Option<wgpu::Texture>,
     normals: Option<wgpu::Texture>,
     readback_busy: Arc<AtomicBool>,
+    target_memory: Scene3dTargetMemory,
 }
 impl Scene3dGpuOutput {
+    /// Target payload of this submission's configuration, independent of cache reuse.
+    pub fn target_memory(&self) -> Scene3dTargetMemory {
+        self.target_memory
+    }
     /// Counts from this submission's prepared mesh plans, without GPU readback.
     pub fn draw_statistics(&self) -> Scene3dDrawStatistics {
         self.draw_statistics

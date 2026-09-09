@@ -1772,6 +1772,74 @@ mod tests {
 
     #[test]
     #[ignore = "requires a GPU adapter"]
+    fn scene3d_target_memory_matches_allocated_attachments_and_shadow_maps() -> anyhow::Result<()> {
+        let context = crate::WgpuContext::new_headless()?;
+        let capabilities = crate::Scene3dDeviceCapabilities::query(&context).rendering()?;
+        let channels = capabilities.channels();
+        let mut input = frame(&[]);
+        input.directional_shadow = Some(gpui::DirectionalShadow3d {
+            light_index: 0,
+            view_projection: IDENTITY,
+            resolution: 256,
+            depth_bias: 0.,
+            normal_bias: 0.,
+            softness: 0.,
+        });
+        let bytes = |texture: &wgpu::Texture| {
+            u64::from(texture.width())
+                * u64::from(texture.height())
+                * u64::from(texture.sample_count())
+                * u64::from(texture.format().block_copy_size(None).unwrap())
+        };
+        for &samples in capabilities.color_sample_counts(channels) {
+            let config = crate::Scene3dOutputConfig {
+                size: [13, 7],
+                channels,
+                color_samples: samples,
+            };
+            let predicted = config.target_memory(Some(256))?;
+            let mut attachments = 0;
+            let mut shadows = 0;
+            for (channel, format, samples) in [
+                (
+                    crate::Scene3dChannels::COLOR,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    samples,
+                ),
+                (
+                    crate::Scene3dChannels::OBJECT_ID,
+                    wgpu::TextureFormat::R32Uint,
+                    1,
+                ),
+                (
+                    crate::Scene3dChannels::LINEAR_DEPTH,
+                    wgpu::TextureFormat::R32Float,
+                    1,
+                ),
+                (
+                    crate::Scene3dChannels::WORLD_NORMAL,
+                    wgpu::TextureFormat::Rgba32Float,
+                    1,
+                ),
+            ] {
+                if !channels.contains(channel) {
+                    continue;
+                }
+                let mut renderer =
+                    Scene3dRenderer::new(&context.device, &context.queue, format, samples);
+                renderer.prepare_frames(&context.device, &context.queue, [&input], [config.size]);
+                let targets = &renderer.targets[&config.size];
+                attachments += bytes(&targets.depth) + targets.hdr.as_ref().map_or(0, bytes);
+                shadows += renderer.shadow_maps.values().map(bytes).sum::<u64>();
+            }
+            assert_eq!(predicted.attachment_bytes, attachments);
+            assert_eq!(predicted.shadow_bytes, shadows);
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
     fn scene3d_instance_buffers_shrink_reuse_and_release_with_active_batches() -> anyhow::Result<()>
     {
         let context = crate::WgpuContext::new_headless()?;

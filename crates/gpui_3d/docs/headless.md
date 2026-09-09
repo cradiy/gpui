@@ -287,6 +287,46 @@ of its allocation lifetime. Window renderers expose
 
 ## Limits and errors
 
+### Target memory
+
+`Scene3dOutputConfig::target_memory(shadow_resolution)` computes unpadded texture
+payload without a device or allocation. `Scene3dTargetMemory` separates returned
+outputs, intermediate attachments, and the optional directional shadow map,
+with their sum in `total_bytes`. Supply the scene's shadow resolution or `None`.
+Color and linear color share HDR/depth attachments; each geometry channel has
+its own depth attachment. MSAA applies to the shaded attachments, and a shadow
+map contributes only when a shaded channel is selected.
+
+```no_run
+use gpui_3d::{HeadlessRenderer, Scene, Scene3dOutputConfig};
+
+# fn main() -> anyhow::Result<()> {
+let config = Scene3dOutputConfig::new([1280, 720]);
+let memory = config.target_memory(None)?;
+let mut renderer = HeadlessRenderer::new()?;
+renderer.set_target_byte_limit(Some(128 * 1024 * 1024));
+let frame = renderer.render(&Scene::new(), config)?;
+assert_eq!(frame.gpu().target_memory(), memory);
+# Ok(())
+# }
+```
+
+`set_target_byte_limit` sets a per-request admission limit. The default is `None`;
+`Some(0)` rejects every render. Over-budget requests fail before image uploads,
+target allocation, or submission, leaving previous frames and caches unchanged.
+The lower-level `WgpuScene3dRenderer` exposes the same limit and
+`validate_target_memory(config, shadow_resolution)` for preflight checks against
+device limits and the configured budget. Changing the limit does not release
+resources; `clear_caches()` preserves the limit.
+
+The report counts the requested layout even when cached attachments are reused.
+It excludes retained older frames, transient overlap between submissions, GPU
+allocation alignment, readback/staging buffers, meshes, material/environment
+textures, and pipeline resources. It is neither current nor peak physical GPU
+memory, and the per-request limit is not a device-wide residency quota.
+
+### Output limits
+
 `capabilities()` reports the device dimension limit, the 16,777,216-pixel output
 budget, and separate four-sample display/HDR color support. `channels()` returns
 the available output mask; `color_sample_counts(channels)` returns the supported

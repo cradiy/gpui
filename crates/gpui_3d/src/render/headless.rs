@@ -11,7 +11,8 @@ use crate::{PreparationCache, Scene, TextureSource, TextureState};
 
 pub use gpui_wgpu::{
     Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities, Scene3dDrawStatistics,
-    Scene3dFormatCapabilities, Scene3dOutputConfig, Scene3dPixels, WgpuContext,
+    Scene3dFormatCapabilities, Scene3dOutputConfig, Scene3dPixels, Scene3dTargetMemory,
+    WgpuContext,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load
@@ -47,6 +48,17 @@ impl HeadlessRenderer {
         self.renderer.device_capabilities()
     }
 
+    /// Per-request output, attachment, and shadow payload limit, or `None` (default).
+    pub fn target_byte_limit(&self) -> Option<u64> {
+        self.renderer.target_byte_limit()
+    }
+
+    /// Changes admission for future requests, without releasing existing resources.
+    /// Zero rejects every render; `None` disables this limit. Not a total GPU budget.
+    pub fn set_target_byte_limit(&mut self, bytes: Option<u64>) {
+        self.renderer.set_target_byte_limit(bytes);
+    }
+
     /// Releases retained CPU preparation and cached GPU resources, including the image atlas.
     /// Subsequent renders rebuild resources from the supplied scene. Returned
     /// frames and pending readbacks remain valid. Does not wait for the GPU.
@@ -60,7 +72,10 @@ impl HeadlessRenderer {
     /// Renders the supplied scene without a native window or UI layout. Geometry,
     /// projection, lighting, and alpha modes share the viewport implementation.
     pub fn render(&mut self, scene: &Scene, config: Scene3dOutputConfig) -> Result<RenderedFrame> {
-        self.capabilities().validate(config)?;
+        self.renderer.validate_target_memory(
+            config,
+            scene.directional_shadow.map(|shadow| shadow.resolution),
+        )?;
         let max_dimension = self.capabilities().max_dimension;
         let atlas = self.renderer.sprite_atlas();
         let mut used = HashSet::new();

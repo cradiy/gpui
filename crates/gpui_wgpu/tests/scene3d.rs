@@ -550,6 +550,14 @@ fn direct_outputs_preserve_integer_ids_cutouts_and_frame_lifetimes() -> anyhow::
         color_samples: 1,
     };
     let first = renderer.render(&input, config)?;
+    let planned = gpui_wgpu::Scene3dDrawStatistics::plan(
+        &input,
+        config.channels,
+        renderer.max_instances_per_batch(),
+    )?;
+    assert_eq!(first.draw_statistics(), planned);
+    assert_eq!(planned.camera_draws, 4);
+    assert_eq!(planned.camera_instances, 4);
     input.objects = vec![far, near].into();
     let reversed = renderer.render(&input, config)?;
     input.objects = Arc::default();
@@ -560,6 +568,9 @@ fn direct_outputs_preserve_integer_ids_cutouts_and_frame_lifetimes() -> anyhow::
             ..config
         },
     )?;
+    assert_eq!(empty.draw_statistics(), Default::default());
+    assert_eq!(first.draw_statistics(), planned);
+    assert_eq!(reversed.draw_statistics(), planned);
 
     let mut read = first.readback()?;
     assert!(reversed.readback().is_err());

@@ -93,7 +93,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Frustum culling**: Cached indexed mesh bounds, perspective/orthographic clip-volume tests with full object transforms, independent camera/shadow eligibility, resource-resolution pruning, and per-frame draw plans without renumbering IDs or changing world-ray queries.
   - [ ] **Rendering benchmarks**: Reproducible shared-mesh and mixed-material workloads with CPU preparation and draw-count measurements.
     - [x] **Scene preparation**: CPU-only shared geometry, mixed PBR, off-camera, and pending-image workloads at 1,024 and 16,384 objects.
-    - [ ] **Draw encoding**: Instanced batch counts and GPU upload/encoding workloads.
+    - [x] **Draw planning**: CPU-only batching workloads, per-pass mesh/instance/triangle counts, parameter-upload payload sizes, and retained submission statistics.
+    - [ ] **Draw encoding**: GPU upload/encoding workloads.
 - [ ] **Resource lifecycle**: Handle multiple viewports, resizing, device recovery, and cache eviction within resource budgets.
 - [ ] **Platform coverage**: Add macOS and Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
 - [ ] **Cross-platform validation**: Cover depth, transparency, texture colors, nested composition, input mapping, and high DPI; distinguish automated checks from manual visual confirmation.

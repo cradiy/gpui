@@ -9,6 +9,9 @@ use gpui::{MeshTexture3d, Scene3dFrame};
 
 use crate::{WgpuAtlas, WgpuContext, wgpu_renderer::scene3d::Scene3dRenderer};
 
+mod statistics;
+pub use statistics::Scene3dDrawStatistics;
+
 bitflags::bitflags! {
     /// Independently selectable outputs. Non-color channels use the pixel center.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +217,11 @@ impl WgpuScene3dRenderer {
         self.capabilities
     }
 
+    /// Maximum instances in one draw batch for this device's buffer limits.
+    pub fn max_instances_per_batch(&self) -> usize {
+        crate::wgpu_renderer::scene3d::instance_limit(&self.context.device)
+    }
+
     /// Submits a frame and returns owned GPU outputs. Image atlas tiles must come
     /// from this renderer. UI subtree textures are not supported by this entry point.
     pub fn render(
@@ -398,6 +406,7 @@ impl WgpuScene3dRenderer {
             label: Some("scene3d.direct"),
         });
         let rect = [0., 0., width as f32, height as f32];
+        let mut draw_statistics = Scene3dDrawStatistics::default();
         let mut linear_color = None;
         let color = if config.channels.shaded() {
             if self
@@ -417,6 +426,7 @@ impl WgpuScene3dRenderer {
             }
             let renderer = &mut self.color.as_mut().unwrap().1;
             renderer.prepare_frames(device, queue, [frame], width, height);
+            draw_statistics += renderer.draw_statistics(frame);
             let texture = config
                 .channels
                 .color()
@@ -462,6 +472,7 @@ impl WgpuScene3dRenderer {
                 renderer.reuse_geometry_from(source);
             }
             renderer.prepare_frames(device, queue, [frame], width, height);
+            draw_statistics += renderer.draw_statistics(frame);
             let texture = output_texture(device, config.size, kind.format());
             renderer.encode_frame(
                 device,
@@ -480,6 +491,7 @@ impl WgpuScene3dRenderer {
         self.context.queue.submit([encoder.finish()]);
         Ok(Scene3dGpuOutput {
             context: self.context.clone(),
+            draw_statistics,
             config,
             color,
             ids,
@@ -566,6 +578,7 @@ fn output_texture(
 /// and resizes. GPU consumers must use the same device and queue ordering.
 pub struct Scene3dGpuOutput {
     context: WgpuContext,
+    draw_statistics: Scene3dDrawStatistics,
     config: Scene3dOutputConfig,
     color: Option<wgpu::Texture>,
     linear_color: Option<wgpu::Texture>,
@@ -575,6 +588,11 @@ pub struct Scene3dGpuOutput {
     readback_busy: Arc<AtomicBool>,
 }
 impl Scene3dGpuOutput {
+    /// Counts from this submission's prepared mesh plans, without GPU readback.
+    pub fn draw_statistics(&self) -> Scene3dDrawStatistics {
+        self.draw_statistics
+    }
+
     pub fn config(&self) -> Scene3dOutputConfig {
         self.config
     }

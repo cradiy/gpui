@@ -35,6 +35,35 @@ impl Visibility {
 }
 
 impl BatchPlan {
+    pub fn statistics(&self, frame: &Scene3dFrame) -> crate::Scene3dDrawStatistics {
+        let mut statistics = crate::Scene3dDrawStatistics {
+            batches: self.batches.len() as u64,
+            instance_upload_bytes: self.order.len() as u64
+                * std::mem::size_of::<super::Instance>() as u64,
+            uniform_upload_bytes: self.batches.len() as u64
+                * std::mem::size_of::<super::Params>() as u64,
+            ..Default::default()
+        };
+        for batch in &self.batches {
+            let visibility = self.passes[batch.start];
+            let instances = batch.len() as u64;
+            let triangles = (frame.objects[self.order[batch.start]].mesh.indices().len() / 3)
+                as u64
+                * instances;
+            if visibility.camera {
+                statistics.camera_draws += 1;
+                statistics.camera_instances += instances;
+                statistics.camera_triangles += triangles;
+            }
+            if visibility.shadow {
+                statistics.shadow_draws += 1;
+                statistics.shadow_instances += instances;
+                statistics.shadow_triangles += triangles;
+            }
+        }
+        statistics
+    }
+
     pub fn new(frame: &Scene3dFrame, color: bool, limit: usize) -> Self {
         assert!(limit > 0);
         let objects = &frame.objects;

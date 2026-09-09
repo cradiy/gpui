@@ -1604,6 +1604,36 @@ include scene validation, culling, resource callbacks, output construction, and
 identity mapping. Scene construction is outside the timed region. These CPU-only
 measurements do not include GPU uploads, draw encoding, shading, or readback.
 
+### Draw statistics
+
+With the `wgpu` feature, `Scene3dDrawStatistics::plan(frame, channels, limit)`
+runs the WGPU mesh planner without an adapter. Pass a prepared frame and a
+positive maximum instance count per batch. A renderer exposes its device-specific
+limit through `max_instances_per_batch()`; an explicit limit also allows offline
+comparisons of batch sizes. Planning does not validate scene inputs, atlas
+residency, or device capabilities.
+
+Statistics report camera and shadow draw calls, instance counts, and submitted
+triangle counts. `batches`, `instance_upload_bytes`, and `uniform_upload_bytes`
+describe per-submission payloads, not allocated buffer capacity. A batch shared
+by camera and shadow work uploads once. Color and linear color share one shaded
+pass; each selected object-ID, depth, or normal output has its own mesh pass.
+Consequently, multi-channel counts include repeated work across outputs.
+
+`RenderedFrame::gpu().draw_statistics()` retains the counts from the actual
+submission's prepared plans without a GPU readback. Statistics do not include
+fullscreen background/display draws, texture or geometry uploads, GPU timings,
+occlusion, or pixel coverage. Frustum-culled meshes contribute no work, while
+occluded meshes can still contribute draws and triangles.
+
+```sh
+cargo bench -p gpui_3d --features wgpu --bench scene -- draw_planning
+```
+
+These CPU workloads compare shared geometry, mixed materials, culled scenes, and
+ordered transparency. Each workload verifies its expected instance and draw
+counts before timing. Scene preparation is outside the measured region.
+
 ## Rendering and support
 
 Linux WGPU supports these viewports. Check `window.supports_scene3d()` before

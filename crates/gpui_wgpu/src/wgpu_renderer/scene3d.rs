@@ -58,7 +58,7 @@ struct BatchSlot {
     instances: wgpu::Buffer,
 }
 
-fn instance_limit(device: &wgpu::Device) -> usize {
+pub(crate) fn instance_limit(device: &wgpu::Device) -> usize {
     ((device.limits().max_buffer_size - std::mem::size_of::<Params>() as u64)
         / std::mem::size_of::<Instance>() as u64)
         .min(u64::from(u32::MAX)) as usize
@@ -554,6 +554,21 @@ impl Scene3dRenderer {
 
     fn plan(&self, frame: &gpui::Scene3dFrame) -> &instances::BatchPlan {
         &self.plans[&(frame as *const _ as usize)]
+    }
+
+    pub(crate) fn draw_statistics(
+        &self,
+        frame: &gpui::Scene3dFrame,
+    ) -> crate::Scene3dDrawStatistics {
+        self.plan(frame).statistics(frame)
+    }
+
+    pub(crate) fn plan_statistics(
+        frame: &gpui::Scene3dFrame,
+        color: bool,
+        limit: usize,
+    ) -> crate::Scene3dDrawStatistics {
+        instances::BatchPlan::new(frame, color, limit).statistics(frame)
     }
 
     pub(crate) fn prepare_frames<'a>(
@@ -1334,6 +1349,122 @@ mod tests {
             alpha_mode: gpui::AlphaMode3d::Opaque,
             sort_depth: 0.,
         }
+    }
+
+    #[test]
+    fn scene3d_draw_statistics_count_shared_work_and_selected_channels() {
+        use crate::{Scene3dChannels as C, Scene3dDrawStatistics as S};
+        let input = frame(&vec![object(); 7]);
+        let color = S::plan(&input, C::COLOR, 3).unwrap();
+        assert_eq!(
+            (
+                color.camera_draws,
+                color.camera_instances,
+                color.camera_triangles
+            ),
+            (3, 7, 7)
+        );
+        assert_eq!(color.shadow_draws, 0);
+        assert_eq!(color.batches, 3);
+        assert_eq!(
+            color.instance_upload_bytes,
+            7 * std::mem::size_of::<Instance>() as u64
+        );
+        assert_eq!(
+            color.uniform_upload_bytes,
+            3 * std::mem::size_of::<Params>() as u64
+        );
+        assert_eq!(
+            S::plan(&input, C::COLOR | C::LINEAR_COLOR, 3).unwrap(),
+            color
+        );
+        let all = S::plan(&input, C::all(), 3).unwrap();
+        let mut expected = color;
+        for _ in 0..3 {
+            expected += color;
+        }
+        assert_eq!(all, expected);
+        assert_eq!(S::plan(&input, C::OBJECT_ID, 100).unwrap().camera_draws, 1);
+        assert_eq!(S::plan(&input, C::WORLD_NORMAL, 1).unwrap().camera_draws, 7);
+        assert_eq!(S::plan(&frame(&[]), C::all(), 1).unwrap(), S::default());
+        assert!(S::plan(&input, C::empty(), 1).is_err());
+        assert!(S::plan(&input, C::from_bits_retain(128), 1).is_err());
+        assert!(S::plan(&input, C::COLOR, 0).is_err());
+    }
+
+    #[test]
+    fn scene3d_draw_statistics_distinguish_shadow_only_meshes_and_batch_breaks() {
+        use crate::{Scene3dChannels as C, Scene3dDrawStatistics as S};
+        let source = object();
+        let mut caster = source.clone();
+        caster.model[3][0] = 3.;
+        let mut outside = source.clone();
+        outside.model[3][0] = 20.;
+        let mut blended = source.clone();
+        blended.alpha_mode = gpui::AlphaMode3d::Blend;
+        let mut different = source.clone();
+        different.pbr = Some(Default::default());
+        let mut vertices = source.mesh.vertices().to_vec();
+        vertices.push(gpui::MeshVertex3d {
+            position: [1., 1., 0.],
+            normal: [0., 0., 1.],
+            uv: [1., 1.],
+        });
+        different.mesh = gpui::Mesh3d::new(vertices, vec![0, 1, 2, 2, 1, 3]);
+        let mut input = frame(&[
+            source.clone(),
+            source,
+            different,
+            caster,
+            outside,
+            blended.clone(),
+            blended,
+        ]);
+        let mut shadow_matrix = IDENTITY;
+        shadow_matrix[0][0] = 0.2;
+        input.directional_shadow = Some(gpui::DirectionalShadow3d {
+            light_index: 0,
+            view_projection: shadow_matrix,
+            resolution: 256,
+            depth_bias: 0.,
+            normal_bias: 0.,
+            softness: 0.,
+        });
+        let color = S::plan(&input, C::COLOR, 100).unwrap();
+        assert_eq!(
+            (
+                color.camera_draws,
+                color.camera_instances,
+                color.camera_triangles
+            ),
+            (4, 5, 6)
+        );
+        assert_eq!(
+            (
+                color.shadow_draws,
+                color.shadow_instances,
+                color.shadow_triangles
+            ),
+            (3, 4, 5)
+        );
+        // Camera/shadow-shared batches upload once; shadow-only batches still upload.
+        assert_eq!(color.batches, 5);
+        assert_eq!(
+            color.instance_upload_bytes,
+            6 * std::mem::size_of::<Instance>() as u64
+        );
+        let data = S::plan(&input, C::OBJECT_ID, 100).unwrap();
+        assert_eq!(
+            (data.camera_draws, data.camera_instances, data.batches),
+            (4, 5, 4)
+        );
+        assert_eq!(data.shadow_draws, 0);
+        let mut combined = color;
+        combined += data;
+        assert_eq!(
+            S::plan(&input, C::COLOR | C::OBJECT_ID, 100).unwrap(),
+            combined
+        );
     }
 
     #[test]

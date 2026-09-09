@@ -72,6 +72,7 @@ fn layer(
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
             background: None,
+            specular_environment: None,
             directional_shadow: None,
             ui_texture: None,
             view_projection: IDENTITY,

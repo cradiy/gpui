@@ -22,7 +22,7 @@ pub use geometry::{Aabb, AffineTransform, Mesh, Transform, TransformError};
 pub use headless::*;
 pub use lighting::{
     DiffuseEnvironment, DirectionalShadow, EnvironmentBackground, EnvironmentError, EnvironmentMap,
-    Light, PunctualLight,
+    Light, PunctualLight, SpecularEnvironment, SpecularEnvironmentMap, SpecularPrefilter,
 };
 pub use material::{Material, MaterialTexture};
 pub(crate) use material::{Texture, TextureSlot};

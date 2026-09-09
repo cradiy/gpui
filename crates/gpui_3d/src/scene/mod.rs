@@ -96,6 +96,7 @@ pub struct Scene {
     pub(crate) directional_shadow: Option<DirectionalShadow>,
     pub(crate) diffuse_environment: Option<DiffuseEnvironment>,
     pub(crate) background: Option<crate::EnvironmentBackground>,
+    pub(crate) specular_environment: Option<crate::SpecularEnvironment>,
     pub(crate) color_output: ColorOutput,
     pub(crate) objects: Vec<Object>,
     pub(crate) spatial_index: Arc<OnceLock<bvh::ObjectIndex>>,
@@ -137,6 +138,11 @@ impl Scene {
     /// None preserves transparent background; zero intensity draws opaque black.
     pub fn background(mut self, background: Option<crate::EnvironmentBackground>) -> Self {
         self.background = background;
+        self
+    }
+    /// Sets distant PBR reflections independently of background and diffuse illumination.
+    pub fn specular_environment(mut self, environment: Option<crate::SpecularEnvironment>) -> Self {
+        self.specular_environment = environment;
         self
     }
     /// Sets exposure and tone mapping for the scene's linear HDR result.

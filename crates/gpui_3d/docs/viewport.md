@@ -759,6 +759,84 @@ Viewport clipping, subtree effects, and group opacity apply to the combined outp
 Use the `lighting` example's background visibility, brightness, and rotation
 controls independently of the environment illumination controls.
 
+### Specular environment lighting
+
+`SpecularEnvironment` supplies distant reflections for metallic-roughness PBR
+materials. Background visibility and diffuse illumination are independent.
+
+```rust,no_run
+use gpui_3d::{EnvironmentMap, Scene, SpecularEnvironment, SpecularPrefilter};
+
+let map = EnvironmentMap::from_equirectangular([2, 1], vec![
+    [0.1, 0.4, 1.0], [4.0, 1.0, 0.2],
+])?;
+let reflections = SpecularEnvironment::from_map(&map, SpecularPrefilter {
+    resolution: 128,
+    samples: 256,
+})?.intensity(0.7).rotation_y(0.4);
+let scene = Scene::new().specular_environment(Some(reflections));
+# Ok::<(), gpui_3d::EnvironmentError>(())
+```
+
+Prefiltering is explicit, synchronous CPU work. Run it during asset preparation,
+outside the frame loop; applications may use their own loading workers. Clones
+share the resulting cube levels. Rotation and intensity changes reuse these
+levels. `None` or zero intensity disables reflections. `SpecularPrefilter`
+defaults to 128-pixel faces and 256 GGX samples per filtered texel. Face size
+must be a power of two in `[16, 512]`, samples must be in `[16, 4096]`, and
+`2 * resolution² * samples` must not exceed 64 million. Invalid quality or source
+data returns `EnvironmentError`.
+
+Level zero samples the source sharply. Successive cube levels cover evenly spaced
+perceptual roughness values through one. Source mip reduction weights texels by
+spherical area and handles non-power-of-two dimensions; filtered importance
+sampling reduces aliasing from concentrated radiance. Higher sample counts reduce
+prefilter noise but increase preparation cost. Higher face resolution retains
+more detail in smooth reflections.
+
+The renderer uses the [split-sum IBL approximation](https://google.github.io/filament/Filament.md.html),
+combining prefiltered radiance with a 128 × 128 RG16Float BRDF lookup. The lookup
+integrates GGX, height-correlated Smith visibility, and Schlick Fresnel using
+512 samples per texel and is generated once when first needed by the renderer.
+Cube storage is RGBA16Float, with linear filtering across faces and roughness
+levels. The PBR path uses the reflected view direction and shading normal,
+including normal maps, then applies metallic/F0, roughness maps, intensity, and
+ambient occlusion. Direct light, emission, and geometry output channels are
+unchanged. Basic diffuse and unlit materials do not receive specular IBL.
+
+This is a single-scattering, infinitely distant environment approximation. It
+does not reflect nearby scene objects or add local occlusion, parallax-corrected
+probes, or multiple-scattering energy compensation. Ambient occlusion attenuates
+indirect reflections as a scalar approximation. Exposure and display mapping
+follow the normal color pipeline; `LINEAR_COLOR` retains linear reflected energy.
+
+#### Prefiltered inputs
+
+External preprocessors can supply `SpecularEnvironmentMap::from_prefiltered`
+and pass the result to `SpecularEnvironment::from_prefiltered`. The input is a
+complete power-of-two mip chain, ending at one texel per face, with base face
+size at most 512. Each level is six contiguous square faces in the order below.
+RGB is finite linear radiance in `[0, 65504]`. Let `s` and `t` span `[-1, 1]`
+from left to right and top to bottom; normalize each listed direction.
+
+| Face | Direction |
+| --- | --- |
+| +X | `(1, -t, -s)` |
+| -X | `(-1, -t, s)` |
+| +Y | `(s, 1, t)` |
+| -Y | `(s, -1, -t)` |
+| +Z | `(s, -t, 1)` |
+| -Z | `(-s, -t, -1)` |
+
+For `N` levels, level `i` represents perceptual roughness `i / (N - 1)`.
+One-level inputs provide the same radiance at every roughness. The map contains
+normalized GGX radiance convolution, without Fresnel or BRDF response baked in.
+`map().levels()` exposes the prepared data for inspection and reuse. GPU caches
+retain shared maps while used by prepared scenes and release unused cube maps.
+
+The `lighting` example controls reflections, reflection rotation, and surface
+roughness independently of the background and diffuse environment.
+
 ### Material textures
 
 ```rust,no_run
@@ -1153,7 +1231,7 @@ Each example is an independent executable.
 | --- | --- |
 | `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, perspective/orthographic projection, framing, orbit and pan. |
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
-| `lighting` | Directional/point/spot sources, fill light, independent HDR background and diffuse illumination, directional shadows, map resolution and soft edges. |
+| `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |
 | `headless` | Window-free display/HDR/ID/depth/normal readback, PNG previews and object identity inspection. |
 

@@ -3,6 +3,8 @@ use std::{fmt, sync::Arc};
 /// Invalid environment dimensions, radiance, or irradiance coefficients.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnvironmentError3d {
+    /// Invalid cube dimensions, roughness levels, or prefilter work budget.
+    Prefilter,
     /// Empty or unaddressable dimensions.
     Dimensions,
     /// Pixel storage does not match the dimensions.
@@ -23,6 +25,9 @@ pub enum EnvironmentError3d {
 impl fmt::Display for EnvironmentError3d {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Prefilter => {
+                f.write_str("invalid specular prefilter dimensions, levels, or work budget")
+            }
             Self::Dimensions => {
                 f.write_str("environment dimensions must be positive and fit addressable memory")
             }
@@ -110,5 +115,70 @@ impl EnvironmentBackground3d {
             && self.rotation_y.is_finite()
             && self.rays.iter().flatten().all(|v| v.is_finite())
             && self.rays[0].iter().any(|v| *v != 0.)
+    }
+}
+
+/// Shared GGX-prefiltered cube radiance. Levels span perceptual roughness 0..1.
+/// Each level stores +X, -X, +Y, -Y, +Z, -Z faces in top-left-origin row order.
+#[derive(Clone, Debug)]
+pub struct SpecularEnvironmentMap3d {
+    size: u32,
+    levels: Arc<[Vec<[f32; 3]>]>,
+}
+impl SpecularEnvironmentMap3d {
+    /// Accepts a complete power-of-two mip chain of finite linear RGB radiance.
+    /// Face size is at most 512; each level contains six square faces.
+    pub fn from_prefiltered(
+        size: u32,
+        levels: Vec<Vec<[f32; 3]>>,
+    ) -> Result<Self, EnvironmentError3d> {
+        if !size.is_power_of_two() || size > 512 || levels.len() != size.ilog2() as usize + 1 {
+            return Err(EnvironmentError3d::Prefilter);
+        }
+        for (level, pixels) in levels.iter().enumerate() {
+            let edge = (size >> level) as usize;
+            if pixels.len() != 6 * edge * edge {
+                return Err(EnvironmentError3d::Prefilter);
+            }
+            for (pixel, rgb) in pixels.iter().enumerate() {
+                if rgb
+                    .iter()
+                    .any(|v| !v.is_finite() || !(0. ..=65504.).contains(v))
+                {
+                    return Err(EnvironmentError3d::Radiance { pixel });
+                }
+            }
+        }
+        Ok(Self {
+            size,
+            levels: levels.into(),
+        })
+    }
+    /// Base face edge in texels.
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+    /// Complete roughness mip chain; clones share these allocations.
+    pub fn levels(&self) -> &[Vec<[f32; 3]>] {
+        &self.levels
+    }
+}
+
+/// Distant specular illumination, independent of diffuse light and background.
+#[derive(Clone, Debug)]
+pub struct SpecularEnvironment3d {
+    /// Shared prefiltered radiance.
+    pub map: SpecularEnvironmentMap3d,
+    /// Nonnegative linear radiance multiplier in [0, 65504].
+    pub intensity: f32,
+    /// Rotation around world +Y in radians.
+    pub rotation_y: f32,
+}
+impl SpecularEnvironment3d {
+    /// Checks finite, bounded illumination parameters.
+    pub fn is_valid(&self) -> bool {
+        self.intensity.is_finite()
+            && (0. ..=65504.).contains(&self.intensity)
+            && self.rotation_y.is_finite()
     }
 }

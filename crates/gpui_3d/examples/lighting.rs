@@ -4,7 +4,8 @@ use gpui::{
 };
 use gpui_3d::{
     Camera, DiffuseEnvironment, DirectionalShadow, EnvironmentBackground, EnvironmentMap, Light,
-    Material, Mesh, Object, OrbitController, PbrMaterial, PunctualLight, Scene, viewport3d,
+    Material, Mesh, Object, OrbitController, PbrMaterial, PunctualLight, Scene,
+    SpecularEnvironment, SpecularPrefilter, viewport3d,
 };
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc};
@@ -38,6 +39,10 @@ struct Lighting {
     kind: usize,
     fill: bool,
     environment: DiffuseEnvironment,
+    specular: SpecularEnvironment,
+    specular_on: bool,
+    specular_rotation: f32,
+    roughness: f32,
     background: EnvironmentBackground,
     background_on: bool,
     background_rotation: f32,
@@ -63,6 +68,10 @@ impl Lighting {
             kind: 0,
             fill: false,
             environment: DiffuseEnvironment::from_map(&map).unwrap(),
+            specular: SpecularEnvironment::from_map(&map, SpecularPrefilter::default()).unwrap(),
+            specular_on: true,
+            specular_rotation: 0.,
+            roughness: 0.15,
             background: EnvironmentBackground::new(map),
             background_on: true,
             background_rotation: 0.,
@@ -87,10 +96,10 @@ impl Lighting {
     }
 
     fn scene(&self) -> Scene {
-        let material = |color| {
+        let material = |color, metallic, roughness| {
             Material::color(rgb(color)).pbr(PbrMaterial {
-                metallic: 0.,
-                roughness: 0.7,
+                metallic,
+                roughness,
                 ..Default::default()
             })
         };
@@ -123,6 +132,10 @@ impl Lighting {
                 ambient: 0.12,
             })
             .lights(lights)
+            .specular_environment(
+                self.specular_on
+                    .then(|| self.specular.clone().rotation_y(self.specular_rotation)),
+            )
             .background(self.background_on.then(|| {
                 self.background
                     .clone()
@@ -142,24 +155,24 @@ impl Lighting {
                 }),
             )
             .object(
-                Object::new(Mesh::plane(), material(0xbdc8d5))
+                Object::new(Mesh::plane(), material(0xbdc8d5, 0., 0.7))
                     .rotation([-std::f32::consts::FRAC_PI_2, 0., 0.])
                     .position([0., -0.6, 0.])
                     .scale([5., 5., 1.]),
             )
             .object(
-                Object::new(Mesh::cube(), material(0xdca678))
+                Object::new(Mesh::cube(), material(0xdca678, 0.9, self.roughness))
                     .position([-0.8, -0.1 + self.height, 0.3])
                     .scale([0.9, 1., 0.9]),
             )
             .object(
-                Object::new(Mesh::cube(), material(0x71b8c0))
+                Object::new(Mesh::cube(), material(0x71b8c0, 0., self.roughness))
                     .position([0.7, 0.3 + self.height, -0.45])
                     .rotation([0., 0.35, 0.])
                     .scale([0.6, 1.8, 0.6]),
             )
             .object(
-                Object::new(Mesh::cube(), material(0xa299d4))
+                Object::new(Mesh::cube(), material(0xa299d4, 1., self.roughness))
                     .position([0.65, -0.4, 1.])
                     .scale([0.8, 0.4, 0.6]),
             )
@@ -219,6 +232,9 @@ impl Render for Lighting {
                         ("background", if self.background_on { "Hide background" } else { "Show background" }),
                         ("background-rotate", "Rotate background"),
                         ("background-brightness", "Background brightness"),
+                        ("specular", if self.specular_on { "Reflections on" } else { "Reflections off" }),
+                        ("specular-rotate", "Rotate reflections"),
+                        ("roughness", "Roughness"),
                         ("cone", "Spot cone"),
                         ("range", "Light range"),
                         ("reset", "Reset view"),
@@ -243,6 +259,9 @@ impl Render for Lighting {
                                     "background" => this.background_on = !this.background_on,
                                     "background-rotate" => this.background_rotation += 0.4,
                                     "background-brightness" => this.background_intensity = if this.background_intensity < 0.8 { this.background_intensity + 0.2 } else { 0.15 },
+                                    "specular" => this.specular_on = !this.specular_on,
+                                    "specular-rotate" => this.specular_rotation += 0.4,
+                                    "roughness" => this.roughness = if this.roughness < 0.95 { (this.roughness + 0.2).min(1.) } else { 0.05 },
                                     "cone" => this.cone = if this.cone < 1. { this.cone+0.2 } else { 0.3 },
                                     "range" => this.range = if this.range < 8. { this.range+2. } else { 4. },
                                     "shadow" => this.enabled = !this.enabled,

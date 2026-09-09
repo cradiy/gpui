@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::{AtlasTile, DevicePixels, Pixels, Rgba, Size, size};
 
 mod environment;
-pub use environment::{EnvironmentBackground3d, EnvironmentError3d, EnvironmentMap3d};
+pub use environment::{
+    EnvironmentBackground3d, EnvironmentError3d, EnvironmentMap3d, SpecularEnvironment3d,
+    SpecularEnvironmentMap3d,
+};
 
 /// Logical dimensions and raster density of a decorative UI texture.
 #[derive(Clone, Copy, Debug)]
@@ -495,6 +498,8 @@ pub struct Scene3dFrame {
     pub diffuse_environment: Option<DiffuseEnvironment3d>,
     /// Distant color background; does not contribute to lighting or geometry outputs.
     pub background: Option<EnvironmentBackground3d>,
+    /// Optional roughness-dependent distant specular illumination for PBR materials.
+    pub specular_environment: Option<SpecularEnvironment3d>,
     /// HDR-to-display conversion. Does not affect depth or object IDs.
     pub color_output: crate::ColorOutput3d,
     /// Meshes; opaque visibility is independent of submission order.

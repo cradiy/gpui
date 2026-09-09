@@ -3,6 +3,7 @@ use gpui::{Mesh3d, MeshTexture3d, SubtreeLayer};
 use wgpu::util::DeviceExt;
 
 mod background;
+mod specular;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -102,6 +103,7 @@ impl From<gpui::PunctualLight3d> for DirectLight {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Params {
+    specular_environment: [f32; 4],
     model: [[f32; 4]; 4],
     normal: [[f32; 4]; 4],
     camera: [[f32; 4]; 4],
@@ -147,6 +149,7 @@ struct Targets {
 }
 
 pub(crate) struct Scene3dRenderer {
+    specular: Option<specular::SpecularRenderer>,
     background: Option<background::BackgroundRenderer>,
     pipeline: wgpu::RenderPipeline,
     blend_pipeline: Option<wgpu::RenderPipeline>,
@@ -228,6 +231,27 @@ impl Scene3dRenderer {
             });
         }
         if !data_output {
+            for (binding, dimension) in [
+                (9, wgpu::TextureViewDimension::Cube),
+                (10, wgpu::TextureViewDimension::D2),
+            ] {
+                bindings.push(wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: dimension,
+                        multisampled: false,
+                    },
+                    count: None,
+                });
+            }
+            bindings.push(wgpu::BindGroupLayoutEntry {
+                binding: 11,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
             bindings.extend([
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
@@ -356,6 +380,7 @@ impl Scene3dRenderer {
             white.size(),
         );
         Self {
+            specular: (!data_output).then(|| specular::SpecularRenderer::new(device)),
             background: (!data_output)
                 .then(|| background::BackgroundRenderer::new(device, samples)),
             shadow_pipeline,
@@ -424,6 +449,15 @@ impl Scene3dRenderer {
         height: u32,
     ) {
         let frames: Vec<_> = frames.into_iter().collect();
+        if let Some(specular) = &mut self.specular {
+            specular.prepare(
+                device,
+                queue,
+                frames
+                    .iter()
+                    .filter_map(|f| f.specular_environment.as_ref()),
+            );
+        }
         if let Some(background) = &mut self.background {
             background.prepare(
                 device,
@@ -602,6 +636,10 @@ impl Scene3dRenderer {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let targets = self.targets.as_ref().unwrap();
+        let specular_environment = frame
+            .specular_environment
+            .as_ref()
+            .filter(|e| e.intensity > 0.);
         let depth = &targets.depth;
         let width = depth.width() as f32;
         let height = depth.height() as f32;
@@ -693,6 +731,14 @@ impl Scene3dRenderer {
                 .orthographic_view_direction
                 .unwrap_or(frame.camera_position);
             let params = Params {
+                specular_environment: specular_environment.map_or([0.; 4], |e| {
+                    [
+                        e.rotation_y.cos(),
+                        e.rotation_y.sin(),
+                        e.intensity,
+                        (e.map.levels().len() - 1) as f32,
+                    ]
+                }),
                 shadow_camera: shadow.map_or([[0.; 4]; 4], |s| s.view_projection),
                 shadow_settings: shadow
                     .map_or([0.; 4], |s| [s.depth_bias, s.normal_bias, s.softness, 0.]),
@@ -804,6 +850,23 @@ impl Scene3dRenderer {
                 }));
             }
             if self.display_pipeline.is_some() {
+                let specular = self.specular.as_ref().unwrap();
+                entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(
+                            specular.map(specular_environment),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(specular.brdf(&self.white)),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: wgpu::BindingResource::Sampler(&specular.sampler),
+                    },
+                ]);
                 entries.extend([
                     wgpu::BindGroupEntry {
                         binding: 7,
@@ -1148,6 +1211,10 @@ mod tests {
             .unwrap();
         assert_eq!(span as usize, std::mem::size_of::<Params>());
         for (name, offset) in [
+            (
+                "specular_environment",
+                std::mem::offset_of!(Params, specular_environment),
+            ),
             ("shadow_camera", std::mem::offset_of!(Params, shadow_camera)),
             (
                 "shadow_settings",

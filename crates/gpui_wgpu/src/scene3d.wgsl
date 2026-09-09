@@ -5,6 +5,7 @@ struct DirectLight {
     position_kind: vec4<f32>, direction_range: vec4<f32>, color_intensity: vec4<f32>, cone: vec4<f32>,
 };
 struct Params {
+    specular_environment: vec4<f32>,
     model: mat4x4<f32>, normal: mat4x4<f32>, camera: mat4x4<f32>,
     bounds: vec4<f32>, viewport: vec4<f32>, ambient: vec4<f32>,
     color: vec4<f32>, texture_rect: vec4<f32>, flags: vec4<f32>,
@@ -28,6 +29,9 @@ struct Params {
 @group(0) @binding(6) var occlusion_image: texture_2d<f32>;
 @group(0) @binding(7) var shadow_image: texture_depth_2d;
 @group(0) @binding(8) var shadow_sampler: sampler_comparison;
+@group(0) @binding(9) var specular_image: texture_cube<f32>;
+@group(0) @binding(10) var specular_brdf: texture_2d<f32>;
+@group(0) @binding(11) var specular_sampler: sampler;
 struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32 };
 @vertex
 fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) tangent: vec4<f32>) -> Output {
@@ -247,6 +251,16 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>,
     let diffuse = base * (1.0 - metal);
     let f0 = mix(vec3<f32>(0.04), base, metal);
     var result = diffuse * (vec3<f32>(params.ambient.x) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * occlusion(uv) + emission;
+    let nv = clamp(dot(normal, view), 0.0, 1.0);
+    if (params.specular_environment.z > 0.0 && nv > 0.0) {
+        let direction = reflect(-view, normal);
+        let settings = params.specular_environment;
+        let rotated = vec3<f32>(settings.x * direction.x - settings.y * direction.z, direction.y,
+            settings.y * direction.x + settings.x * direction.z);
+        let radiance = textureSampleLevel(specular_image, specular_sampler, rotated, roughness * settings.w).rgb;
+        let brdf = textureSampleLevel(specular_brdf, specular_sampler, vec2<f32>(nv, roughness), 0.0).rg;
+        result += radiance * settings.z * (f0 * brdf.x + vec3<f32>(brdf.y)) * occlusion(uv);
+    }
     for (var i = 0u; i < params.light_count.x; i += 1u) {
         result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world)) * shadow_visibility(i, world, geometric_normal);
     }

@@ -252,6 +252,18 @@ impl WgpuScene3dRenderer {
         );
         ensure!(!self.context.device_lost(), "3D rendering device is lost");
         if config.channels.shaded()
+            && let Some(environment) = &frame.specular_environment
+        {
+            ensure!(
+                environment.is_valid(),
+                "invalid specular environment parameters"
+            );
+            ensure!(
+                environment.map.size() <= self.capabilities.max_dimension,
+                "specular environment exceeds device texture dimensions"
+            );
+        }
+        if config.channels.shaded()
             && let Some(background) = &frame.background
         {
             ensure!(

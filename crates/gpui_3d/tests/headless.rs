@@ -5,6 +5,112 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn specular_ibl_resolves_cube_mips_brdf_energy_and_geometry_independence() -> anyhow::Result<()> {
+    use gpui_3d::{
+        Light, Object, PbrMaterial, Projection, Scene, Scene3dChannels, SpecularEnvironment,
+        SpecularEnvironmentMap,
+    };
+    let levels = (0..5)
+        .map(|level| {
+            let edge = 16 >> level;
+            (0..6)
+                .flat_map(|face| {
+                    let color = if face == 4 {
+                        match level {
+                            0 => [4., 0., 0.],
+                            1 => [0., 2., 0.],
+                            _ => [0., 0., 3.],
+                        }
+                    } else {
+                        [0., 1., 0.]
+                    };
+                    vec![color; edge * edge]
+                })
+                .collect()
+        })
+        .collect();
+    let environment = SpecularEnvironment::from_prefiltered(
+        SpecularEnvironmentMap::from_prefiltered(16, levels)?,
+    );
+    let mut renderer = HeadlessRenderer::new()?;
+    let mut outputs = Vec::new();
+    for (enabled, roughness, rotation, intensity, unlit, pbr) in [
+        (true, 0., 0., 1., false, true),
+        (true, 1., 0., 1., false, true),
+        (true, 0., std::f32::consts::FRAC_PI_2, 1., false, true),
+        (true, 0., 0., 0.5, false, true),
+        (false, 0., 0., 1., false, true),
+        (true, 0., 0., 1., true, true),
+        (true, 0., 0., 1., false, false),
+    ] {
+        let mut material = Material::color(rgb(0xffffff)).unlit(unlit);
+        if pbr {
+            material = material.pbr(PbrMaterial {
+                metallic: 1.,
+                roughness,
+                ..Default::default()
+            });
+        }
+        let scene = Scene::new()
+            .camera(Camera {
+                projection: Projection::Orthographic { vertical_size: 3. },
+                ..Default::default()
+            })
+            .light(Light {
+                ambient: 0.,
+                ..Default::default()
+            })
+            .lights([])
+            .specular_environment(enabled.then(|| {
+                environment
+                    .clone()
+                    .rotation_y(rotation)
+                    .intensity(intensity)
+            }))
+            .object(Object::new(Mesh::plane(), material));
+        let frame = renderer.render(
+            &scene,
+            Scene3dOutputConfig {
+                size: [65, 65],
+                channels: Scene3dChannels::all(),
+                color_samples: 1,
+            },
+        )?;
+        let mut pending = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(result) = pending.try_read()? {
+                outputs.push(result.pixels);
+                break;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    let expected = [
+        [3.28, 0.36, 0.],
+        [0., 0., 3. * (1. - std::f32::consts::LN_2)],
+        [0., 1., 0.],
+        [1.64, 0.18, 0.],
+        [0.; 3],
+        [1.; 3],
+        [0.; 3],
+    ];
+    for (pixels, expected) in outputs.iter().zip(expected) {
+        assert_eq!(pixels.object_ids, outputs[0].object_ids);
+        assert_eq!(pixels.linear_depth, outputs[0].linear_depth);
+        assert_eq!(pixels.world_normals, outputs[0].world_normals);
+        let hdr = pixels.linear_rgba.as_ref().unwrap();
+        assert_eq!(hdr[0], [0.; 4]);
+        for (actual, expected) in hdr[32 * 65 + 32][..3].iter().zip(expected) {
+            assert!((actual - expected).abs() < 0.025, "{actual} != {expected}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn environment_background_composes_in_linear_color_without_geometry_coverage() -> anyhow::Result<()>
 {
     use gpui_3d::{

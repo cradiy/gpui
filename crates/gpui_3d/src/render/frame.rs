@@ -199,6 +199,10 @@ impl Scene {
             });
         }
         Ok(Scene3dFrame {
+            specular_environment: self
+                .specular_environment
+                .as_ref()
+                .map(|environment| environment.0.clone()),
             background: self
                 .background
                 .as_ref()

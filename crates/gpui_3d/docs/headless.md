@@ -96,6 +96,13 @@ Normal maps use linear tangent-space vectors and require mesh tangent data.
 and back-face orientation follow the viewport conventions. Picking and depth
 remain geometric rather than normal-map perturbed.
 
+`Scene::specular_environment` accepts shared GGX-prefiltered radiance for PBR
+reflections. Viewport and headless rendering share cube upload, BRDF lookup,
+roughness sampling, and normal-map handling. Prefilter on the caller's resource
+preparation path, not in the render loop. Reflections affect both display and
+linear HDR color, but not geometry channels or background visibility. See
+[Specular environment lighting](viewport.md#specular-environment-lighting).
+
 `Opaque` ignores alpha, `Mask` discards values below its cutoff and makes survivors
 opaque, and `Blend` blends nonzero alpha using linear premultiplied source-over.
 Color draws depth-writing surfaces first, then blended objects from far to near

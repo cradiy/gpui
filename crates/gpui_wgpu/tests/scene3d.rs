@@ -71,6 +71,77 @@ const IDENTITY: [[f32; 4]; 4] = [
     [0., 0., 1., 0.],
     [0., 0., 0., 1.],
 ];
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn output_cache_budget_covers_nested_captures_resize_and_removal() {
+    let mut renderer =
+        WgpuOffscreenRenderer::new(size(DevicePixels(64), DevicePixels(64))).unwrap();
+    let nested = layer(
+        bounds(0., 0., 16., 16.),
+        Scene::default(),
+        vec![mesh(0.5, 0xff0000ff, MeshTexture3d::None)],
+        1.,
+    );
+    let mut outer = layer(
+        bounds(8., 8., 32., 32.),
+        Scene::default(),
+        vec![mesh(0.5, 0xffffffff, MeshTexture3d::Subtree)],
+        1.,
+    );
+    Arc::make_mut(outer.scene3d.as_mut().unwrap()).ui_texture = Some(gpui::UiTexture3d::new(
+        size(gpui::px(32.), gpui::px(32.)),
+        1.,
+    ));
+    let build = |color| {
+        let mut source = Scene::default();
+        source.insert_primitive(Primitive::SubtreeLayer(nested.clone()));
+        source.insert_primitive(quad(bounds(20., 20., 8., 8.), color));
+        source.finish();
+        let mut capture = outer.clone();
+        capture.scene = Rc::new(source);
+        scene(capture)
+    };
+    renderer.set_scene3d_output_cache_budget(4096);
+    renderer.render_rgba(&build(0xff0000ff)).unwrap();
+    let blue = build(0x0000ffff);
+    renderer.render_rgba(&blue).unwrap();
+    let pixels = renderer.render_rgba(&blue).unwrap();
+    assert_eq!(renderer.render_rgba(&blue).unwrap(), pixels);
+    let stats = renderer.scene3d_output_cache_stats();
+    assert_eq!(stats.retained_bytes, 16 * 16 * 4);
+    assert_eq!(stats.retained_textures, 1);
+    assert!(stats.retained_bytes <= stats.budget_bytes);
+
+    renderer.set_scene3d_output_cache_budget(8192);
+    assert_eq!(renderer.scene3d_output_cache_stats().retained_bytes, 0);
+    renderer.render_rgba(&build(0x00ff00ff)).unwrap();
+    renderer.render_rgba(&blue).unwrap();
+    assert_eq!(renderer.render_rgba(&blue).unwrap(), pixels);
+    let stats = renderer.scene3d_output_cache_stats();
+    assert_eq!(stats.retained_bytes, (16 * 16 + 32 * 32) * 4);
+    assert_eq!(stats.retained_textures, 2);
+    renderer.set_scene3d_output_cache_budget(8192);
+    assert_eq!(renderer.scene3d_output_cache_stats(), stats);
+
+    renderer.resize(size(DevicePixels(96), DevicePixels(64)));
+    renderer.render_rgba(&blue).unwrap();
+    assert_eq!(
+        renderer.scene3d_output_cache_stats().retained_bytes,
+        16 * 16 * 4
+    );
+    renderer.set_scene3d_output_cache_budget(0);
+    let uncached = renderer.render_rgba(&blue).unwrap();
+    assert_eq!(renderer.render_rgba(&blue).unwrap(), uncached);
+    assert_eq!(renderer.scene3d_output_cache_stats().retained_bytes, 0);
+    renderer.set_scene3d_output_cache_budget(8192);
+    renderer.render_rgba(&blue).unwrap();
+    renderer.render_rgba(&blue).unwrap();
+    assert!(renderer.scene3d_output_cache_stats().retained_bytes > 0);
+    renderer.render_rgba(&Scene::default()).unwrap();
+    assert_eq!(renderer.scene3d_output_cache_stats().retained_bytes, 0);
+    assert_eq!(renderer.scene3d_output_cache_stats().retained_textures, 0);
+}
 fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
     Bounds::new(
         point(ScaledPixels(x), ScaledPixels(y)),

@@ -521,6 +521,7 @@ pub struct WgpuRenderer {
     max_texture_size: u32,
     backdrop_blur_supported: bool,
     scene3d_support: gpui::Scene3dSupport,
+    scene3d_output_budget: scene3d::OutputBudget,
     last_error: Arc<Mutex<Option<String>>>,
     failed_frame_count: u32,
     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1038,6 +1039,7 @@ impl WgpuRenderer {
             max_texture_size,
             backdrop_blur_supported,
             scene3d_support,
+            scene3d_output_budget: scene3d::OutputBudget::default(),
             last_error,
             failed_frame_count: 0,
             device_lost: context.device_lost_flag(),
@@ -2223,6 +2225,32 @@ impl WgpuRenderer {
         }
     }
 
+    /// Mesh output-cache allocations across this renderer and its UI captures.
+    /// Counts retained allocations, not total device memory or in-flight commands.
+    pub fn scene3d_output_cache_stats(&self) -> gpui::Scene3dOutputCacheStats {
+        self.scene3d_output_budget.stats()
+    }
+
+    /// Sets the shared mesh output-cache budget in bytes; zero disables mesh pixel reuse.
+    /// A changed budget releases existing output-cache entries without clearing mesh,
+    /// atlas, or UI textures. Does not request a frame or wait for the GPU.
+    pub fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        if self.scene3d_output_budget.set_limit(bytes) {
+            self.invalidate_scene3d_outputs();
+        }
+    }
+
+    fn invalidate_scene3d_outputs(&mut self) {
+        if let Some(resources) = self.resources.as_mut() {
+            if let Some(renderer) = &mut resources.scene3d {
+                renderer.invalidate_outputs();
+            }
+            for capture in &mut resources.ui_captures {
+                capture.invalidate_scene3d_outputs();
+            }
+        }
+    }
+
     pub fn draw(&mut self, scene: &Scene) -> bool {
         // Bail out early if the surface has been unconfigured (e.g. during
         // Android background/rotation transitions).  Attempting to acquire
@@ -2999,11 +3027,13 @@ impl WgpuRenderer {
         scene.visit(&mut |scene| has_fluid |= !scene.fluids.is_empty());
         {
             let atlas = self.atlas.clone();
+            let output_budget = self.scene3d_output_budget.clone();
             let resources = self.resources_mut();
             if has_scene3d && resources.scene3d.is_none() {
                 resources.scene3d = Some(scene3d::ViewportRenderer::new(
                     format,
                     scene3d_capabilities.unwrap(),
+                    output_budget,
                 ));
             }
             if let Some(renderer) = &mut resources.scene3d {
@@ -5416,6 +5446,7 @@ impl WgpuRenderer {
         self.resources = None;
         self.atlas.handle_device_lost(context);
 
+        let output_budget = self.scene3d_output_budget.clone();
         *self = Self::new_internal(
             Some(gpu_context.clone()),
             context,
@@ -5424,6 +5455,7 @@ impl WgpuRenderer {
             self.compositor_gpu,
             self.atlas.clone(),
         )?;
+        self.scene3d_output_budget = output_budget;
 
         log::info!("GPU recovery complete");
         Ok(())

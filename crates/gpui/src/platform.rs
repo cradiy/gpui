@@ -853,6 +853,15 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// Unsupported backends do nothing. Does not schedule a frame.
     fn clear_scene3d_caches(&mut self) {}
 
+    /// Mesh output-cache allocations, including nested UI captures, when supported.
+    fn scene3d_output_cache_stats(&self) -> Option<crate::Scene3dOutputCacheStats> {
+        None
+    }
+
+    /// Sets the shared mesh output-cache budget. Zero disables mesh pixel reuse.
+    /// Unsupported backends do nothing. Does not request a frame or wait for the GPU.
+    fn set_scene3d_output_cache_budget(&mut self, _bytes: u64) {}
+
     // macOS specific methods
     fn get_title(&self) -> String {
         String::new()

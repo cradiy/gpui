@@ -3614,6 +3614,19 @@ impl Window {
         self.platform_window.clear_scene3d_caches();
     }
 
+    /// Mesh output-cache allocations across this window and its UI captures.
+    /// Unsupported backends return `None`. This is not a total GPU-memory report.
+    pub fn scene3d_output_cache_stats(&self) -> Option<crate::Scene3dOutputCacheStats> {
+        self.platform_window.scene3d_output_cache_stats()
+    }
+
+    /// Sets the shared mesh output-cache budget in bytes; zero disables mesh pixel reuse.
+    /// A changed budget releases existing entries. Shared atlas and UI textures remain
+    /// valid. Does not request a frame or wait for the GPU; unsupported backends do nothing.
+    pub fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.platform_window.set_scene3d_output_cache_budget(bytes);
+    }
+
     /// Draws UI in texture-local coordinates at its own raster density.
     /// Use the same configuration during prepaint and paint inside a 3D capture.
     /// Ancestor masks apply to the final viewport, not to the source texture.

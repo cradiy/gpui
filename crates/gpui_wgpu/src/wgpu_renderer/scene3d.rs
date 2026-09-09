@@ -11,6 +11,7 @@ mod specular;
 mod target;
 mod viewport;
 
+pub(super) use output_cache::OutputBudget;
 pub(crate) use target::RenderRegion;
 pub(super) use viewport::ViewportRenderer;
 

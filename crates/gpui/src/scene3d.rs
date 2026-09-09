@@ -2,6 +2,19 @@ use std::sync::Arc;
 
 use crate::{AtlasTile, DevicePixels, Pixels, Rgba, Size, size};
 
+/// Mesh output-cache allocations across a window or external renderer and its UI captures.
+/// Excludes intermediate targets, UI textures, geometry, atlas images, and allocations
+/// kept alive only by in-flight GPU commands. Allocated pixels may await submission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Scene3dOutputCacheStats {
+    /// Maximum bytes reserved for mesh output-cache textures.
+    pub budget_bytes: u64,
+    /// Bytes reserved by currently retained cache textures.
+    pub retained_bytes: u64,
+    /// Number of currently retained cache textures.
+    pub retained_textures: usize,
+}
+
 /// Capabilities of the current window's depth-tested mesh path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scene3dViewportCapabilities {

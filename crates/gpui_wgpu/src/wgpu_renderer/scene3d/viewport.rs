@@ -1,12 +1,10 @@
 use super::{
     RenderRegion,
-    output_cache::{Output, OutputKey},
+    output_cache::{Output, OutputBudget, OutputKey},
 };
 use super::{Scene3dRenderer, WgpuAtlas};
 use gpui::{Scene, Scene3dViewportCapabilities, SubtreeLayer};
 use std::collections::HashMap;
-
-const OUTPUT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(super) fn visit_scenes(scene: &Scene, mut visit: impl FnMut(&Scene)) {
     let mut pending = vec![scene];
@@ -35,12 +33,14 @@ pub(in crate::wgpu_renderer) struct ViewportRenderer {
     outputs: Vec<Option<Output>>,
     output_indices: HashMap<usize, usize>,
     surface_size: [u32; 2],
+    budget: OutputBudget,
 }
 
 impl ViewportRenderer {
     pub(in crate::wgpu_renderer) fn new(
         format: wgpu::TextureFormat,
         capabilities: Scene3dViewportCapabilities,
+        budget: OutputBudget,
     ) -> Self {
         Self {
             renderers: [None, None],
@@ -49,6 +49,7 @@ impl ViewportRenderer {
             outputs: Vec::new(),
             output_indices: HashMap::new(),
             surface_size: [0; 2],
+            budget,
         }
     }
 
@@ -70,7 +71,6 @@ impl ViewportRenderer {
         }
         let mut previous = std::mem::take(&mut self.outputs).into_iter();
         self.output_indices.clear();
-        let mut budget = OUTPUT_CACHE_BYTES;
         visit_scenes(scene, |scene| {
             for layer in &scene.subtree_layers {
                 if let Some(frame) = &layer.scene3d {
@@ -78,7 +78,7 @@ impl ViewportRenderer {
                     needed[usize::from(samples == 4)] = true;
                     let old = previous.next().flatten();
                     let bounds = layer.composite.bounds;
-                    let output = retain_outputs
+                    let output = (retain_outputs && self.budget.stats().budget_bytes > 0)
                         .then(|| {
                             RenderRegion::viewport(
                                 [
@@ -95,24 +95,32 @@ impl ViewportRenderer {
                         .flatten()
                         .and_then(|region| {
                             let bytes = u64::from(region.output_size[0])
-                                * u64::from(region.output_size[1])
-                                * u64::from(self.format.block_copy_size(None).unwrap_or(16));
-                            if bytes > budget {
+                                .checked_mul(u64::from(region.output_size[1]))?
+                                .checked_mul(u64::from(
+                                    self.format.block_copy_size(None).unwrap_or(16),
+                                ))?;
+                            if bytes > self.budget.stats().budget_bytes {
                                 return None;
                             }
                             let key =
                                 OutputKey::new(layer, region, |tile| atlas.tile_generation(tile))?;
                             let matching = old.filter(|output| output.key.matches(&key));
-                            if matching.is_some() {
-                                budget -= bytes;
-                            }
                             Some(match matching {
                                 Some(mut output) if output.validity.reusable() => {
                                     output.key = key;
                                     output
                                 }
-                                Some(_) => Output::new(device, self.format, key, region, true),
-                                None => Output::new(device, self.format, key, region, false),
+                                Some(previous) => {
+                                    drop(previous);
+                                    Output::new(
+                                        device,
+                                        self.format,
+                                        key,
+                                        region,
+                                        self.budget.reserve(bytes),
+                                    )
+                                }
+                                None => Output::new(device, self.format, key, region, None),
                             })
                         });
                     self.output_indices

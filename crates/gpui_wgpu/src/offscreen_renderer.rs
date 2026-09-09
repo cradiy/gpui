@@ -48,6 +48,17 @@ impl WgpuOffscreenRenderer {
         self.renderer.sprite_atlas().clone()
     }
 
+    /// Mesh output-cache allocations across this renderer and nested UI captures.
+    pub fn scene3d_output_cache_stats(&self) -> gpui::Scene3dOutputCacheStats {
+        self.renderer.scene3d_output_cache_stats()
+    }
+
+    /// Sets the shared mesh output-cache budget. Zero disables mesh pixel reuse;
+    /// changing the budget releases current output-cache entries without waiting.
+    pub fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.renderer.set_scene3d_output_cache_budget(bytes);
+    }
+
     /// Changes the target size, recreating its backing texture when necessary.
     pub fn resize(&mut self, size: Size<DevicePixels>) {
         let size = clamped_size(size);

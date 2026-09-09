@@ -2020,15 +2020,28 @@ Capture-size changes replace the texture. Layout, paint callbacks, resource
 resolution, hit testing, and focus/event handling remain active; reuse skips only
 GPU capture rendering. No application-managed dirty flag is required.
 
-The mesh-output cache holds only viewport-covered display pixels, with a 64 MiB retained-output
-limit per WGPU renderer. Independent UI capture renderers have separate limits.
+The mesh-output cache holds only viewport-covered display pixels. Each WGPU
+window or external renderer has a shared 64 MiB budget by default, including
+mesh outputs nested inside its independent UI captures. Other windows have
+independent budgets even when they share a device.
 Inputs must repeat before a pixel texture is allocated; continuously changing
 snapshots do not allocate output-cache textures. Surface-size, transparency-mode,
 and subpixel-layout changes invalidate retained outputs.
 Entries are retained only for the current visible viewport list; oversized or
 uncacheable inputs render normally. This limit excludes intermediate attachments,
-atlas resources, and outputs still held by submitted GPU commands. Abandoned
+UI capture textures, atlas resources, geometry, and outputs still held only by
+submitted GPU commands. Abandoned
 encodings never make an output reusable.
+
+`Window::set_scene3d_output_cache_budget(bytes)` changes the shared limit; zero
+disables mesh pixel reuse. Changing the limit releases all existing mesh output
+entries immediately without clearing UI pixels, atlas images, or mesh buffers.
+Setting the same limit preserves entries. The setting survives WGPU device
+recovery and does not request a frame or wait for GPU completion.
+`Window::scene3d_output_cache_stats()` returns the budget, retained bytes, and
+texture count, or `None` when the backend does not expose this cache. Counts include
+allocated cache textures awaiting submission, not total physical GPU memory.
+`WgpuRenderer` and `WgpuOffscreenRenderer` expose the same controls and statistics.
 
 `WgpuRenderer::draw_external` clears, renders, and submits an external target,
 enabling the same output reuse without a native window. `WgpuOffscreenRenderer`

@@ -1878,6 +1878,16 @@ impl PlatformWindow for WaylandWindow {
         self.borrow_mut().renderer.clear_scene3d_caches();
     }
 
+    fn scene3d_output_cache_stats(&self) -> Option<gpui::Scene3dOutputCacheStats> {
+        Some(self.borrow().renderer.scene3d_output_cache_stats())
+    }
+
+    fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.borrow_mut()
+            .renderer
+            .set_scene3d_output_cache_budget(bytes);
+    }
+
     fn minimize(&self) {
         if let Some(toplevel) = self.borrow().surface_state.toplevel() {
             toplevel.set_minimized();

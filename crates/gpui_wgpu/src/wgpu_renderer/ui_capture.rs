@@ -11,6 +11,10 @@ pub(super) struct UiCapture {
 }
 
 impl UiCapture {
+    pub(super) fn invalidate_scene3d_outputs(&mut self) {
+        self.renderer.invalidate_scene3d_outputs();
+    }
+
     pub(super) fn clear_scene3d_caches(&mut self) {
         self.snapshot = None;
         self.validity = OutputValidity::default();
@@ -64,7 +68,7 @@ impl WgpuRenderer {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                     ..self.surface_config.clone()
                 };
-                let renderer = Self::new_for_target(
+                let mut renderer = Self::new_for_target(
                     None,
                     &self.resources().capture_context,
                     None,
@@ -77,6 +81,7 @@ impl WgpuRenderer {
                     Some(self.last_error.clone()),
                 )
                 .expect("UI capture renderer");
+                renderer.scene3d_output_budget = self.scene3d_output_budget.clone();
                 let texture = self.ui_capture_texture(width, height);
                 self.resources_mut().ui_captures.push(UiCapture {
                     renderer,

@@ -652,6 +652,77 @@ mod tests {
     }
 
     #[test]
+    fn morphed_frames_and_rays_use_the_same_mesh_before_hierarchy_transforms() {
+        use crate::{MorphTarget, MorphTargets, Ray};
+        let source = Mesh::plane();
+        let morphs = MorphTargets::new(
+            source.clone(),
+            [MorphTarget {
+                positions: Some(vec![[0.4, 0., 0.25]; 4].into()),
+                normals: Some(vec![[1., 0., 0.]; 4].into()),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+        let mesh = morphs.evaluate(&[1.]).unwrap();
+        let mut graph = SceneGraph::new();
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        let parent = graph
+            .insert(
+                None,
+                Node::new().transform(
+                    AffineTransform::from_trs([2., 3., 1.], [0., 0., k, k], [2., 1., 0.5]).unwrap(),
+                ),
+            )
+            .unwrap();
+        let child = graph
+            .insert(
+                Some(parent),
+                Node::new()
+                    .id("morph")
+                    .mesh(mesh.clone(), Material::color(rgb(0xffffff)))
+                    .transform(AffineTransform::from_translation([0.5, 0., 0.]).unwrap()),
+            )
+            .unwrap();
+        let scene = graph.evaluate().unwrap().scene(Camera::default());
+        let frame = scene
+            .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+            .unwrap();
+        let object = &frame.objects[0];
+        assert!(std::sync::Arc::ptr_eq(&object.mesh, &mesh.0));
+        assert!(std::ptr::eq(object.mesh.indices(), source.indices()));
+        let hit = scene
+            .raycast(Ray::new([2., 4.8, 5.], [0., 0., -1.]).unwrap())
+            .unwrap();
+        assert_eq!(hit.node, Some(child));
+        for (a, b) in hit.position.into_iter().zip([2., 4.8, 1.125]) {
+            assert!((a - b).abs() < 1e-5);
+        }
+        for (a, b) in hit
+            .normal
+            .into_iter()
+            .zip([0., 1. / 17_f32.sqrt(), 4. / 17_f32.sqrt()])
+        {
+            assert!((a - b).abs() < 1e-5);
+        }
+        graph.set_mesh(child, source).unwrap();
+        assert_eq!(frame.objects[0].output_id, 1);
+        assert_eq!(
+            frame.objects[0].mesh.vertices()[0].position,
+            mesh.vertices()[0].position
+        );
+        assert!(
+            (scene
+                .raycast(Ray::new([2., 4.8, 5.], [0., 0., -1.]).unwrap())
+                .unwrap()
+                .position[2]
+                - 1.125)
+                .abs()
+                < 1e-5
+        );
+    }
+
+    #[test]
     fn prepared_frames_share_geometry_and_preserve_evaluated_world_transforms() {
         let mut graph = SceneGraph::new();
         let parent = graph

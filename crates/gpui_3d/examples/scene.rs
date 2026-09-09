@@ -3,9 +3,9 @@ use gpui::{
     div, prelude::*, px, rgb, size,
 };
 use gpui_3d::{
-    AffineTransform, Camera, EvaluatedScene, Interpolation, Keyframe, Material, Mesh, Node,
-    NodeHandle, OrbitController, Projection, RotationTrack, SceneGraph, SubtreeInstance,
-    TransformTrack, VectorTrack, viewport3d,
+    AffineTransform, Camera, EvaluatedScene, Interpolation, Keyframe, Material, Mesh, MorphTarget,
+    MorphTargets, Node, NodeHandle, OrbitController, Projection, RotationTrack, SceneGraph,
+    SubtreeInstance, TransformTrack, VectorTrack, viewport3d,
 };
 use gpui_platform::application;
 use std::{
@@ -87,14 +87,73 @@ fn taper(mesh: &Mesh, amount: f32) -> Mesh {
     mesh.with_vertices(vertices, Some(tangents)).unwrap()
 }
 
+fn morphs(mesh: &Mesh) -> MorphTargets {
+    let shear = mesh
+        .with_vertices(
+            mesh.vertices()
+                .iter()
+                .map(|v| gpui_3d::Vertex {
+                    position: [
+                        v.position[0] + 0.85 * v.position[1],
+                        v.position[1],
+                        v.position[2],
+                    ],
+                    normal: [v.normal[0], v.normal[1] - 0.85 * v.normal[0], v.normal[2]],
+                    uv: v.uv,
+                })
+                .collect(),
+            Some(
+                mesh.tangents()
+                    .unwrap()
+                    .iter()
+                    .map(|t| [t[0] + 0.85 * t[1], t[1], t[2], t[3]])
+                    .collect(),
+            ),
+        )
+        .unwrap();
+    let targets = [taper(mesh, 1.2), shear].map(|shape| MorphTarget {
+        positions: Some(
+            shape
+                .vertices()
+                .iter()
+                .zip(mesh.vertices())
+                .map(|(a, b)| std::array::from_fn(|i| a.position[i] - b.position[i]))
+                .collect(),
+        ),
+        normals: Some(
+            shape
+                .vertices()
+                .iter()
+                .zip(mesh.vertices())
+                .map(|(a, b)| {
+                    let length = a.normal.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    std::array::from_fn(|i| a.normal[i] / length - b.normal[i])
+                })
+                .collect(),
+        ),
+        tangents: Some(
+            shape
+                .tangents()
+                .unwrap()
+                .iter()
+                .zip(mesh.tangents().unwrap())
+                .map(|(a, b)| std::array::from_fn(|i| a[i] - b[i]))
+                .collect(),
+        ),
+    });
+    MorphTargets::new(mesh.clone(), targets).unwrap()
+}
+
 struct SceneDemo {
     graph: SceneGraph,
     evaluated: EvaluatedScene,
     instances: Vec<SubtreeInstance>,
     body: NodeHandle,
     body_mesh: Mesh,
-    deform: bool,
-    mesh_position: Duration,
+    morphs: MorphTargets,
+    deformation: usize,
+    morph_weights: [f32; 2],
+    mesh_sample: (Duration, usize, [f32; 2]),
     selected: usize,
     hovered: Option<usize>,
     raised: [bool; 3],
@@ -158,14 +217,17 @@ impl SceneDemo {
             .unwrap();
         camera.near = 0.01;
         camera.far = 100.;
+        let morphs = morphs(&geometry);
         Self {
             graph,
             evaluated,
             instances,
             body,
             body_mesh: geometry,
-            deform: false,
-            mesh_position: Duration::ZERO,
+            morphs,
+            deformation: 0,
+            morph_weights: [0.65, 0.35],
+            mesh_sample: (Duration::ZERO, 0, [0.65, 0.35]),
             selected: 1,
             hovered: None,
             raised: [false; 3],
@@ -194,26 +256,33 @@ impl SceneDemo {
         cx.notify();
     }
     fn evaluate_pose(&mut self) {
-        let position = if self.deform {
+        let position = if self.deformation != 0 {
             self.position
         } else {
             Duration::ZERO
         };
-        if self.mesh_position != position {
+        let mesh_sample = (position, self.deformation, self.morph_weights);
+        if self.mesh_sample != mesh_sample {
             let amount = if position == ANIMATION_LENGTH {
                 0.
             } else {
                 (std::f32::consts::PI * position.as_secs_f32() / ANIMATION_LENGTH.as_secs_f32())
                     .sin()
-                    * 1.2
             };
-            let mesh = taper(&self.body_mesh, amount);
+            let mesh = match self.deformation {
+                1 => taper(&self.body_mesh, amount * 1.2),
+                2 => self
+                    .morphs
+                    .evaluate(&self.morph_weights.map(|weight| weight * amount))
+                    .unwrap(),
+                _ => self.body_mesh.clone(),
+            };
             for instance in &self.instances {
                 self.graph
                     .set_mesh(instance.node(self.body).unwrap(), mesh.clone())
                     .unwrap();
             }
-            self.mesh_position = position;
+            self.mesh_sample = mesh_sample;
         }
         let transforms = self
             .instances
@@ -418,8 +487,15 @@ impl Render for SceneDemo {
                 })))
                 .child(self.button("reset", "Reset", false).on_click(cx.listener(|this, _, window, cx| { *this = Self::new(window, cx); cx.notify(); }))))
             .child(div().flex().flex_wrap().items_center().gap_3()
-                .child(self.button("deform", "Taper mesh", self.deform).on_click(cx.listener(|this, _, _, cx| {
-                    this.deform = !this.deform; this.refresh(cx);
+                .child(self.button("deform", "Taper mesh", self.deformation == 1).on_click(cx.listener(|this, _, _, cx| {
+                    this.deformation = if this.deformation == 1 { 0 } else { 1 }; this.refresh(cx);
+                })))
+                .child(self.button("morph", "Blend shapes", self.deformation == 2).on_click(cx.listener(|this, _, _, cx| {
+                    this.deformation = if this.deformation == 2 { 0 } else { 2 };
+                    if this.deformation == 2 && !this.playing && (this.position == Duration::ZERO || this.position == ANIMATION_LENGTH) {
+                        this.position = Duration::from_secs(2);
+                    }
+                    this.refresh(cx);
                 })))
                 .child(self.button("play", if self.playing { "Pause" } else { "Play" }, self.playing).on_click(cx.listener(|this, _, _, cx| {
                     this.playing = !this.playing;
@@ -441,6 +517,13 @@ impl Render for SceneDemo {
                     this.playing = false; this.position = Duration::ZERO; this.refresh(cx);
                 })))
                 .child(format!("{:.2} / 4.00 s · Translation, rotation and scale", self.position.as_secs_f64())))
+            .when(self.deformation == 2, |root| root.child(div().flex().flex_wrap().items_center().gap_3()
+                .children([("taper-less", "Taper −", 0, -0.1), ("taper-more", "Taper +", 0, 0.1), ("shear-less", "Shear −", 1, -0.1), ("shear-more", "Shear +", 1, 0.1)]
+                    .into_iter().map(|(id, label, index, delta)| self.button(id, label, false).on_click(cx.listener(move |this, _, _, cx| {
+                        this.morph_weights[index] = (this.morph_weights[index] + delta).clamp(-0.5, 1.);
+                        this.refresh(cx);
+                    }))))
+                .child(format!("Weights {:.2} / {:.2}", self.morph_weights[0], self.morph_weights[1]))))
             .child(stage)
             .child(div().text_sm().text_color(rgb(0xa4bad2)).child(format!("Instance {} selected · 3 editable subtrees · Shared mesh topology", self.selected + 1)))
             .when(!window.supports_scene3d(), |root| root.child("3D viewports are unavailable on this renderer."))

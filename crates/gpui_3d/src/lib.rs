@@ -22,7 +22,10 @@ pub use camera::{
     Camera, CameraError, OrbitController, OrbitError, OrbitSettings, Projection, Ray, RayError,
     ScreenPoint,
 };
-pub use geometry::{Aabb, AffineTransform, Mesh, Transform, TransformError};
+pub use geometry::{
+    Aabb, AffineTransform, Mesh, MorphAttribute, MorphError, MorphTarget, MorphTargets, Transform,
+    TransformError,
+};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use headless::*;
 pub use lighting::{

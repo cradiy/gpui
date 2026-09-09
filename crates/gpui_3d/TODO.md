@@ -73,6 +73,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 - [x] **Transform evaluation**: Immutable translation, XYZW quaternion rotation, and scale tracks; Step, Linear/shortest-arc SLERP, and cubic Hermite interpolation; absolute-time sampling, explicit base poses, nonmutating hierarchy overrides, and shared rendering/query snapshots.
 - [ ] **Deformation**: Skeletal skinning and morph targets from explicit pose/weight inputs, shared by rendering and queries.
+  - [x] **Morph targets**: Shared dense position/normal/tangent deltas, validated signed weights, normalized direction blending, preserved handedness, and immutable CPU-evaluated meshes reused by rendering, bounds, and picking.
+  - [ ] **Skeletal skinning**: Explicit joint transforms, inverse bind matrices, and per-vertex influences with shared deformed geometry for rendering and queries.
 - [ ] **Dynamic geometry**: Update vertex and instance data while reusing GPU buffers instead of rebuilding mesh resources each frame.
   - [x] **Fixed-topology vertex updates**: Validated immutable vertex snapshots sharing index storage; fresh bounds/query indices, node mesh replacement, and topology-compatible GPU vertex/index buffer reuse with concurrent snapshot preservation.
   - [ ] **Instance streams**: Explicit per-instance data updates and reusable instance buffers for batched draws.

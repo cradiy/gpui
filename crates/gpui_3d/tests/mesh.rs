@@ -1,6 +1,6 @@
 use gpui_3d::{
-    Camera, Material, Mesh, MeshError, MeshUpdateError, Node, Object, Ray, Scene, SceneError,
-    SceneGraph, Vertex, VertexAttribute,
+    Camera, Material, Mesh, MeshError, MeshUpdateError, MorphAttribute, MorphError, MorphTarget,
+    MorphTargets, Node, Object, Ray, Scene, SceneError, SceneGraph, Vertex, VertexAttribute,
 };
 
 fn vertices() -> Vec<Vertex> {
@@ -282,4 +282,216 @@ fn tangent_inputs_preserve_geometry_and_reject_undefined_bases() {
             .unwrap_err(),
         TangentError::InvalidBasis { vertex: 2 }
     );
+}
+
+#[test]
+fn morph_weights_mix_signed_deltas_without_history_and_preserve_snapshot_queries() {
+    let source = Mesh::plane();
+    let targets = MorphTargets::new(
+        source.clone(),
+        [
+            MorphTarget {
+                positions: Some(vec![[2., 0., 0.]; 4].into()),
+                ..Default::default()
+            },
+            MorphTarget {
+                positions: Some(vec![[0., 4., 2.]; 4].into()),
+                ..Default::default()
+            },
+        ],
+    )
+    .unwrap();
+    let a = targets.evaluate(&[0.5, -0.25]).unwrap();
+    a.prepare_spatial_index();
+    let b = targets.evaluate(&[0., 2.]).unwrap();
+    assert_eq!(a.bounds().min(), [0.5, -1.5, -0.5]);
+    assert_eq!(b.bounds().min(), [-0.5, 7.5, 4.]);
+    let again = targets.evaluate(&[0.5, -0.25]).unwrap();
+    assert_eq!(again.bounds(), a.bounds());
+    assert!(std::ptr::eq(source.indices(), a.indices()));
+    let ray = Ray::new([1., -1., 3.], [0., 0., -1.]).unwrap();
+    let make_scene =
+        |mesh| Scene::new().object(Object::new(mesh, Material::color(gpui::rgb(0xffffff))));
+    let snapshot = make_scene(a);
+    let hit = snapshot.raycast(ray).unwrap();
+    assert_eq!(hit.position, [1., -1., -0.5]);
+    assert!((hit.uv[0] - 0.5).abs() < 1e-6 && (hit.uv[1] - 0.5).abs() < 1e-6);
+    assert!(make_scene(b).raycast(ray).is_none());
+    assert!(make_scene(source.clone()).raycast(ray).is_none());
+    let zero = targets.evaluate(&[0., -0.]).unwrap();
+    assert!(std::ptr::eq(zero.vertices(), source.vertices()));
+    assert!(std::ptr::eq(
+        zero.tangents().unwrap(),
+        source.tangents().unwrap()
+    ));
+    assert!(snapshot.raycast(ray).is_some());
+    let empty = MorphTargets::new(source.clone(), [])
+        .unwrap()
+        .evaluate(&[])
+        .unwrap();
+    assert!(std::ptr::eq(empty.vertices(), source.vertices()));
+}
+
+#[test]
+fn morph_directions_blend_before_normalization_and_keep_tangent_handedness() {
+    let source = Mesh::plane();
+    let targets = MorphTargets::new(
+        source.clone(),
+        [
+            MorphTarget {
+                normals: Some(vec![[0., 1., 0.]; 4].into()),
+                ..Default::default()
+            },
+            MorphTarget {
+                tangents: Some(vec![[-1., 1., 0.]; 4].into()),
+                ..Default::default()
+            },
+        ],
+    )
+    .unwrap();
+    let morphed = targets.evaluate(&[1., 1.]).unwrap();
+    let k = std::f32::consts::FRAC_1_SQRT_2;
+    for (index, vertex) in morphed.vertices().iter().enumerate() {
+        assert_eq!(vertex.position, source.vertices()[index].position);
+        assert_eq!(vertex.uv, source.vertices()[index].uv);
+        let tangent = morphed.tangents().unwrap()[index];
+        for (a, b) in vertex.normal.into_iter().zip([0., k, k]) {
+            assert!((a - b).abs() < 1e-6);
+        }
+        for (a, b) in tangent.into_iter().zip([0., k, -k, -1.]) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+    let enormous = MorphTargets::new(
+        source,
+        [MorphTarget {
+            normals: Some(vec![[0., f32::MAX, 0.]; 4].into()),
+            ..Default::default()
+        }],
+    )
+    .unwrap()
+    .evaluate(&[f32::MAX])
+    .unwrap();
+    assert_eq!(enormous.vertices()[0].normal, [0., 1., 0.]);
+}
+
+#[test]
+fn morph_normal_only_targets_preserve_zero_normals_but_reject_undefined_tangent_frames() {
+    let source = Mesh::plane();
+    let target = MorphTarget {
+        normals: Some(vec![[0., 0., -1.]; 4].into()),
+        ..Default::default()
+    };
+    let without_tangents = source
+        .with_vertices(source.vertices().to_vec(), None)
+        .unwrap();
+    let zero = MorphTargets::new(without_tangents, [target.clone()])
+        .unwrap()
+        .evaluate(&[1.])
+        .unwrap();
+    assert!(zero.vertices().iter().all(|v| v.normal == [0.; 3]));
+    assert!(matches!(
+        MorphTargets::new(source.clone(), [target])
+            .unwrap()
+            .evaluate(&[1.]),
+        Err(MorphError::Mesh(MeshUpdateError::Tangents(
+            gpui_3d::TangentError::InvalidBasis { vertex: 0 }
+        )))
+    ));
+    let cancelled_tangent = MorphTargets::new(
+        source,
+        [MorphTarget {
+            tangents: Some(vec![[-1., 0., 0.]; 4].into()),
+            ..Default::default()
+        }],
+    )
+    .unwrap();
+    assert!(matches!(
+        cancelled_tangent.evaluate(&[1.]),
+        Err(MorphError::Mesh(MeshUpdateError::Tangents(
+            gpui_3d::TangentError::InvalidBasis { vertex: 0 }
+        )))
+    ));
+}
+
+#[test]
+fn morph_validation_identifies_target_attributes_and_weight_failures() {
+    let source = Mesh::plane();
+    assert!(matches!(
+        MorphTargets::new(source.clone(), [MorphTarget::default()]),
+        Err(MorphError::EmptyTarget { target: 0 })
+    ));
+    for attribute in [
+        MorphAttribute::Position,
+        MorphAttribute::Normal,
+        MorphAttribute::Tangent,
+    ] {
+        let target = |values| match attribute {
+            MorphAttribute::Position => MorphTarget {
+                positions: Some(values),
+                ..Default::default()
+            },
+            MorphAttribute::Normal => MorphTarget {
+                normals: Some(values),
+                ..Default::default()
+            },
+            MorphAttribute::Tangent => MorphTarget {
+                tangents: Some(values),
+                ..Default::default()
+            },
+        };
+        assert!(
+            matches!(MorphTargets::new(source.clone(), [target(vec![[0.; 3]; 3].into())]), Err(MorphError::AttributeCount { target: 0, attribute: a, expected: 4, actual: 3 }) if a == attribute)
+        );
+        let mut invalid = vec![[0.; 3]; 4];
+        invalid[3][2] = f32::NAN;
+        assert!(
+            matches!(MorphTargets::new(source.clone(), [target(invalid.into())]), Err(MorphError::NonFiniteDelta { target: 0, attribute: a, vertex: 3, component: 2 }) if a == attribute)
+        );
+    }
+    let without_tangents = source
+        .with_vertices(source.vertices().to_vec(), None)
+        .unwrap();
+    assert!(matches!(
+        MorphTargets::new(
+            without_tangents,
+            [MorphTarget {
+                tangents: Some(vec![[0.; 3]; 4].into()),
+                ..Default::default()
+            }]
+        ),
+        Err(MorphError::MissingBaseTangents { target: 0 })
+    ));
+    let targets = MorphTargets::new(
+        source.clone(),
+        [MorphTarget {
+            positions: Some(vec![[f32::MAX, 0., 0.]; 4].into()),
+            ..Default::default()
+        }],
+    )
+    .unwrap();
+    for weights in [&[][..], &[0., 1.][..]] {
+        assert!(matches!(
+            targets.evaluate(weights),
+            Err(MorphError::WeightCount { expected: 1, .. })
+        ));
+    }
+    for weight in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(matches!(
+            targets.evaluate(&[weight]),
+            Err(MorphError::NonFiniteWeight { target: 0 })
+        ));
+    }
+    assert!(matches!(
+        targets.evaluate(&[2.]),
+        Err(MorphError::UnrepresentableResult {
+            vertex: 0,
+            attribute: MorphAttribute::Position
+        })
+    ));
+    assert_eq!(source.bounds().min(), [-0.5, -0.5, 0.]);
+    assert!(std::ptr::eq(
+        targets.evaluate(&[0.]).unwrap().vertices(),
+        source.vertices()
+    ));
 }

@@ -123,6 +123,57 @@ Cache entries absent from the prepared scenes are released. Vertex/index count
 changes require a new `Mesh`; batched instance streams are separate from vertex
 replacement.
 
+### Morph targets
+
+`MorphTargets` binds immutable target deltas to a base `Mesh`.
+`MorphTarget::positions`, `normals`, and `tangents` contain optional dense XYZ
+arrays in mesh-local space. Each supplied array must contain one finite delta
+per base vertex, including unused vertices. A target needs at least one attribute;
+the target list itself may be empty. Tangent deltas require base mesh tangents
+and never modify handedness W. Clones share the base mesh and delta arrays.
+
+```rust
+use gpui_3d::{Mesh, MorphTarget, MorphTargets};
+
+let base = Mesh::plane();
+let targets = MorphTargets::new(base.clone(), [
+    MorphTarget {
+        positions: Some(vec![[0., 0., 0.5]; base.vertex_count()].into()),
+        ..Default::default()
+    },
+    MorphTarget {
+        positions: Some(vec![[0.25, 0., 0.]; base.vertex_count()].into()),
+        ..Default::default()
+    },
+])?;
+let mesh = targets.evaluate(&[0.7, -0.2])?;
+# let _ = mesh;
+# Ok::<(), gpui_3d::MorphError>(())
+```
+
+Evaluation computes `base + sum(weight * delta)` before node transforms. Weights
+must be finite and match the target count; negative weights and values above one
+are supported without clamping or normalization. Omitted attributes contribute
+zero, and UVs and triangle identities remain unchanged. Normals with active
+deltas are normalized after the complete blend. Tangents are orthogonalized
+against the resulting normals with base handedness. Position-only targets do
+not regenerate normals. Zero normals are supported without tangents; undefined
+tangent bases return an error.
+
+`evaluate` is synchronous and CPU-only, returning an ordinary immutable `Mesh`
+with shared index storage and an independent lazy query index. Use the result in
+`Object::new` or `SceneGraph::set_mesh`, then evaluate the graph for current world
+bounds. The same vertex snapshot is used by viewport/headless rendering and ray
+queries. Zero weights return the shared base mesh. Keep a sampled mesh while its
+weights are unchanged; the evaluator has no history, internal cache, or clock.
+Work scales with vertex count and the number of nonzero targets.
+
+`MorphError` reports invalid target/attribute/vertex offsets, mismatched weights,
+nonfinite inputs, unrepresentable positions, and invalid resulting tangent data.
+Failed evaluation does not modify the base or previous results. File-format
+decoding, sparse-array expansion, weight animation, and playback policy belong
+to the caller.
+
 ## Camera projection and queries
 
 `Camera::projection` selects `Projection::Perspective { vertical_fov }` in radians
@@ -1338,7 +1389,7 @@ Each example is an independent executable.
 
 | Example | Controls and content |
 | --- | --- |
-| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, camera controls, transform tracks, and vertex tapering with play, pause, and seek controls. |
+| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, camera controls, transform tracks, vertex tapering, and two-target morph blending with independent weights and playback controls. |
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
 | `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |

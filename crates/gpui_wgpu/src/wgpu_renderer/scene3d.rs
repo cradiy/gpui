@@ -7,6 +7,16 @@ mod geometry;
 mod images;
 mod instances;
 mod specular;
+mod target;
+
+pub(crate) use target::RenderRegion;
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct DisplayParams {
+    settings: [f32; 4],
+    origin: [f32; 4],
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -452,7 +462,8 @@ pub(crate) struct Scene3dRenderer {
     slots: Vec<BatchSlot>,
     offsets: HashMap<usize, usize>,
     plans: HashMap<usize, instances::BatchPlan>,
-    targets: Option<Targets>,
+    targets: HashMap<[u32; 2], Targets>,
+    regions: HashMap<usize, RenderRegion>,
     format: wgpu::TextureFormat,
     samples: u32,
 }
@@ -621,7 +632,8 @@ impl Scene3dRenderer {
             slots: Vec::new(),
             offsets: HashMap::new(),
             plans: HashMap::new(),
-            targets: None,
+            targets: HashMap::default(),
+            regions: HashMap::default(),
             format,
             samples,
         }
@@ -636,6 +648,7 @@ impl Scene3dRenderer {
         height: u32,
     ) {
         self.offsets.clear();
+        self.regions.clear();
         let mut frames = Vec::new();
         let mut layers = Vec::new();
         scene.visit(&mut |scene| {
@@ -643,17 +656,25 @@ impl Scene3dRenderer {
                 let Some(frame) = &layer.scene3d else {
                     continue;
                 };
+                let bounds = layer.composite.bounds;
+                let Some(region) = RenderRegion::viewport(
+                    [
+                        bounds.origin.x.0,
+                        bounds.origin.y.0,
+                        bounds.size.width.0,
+                        bounds.size.height.0,
+                    ],
+                    [width, height],
+                ) else {
+                    continue;
+                };
+                self.regions.insert(layer as *const _ as usize, region);
                 layers.push(layer as *const _ as usize);
                 frames.push(frame.clone());
             }
         });
-        self.prepare_frames(
-            device,
-            queue,
-            frames.iter().map(AsRef::as_ref),
-            width,
-            height,
-        );
+        let sizes: Vec<_> = self.regions.values().map(|region| region.size).collect();
+        self.prepare_frames(device, queue, frames.iter().map(AsRef::as_ref), sizes);
         let mut slot_count = 0;
         for (layer, frame) in layers.into_iter().zip(&frames) {
             self.offsets.insert(layer, slot_count);
@@ -685,8 +706,7 @@ impl Scene3dRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         frames: impl IntoIterator<Item = &'a gpui::Scene3dFrame>,
-        width: u32,
-        height: u32,
+        sizes: impl IntoIterator<Item = [u32; 2]>,
     ) {
         let frames: Vec<_> = frames.into_iter().collect();
         self.images
@@ -778,12 +798,15 @@ impl Scene3dRenderer {
             }
         }
         if !has_frame {
-            self.targets = None;
+            self.targets.clear();
             return;
         }
-        if self.targets.as_ref().is_none_or(|targets| {
-            targets.depth.width() != width || targets.depth.height() != height
-        }) {
+        let sizes: HashSet<_> = sizes.into_iter().collect();
+        self.targets.retain(|size, _| sizes.contains(size));
+        for [width, height] in sizes {
+            if self.targets.contains_key(&[width, height]) {
+                continue;
+            }
             let texture = |format, label, sample_count, usage| {
                 device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -801,28 +824,31 @@ impl Scene3dRenderer {
                 })
             };
             let attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
-            self.targets = Some(Targets {
-                depth: texture(
-                    wgpu::TextureFormat::Depth32Float,
-                    "scene3d_depth",
-                    self.samples,
-                    attachment,
-                ),
-                hdr: self.display_pipeline.as_ref().map(|_| {
-                    texture(
-                        wgpu::TextureFormat::Rgba16Float,
-                        "scene3d_hdr",
+            self.targets.insert(
+                [width, height],
+                Targets {
+                    depth: texture(
+                        wgpu::TextureFormat::Depth32Float,
+                        "scene3d_depth",
                         self.samples,
-                        attachment
-                            | wgpu::TextureUsages::TEXTURE_BINDING
-                            | if self.samples == 1 {
-                                wgpu::TextureUsages::COPY_SRC
-                            } else {
-                                wgpu::TextureUsages::empty()
-                            },
-                    )
-                }),
-            });
+                        attachment,
+                    ),
+                    hdr: self.display_pipeline.as_ref().map(|_| {
+                        texture(
+                            wgpu::TextureFormat::Rgba16Float,
+                            "scene3d_hdr",
+                            self.samples,
+                            attachment
+                                | wgpu::TextureUsages::TEXTURE_BINDING
+                                | if self.samples == 1 {
+                                    wgpu::TextureUsages::COPY_SRC
+                                } else {
+                                    wgpu::TextureUsages::empty()
+                                },
+                        )
+                    }),
+                },
+            );
         }
     }
 
@@ -854,20 +880,29 @@ impl Scene3dRenderer {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let frame = layer.scene3d.as_ref().unwrap();
-        let bounds = layer.composite.bounds;
-        let rect = [
-            bounds.origin.x.0,
-            bounds.origin.y.0,
-            bounds.size.width.0,
-            bounds.size.height.0,
-        ];
+        let Some(&region) = self.regions.get(&(layer as *const _ as usize)) else {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene3d_empty"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: destination,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            return;
+        };
         let start = self.offsets[&(layer as *const _ as usize)];
         self.encode_frame(
             device,
             queue,
             atlas,
             frame,
-            rect,
+            region,
             start,
             Some(source),
             Some(destination),
@@ -882,13 +917,14 @@ impl Scene3dRenderer {
         queue: &wgpu::Queue,
         atlas: &WgpuAtlas,
         frame: &gpui::Scene3dFrame,
-        rect: [f32; 4],
+        region: RenderRegion,
         start: usize,
         source: Option<&wgpu::TextureView>,
         destination: Option<&wgpu::TextureView>,
         encoder: &mut wgpu::CommandEncoder,
     ) {
-        let targets = self.targets.as_ref().unwrap();
+        let targets = &self.targets[&region.size];
+        let rect = region.rect;
         let plan = self.plan(frame);
         let mut uploaded = HashSet::new();
         for &index in &plan.order {
@@ -958,7 +994,7 @@ impl Scene3dRenderer {
             let (texture, texture_rect, premultiplied) = match object.texture {
                 MeshTexture3d::None => (&self.white, [0., 0., 1., 1.], 0.),
                 MeshTexture3d::Subtree => {
-                    let texture_rect = frame.ui_texture.map_or(rect, |texture| {
+                    let texture_rect = frame.ui_texture.map_or(region.source_rect, |texture| {
                         let size = texture.pixel_size();
                         [0., 0., size.width.0 as f32, size.height.0 as f32]
                     });
@@ -1324,15 +1360,18 @@ impl Scene3dRenderer {
         if let (Some(pipeline), Some(hdr), Some(destination)) =
             (&self.display_pipeline, &hdr_view, destination)
         {
-            let settings = [
-                2.0_f32.powf(frame.color_output.exposure),
-                frame.color_output.tone_mapping as u32 as f32,
-                f32::from(self.format.is_srgb()),
-                0.,
-            ];
+            let params = DisplayParams {
+                settings: [
+                    2.0_f32.powf(frame.color_output.exposure),
+                    frame.color_output.tone_mapping as u32 as f32,
+                    f32::from(self.format.is_srgb()),
+                    0.,
+                ],
+                origin: [region.origin[0] as f32, region.origin[1] as f32, 0., 0.],
+            };
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("scene3d_display_params"),
-                contents: bytemuck::cast_slice(&settings),
+                contents: bytemuck::bytes_of(&params),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1363,6 +1402,12 @@ impl Scene3dRenderer {
                 ..Default::default()
             });
             pass.set_pipeline(pipeline);
+            pass.set_scissor_rect(
+                region.origin[0],
+                region.origin[1],
+                region.size[0],
+                region.size[1],
+            );
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -1373,7 +1418,10 @@ impl Scene3dRenderer {
         destination: &wgpu::Texture,
         encoder: &mut wgpu::CommandEncoder,
     ) {
-        let source = self.targets.as_ref().unwrap().hdr.as_ref().unwrap();
+        let source = self.targets[&[destination.width(), destination.height()]]
+            .hdr
+            .as_ref()
+            .unwrap();
         if self.samples == 1 {
             encoder.copy_texture_to_texture(
                 source.as_image_copy(),
@@ -1497,6 +1545,80 @@ mod tests {
             alpha_mode: gpui::AlphaMode3d::Opaque,
             sort_depth: 0.,
         }
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn scene3d_target_cache_tracks_viewport_sizes_reuse_and_eviction() -> anyhow::Result<()> {
+        let context = crate::WgpuContext::new_headless()?;
+        let mut renderer = Scene3dRenderer::new(
+            &context.device,
+            &context.queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            1,
+        );
+        let make_scene = |rects: &[[f32; 4]]| {
+            let mut scene = Scene::default();
+            for &[x, y, width, height] in rects {
+                let bounds = gpui::Bounds::new(
+                    gpui::point(gpui::ScaledPixels(x), gpui::ScaledPixels(y)),
+                    gpui::size(gpui::ScaledPixels(width), gpui::ScaledPixels(height)),
+                );
+                scene.insert_primitive(gpui::Primitive::SubtreeLayer(SubtreeLayer {
+                    scene3d: Some(Arc::new(frame(&[]))),
+                    scene: std::rc::Rc::new(Scene::default()),
+                    second_scene: None,
+                    intermediate_effects: Arc::default(),
+                    composite: gpui::EffectQuad {
+                        order: 0,
+                        bounds,
+                        effect_bounds: bounds,
+                        transformation: Default::default(),
+                        content_mask: gpui::ContentMask { bounds },
+                        shader: gpui::EffectShader::wgsl_image(
+                            "fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return sample_effect_image(input, input.uv); }",
+                        ),
+                        uniforms: Default::default(),
+                        time: 0.,
+                        corner_radii: Default::default(),
+                        opacity: 1.,
+                        image_tile: None,
+                        second_image_tile: None,
+                        third_image_tile: None,
+                        fourth_image_tile: None,
+                    },
+                }));
+            }
+            scene.finish();
+            scene
+        };
+        let scene = make_scene(&[
+            [12., 20., 64., 48.],
+            [100., 20., 64., 48.],
+            [12.25, 100.75, 32.5, 24.5],
+            [3000., 0., 64., 48.],
+        ]);
+        renderer.prepare(&context.device, &context.queue, &scene, 1024, 768);
+        assert_eq!(renderer.targets.len(), 2);
+        assert_eq!(renderer.regions.len(), 3);
+        let depth = renderer.targets[&[64, 48]].depth.clone();
+        let hdr = renderer.targets[&[64, 48]].hdr.as_ref().unwrap().clone();
+        assert_eq!([depth.width(), depth.height()], [64, 48]);
+        assert_eq!([hdr.width(), hdr.height()], [64, 48]);
+        assert_eq!(renderer.targets[&[33, 26]].depth.height(), 26);
+
+        renderer.prepare(&context.device, &context.queue, &scene, 2048, 1536);
+        assert_eq!(renderer.targets.len(), 2);
+        assert_eq!(renderer.targets[&[64, 48]].depth, depth);
+        assert_eq!(renderer.targets[&[64, 48]].hdr.as_ref().unwrap(), &hdr);
+        let smaller = make_scene(&[[12., 20., 64., 48.]]);
+        renderer.prepare(&context.device, &context.queue, &smaller, 40, 40);
+        assert_eq!(renderer.targets.len(), 1);
+        assert!(renderer.targets.contains_key(&[28, 20]));
+        renderer.prepare(&context.device, &context.queue, &Scene::default(), 40, 40);
+        assert!(renderer.targets.is_empty());
+        assert!(renderer.regions.is_empty());
+        Ok(())
     }
 
     #[test]
@@ -1847,6 +1969,23 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+        let (_, params) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some("Params"))
+            .unwrap();
+        let naga::TypeInner::Struct { members, span } = &params.inner else {
+            panic!("display parameters must be a struct");
+        };
+        assert_eq!(*span as usize, std::mem::size_of::<DisplayParams>());
+        assert_eq!(
+            members[0].offset as usize,
+            std::mem::offset_of!(DisplayParams, settings)
+        );
+        assert_eq!(
+            members[1].offset as usize,
+            std::mem::offset_of!(DisplayParams, origin)
+        );
     }
 
     #[test]

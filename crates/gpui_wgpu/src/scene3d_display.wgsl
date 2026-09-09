@@ -1,4 +1,4 @@
-struct Params { settings: vec4<f32> };
+struct Params { settings: vec4<f32>, origin: vec4<f32> };
 @group(0) @binding(0) var hdr: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var hdr_msaa: texture_multisampled_2d<f32>;
@@ -32,7 +32,7 @@ fn store_color(color: vec4<f32>) -> vec4<f32> {
 
 @fragment
 fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    return store_color(display_sample(textureLoad(hdr, vec2<i32>(position.xy), 0)));
+    return store_color(display_sample(textureLoad(hdr, vec2<i32>(position.xy - params.origin.xy), 0)));
 }
 
 @fragment
@@ -40,7 +40,7 @@ fn fragment_msaa(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     var color = vec4<f32>(0.0);
     let count = textureNumSamples(hdr_msaa);
     for (var i = 0u; i < count; i += 1u) {
-        color += display_sample(textureLoad(hdr_msaa, vec2<i32>(position.xy), i32(i)));
+        color += display_sample(textureLoad(hdr_msaa, vec2<i32>(position.xy - params.origin.xy), i32(i)));
     }
     return store_color(color / f32(count));
 }

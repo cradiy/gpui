@@ -7,7 +7,10 @@ use std::sync::{
 use anyhow::{Context as _, Result, ensure};
 use gpui::{MeshTexture3d, Scene3dFrame};
 
-use crate::{WgpuAtlas, WgpuContext, wgpu_renderer::scene3d::Scene3dRenderer};
+use crate::{
+    WgpuAtlas, WgpuContext,
+    wgpu_renderer::scene3d::{RenderRegion, Scene3dRenderer},
+};
 
 mod statistics;
 pub use statistics::Scene3dDrawStatistics;
@@ -427,7 +430,7 @@ impl WgpuScene3dRenderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene3d.direct"),
         });
-        let rect = [0., 0., width as f32, height as f32];
+        let region = RenderRegion::full(config.size);
         let mut draw_statistics = Scene3dDrawStatistics::default();
         let mut linear_color = None;
         let color = if config.channels.shaded() {
@@ -447,7 +450,7 @@ impl WgpuScene3dRenderer {
                 ));
             }
             let renderer = &mut self.color.as_mut().unwrap().1;
-            renderer.prepare_frames(device, queue, [frame], width, height);
+            renderer.prepare_frames(device, queue, [frame], [config.size]);
             draw_statistics += renderer.draw_statistics(frame);
             let texture = config
                 .channels
@@ -461,7 +464,7 @@ impl WgpuScene3dRenderer {
                 queue,
                 &self.atlas,
                 frame,
-                rect,
+                region,
                 0,
                 None,
                 view.as_ref(),
@@ -493,7 +496,7 @@ impl WgpuScene3dRenderer {
             if let Some(source) = resource_source {
                 renderer.reuse_resources_from(source);
             }
-            renderer.prepare_frames(device, queue, [frame], width, height);
+            renderer.prepare_frames(device, queue, [frame], [config.size]);
             draw_statistics += renderer.draw_statistics(frame);
             let texture = output_texture(device, config.size, kind.format());
             renderer.encode_frame(
@@ -501,7 +504,7 @@ impl WgpuScene3dRenderer {
                 queue,
                 &self.atlas,
                 frame,
-                rect,
+                region,
                 0,
                 None,
                 Some(&texture.create_view(&Default::default())),

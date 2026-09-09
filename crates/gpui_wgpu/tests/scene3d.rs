@@ -827,6 +827,61 @@ fn direct_outputs_preserve_integer_ids_cutouts_and_frame_lifetimes() -> anyhow::
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn viewport_pixel_mapping_survives_offset_clipping_and_target_resize() -> anyhow::Result<()> {
+    let make = |dx: f32, dy: f32| {
+        let region = bounds(8.25 + dx, 8.75 + dy, 64.5, 48.5);
+        let mut source = Scene::default();
+        source.insert_primitive(quad(bounds(8.25 + dx, 8.75 + dy, 32.25, 48.5), 0x00ff00ff));
+        source.insert_primitive(quad(bounds(40.5 + dx, 8.75 + dy, 32.25, 48.5), 0x0000ffff));
+        scene(layer(
+            region,
+            source,
+            vec![mesh(0.2, 0xffffffff, MeshTexture3d::Subtree)],
+            1.,
+        ))
+    };
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(96), DevicePixels(80)))?;
+    let reference = renderer.render_rgba(&make(0., 0.))?;
+    assert_eq!(
+        &reference[(32 * 96 + 24) * 4..(32 * 96 + 24) * 4 + 4],
+        &[0, 255, 0, 255]
+    );
+    assert_eq!(
+        &reference[(32 * 96 + 56) * 4..(32 * 96 + 56) * 4 + 4],
+        &[0, 0, 255, 255]
+    );
+    for (width, height, dx, dy) in [
+        (256, 192, 37, 21),
+        (96, 80, -24, -16),
+        (96, 80, 48, 40),
+        (96, 80, 0, 0),
+    ] {
+        renderer.resize(size(DevicePixels(width), DevicePixels(height)));
+        let pixels = renderer.render_rgba(&make(dx as f32, dy as f32))?;
+        for y in 0..height {
+            for x in 0..width {
+                let (rx, ry) = (x - dx, y - dy);
+                let expected = if (0..96).contains(&rx) && (0..80).contains(&ry) {
+                    let index = ((ry * 96 + rx) * 4) as usize;
+                    &reference[index..index + 4]
+                } else {
+                    &[0; 4]
+                };
+                let index = ((y * width + x) * 4) as usize;
+                for (actual, expected) in pixels[index..index + 4].iter().zip(expected) {
+                    assert!(
+                        actual.abs_diff(*expected) <= 1,
+                        "pixel {x}, {y}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn mesh_depth_capture_clipping_and_nested_composition() -> anyhow::Result<()> {
     let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(96)))?;
     let tile = renderer

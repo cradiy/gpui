@@ -89,6 +89,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **WGPU device reports**: Adapter/device feature separation, format usages and flags, output/channel/sample queries, enabled limits, image anisotropy, and pre-construction mesh-pipeline validation.
   - [x] **Viewport backend reports**: Live window support with backend/device/resource reasons, WGPU target-format validation independent of direct outputs, selected 1x/4x sampling, and device-bounded UI capture density.
 - [ ] **Viewport-sized render targets**: Allocate color, depth, and MSAA targets to viewport bounds, with configurable resolution and sample count to limit GPU memory use.
+  - [x] **Local mesh attachments**: Surface-clipped pixel bounds, preserved fractional alignment and UI sampling, size-shared HDR/depth/MSAA targets, active-size eviction, and surface-space composition.
+  - [ ] **Viewport quality controls**: Configurable mesh resolution and sample count with device-limit handling and unchanged input coordinates.
 - [ ] **On-demand updates**: Track scene, camera, and UI texture invalidation separately; reuse results when static, invisible, or paused without continuously requesting frames.
 - [ ] **Culling and instancing**: Frustum culling, instanced rendering of shared geometry, and material batching with reproducible benchmarks.
   - [x] **Instanced material batches**: Shared-mesh, compatible-material batching for color, shadow, and geometry outputs without reordering depth writers.

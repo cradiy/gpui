@@ -1885,8 +1885,9 @@ DirectX backends do not currently implement the mesh pass.
 
 Each viewport has isolated depth visibility and is composited into GPUI's normal
 paint order. Ancestor opacity applies once to the final image, and ancestor
-clipping still applies. Mesh edges use four-sample MSAA. Captured viewports can
-be nested in other subtree effects.
+clipping still applies. Mesh edges use the sample count reported by
+`window.scene3d_support()`: four samples when supported, otherwise one. Captured
+viewports can be nested in other subtree effects.
 
 Rendering conservatively rejects indexed mesh bounds outside the camera frustum
 before allocating geometry buffers or uploading instance data. Bounds touching
@@ -1904,11 +1905,20 @@ This does not hide scene nodes, alter bounds or world-ray queries, or renumber
 output IDs. It is not occlusion culling: geometry behind other objects still
 participates in depth testing.
 
-Geometry buffers are reused for shared meshes. Intermediate color and depth
-targets are reused at a stable window size; they are recreated on resize and
-device recovery. Window-sized offscreen targets consume GPU memory, so use a
-small number of simultaneous viewports. UI capture, mesh rendering and composition
-run when GPUI repaints; there is no autonomous background render loop.
+Geometry buffers are reused for shared meshes. Intermediate HDR color and depth
+targets cover the viewport's pixel bounds intersected with the render surface,
+rounded outward to whole pixels. Fractional layout positions keep their pixel
+alignment. Viewports with the same target dimensions share temporary attachments;
+other dimensions have separate attachments retained only while used by the current
+scene. A window resize preserves attachments whose viewport dimensions remain
+unchanged. Fully off-surface viewports do not allocate mesh attachments.
+
+Mesh output is placed back into surface coordinates for subtree composition and
+enclosing effects. Generic subtree-composition textures remain surface-sized, so many
+nested captures can still consume substantial GPU memory. UI capture, mesh
+rendering and composition run when GPUI repaints; there is no autonomous background
+render loop. UI layout, texture sampling coordinates, picking, and pointer routing
+are independent of mesh attachment dimensions.
 UI texture targets and their rendering resources are reused while attached;
 pixel-size changes resize the capture targets independently of the window.
 

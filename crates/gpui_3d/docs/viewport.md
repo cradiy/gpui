@@ -512,10 +512,72 @@ use the eye-to-surface vector; orthographic cameras use a constant direction.
 Both viewport and headless rendering use these conventions. PBR does not alter
 alpha cutout, depth writes, object IDs, or picking.
 
-The light model contains one directional light, uniform ambient illumination,
-and optional diffuse environment illumination. Pure metals receive no diffuse
-ambient or environment light. Environment reflections and shadows are not provided.
+Direct lighting supports a single `Light` or an explicit `PunctualLight` list,
+alongside uniform ambient and optional diffuse environment illumination. Pure
+metals receive no diffuse ambient or environment light. Environment reflections
+and shadows are not provided.
 Emission does not illuminate other objects or add a glow outside the surface.
+
+### Direct lights
+
+```rust
+use gpui::rgb;
+use gpui_3d::{Light, PunctualLight, Scene};
+
+let scene = Scene::new()
+    .light(Light { ambient: 0.05, ..Default::default() })
+    .lights([
+        PunctualLight::directional([-0.5, 0.8, 0.7]).intensity(0.3),
+        PunctualLight::point([1., 1., 2.])
+            .color(rgb(0xffbb88)).intensity(4.).range(Some(6.)),
+        PunctualLight::spot([-1., 1., 2.], [0., -0.3, -1.])
+            .cone_angles(0.2, 0.5).intensity(6.),
+    ]);
+```
+
+`Scene::lights` replaces the direct-light list, preserving uniform ambient and
+diffuse environment illumination. `MAX_PUNCTUAL_LIGHTS` is eight; rendering
+rejects larger lists rather than silently truncating them. An empty list disables
+direct illumination. `Scene::light` sets the single directional light and ambient
+multiplier and clears the explicit list. Neither method changes the environment.
+
+Light positions and directions are world-space values, independent of object
+transforms. A directional vector points **toward the source**. A spot vector
+points **outward along the beam**. Directions need not be normalized, but must be
+finite and nonzero. Point lights ignore direction. All positions must be finite.
+The core does not attach lights to scene nodes or load lighting from asset files.
+
+`color` is sRGB RGB in `[0, 1]` with alpha ignored. `intensity` is a finite linear
+multiplier in `[0, 65504]`, defaulting to one. Direct illumination is summed in
+linear HDR before exposure and tone mapping. Basic lit materials use Lambert
+shading; PBR materials use the same GGX/Smith/Schlick response for every source.
+The intensity scale follows the material's existing shading model; it is not a
+calibrated photometric exposure system.
+
+Directional light has no distance attenuation. Point and spot lights use
+`1 / max(distance, minimum_distance)^2`. `minimum_distance` defaults to 0.01
+world units and accepts `[0.0001, 65504]`, keeping near-source intensity finite
+without creating an area light. At the exact source position the direction is
+undefined and the direct contribution is zero.
+
+`range(Some(r))` sets a finite positive cutoff for point/spot lights; `None`
+means unlimited range. Attenuation is multiplied by
+`(1 - min(distance/r, 1)^4)^2`, reaching zero smoothly at the cutoff.
+Spot half-angles satisfy `0 <= inner < outer <= pi/2`. Their cosines must remain
+distinct at f32 precision. The default angles are zero and pi/4. Angular weight
+is `clamp((cos(theta)-cos(outer))/(cos(inner)-cos(outer)), 0, 1)^2`, where theta
+is measured from the outward beam axis. Distance and cone attenuation follow
+the conventions of [KHR_lights_punctual](https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_lights_punctual/README.md).
+
+AO attenuates indirect illumination only, not these direct sources. Unlit
+materials bypass every light. Lights do not change emission, alpha, picking,
+object IDs, depth, or geometric normals. Occlusion by other geometry and shadow
+maps are not computed. Viewport and headless rendering share the same light list.
+
+Run `cargo run -p gpui_3d --example lights` to compare point and spot sources.
+Move the pointer to move both sources, adjust source distance and cone width,
+or add a directional and colored point fill light. Right-drag or scroll in either
+view to control the synchronized cameras.
 
 ### Diffuse environment lighting
 
@@ -581,7 +643,7 @@ add `base * (1 - metallic) * (1 - F0) * irradiance/pi`, where
 `F0 = mix(0.04, base, metallic)`, evaluated with the shading normal, including an
 active normal map. This diffuse approximation is view-independent; it does not
 provide specular IBL, roughness-dependent reflections, or geometry-derived occlusion.
-Uniform ambient and directional lighting remain additive. Unlit materials bypass
+Uniform ambient and direct lighting remain additive. Unlit materials bypass
 environment lighting. Alpha, picking, object IDs, depth, and geometric normal
 outputs are unchanged. Viewport and headless color rendering share the same path.
 
@@ -646,7 +708,7 @@ is `1 + strength * (R - 1)`, following the
 An absent map or zero strength leaves indirect lighting unchanged.
 
 Both basic lit and PBR materials apply this multiplier to uniform ambient and
-diffuse environment illumination. Directional diffuse/specular light and PBR
+diffuse environment illumination. Direct diffuse/specular light and PBR
 emission are unaffected. Unlit materials bypass occlusion. The texture does not
 alter base color, transparency, geometry, picking, depth or geometric normals.
 It represents authored or baked occlusion, not dynamic shadows or screen-space AO.

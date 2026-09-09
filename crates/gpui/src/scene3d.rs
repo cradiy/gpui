@@ -275,6 +275,68 @@ pub enum AlphaMode3d {
     Blend = 2,
 }
 
+/// Maximum number of explicit direct lights per scene.
+pub const MAX_PUNCTUAL_LIGHTS_3D: usize = 8;
+
+/// Direct-light spatial distribution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightKind3d {
+    /// Infinite source with a constant direction toward the light.
+    Directional,
+    /// Inverse-square source emitting in every direction.
+    Point,
+    /// Inverse-square source emitting along a cone.
+    Spot,
+}
+
+/// World-space direct light. No shadows or scene-node attachment are implied.
+#[derive(Clone, Copy, Debug)]
+pub struct PunctualLight3d {
+    /// Spatial distribution.
+    pub kind: LightKind3d,
+    /// World-space position; ignored by directional lights.
+    pub position: [f32; 3],
+    /// Toward a directional source, or outward from a spot source. Nonzero.
+    pub direction: [f32; 3],
+    /// sRGB color in [0, 1]; alpha is ignored.
+    pub color: crate::Rgba,
+    /// Nonnegative linear multiplier, at most 65504.
+    pub intensity: f32,
+    /// Optional positive distance cutoff; ignored by directional lights.
+    pub range: Option<f32>,
+    /// Inverse-square denominator clamp in world units, in [0.0001, 65504].
+    pub minimum_distance: f32,
+    /// Spot half-angle with full intensity, in radians.
+    pub inner_angle: f32,
+    /// Spot half-angle with zero intensity; inner < outer <= pi/2.
+    pub outer_angle: f32,
+}
+
+impl PunctualLight3d {
+    /// Checks finite values, supported ranges, directions, and cone angles.
+    pub fn is_valid(&self) -> bool {
+        self.position
+            .iter()
+            .chain(&self.direction)
+            .all(|v| v.is_finite())
+            && (self.kind == LightKind3d::Point || self.direction.iter().any(|v| *v != 0.))
+            && [self.color.r, self.color.g, self.color.b]
+                .iter()
+                .all(|v| v.is_finite() && (0. ..=1.).contains(v))
+            && self.intensity.is_finite()
+            && (0. ..=65504.).contains(&self.intensity)
+            && self.range.is_none_or(|v| v.is_finite() && v > 0.)
+            && self.minimum_distance.is_finite()
+            && (0.0001..=65504.).contains(&self.minimum_distance)
+            && self.inner_angle.is_finite()
+            && self.inner_angle >= 0.
+            && self.outer_angle.is_finite()
+            && self.inner_angle < self.outer_angle
+            && self.outer_angle <= std::f32::consts::FRAC_PI_2
+            && self.inner_angle.cos() > self.outer_angle.cos()
+    }
+}
+
 /// L2 real spherical harmonics of diffuse irradiance divided by pi, in linear RGB.
 /// Coefficient order is (0,0), (1,-1), (1,0), (1,1), (2,-2), (2,-1), (2,0), (2,1), (2,2).
 #[derive(Clone, Copy, Debug)]
@@ -385,6 +447,8 @@ pub struct Scene3dFrame {
     pub light_direction: [f32; 3],
     /// sRGB light RGB and linear intensity multiplier.
     pub light: [f32; 4],
+    /// Explicit direct lights replacing the single light when present. At most eight.
+    pub lights: Option<Arc<[PunctualLight3d]>>,
     /// Ambient light multiplier.
     pub ambient: f32,
     /// Optional distant diffuse illumination. It does not draw a background.

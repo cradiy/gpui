@@ -1440,6 +1440,7 @@ mod tests {
             orthographic_view_direction: None,
             light_direction: [0., 0., 1.],
             light: [1.; 4],
+            lights: None,
             ambient: 0.3,
             diffuse_environment: None,
             color_output: Default::default(),

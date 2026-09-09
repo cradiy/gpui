@@ -5,6 +5,115 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn punctual_sources_match_directional_energy_at_the_surface_center() -> anyhow::Result<()> {
+    use gpui_3d::{Light, Object, PbrMaterial, Projection, PunctualLight, Scene};
+    let mut renderer = HeadlessRenderer::new()?;
+    let point = PunctualLight::point([0., 0., 2.]).intensity(1.6);
+    let cases = [
+        (vec![], 0.),
+        (
+            vec![PunctualLight::directional([0., 0., 7.]).intensity(0.4)],
+            0.4,
+        ),
+        (vec![point], 0.4),
+        (vec![PunctualLight::point([0., 0., 4.]).intensity(1.6)], 0.1),
+        (vec![point.range(Some(2.))], 0.),
+        (vec![point.range(Some(4.))], 0.3515625),
+        (vec![PunctualLight::point([0.; 3])], 0.),
+        (
+            vec![
+                PunctualLight::spot([0., 0., 2.], [(1_f32 - 0.85 * 0.85).sqrt(), 0., -0.85])
+                    .cone_angles(0.95_f32.acos(), 0.75_f32.acos())
+                    .intensity(1.6),
+            ],
+            0.1,
+        ),
+        (
+            vec![
+                PunctualLight::point([0., 0., 0.0001])
+                    .minimum_distance(0.5)
+                    .intensity(0.1),
+            ],
+            0.4,
+        ),
+        (
+            vec![PunctualLight::spot([0., 0., 2.], [0., 0., -1.]).intensity(1.6)],
+            0.4,
+        ),
+        (
+            vec![PunctualLight::spot([0., 0., 2.], [1., 0., 0.]).intensity(1.6)],
+            0.,
+        ),
+        (
+            vec![PunctualLight::directional([0., 0., 1.]).intensity(0.05); 8],
+            0.4,
+        ),
+    ];
+    for pbr in [false, true] {
+        for (lights, expected) in &cases {
+            let mut outputs = Vec::new();
+            for explicit in [false, true] {
+                let material = Material::color(rgb(0x806040));
+                let material = if pbr {
+                    material.pbr(PbrMaterial {
+                        metallic: 0.2,
+                        roughness: 0.6,
+                        ..Default::default()
+                    })
+                } else {
+                    material
+                };
+                let mut scene = Scene::new()
+                    .camera(Camera {
+                        projection: Projection::Orthographic { vertical_size: 2. },
+                        ..Default::default()
+                    })
+                    .light(Light {
+                        direction: [0., 0., 1.],
+                        intensity: *expected,
+                        color: rgb(0xffffff),
+                        ambient: 0.,
+                    })
+                    .object(Object::new(Mesh::plane(), material));
+                if explicit {
+                    scene = scene.lights(lights.iter().copied());
+                }
+                let frame = renderer.render(
+                    &scene,
+                    Scene3dOutputConfig {
+                        color_samples: 1,
+                        ..Scene3dOutputConfig::new([33, 33])
+                    },
+                )?;
+                let mut read = frame.readback()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                loop {
+                    if let Some(result) = read.try_read()? {
+                        outputs.push(result.pixels);
+                        break;
+                    }
+                    anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+            let offset = (16 * 33 + 16) * 4;
+            let reference = &outputs[0].rgba.as_ref().unwrap()[offset..offset + 4];
+            let actual = &outputs[1].rgba.as_ref().unwrap()[offset..offset + 4];
+            assert_eq!(actual[3], 255);
+            for (actual, reference) in actual.iter().zip(reference) {
+                assert!(
+                    actual.abs_diff(*reference) <= 2,
+                    "PBR {pbr}, lights {lights:?}: {actual} != {reference}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn occlusion_attenuates_only_indirect_light_with_independent_linear_sampling() -> anyhow::Result<()>
 {
     use gpui_3d::{

@@ -13,6 +13,7 @@ mod frame;
 mod graph;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub mod headless;
+mod light;
 mod math;
 mod orbit;
 mod picking;
@@ -25,6 +26,7 @@ pub use camera::{Camera, CameraError, Projection, Ray, RayError, ScreenPoint};
 pub use environment::{DiffuseEnvironment, EnvironmentError};
 pub use gpui::AlphaMode3d as AlphaMode;
 pub use gpui::ElementId as ObjectId;
+pub use gpui::MAX_PUNCTUAL_LIGHTS_3D as MAX_PUNCTUAL_LIGHTS;
 pub use gpui::MeshVertex3d as Vertex;
 pub use gpui::PbrMaterial3d as PbrMaterial;
 pub use gpui::TangentError3d as TangentError;
@@ -45,6 +47,7 @@ pub use graph::{
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use headless::*;
+pub use light::PunctualLight;
 pub use math::Transform;
 pub use orbit::{OrbitController, OrbitError, OrbitSettings};
 pub use picking::{Hit, PickBehavior};
@@ -457,6 +460,7 @@ impl Default for Light {
 pub struct Scene {
     camera: Camera,
     light: Light,
+    lights: Option<Arc<[gpui::PunctualLight3d]>>,
     diffuse_environment: Option<DiffuseEnvironment>,
     color_output: ColorOutput,
     objects: Vec<Object>,
@@ -472,9 +476,17 @@ impl Scene {
         self.camera = camera;
         self
     }
-    /// Sets scene lighting.
+    /// Sets a single directional light and ambient illumination, clearing explicit lights.
     pub fn light(mut self, light: Light) -> Self {
         self.light = light;
+        self.lights = None;
+        self
+    }
+    /// Replaces direct lighting with at most MAX_PUNCTUAL_LIGHTS world-space sources.
+    /// An empty list disables direct light. Ambient and environment illumination are preserved.
+    /// Rendering rejects excess lights rather than truncating them.
+    pub fn lights(mut self, lights: impl IntoIterator<Item = PunctualLight>) -> Self {
+        self.lights = Some(lights.into_iter().map(|light| light.0).collect());
         self
     }
     /// Adds distant diffuse illumination without changing the scene background.

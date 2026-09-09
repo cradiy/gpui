@@ -200,6 +200,18 @@ impl WgpuScene3dRenderer {
         config: Scene3dOutputConfig,
     ) -> Result<Scene3dGpuOutput> {
         self.capabilities.validate(config)?;
+        if let Some(lights) = &frame.lights {
+            ensure!(
+                lights.len() <= gpui::MAX_PUNCTUAL_LIGHTS_3D,
+                "too many direct lights"
+            );
+            for (index, light) in lights.iter().enumerate() {
+                ensure!(
+                    light.is_valid(),
+                    "direct light {index} has invalid parameters"
+                );
+            }
+        }
         ensure!(
             frame
                 .diffuse_environment

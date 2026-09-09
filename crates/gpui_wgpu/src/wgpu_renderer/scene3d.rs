@@ -51,14 +51,61 @@ impl ImageParams {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct DirectLight {
+    position_kind: [f32; 4],
+    direction_range: [f32; 4],
+    color_intensity: [f32; 4],
+    cone: [f32; 4],
+}
+
+impl From<gpui::PunctualLight3d> for DirectLight {
+    fn from(light: gpui::PunctualLight3d) -> Self {
+        let length = light
+            .direction
+            .iter()
+            .map(|v| f64::from(*v).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let direction = light
+            .direction
+            .map(|v| (f64::from(v) / length.max(f64::MIN_POSITIVE)) as f32);
+        Self {
+            position_kind: [
+                light.position[0],
+                light.position[1],
+                light.position[2],
+                match light.kind {
+                    gpui::LightKind3d::Directional => 0.,
+                    gpui::LightKind3d::Point => 1.,
+                    gpui::LightKind3d::Spot => 2.,
+                },
+            ],
+            direction_range: [
+                direction[0],
+                direction[1],
+                direction[2],
+                light.range.unwrap_or(0.),
+            ],
+            color_intensity: [light.color.r, light.color.g, light.color.b, light.intensity],
+            cone: [
+                light.inner_angle.cos(),
+                light.outer_angle.cos(),
+                light.minimum_distance,
+                0.,
+            ],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct Params {
     model: [[f32; 4]; 4],
     normal: [[f32; 4]; 4],
     camera: [[f32; 4]; 4],
     bounds: [f32; 4],
     viewport: [f32; 4],
-    direction: [f32; 4],
-    light: [f32; 4],
+    ambient: [f32; 4],
     color: [f32; 4],
     texture_rect: [f32; 4],
     flags: [f32; 4],
@@ -78,6 +125,8 @@ struct Params {
     environment: [f32; 4],
     occlusion_map: ImageParams,
     occlusion_settings: [f32; 4],
+    lights: [DirectLight; gpui::MAX_PUNCTUAL_LIGHTS_3D],
+    light_count: [u32; 4],
 }
 
 struct Geometry {
@@ -454,6 +503,28 @@ impl Scene3dRenderer {
         let height = depth.height() as f32;
         let layout = self.pipeline.get_bind_group_layout(0);
         let mut groups = Vec::with_capacity(frame.objects.len());
+        let mut lights = [DirectLight::zeroed(); gpui::MAX_PUNCTUAL_LIGHTS_3D];
+        let light_count = if let Some(sources) = &frame.lights {
+            assert!(sources.len() <= lights.len(), "too many direct lights");
+            for (target, source) in lights.iter_mut().zip(sources.iter()) {
+                assert!(source.is_valid(), "invalid direct light");
+                *target = (*source).into();
+            }
+            sources.len() as u32
+        } else {
+            lights[0] = DirectLight {
+                position_kind: [0.; 4],
+                direction_range: [
+                    frame.light_direction[0],
+                    frame.light_direction[1],
+                    frame.light_direction[2],
+                    0.,
+                ],
+                color_intensity: frame.light,
+                cone: [0.; 4],
+            };
+            1
+        };
         for (index, object) in frame.objects.iter().enumerate() {
             let atlas_texture = match object.texture {
                 MeshTexture3d::Image(tile) => Some(atlas.get_texture_info(tile.texture_id)),
@@ -513,13 +584,9 @@ impl Scene3dRenderer {
                 camera: frame.view_projection,
                 bounds: rect,
                 viewport: [width, height, 0., 0.],
-                direction: [
-                    frame.light_direction[0],
-                    frame.light_direction[1],
-                    frame.light_direction[2],
-                    frame.ambient,
-                ],
-                light: frame.light,
+                ambient: [frame.ambient, 0., 0., 0.],
+                lights,
+                light_count: [light_count, 0, 0, 0],
                 color: [
                     object.color.r,
                     object.color.g,
@@ -848,6 +915,9 @@ mod tests {
             .unwrap();
         assert_eq!(span as usize, std::mem::size_of::<Params>());
         for (name, offset) in [
+            ("ambient", std::mem::offset_of!(Params, ambient)),
+            ("lights", std::mem::offset_of!(Params, lights)),
+            ("light_count", std::mem::offset_of!(Params, light_count)),
             ("ids", std::mem::offset_of!(Params, ids)),
             ("uv_u", std::mem::offset_of!(Params, uv_u)),
             ("uv_v", std::mem::offset_of!(Params, uv_v)),
@@ -876,6 +946,41 @@ mod tests {
                 "normal_settings",
                 std::mem::offset_of!(Params, normal_settings),
             ),
+        ] {
+            let member = members
+                .iter()
+                .find(|member| member.name.as_deref() == Some(name))
+                .unwrap();
+            assert_eq!(member.offset as usize, offset, "{name}");
+        }
+        let (members, span) = module
+            .types
+            .iter()
+            .find_map(|(_, ty)| {
+                if ty.name.as_deref() == Some("DirectLight")
+                    && let naga::TypeInner::Struct { members, span } = &ty.inner
+                {
+                    Some((members, *span))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(span as usize, std::mem::size_of::<DirectLight>());
+        for (name, offset) in [
+            (
+                "position_kind",
+                std::mem::offset_of!(DirectLight, position_kind),
+            ),
+            (
+                "direction_range",
+                std::mem::offset_of!(DirectLight, direction_range),
+            ),
+            (
+                "color_intensity",
+                std::mem::offset_of!(DirectLight, color_intensity),
+            ),
+            ("cone", std::mem::offset_of!(DirectLight, cone)),
         ] {
             let member = members
                 .iter()

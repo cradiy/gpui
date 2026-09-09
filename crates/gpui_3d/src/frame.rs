@@ -16,6 +16,19 @@ impl Scene {
             "scene exposure must be finite and between -16 and 16 stops"
         );
         let light = self.light;
+        if let Some(lights) = &self.lights {
+            ensure!(
+                lights.len() <= crate::MAX_PUNCTUAL_LIGHTS,
+                "too many direct lights; maximum is {}",
+                crate::MAX_PUNCTUAL_LIGHTS
+            );
+            for (index, light) in lights.iter().enumerate() {
+                ensure!(
+                    light.is_valid(),
+                    "direct light {index} has invalid parameters"
+                );
+            }
+        }
         ensure!(
             light
                 .direction
@@ -174,6 +187,7 @@ impl Scene {
                 }
             },
             light_direction: light.direction,
+            lights: self.lights.clone(),
             light: [
                 light.color.r,
                 light.color.g,
@@ -414,6 +428,90 @@ mod tests {
                 scene
                     .prepare_frame(1., None, |_, _, _| unreachable!(
                         "invalid strength must fail before resource resolution"
+                    ))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_lights_replace_direct_sources_without_changing_ambient_or_objects() {
+        use crate::{Light, PunctualLight};
+        let scene = Scene::new()
+            .light(Light {
+                ambient: 0.17,
+                ..Default::default()
+            })
+            .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))));
+        let prepare = |scene: &Scene| {
+            scene
+                .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+                .unwrap()
+        };
+        let sources = [
+            PunctualLight::point([1., 2., 3.]).range(Some(5.)),
+            PunctualLight::spot([0., 0., 2.], [0., 0., -1.]),
+        ];
+        let multiple = prepare(&scene.clone().lights(sources));
+        assert_eq!(multiple.ambient, 0.17);
+        assert_eq!(multiple.objects[0].output_id, 1);
+        let lights = multiple.lights.as_ref().unwrap();
+        assert_eq!(lights.len(), 2);
+        assert_eq!(lights[0].position, [1., 2., 3.]);
+        assert_eq!(lights[0].range, Some(5.));
+        assert_eq!(lights[1].direction, [0., 0., -1.]);
+        assert!(
+            prepare(&scene.clone().lights([]))
+                .lights
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(prepare(&scene.clone().lights([])).ambient, 0.17);
+        assert!(
+            prepare(&scene.clone().lights(sources).light(Light::default()))
+                .lights
+                .is_none()
+        );
+        assert!(prepare(&scene).lights.is_none());
+    }
+
+    #[test]
+    fn light_limits_and_invalid_sources_fail_before_resource_resolution() {
+        use crate::{MAX_PUNCTUAL_LIGHTS, PunctualLight};
+        let light = PunctualLight::point([0., 0., 1.]);
+        let scene = |lights: Vec<_>| {
+            Scene::new()
+                .lights(lights)
+                .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))))
+        };
+        assert!(
+            scene(vec![light; MAX_PUNCTUAL_LIGHTS])
+                .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+                .is_ok()
+        );
+        let invalid = [
+            PunctualLight::directional([0.; 3]),
+            PunctualLight::point([f32::NAN, 0., 0.]),
+            light.intensity(-1.),
+            light.intensity(f32::INFINITY),
+            light.range(Some(0.)),
+            light.range(Some(f32::INFINITY)),
+            light.minimum_distance(0.),
+            PunctualLight::spot([0.; 3], [0.; 3]),
+            PunctualLight::spot([0.; 3], [0., 0., -1.]).cone_angles(0.5, 0.5),
+            PunctualLight::spot([0.; 3], [0., 0., -1.]).cone_angles(0., 2.),
+            PunctualLight::spot([0.; 3], [0., 0., -1.]).cone_angles(0., 1e-8),
+        ];
+        for lights in
+            invalid
+                .into_iter()
+                .map(|light| vec![light])
+                .chain([vec![light; MAX_PUNCTUAL_LIGHTS + 1]])
+        {
+            assert!(
+                scene(lights)
+                    .prepare_frame(1., None, |_, _, _| unreachable!(
+                        "invalid lights must fail before resource resolution"
                     ))
                     .is_err()
             );

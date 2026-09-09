@@ -1,9 +1,12 @@
 struct ImageParams {
     rect: vec4<f32>, uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
 };
+struct DirectLight {
+    position_kind: vec4<f32>, direction_range: vec4<f32>, color_intensity: vec4<f32>, cone: vec4<f32>,
+};
 struct Params {
     model: mat4x4<f32>, normal: mat4x4<f32>, camera: mat4x4<f32>,
-    bounds: vec4<f32>, viewport: vec4<f32>, direction: vec4<f32>, light: vec4<f32>,
+    bounds: vec4<f32>, viewport: vec4<f32>, ambient: vec4<f32>,
     color: vec4<f32>, texture_rect: vec4<f32>, flags: vec4<f32>,
     ids: vec4<u32>,
     uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
@@ -13,6 +16,7 @@ struct Params {
     depth_plane: vec4<f32>,
     environment_sh: array<vec4<f32>, 9>, environment: vec4<f32>,
     occlusion_map: ImageParams, occlusion_settings: vec4<f32>,
+    lights: array<DirectLight, 8>, light_count: vec4<u32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
@@ -150,20 +154,35 @@ fn occlusion(uv: vec2<f32>) -> f32 {
     return mix(1.0, sample_image(occlusion_image, params.occlusion_map, uv).r, params.occlusion_settings.x);
 }
 
-fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
-    let factors = sample_image(metallic_roughness_image, params.metallic_roughness_map, uv);
-    let metal = params.pbr.x * factors.b;
-    let roughness = max(params.pbr.y * factors.g, 0.045);
-    let emission = params.emissive.rgb * sample_image(emissive_image, params.emissive_map, uv).rgb;
-    let view = unit_vector(params.view.xyz - world * params.view.w);
-    let light = unit_vector(params.direction.xyz);
+struct LightSample { direction: vec3<f32>, energy: vec3<f32> };
+fn sample_light(source: DirectLight, world: vec3<f32>) -> LightSample {
+    var direction = unit_vector(source.direction_range.xyz);
+    var attenuation = 1.0;
+    if (source.position_kind.w > 0.5) {
+        let delta = source.position_kind.xyz - world;
+        let distance = length(delta);
+        direction = unit_vector(delta);
+        let clamped_distance = max(distance, source.cone.z);
+        attenuation = 1.0 / (clamped_distance * clamped_distance);
+        if (source.direction_range.w > 0.0) {
+            let ratio = min(distance / source.direction_range.w, 1.0);
+            let window = 1.0 - ratio * ratio * ratio * ratio;
+            attenuation *= window * window;
+        }
+        if (source.position_kind.w > 1.5) {
+            let cosine = dot(-direction, unit_vector(source.direction_range.xyz));
+            let angular = clamp((cosine - source.cone.y) / (source.cone.x - source.cone.y), 0.0, 1.0);
+            attenuation *= angular * angular;
+        }
+    }
+    return LightSample(direction, srgb_to_linear(source.color_intensity.rgb) * source.color_intensity.a * attenuation);
+}
+
+fn pbr_direct(diffuse: vec3<f32>, f0: vec3<f32>, roughness: f32, normal: vec3<f32>, view: vec3<f32>, light: LightSample) -> vec3<f32> {
     let nv = clamp(dot(normal, view), 0.0, 1.0);
-    let nl = clamp(dot(normal, light), 0.0, 1.0);
-    let diffuse = base * (1.0 - metal);
-    let f0 = mix(vec3<f32>(0.04), base, metal);
-    var result = diffuse * (vec3<f32>(params.direction.w) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * occlusion(uv) + emission;
-    if (nv <= 0.0 || nl <= 0.0) { return result; }
-    let half_vector = unit_vector(view + light);
+    let nl = clamp(dot(normal, light.direction), 0.0, 1.0);
+    if (nv <= 0.0 || nl <= 0.0) { return vec3<f32>(0.0); }
+    let half_vector = unit_vector(view + light.direction);
     let nh = clamp(dot(normal, half_vector), 0.0, 1.0);
     let vh = clamp(dot(view, half_vector), 0.0, 1.0);
     let a = roughness * roughness;
@@ -175,7 +194,21 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f
     let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vh, 5.0);
     let specular = fresnel * distribution * visibility;
     let reflected = (vec3<f32>(1.0) - fresnel) * diffuse / 3.14159265359 + specular;
-    result += reflected * srgb_to_linear(params.light.rgb) * params.light.a * nl;
+    return reflected * light.energy * nl;
+}
+
+fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+    let factors = sample_image(metallic_roughness_image, params.metallic_roughness_map, uv);
+    let metal = params.pbr.x * factors.b;
+    let roughness = max(params.pbr.y * factors.g, 0.045);
+    let emission = params.emissive.rgb * sample_image(emissive_image, params.emissive_map, uv).rgb;
+    let view = unit_vector(params.view.xyz - world * params.view.w);
+    let diffuse = base * (1.0 - metal);
+    let f0 = mix(vec3<f32>(0.04), base, metal);
+    var result = diffuse * (vec3<f32>(params.ambient.x) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * occlusion(uv) + emission;
+    for (var i = 0u; i < params.light_count.x; i += 1u) {
+        result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world));
+    }
     return result;
 }
 
@@ -189,9 +222,11 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
             return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, input.world, input.uv), vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
         }
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front) * input.orientation;
-        let light = params.direction.xyz / max(length(params.direction.xyz), 0.00001);
-        illumination = (vec3<f32>(params.direction.w) + diffuse_environment(normal)) * occlusion(input.uv)
-            + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);
+        illumination = (vec3<f32>(params.ambient.x) + diffuse_environment(normal)) * occlusion(input.uv);
+        for (var i = 0u; i < params.light_count.x; i += 1u) {
+            let light = sample_light(params.lights[i], input.world);
+            illumination += light.energy * max(dot(normal, light.direction), 0.0);
+        }
     }
     return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
 }

@@ -6,6 +6,7 @@ pub mod guide {}
 
 mod affine;
 mod bounds;
+mod camera;
 mod graph;
 mod math;
 mod picking;
@@ -14,13 +15,14 @@ mod viewport;
 
 pub use affine::{AffineTransform, TransformError};
 pub use bounds::Aabb;
+pub use camera::{Camera, CameraError, Projection, Ray, RayError, ScreenPoint};
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
 use gpui::{ImageSource, Mesh3d, Rgba};
 pub use graph::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
 };
-pub use math::{Camera, Transform};
+pub use math::Transform;
 pub use picking::{Hit, PickBehavior};
 use std::sync::{Arc, OnceLock};
 pub use viewport::{Viewport3d, viewport3d};
@@ -240,7 +242,7 @@ impl Scene {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Sets the perspective camera.
+    /// Sets the viewport camera.
     pub fn camera(mut self, camera: Camera) -> Self {
         self.camera = camera;
         self

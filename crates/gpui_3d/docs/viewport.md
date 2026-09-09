@@ -1,7 +1,7 @@
 # 3D viewports
 
 `gpui_3d` embeds depth-tested mesh scenes in ordinary GPUI layouts. A viewport
-uses a perspective camera, indexed triangle geometry, one directional light,
+supports perspective and orthographic cameras, indexed triangle geometry, one directional light,
 and solid, image or captured-UI materials.
 
 ```rust
@@ -29,8 +29,10 @@ The viewport does not schedule animation frames itself.
 
 World coordinates are right-handed, with positive Y up. The default camera is
 at `[0, 0, 6]`, looking toward the origin. Angles are radians. `Camera::orbit`
-orbits the origin; `Camera` also exposes eye, target, field of view and clip
-distances for explicit positioning.
+orbits the origin; `Camera` exposes `eye`, `target`, `up`, `projection`, and clip
+distances for explicit positioning. Projection matrices are column-major, with
+camera forward along local -Z and hardware depth from zero to one. Scene units
+are application-defined; camera distances and geometry must use the same units.
 
 `Mesh::plane()` is a unit XY square facing positive Z. `Mesh::cube()` is a unit
 cube centered at the origin. Both reuse shared geometry. `Mesh::new` accepts
@@ -40,6 +42,97 @@ UV `(0, 0)` is at the top left. Faces render from both sides.
 Object transforms apply scale, X/Y/Z Euler rotation, then translation. Normals
 use inverse-transpose transforms for nonuniform scale. Scale components must be
 finite and nonzero. Camera clip distances must satisfy `0 < near < far`.
+
+## Camera projection and queries
+
+`Camera::projection` selects `Projection::Perspective { vertical_fov }` in radians
+or `Projection::Orthographic { vertical_size }` in scene units. Orthographic size
+is the full vertical span; horizontal span is `vertical_size * aspect`. Perspective
+objects shrink with distance; orthographic objects keep their projected size.
+`up` controls camera roll. A nearly parallel up vector uses a deterministic
+world-axis fallback so exact top and bottom views remain defined.
+
+```rust
+use gpui::{Bounds, point, px, size};
+use gpui_3d::{Camera, Projection};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let camera = Camera {
+    projection: Projection::Orthographic { vertical_size: 4. },
+    ..Default::default()
+};
+let viewport = Bounds::new(point(px(80.), px(40.)), size(px(800.), px(600.)));
+let projected = camera.world_to_screen(viewport, [1., 0., 0.])?.unwrap();
+let ray = camera.screen_to_ray(viewport, projected.position)?;
+let view = camera.world_to_view([1., 0., 0.])?;
+let matrix = camera.view_projection(800. / 600.)?;
+# Ok(())
+# }
+```
+
+These APIs require no `Window`, layout, or GPU:
+
+| API | Result |
+| --- | --- |
+| `axes` | Camera right, up, and backward unit vectors |
+| `view_matrix` | World-to-view matrix |
+| `projection_matrix(aspect)` | View-to-clip matrix |
+| `view_projection(aspect)` | World-to-clip matrix used by rendering |
+| `world_to_view(point)` | Camera-space position; points in front have negative Z |
+| `world_to_screen(viewport, point)` | Screen position, NDC, linear forward depth, and frustum membership |
+| `screen_to_ray(viewport, position)` | Normalized world-space ray |
+
+Screen coordinates use a top-left origin and include the viewport offset. Use
+logical viewport bounds and logical input positions for GPUI handlers. The math
+is scale-independent: multiplying both bounds and screen coordinates by the same
+DPI scale produces the same ray. Pixel centers in physical image data are at
+`(x + 0.5, y + 0.5)`; convert them and the viewport into one coordinate system
+before querying. No implicit DPI conversion is performed.
+
+`world_to_screen` returns `None` on or behind the eye plane. Points in front but
+outside the viewport or clip planes retain their projected coordinates with
+`in_frustum = false`. The near plane is included and the far plane excluded.
+Frustum membership is geometric, not proof that a point is unoccluded.
+
+Perspective rays originate at the eye. Orthographic rays originate at the
+corresponding point on the eye plane and have parallel directions. Both extend
+forward without an intrinsic near/far limit. `screen_to_ray` accepts positions
+outside the viewport for captured drags; `Scene::pick` still enforces viewport
+bounds and the camera's clip range. UI pointer mapping uses the same projection
+for either camera type.
+
+`Ray::new(origin, direction)` accepts arbitrary world rays and normalizes their
+direction. `Scene::raycast(ray)` ignores the camera and its clipping planes,
+while respecting mesh geometry, constant material alpha, and picking behavior.
+It does not resolve images or sample image alpha. Query distance is measured from
+the ray origin. Queries still scan triangles directly; no spatial acceleration
+structure is provided.
+
+Invalid camera, viewport, and point inputs return `CameraError` from the public
+matrix/projection/query methods. Invalid rays return `RayError`.
+
+### Framing bounds
+
+```rust
+use gpui_3d::{Aabb, Camera};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let bounds = Aabb::new([-2., -1., -1.], [3., 2., 1.]).unwrap();
+let camera = Camera::orbit(0.4, 0.3, 8.).frame_bounds(bounds, 16. / 9., 1.2)?;
+# Ok(())
+# }
+```
+
+`frame_bounds` preserves viewing direction, up, and projection kind. It centers
+the target on the box and adjusts eye distance, near/far planes, and orthographic
+span as needed. Margin is a finite screen-space multiplier of at least one.
+The result contains all eight corners for the supplied aspect ratio, without
+changing any scene objects. Reframe when a changed output aspect requires it.
+
+Use `EvaluatedScene::bounds()` to frame visible geometry, a node's `bounds` to
+frame one mesh, or `subtree_bounds` to include its descendants. Subtree bounds
+include hidden geometry. Framing an empty group requires the caller to choose
+another target; zero-extent boxes use a small finite framing extent.
 
 ## Scene hierarchy
 
@@ -284,7 +377,9 @@ let viewport = viewport3d("world", Scene::new().object(cover)).size_full();
 ```
 
 `Hit` provides the object and triangle indices, world position, interpolated
-world-space shading normal, UV, barycentric weights, and distance from the camera.
+world-space shading normal, UV, barycentric weights, and distance from the ray
+origin. With a perspective camera this is distance from the eye; with an
+orthographic camera it is forward distance from the eye plane.
 Both faces are pickable; backface normals follow the renderer's flipped shading
 normal convention. Hits respect the camera's near and far clip planes. Equal-depth
 ties use scene insertion order.
@@ -336,6 +431,16 @@ UI texture targets and their rendering resources are reused while attached;
 pixel-size changes resize the capture targets independently of the window.
 
 ## Example
+
+```sh
+cargo run -p gpui_3d --example camera
+```
+
+Compare six equal cubes at different depths with perspective and orthographic
+projection. Click a cube to select it, frame the selection or the whole scene,
+and switch between front, top, and oblique views. Right-drag to orbit; scrolling
+moves a perspective camera or changes the orthographic span. The footer reports
+the selected node's projected position and linear forward depth.
 
 ```sh
 cargo run -p gpui_3d --example hierarchy

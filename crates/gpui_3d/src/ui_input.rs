@@ -191,6 +191,7 @@ mod tests {
         overlay: bool,
         overlay_clicks: usize,
         enabled: bool,
+        orthographic: bool,
     }
 
     impl Controls {
@@ -208,11 +209,16 @@ mod tests {
                 overlay: false,
                 overlay_clicks: 0,
                 enabled: true,
+                orthographic: false,
             }
         }
 
         fn scene(&self) -> Scene {
-            let scene = Scene::new().camera(Camera::orbit(0.2, 0.1, 6.)).object(
+            let mut camera = Camera::orbit(0.2, 0.1, 6.);
+            if self.orthographic {
+                camera.projection = crate::Projection::Orthographic { vertical_size: 5. };
+            }
+            let scene = Scene::new().camera(camera).object(
                 Object::new(Mesh::plane(), Material::ui())
                     .id("panel")
                     .scale([4., 3., 1.])
@@ -576,6 +582,48 @@ mod tests {
             .update(cx, |view, window, cx| {
                 assert!(window.captured_hitbox().is_none());
                 assert!(view.input.read(cx).state.borrow().drag.is_none());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn orthographic_surface_routes_clicks_and_captured_drag(cx: &mut TestAppContext) {
+        let handle = cx.add_window(Controls::new);
+        handle
+            .update(cx, |view, _, cx| {
+                view.orthographic = true;
+                cx.notify();
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        let p = handle
+            .update(cx, |view, _, _| view.screen(30., 30.))
+            .unwrap();
+        button(cx, handle, p, true, MouseButton::Left);
+        button(cx, handle, p, false, MouseButton::Left);
+        assert_eq!(handle.update(cx, |view, _, _| view.clicks).unwrap(), 1);
+        let (start, outside) = handle
+            .update(cx, |view, _, _| {
+                (view.screen(200., 114.), view.screen(800., 114.))
+            })
+            .unwrap();
+        button(cx, handle, start, true, MouseButton::Left);
+        event(
+            cx,
+            handle,
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position: outside,
+                pressed_button: Some(MouseButton::Left),
+                ..Default::default()
+            }),
+        );
+        button(cx, handle, outside, false, MouseButton::Left);
+        handle
+            .update(cx, |view, window, cx| {
+                assert!(view.slider.read(cx).value() > 99.);
+                assert_eq!(view.camera_down, 0);
+                assert!(window.captured_hitbox().is_none());
             })
             .unwrap();
     }

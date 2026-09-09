@@ -86,7 +86,8 @@ pub struct Hit {
     pub uv: [f32; 2],
     /// Weights corresponding to the triangle's three indexed vertices.
     pub barycentric: [f32; 3],
-    /// World-space distance from the camera eye.
+    /// World-space distance from the ray origin. Orthographic camera rays start
+    /// on the eye plane, so this is forward depth rather than distance to the eye.
     pub distance: f32,
 }
 
@@ -99,6 +100,12 @@ impl Scene {
     /// Viewport callbacks also sample prepared image alpha and use GPUI hitbox routing.
     pub fn pick(&self, bounds: Bounds<Pixels>, position: Point<Pixels>) -> Option<Hit> {
         self.pick_filtered(bounds, position, |_, _| 1.)
+    }
+
+    /// Geometric world-ray query, independent of the scene camera and its clip range.
+    /// Respects material alpha and picking behavior, but does not resolve image alpha.
+    pub fn raycast(&self, ray: crate::Ray) -> Option<Hit> {
+        self.trace(ray, |_| true, |_, _| 1.)
     }
 
     fn pick_filtered(
@@ -122,8 +129,25 @@ impl Scene {
             return None;
         }
         let camera = self.camera;
-        let [_, _, backward] = camera.basis();
-        let direction = ray_direction(camera, bounds, position);
+        let [_, _, backward] = camera.axes().ok()?;
+        let ray = camera.screen_to_ray(bounds, position).ok()?;
+        self.trace(
+            ray,
+            |position| {
+                let depth = -dot(sub(position, camera.eye), backward);
+                depth >= camera.near && depth < camera.far
+            },
+            alpha,
+        )
+    }
+
+    fn trace(
+        &self,
+        ray: crate::Ray,
+        within: impl Fn([f32; 3]) -> bool,
+        alpha: impl Fn(usize, [f32; 2]) -> f32,
+    ) -> Option<Hit> {
+        let direction = ray.direction();
         let mut closest: Option<Hit> = None;
         for (object_index, object) in self.objects.iter().enumerate() {
             if object.pick_behavior == PickBehavior::Ignore
@@ -140,16 +164,15 @@ impl Scene {
                     [p[0], p[1], p[2]]
                 });
                 let Some((distance, barycentric, front)) =
-                    intersect(camera.eye, direction, world, true)
+                    intersect(ray.origin(), direction, world, true)
                 else {
                     continue;
                 };
                 if closest.as_ref().is_some_and(|hit| distance >= hit.distance) {
                     continue;
                 }
-                let position = std::array::from_fn(|i| camera.eye[i] + direction[i] * distance);
-                let depth = -dot(sub(position, camera.eye), backward);
-                if depth < camera.near || depth >= camera.far {
+                let position = ray.at(distance);
+                if !within(position) {
                     continue;
                 }
                 let uv = std::array::from_fn(|i| {
@@ -212,24 +235,6 @@ fn intersect(
     Some((distance, [1. - u - v, u, v], determinant > 0.))
 }
 
-fn ray_direction(
-    camera: crate::Camera,
-    bounds: Bounds<Pixels>,
-    position: Point<Pixels>,
-) -> [f32; 3] {
-    let [right, up, backward] = camera.basis();
-    let extent = (camera.fov * 0.5).tan();
-    let width = f32::from(bounds.size.width);
-    let height = f32::from(bounds.size.height);
-    let x = f32::from(position.x - bounds.origin.x);
-    let y = f32::from(position.y - bounds.origin.y);
-    let sx = (2. * x / width - 1.) * (width / height).max(0.001) * extent;
-    let sy = (1. - 2. * y / height) * extent;
-    unit(std::array::from_fn(|i| {
-        right[i] * sx + up[i] * sy - backward[i]
-    }))
-}
-
 pub(crate) struct DragProjection {
     camera: crate::Camera,
     bounds: Bounds<Pixels>,
@@ -256,8 +261,8 @@ impl DragProjection {
     }
 
     pub fn project(&self, position: Point<Pixels>) -> Option<[f32; 2]> {
-        let direction = ray_direction(self.camera, self.bounds, position);
-        let (_, weights, _) = intersect(self.camera.eye, direction, self.world, false)?;
+        let ray = self.camera.screen_to_ray(self.bounds, position).ok()?;
+        let (_, weights, _) = intersect(ray.origin(), ray.direction(), self.world, false)?;
         let uv = std::array::from_fn(|i| (0..3).map(|j| self.uv[j][i] * weights[j]).sum::<f32>());
         uv.iter().all(|v| v.is_finite()).then_some(uv)
     }
@@ -463,7 +468,8 @@ mod tests {
             target: [0., 0., -1.],
             near: 1.,
             far: 3.,
-            fov: 2.,
+            projection: crate::Projection::Perspective { vertical_fov: 2. },
+            ..Default::default()
         };
         let bounds = bounds();
         let p = project(camera, bounds, [1.2, 0., -0.9]);

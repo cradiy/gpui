@@ -9,7 +9,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] Independent `gpui_3d` crate with a `Styled`-compatible `viewport3d` embedded in ordinary layouts.
 - [x] Indexed triangle meshes, custom vertices, built-in planes and cubes, and shared geometry resources.
 - [x] Object translation, Euler rotation, and nonuniform scaling with correct normal transforms.
-- [x] Perspective cameras and orbital positioning, with drag-to-orbit and scroll-to-zoom in the example.
+- [x] Perspective and orthographic cameras, public projection/ray queries, bounds framing, and interactive camera examples.
 - [x] Depth testing, four-sample MSAA, double-sided rendering, and alpha cutout.
 - [x] Solid, image, and decorative UI textures, basic directional and ambient lighting, and unlit materials.
 - [x] Subtree composition, nested viewports, ancestor clipping, and group opacity.
@@ -37,7 +37,9 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Static scene evaluation**: Camera-independent owned results, world and aggregate bounds, node identities in picking, and a hierarchy example.
 - [ ] **Camera and light nodes**: Attach cameras and lights to hierarchy nodes and derive their world-space state during evaluation.
 - [ ] **Model instances**: Preserve asset, instance, node, and primitive ownership; share geometry/material resources with explicit instance overrides.
-- [ ] **Camera extensions**: Orthographic projection, viewport rays, world-to-screen projection, and framing from object bounds.
+- [x] **Camera extensions**: Orthographic projection, explicit up vectors, public view/projection matrices, viewport rays, world-to-screen projection, and framing from object bounds.
+- [x] **World-ray queries**: Normalized arbitrary rays with camera-independent geometric intersection and stable node identities.
+- [ ] **Camera optics**: Focal-length/sensor-size conversion and explicit off-center projection support.
 - [ ] **Geometry primitives**: Spheres, cylinders, cones, and subdivided planes with segment configuration, bounds, and normal and tangent generation.
 - [ ] **Texture sampling**: UV transforms, addressing and filtering modes, mipmaps, anisotropic filtering, and distinct handling of color and data textures.
 - [ ] **Static glTF / GLB models**: Load nodes, meshes, indices, UVs, normals, images, and basic materials; report unsupported extensions and asset errors.
@@ -76,7 +78,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Near-Term Order
 
-1. Public camera projection/ray queries, orthographic projection, bounds framing, and reusable controllers.
+1. Reusable orbit/pan/dolly/zoom controllers with input ownership and configurable limits.
 2. Shared viewport/headless rendering inputs and explicit Color/ID output contracts.
 3. Static glTF / GLB assets, resource readiness, model instances, and accelerated spatial queries.
 4. Texture sampling, linear HDR color, PBR, and transparent materials.

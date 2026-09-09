@@ -84,86 +84,10 @@ impl Transform {
     }
 }
 
-/// Perspective camera looking at a target with world-up along positive Y.
-#[derive(Clone, Copy, Debug)]
-pub struct Camera {
-    /// Camera position.
-    pub eye: [f32; 3],
-    /// Look-at target, distinct from the eye.
-    pub target: [f32; 3],
-    /// Vertical field of view in radians.
-    pub fov: f32,
-    /// Positive near clip distance.
-    pub near: f32,
-    /// Far clip distance, greater than near.
-    pub far: f32,
-}
-impl Default for Camera {
-    fn default() -> Self {
-        Self {
-            eye: [0., 0., 6.],
-            target: [0.; 3],
-            fov: std::f32::consts::FRAC_PI_4,
-            near: 0.05,
-            far: 100.,
-        }
-    }
-}
-impl Camera {
-    /// Orbits the origin. Angles are radians; pitch stays below the poles.
-    pub fn orbit(yaw: f32, pitch: f32, distance: f32) -> Self {
-        assert!(yaw.is_finite() && pitch.is_finite() && distance.is_finite() && distance > 0.);
-        let pitch = pitch.clamp(-1.5, 1.5);
-        Self {
-            eye: [
-                yaw.sin() * pitch.cos() * distance,
-                pitch.sin() * distance,
-                yaw.cos() * pitch.cos() * distance,
-            ],
-            ..Default::default()
-        }
-    }
-    pub(crate) fn basis(self) -> [[f32; 3]; 3] {
-        assert!(self.eye.iter().chain(&self.target).all(|x| x.is_finite()));
-        assert!(self.fov.is_finite() && self.fov > 0. && self.fov < std::f32::consts::PI);
-        assert!(
-            self.near.is_finite() && self.far.is_finite() && self.near > 0. && self.far > self.near
-        );
-        let backward = sub(self.eye, self.target);
-        assert!(dot(backward, backward) > 0.000001);
-        let z = unit(backward);
-        let up = if z[1].abs() > 0.999 {
-            [0., 0., 1.]
-        } else {
-            [0., 1., 0.]
-        };
-        let x = unit(cross(up, z));
-        let y = cross(z, x);
-        [x, y, z]
-    }
-    pub(crate) fn matrix(self, aspect: f32) -> Matrix {
-        let [x, y, z] = self.basis();
-        let view = [
-            [x[0], y[0], z[0], 0.],
-            [x[1], y[1], z[1], 0.],
-            [x[2], y[2], z[2], 0.],
-            [-dot(x, self.eye), -dot(y, self.eye), -dot(z, self.eye), 1.],
-        ];
-        let f = 1. / (self.fov * 0.5).tan();
-        let z = self.far / (self.near - self.far);
-        let projection = [
-            [f / aspect.max(0.001), 0., 0., 0.],
-            [0., f, 0., 0.],
-            [0., 0., z, -1.],
-            [0., 0., z * self.near, 0.],
-        ];
-        multiply(projection, view)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Camera;
     #[test]
     fn perspective_maps_clip_planes_and_preserves_camera_target() {
         let camera = Camera::default();

@@ -2,7 +2,7 @@
 
 Enable the `wgpu` feature to render 3D scenes without a native window, `App`,
 or UI layout. `HeadlessRenderer` uses the same scene preparation, mesh pass,
-lighting, and alpha-cutout shader as GPUI viewports.
+lighting, and alpha-mode shaders as GPUI viewports.
 
 ```toml
 gpui_3d = { path = "../gpui/crates/gpui_3d", features = ["wgpu"] }
@@ -46,7 +46,7 @@ provides the complete scene state and camera for each call; output does not
 depend on a window's size, DPI, last rendered frame, or camera controller.
 
 Solid materials and `Material::image(Arc<RenderImage>)` are supported, including
-tint, basic lighting, unlit shading, and alpha cutout. Images use their first
+tint, basic lighting, unlit shading, alpha cutout, and alpha blending. Images use their first
 decoded BGRA frame. Decode resources before rendering. Resource paths, URLs,
 encoded `Image` values, custom UI image loaders, and captured UI textures return
 errors identifying the object; they are not silently omitted or loaded on the
@@ -73,7 +73,7 @@ with four color samples.
 
 | Channel | GPU format | CPU layout | Background and coverage |
 | --- | --- | --- | --- |
-| Color | `Rgba8Unorm` | RGBA bytes, width × 4 bytes per row | Transparent black; premultiplied alpha at MSAA edges |
+| Color | `Rgba8Unorm` | RGBA bytes, width × 4 bytes per row | Transparent black; premultiplied alpha |
 | Object ID | `R32Uint` | `u32` values, width values per row | Zero background; nearest surviving surface at the pixel center |
 
 Both images have a top-left origin. Readback strips GPU row padding. Color uses
@@ -92,13 +92,21 @@ Normal maps use linear tangent-space vectors and require mesh tangent data.
 and back-face orientation follow the viewport conventions. Picking and depth
 remain geometric rather than normal-map perturbed.
 
-Surviving alpha-cutout fragments are opaque. Both channels use the same mesh
-visibility, transforms, clip planes, texture sampling, and alpha threshold.
+`Opaque` ignores alpha, `Mask` discards values below its cutoff and makes survivors
+opaque, and `Blend` blends nonzero alpha using linear premultiplied source-over.
+Color draws depth-writing surfaces first, then blended objects from far to near
+by transformed bounds-center depth, without depth writes. Sorting is per object;
+intersecting and self-overlapping transparent surfaces are not resolved.
+
+Both channels use the same mesh visibility, transforms, clip planes, texture
+sampling, and alpha-mode discard rules. Object IDs select the nearest surviving
+surface, including low-opacity blended surfaces, rather than the largest color contributor.
 IDs are written as integers, without color conversion, filtering, or MSAA
 averaging. With four color samples, an edge pixel may have partial color coverage
 but a zero ID when its center is outside the mesh. Use one color sample for
-matching pixel-center coverage. Equal-depth overlaps follow submission order.
-Blended transparency, depth/normal exports, and raw HDR output are not available.
+matching pixel-center coverage. Equal-depth ID overlaps keep the first submitted
+surface; equal-depth blended color layers compose in submission order.
+Depth/normal exports and raw HDR output are not available.
 
 ## GPU ownership and readback
 

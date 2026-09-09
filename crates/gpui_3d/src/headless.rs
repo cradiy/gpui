@@ -50,7 +50,7 @@ impl HeadlessRenderer {
     }
 
     /// Renders the supplied scene without a native window or UI layout. Geometry,
-    /// projection, lighting, and alpha cutout share the viewport implementation.
+    /// projection, lighting, and alpha modes share the viewport implementation.
     pub fn render(&mut self, scene: &Scene, config: Scene3dOutputConfig) -> Result<RenderedFrame> {
         self.capabilities().validate(config)?;
         let max_dimension = self.capabilities().max_dimension;

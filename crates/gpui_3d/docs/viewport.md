@@ -433,15 +433,52 @@ capabilities. The viewport still resolves image resources during rendering.
   image source stable across renders. An object is omitted while its image is unavailable.
 - `Material::ui()` samples the viewport's captured UI without lighting.
 - `.unlit(true)` disables lighting for any material.
-- `.tint(color)` sets an sRGB tint, decoded before multiplication; its alpha participates in cutout.
-- `.alpha_cutoff(value)` discards low-alpha pixels. Remaining pixels are opaque
-  and write depth; fractional material transparency is not blended.
+- `.tint(color)` sets an sRGB tint, decoded before multiplication; its alpha multiplies texture alpha.
+- `.alpha_mode(mode)` selects `AlphaMode::Opaque`, `Mask`, or `Blend`.
+- `.alpha_cutoff(value)` selects `Mask` and sets its threshold, clamped to `[0.001, 1]`.
 
 `Light` supplies a world-space direction toward the light, color, intensity and
 ambient strength. Materials use basic diffuse shading unless `.pbr(parameters)`
 is selected. Distinct opaque surfaces occlude each
 other independently of object submission order. Coplanar surfaces should be
 separated to avoid depth conflicts.
+
+### Transparency
+
+The default is `AlphaMode::Mask` with a cutoff of 0.5.
+
+| Mode | Fragment alpha | Depth writes |
+| --- | --- | --- |
+| `Opaque` | Ignored; the surface is opaque | Yes |
+| `Mask` | Below cutoff is discarded; survivors are opaque | Yes |
+| `Blend` | Zero is discarded; nonzero values blend continuously | No |
+
+```rust
+use gpui::rgba;
+use gpui_3d::{AlphaMode, Material};
+
+let material = Material::color(rgba(0x65e0f580))
+    .alpha_mode(AlphaMode::Blend);
+```
+
+Texture alpha and tint alpha are multiplied and clamped to `[0, 1]`. Blending
+uses premultiplied source-over in the linear HDR target, before exposure and
+tone mapping. It applies to both lit and unlit materials.
+
+Opaque and masked objects render first. Blended objects then render from far
+to near, ordered by the forward camera depth of each transformed mesh-bounds
+center. Equal-depth blended objects retain submission order. All modes depth-test
+against opaque and masked surfaces. Sort order does not change object IDs.
+
+Sorting is per object, not per triangle. Intersecting meshes, cyclic overlaps,
+and self-overlapping transparent meshes can produce incorrect layer ordering.
+Separate independently ordered surfaces into objects. Order-independent
+transparency, refraction, and transparent shadows are not provided.
+
+Viewport image picking and headless object IDs select the nearest surviving
+surface, even when its blended opacity is small; they do not choose the largest
+color contributor. `Opaque` ignores alpha, `Mask` uses the cutoff, and `Blend`
+passes through only zero-alpha regions. Captured UI picking remains geometric.
 
 ### Metallic-roughness materials
 
@@ -633,8 +670,8 @@ neighbors. Sampling remains inside the image's atlas rectangle.
 These settings apply only to image materials. Captured UI textures retain their
 identity UV mapping and linear edge-clamped sampling, including pointer routing.
 `Hit::uv` always contains the original mesh UVs. Viewport image-alpha picking
-applies the material's image sampling before testing the alpha cutoff. Color and
-object-ID outputs use the same material sampling and cutoff. Interpolation near
+applies the material's image sampling before evaluating its alpha mode. Color and
+object-ID outputs use the same sampling and discard rules. Interpolation near
 a cutoff can differ at floating-point precision boundaries between CPU and GPU.
 Mipmaps and anisotropic filtering are not provided; both magnification and
 minification use mip level zero.
@@ -785,8 +822,8 @@ position. Application state changes should notify the view as usual.
 
 Viewport callbacks sample the first image frame's alpha using the material's UV
 transform, addressing and filter, matching the material shader. Sampled
-alpha is multiplied by material alpha and compared with `alpha_cutoff`; discarded
-regions allow hits on surfaces behind them. This also applies to occluders.
+alpha is multiplied by material alpha and evaluated using the material's alpha
+mode; discarded regions allow hits on surfaces behind them. This also applies to occluders.
 Images that are loading, failed, empty, or unavailable to the renderer do not
 receive hits or block picking. The query uses the image data prepared for the
 painted scene, without decoding images or reading GPU pixels during pointer events.
@@ -831,6 +868,14 @@ nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
 
 ## Example
+
+```sh
+cargo run -p gpui_3d --example transparency
+```
+
+Compare Opaque, Mask, and Blend using the same alpha-gradient image and overlapping
+colored planes over a checkerboard. Change tint opacity or reverse object submission
+order. The center opening has zero alpha; only Opaque fills it.
 
 ```sh
 cargo run -p gpui_3d --example normal_mapping

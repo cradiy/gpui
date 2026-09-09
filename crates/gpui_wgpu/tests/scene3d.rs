@@ -54,6 +54,8 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         normal_scale: 1.,
         unlit: true,
         alpha_cutoff: 0.5,
+        alpha_mode: gpui::AlphaMode3d::Mask,
+        sort_depth: 0.,
     }
 }
 fn layer(
@@ -103,6 +105,88 @@ fn scene(layer: SubtreeLayer) -> Scene {
     scene.insert_primitive(Primitive::SubtreeLayer(layer));
     scene.finish();
     scene
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn blended_layers_preserve_linear_color_depth_and_nearest_ids() -> anyhow::Result<()> {
+    use gpui_wgpu::{Scene3dChannels, Scene3dOutputConfig, WgpuScene3dRenderer};
+    let mut renderer = WgpuScene3dRenderer::new_headless()?;
+    let mut front = mesh(0.2, 0xff000080, MeshTexture3d::None);
+    front.alpha_mode = gpui::AlphaMode3d::Blend;
+    front.sort_depth = 0.2;
+    front.output_id = 7;
+    let mut rear = mesh(0.8, 0x0000ff80, MeshTexture3d::None);
+    rear.alpha_mode = gpui::AlphaMode3d::Blend;
+    rear.sort_depth = 0.8;
+    rear.output_id = 9;
+    let mut blocker = mesh(0.1, 0x00ff0000, MeshTexture3d::None);
+    blocker.alpha_mode = gpui::AlphaMode3d::Opaque;
+    blocker.output_id = 11;
+    for samples in [1, 4] {
+        for case in 0..4 {
+            let mut front = front.clone();
+            let mut rear = rear.clone();
+            let (expected, id) = match case {
+                0 => ([160, 0, 117, 192], 7),
+                1 => {
+                    rear.alpha_mode = gpui::AlphaMode3d::Opaque;
+                    ([188, 0, 187, 255], 7)
+                }
+                2 => {
+                    front.color.a = 0.;
+                    ([0, 0, 128, 128], 9)
+                }
+                _ => ([0, 255, 0, 255], 11),
+            };
+            let mut objects = vec![front, rear];
+            if case == 3 {
+                objects.push(blocker.clone());
+            }
+            for reverse in [false, true] {
+                if reverse {
+                    objects.reverse();
+                }
+                let input = layer(
+                    bounds(0., 0., 32., 32.),
+                    Scene::default(),
+                    objects.clone(),
+                    1.,
+                )
+                .scene3d
+                .unwrap();
+                let output = renderer.render(
+                    &input,
+                    Scene3dOutputConfig {
+                        size: [32, 32],
+                        channels: Scene3dChannels::ColorAndObjectId,
+                        color_samples: samples,
+                    },
+                )?;
+                let mut read = output.readback()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let pixels = loop {
+                    if let Some(pixels) = read.try_read()? {
+                        break pixels;
+                    }
+                    anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                };
+                let center = 16 * 32 + 16;
+                assert_eq!(pixels.object_ids.unwrap()[center], id);
+                for (actual, expected) in pixels.rgba.unwrap()[center * 4..center * 4 + 4]
+                    .iter()
+                    .zip(expected)
+                {
+                    assert!(
+                        (i32::from(*actual) - expected).abs() <= 2,
+                        "case {case}, samples {samples}, reverse {reverse}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]

@@ -34,10 +34,13 @@ impl PickSnapshot {
         self.scene
             .pick_filtered(self.bounds, position, |index, uv| {
                 match &self.surfaces[index] {
-                    PickSurface::Absent => 0.,
-                    PickSurface::Solid => 1.,
+                    PickSurface::Absent => None,
+                    PickSurface::Solid => Some(1.),
                     PickSurface::Image(image) => {
-                        image_alpha(image, uv, self.scene.objects[index].material.sampling)
+                        let size = image.size(0);
+                        (size.width.0 > 0 && size.height.0 > 0 && image.as_bytes(0).is_some()).then(
+                            || image_alpha(image, uv, self.scene.objects[index].material.sampling),
+                        )
                     }
                 }
             })
@@ -124,20 +127,20 @@ impl Scene {
     /// ancestor clipping, and effect deformation are not sampled by this query.
     /// Viewport callbacks also sample prepared image alpha and use GPUI hitbox routing.
     pub fn pick(&self, bounds: Bounds<Pixels>, position: Point<Pixels>) -> Option<Hit> {
-        self.pick_filtered(bounds, position, |_, _| 1.)
+        self.pick_filtered(bounds, position, |_, _| Some(1.))
     }
 
     /// Geometric world-ray query, independent of the scene camera and its clip range.
     /// Respects material alpha and picking behavior, but does not resolve image alpha.
     pub fn raycast(&self, ray: crate::Ray) -> Option<Hit> {
-        self.trace(ray, |_| true, |_, _| 1.)
+        self.trace(ray, |_| true, |_, _| Some(1.))
     }
 
     fn pick_filtered(
         &self,
         bounds: Bounds<Pixels>,
         position: Point<Pixels>,
-        alpha: impl Fn(usize, [f32; 2]) -> f32,
+        alpha: impl Fn(usize, [f32; 2]) -> Option<f32>,
     ) -> Option<Hit> {
         let width = f32::from(bounds.size.width);
         let height = f32::from(bounds.size.height);
@@ -170,7 +173,7 @@ impl Scene {
         &self,
         ray: crate::Ray,
         within: impl Fn([f32; 3]) -> bool,
-        alpha: impl Fn(usize, [f32; 2]) -> f32,
+        alpha: impl Fn(usize, [f32; 2]) -> Option<f32>,
     ) -> Option<Hit> {
         self.trace_with(
             ray,
@@ -185,7 +188,7 @@ impl Scene {
         &self,
         ray: crate::Ray,
         within: impl Fn([f32; 3]) -> bool,
-        alpha: impl Fn(usize, [f32; 2]) -> f32,
+        alpha: impl Fn(usize, [f32; 2]) -> Option<f32>,
         objects: impl FnOnce(&mut dyn FnMut(usize)),
         mut candidates: impl FnMut(&crate::Mesh, crate::math::Matrix, crate::Ray, &mut dyn FnMut(usize)),
     ) -> Option<Hit> {
@@ -194,7 +197,7 @@ impl Scene {
         let mut visit_object = |object_index: usize| {
             let object = &self.objects[object_index];
             if object.pick_behavior == PickBehavior::Ignore
-                || object.material.color.a < object.material.alpha_cutoff
+                || !object.material.alpha_visible(object.material.color.a)
             {
                 return;
             }
@@ -227,7 +230,12 @@ impl Scene {
                 let uv = std::array::from_fn(|i| {
                     (0..3).map(|j| vertices[j].uv[i] * barycentric[j]).sum()
                 });
-                if alpha(object_index, uv) * object.material.color.a < object.material.alpha_cutoff
+                let Some(alpha) = alpha(object_index, uv) else {
+                    return;
+                };
+                if !object
+                    .material
+                    .alpha_visible(alpha * object.material.color.a)
                 {
                     return;
                 }
@@ -449,7 +457,7 @@ mod tests {
                                 pose.inverse().transform_point(p)[2] >= -0.4 || x > 0.
                             };
                             let alpha = |index, uv: [f32; 2]| {
-                                if index == 0 && uv[0] > 0.4 { 0. } else { 1. }
+                                Some(if index == 0 && uv[0] > 0.4 { 0. } else { 1. })
                             };
                             let expected = scene.trace_with(
                                 ray,
@@ -497,7 +505,7 @@ mod tests {
             let actual = scene.trace_with(
                 ray,
                 |_| true,
-                |_, _| 1.,
+                |_, _| Some(1.),
                 |visit| scene.visit_objects(ray, visit),
                 |mesh, model, ray, visit| {
                     mesh.visit_triangles(model, ray, |triangle| {
@@ -509,7 +517,7 @@ mod tests {
             let expected = scene.trace_with(
                 ray,
                 |_| true,
-                |_, _| 1.,
+                |_, _| Some(1.),
                 |visit| (0..scene.objects.len()).for_each(visit),
                 |mesh, _, _, visit| {
                     for triangle in 0..mesh.triangle_count() {
@@ -575,7 +583,7 @@ mod tests {
         let actual = scene.trace_with(
             ray,
             |_| true,
-            |_, _| 1.,
+            |_, _| Some(1.),
             |visit| {
                 scene.visit_objects(ray, |index| {
                     tested += 1;
@@ -587,7 +595,7 @@ mod tests {
         let expected = scene.trace_with(
             ray,
             |_| true,
-            |_, _| 1.,
+            |_, _| Some(1.),
             |visit| (0..scene.objects.len()).for_each(visit),
             |mesh, _, _, visit| (0..mesh.triangle_count()).for_each(visit),
         );
@@ -758,6 +766,40 @@ mod tests {
             snapshot.pick(at(0.5, 0.)).unwrap().object_id,
             Some("rear".into())
         );
+    }
+
+    #[test]
+    fn alpha_modes_distinguish_transparent_pixels_from_unavailable_images() {
+        let mut snapshot = PickSnapshot {
+            scene: Scene::new()
+                .object(plane().id("rear"))
+                .object(plane().id("front").position([0., 0., 1.])),
+            bounds: bounds(),
+            surfaces: vec![
+                PickSurface::Solid,
+                PickSurface::Image(alpha_image(1, 1, &[64])),
+            ],
+        };
+        let p = project(Camera::default(), bounds(), [0.; 3]);
+        assert_eq!(snapshot.pick(p).unwrap().object_id, Some("rear".into()));
+        snapshot.scene.objects[1].material.alpha_mode = crate::AlphaMode::Blend;
+        assert_eq!(snapshot.pick(p).unwrap().object_id, Some("front".into()));
+        snapshot.scene.objects[1].material.color.a = 0.;
+        assert_eq!(snapshot.pick(p).unwrap().object_id, Some("rear".into()));
+        snapshot.scene.objects[1].material.alpha_mode = crate::AlphaMode::Opaque;
+        assert_eq!(snapshot.pick(p).unwrap().object_id, Some("front".into()));
+        snapshot.surfaces[1] = PickSurface::Absent;
+        assert_eq!(snapshot.pick(p).unwrap().object_id, Some("rear".into()));
+        snapshot.surfaces[1] = PickSurface::Image(alpha_image(1, 1, &[0]));
+        assert_eq!(snapshot.pick(p).unwrap().object_id, Some("front".into()));
+        snapshot.scene.objects[1].material.color.a = 1.;
+        snapshot.scene.objects[1].material.alpha_mode = crate::AlphaMode::Blend;
+        assert_eq!(snapshot.pick(p).unwrap().object_id, Some("rear".into()));
+        snapshot.surfaces[1] = PickSurface::Solid;
+        snapshot.scene.objects[1].pick_behavior = PickBehavior::Occlude;
+        assert!(snapshot.pick(p).is_none());
+        snapshot.scene.objects[1].pick_behavior = PickBehavior::Ignore;
+        assert_eq!(snapshot.pick(p).unwrap().object_id, Some("rear".into()));
     }
 
     #[test]

@@ -184,6 +184,11 @@ impl WgpuScene3dRenderer {
         );
         for object in frame.objects.iter() {
             ensure!(
+                object.sort_depth.is_finite(),
+                "3D object {} has invalid sort depth",
+                object.output_id
+            );
+            ensure!(
                 object.normal_scale.is_finite() && object.normal_scale >= 0.,
                 "3D object {} has invalid normal scale",
                 object.output_id

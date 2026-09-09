@@ -21,6 +21,7 @@ mod viewport;
 pub use affine::{AffineTransform, TransformError};
 pub use bounds::Aabb;
 pub use camera::{Camera, CameraError, Projection, Ray, RayError, ScreenPoint};
+pub use gpui::AlphaMode3d as AlphaMode;
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
 pub use gpui::PbrMaterial3d as PbrMaterial;
@@ -190,13 +191,14 @@ impl MaterialTexture {
     }
 }
 
-/// Solid or textured material with optional alpha cutout.
+/// Solid or textured material with explicit alpha interpretation.
 #[derive(Clone)]
 pub struct Material {
     color: Rgba,
     texture: Texture,
     unlit: bool,
     alpha_cutoff: f32,
+    alpha_mode: AlphaMode,
     sampling: TextureSampling,
     image_color_space: TextureColorSpace,
     pbr: Option<PbrMaterial>,
@@ -213,6 +215,7 @@ impl Material {
             texture: Texture::None,
             unlit: false,
             alpha_cutoff: 0.5,
+            alpha_mode: AlphaMode::Mask,
             sampling: TextureSampling::default(),
             image_color_space: TextureColorSpace::default(),
             pbr: None,
@@ -237,7 +240,7 @@ impl Material {
             ..Self::color(gpui::white())
         }
     }
-    /// Sets an sRGB tint, decoded before multiplication; alpha participates in cutout.
+    /// Sets an sRGB tint, decoded before multiplication; alpha follows the alpha mode.
     pub fn tint(mut self, color: impl Into<Rgba>) -> Self {
         self.color = color.into();
         self
@@ -312,11 +315,26 @@ impl Material {
         self.unlit = unlit;
         self
     }
-    /// Discards source alpha below the threshold. Remaining pixels are opaque.
+    /// Selects Opaque, Mask or Blend alpha interpretation. Defaults to Mask.
+    pub fn alpha_mode(mut self, mode: AlphaMode) -> Self {
+        self.alpha_mode = mode;
+        self
+    }
+    /// Sets the Mask threshold in [0.001, 1] and selects Mask mode.
     pub fn alpha_cutoff(mut self, cutoff: f32) -> Self {
         assert!(cutoff.is_finite());
         self.alpha_cutoff = cutoff.clamp(0.001, 1.);
+        self.alpha_mode = AlphaMode::Mask;
         self
+    }
+
+    fn alpha_visible(&self, alpha: f32) -> bool {
+        let alpha = alpha.clamp(0., 1.);
+        match self.alpha_mode {
+            AlphaMode::Opaque => true,
+            AlphaMode::Mask => alpha >= self.alpha_cutoff,
+            AlphaMode::Blend => alpha > 0.,
+        }
     }
 }
 

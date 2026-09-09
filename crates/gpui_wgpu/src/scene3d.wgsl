@@ -83,8 +83,10 @@ fn base_color(input: Output) -> vec4<f32> {
         sampled = vec4<f32>(srgb_to_linear(sampled.rgb), sampled.a);
     }
     let base = sampled * vec4<f32>(srgb_to_linear(params.color.rgb), params.color.a);
-    if (base.a < params.flags.x) { discard; }
-    return base;
+    let alpha = clamp(base.a, 0.0, 1.0);
+    if (params.ids.y == 1u && alpha < params.flags.x) { discard; }
+    if (params.ids.y == 2u && alpha <= 0.0) { discard; }
+    return vec4<f32>(base.rgb, select(1.0, alpha, params.ids.y == 2u));
 }
 @fragment
 fn object_id(input: Output) -> @location(0) u32 {
@@ -148,11 +150,11 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
     if (params.flags.y < 0.5) {
         if (params.pbr.z > 0.5) {
             let normal = surface_normal(input) * select(-1.0, 1.0, front) * input.orientation;
-            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, input.world, input.uv), vec3<f32>(0.0), vec3<f32>(65504.0)), 1.0);
+            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, input.world, input.uv), vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
         }
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front) * input.orientation;
         let light = params.direction.xyz / max(length(params.direction.xyz), 0.00001);
         illumination = vec3<f32>(params.direction.w) + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);
     }
-    return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)), 1.0);
+    return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
 }

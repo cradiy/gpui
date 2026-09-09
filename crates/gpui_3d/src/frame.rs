@@ -10,6 +10,7 @@ impl Scene {
         mut resolve: impl FnMut(usize, TextureSlot, &Texture) -> Result<Option<MeshTexture3d>>,
     ) -> Result<Scene3dFrame> {
         let view_projection = self.camera.view_projection(aspect)?;
+        let view = self.camera.view_matrix()?;
         ensure!(
             self.color_output.is_valid(),
             "scene exposure must be finite and between -16 and 16 stops"
@@ -64,6 +65,28 @@ impl Scene {
                 "object {index} has an invalid transform"
             );
             let (model, normal) = object.matrices();
+            let sort_depth = if object.material.alpha_mode == crate::AlphaMode::Blend {
+                let bounds = object.mesh.bounds();
+                let center: [f64; 4] = std::array::from_fn(|i| {
+                    if i == 3 {
+                        1.
+                    } else {
+                        (f64::from(bounds.min()[i]) + f64::from(bounds.max()[i])) * 0.5
+                    }
+                });
+                let world: [f64; 4] = std::array::from_fn(|r| {
+                    (0..4).map(|c| f64::from(model[c][r]) * center[c]).sum()
+                });
+                -(0..4)
+                    .map(|c| f64::from(view[c][2]) * world[c])
+                    .sum::<f64>()
+            } else {
+                0.
+            };
+            ensure!(
+                sort_depth.is_finite(),
+                "object {index} has invalid sort depth"
+            );
             let color = object.material.color;
             ensure!(
                 model
@@ -124,6 +147,8 @@ impl Scene {
                 normal_texture,
                 normal_scale: object.material.normal_scale,
                 alpha_cutoff: object.material.alpha_cutoff,
+                alpha_mode: object.material.alpha_mode,
+                sort_depth,
                 unlit: object.material.unlit,
             });
         }
@@ -157,6 +182,26 @@ mod tests {
     use super::*;
     use crate::{AffineTransform, Camera, Material, Mesh, Node, Object, SceneGraph};
     use gpui::rgb;
+
+    #[test]
+    fn blend_sort_depth_uses_camera_forward_and_transformed_bounds() {
+        let camera = Camera {
+            eye: [4., 0., 0.],
+            target: [0.; 3],
+            ..Default::default()
+        };
+        let material = Material::color(rgb(0xffffff)).alpha_mode(crate::AlphaMode::Blend);
+        let frame = Scene::new()
+            .camera(camera)
+            .object(Object::new(Mesh::plane(), material.clone()).position([2., 100., 0.]))
+            .object(Object::new(Mesh::plane(), material).position([0., 0., 0.]))
+            .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+            .unwrap();
+        assert!((frame.objects[0].sort_depth - 2.).abs() < 1e-6);
+        assert!((frame.objects[1].sort_depth - 4.).abs() < 1e-6);
+        assert_eq!(frame.objects[0].output_id, 1);
+        assert_eq!(frame.objects[1].output_id, 2);
+    }
 
     #[test]
     fn normal_maps_require_tangents_only_when_active() {

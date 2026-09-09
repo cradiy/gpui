@@ -89,6 +89,7 @@ struct Targets {
 
 pub(crate) struct Scene3dRenderer {
     pipeline: wgpu::RenderPipeline,
+    blend_pipeline: Option<wgpu::RenderPipeline>,
     display_pipeline: Option<wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
@@ -117,22 +118,65 @@ impl Scene3dRenderer {
         } else {
             wgpu::TextureFormat::Rgba16Float
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("scene3d"), layout: None,
+        let mut bindings = vec![
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Params>() as u64),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ];
+        for binding in if is_id { &[1][..] } else { &[1, 3, 4, 5][..] } {
+            bindings.push(wgpu::BindGroupLayoutEntry {
+                binding: *binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+        }
+        let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("scene3d_material"),
+            entries: &bindings,
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("scene3d"),
+            bind_group_layouts: &[Some(&material_layout)],
+            immediate_size: 0,
+        });
+        let create_pipeline = |blend: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("scene3d"), layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader, entry_point: Some("vertex"), compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 48, step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] })],
             },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(if format == wgpu::TextureFormat::R32Uint { "object_id" } else { "fragment" }), compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format: mesh_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+                targets: &[Some(wgpu::ColorTargetState { format: mesh_format, blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }),
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true), depth_compare: Some(wgpu::CompareFunction::Less),
+                depth_write_enabled: Some(!blend), depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(), bias: Default::default() }),
             multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
             multiview_mask: None, cache: None,
-        });
+        })
+        };
+        let pipeline = create_pipeline(false);
+        let blend_pipeline = (!is_id).then(|| create_pipeline(true));
         let display_pipeline = (!is_id).then(|| {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("scene3d_display"),
@@ -194,6 +238,7 @@ impl Scene3dRenderer {
         );
         Self {
             pipeline,
+            blend_pipeline,
             display_pipeline,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 mag_filter: wgpu::FilterMode::Linear,
@@ -463,7 +508,7 @@ impl Scene3dRenderer {
                     premultiplied,
                     f32::from(matches!(object.texture, MeshTexture3d::Image(_))),
                 ],
-                ids: [object.output_id, 0, 0, 0],
+                ids: [object.output_id, object.alpha_mode as u32, 0, 0],
                 uv_u: [rows[0][0], rows[0][1], rows[0][2], 0.],
                 uv_v: [rows[1][0], rows[1][1], rows[1][2], 0.],
                 sampling: [
@@ -576,8 +621,20 @@ impl Scene3dRenderer {
         let bottom = (rect[1] + rect[3]).min(height).ceil().max(0.) as u32;
         if right > x && bottom > y {
             pass.set_scissor_rect(x, y, right - x, bottom - y);
-            pass.set_pipeline(&self.pipeline);
-            for (object, group) in frame.objects.iter().zip(&groups) {
+            let order = if self.blend_pipeline.is_some() {
+                color_draw_order(&frame.objects)
+            } else {
+                (0..frame.objects.len()).collect()
+            };
+            for index in order {
+                let object = &frame.objects[index];
+                let group = &groups[index];
+                let pipeline = if object.alpha_mode == gpui::AlphaMode3d::Blend {
+                    self.blend_pipeline.as_ref().unwrap_or(&self.pipeline)
+                } else {
+                    &self.pipeline
+                };
+                pass.set_pipeline(pipeline);
                 let geometry = &self.geometry[&(Arc::as_ptr(&object.mesh) as usize)];
                 pass.set_bind_group(0, group, &[]);
                 pass.set_vertex_buffer(0, geometry.vertices.slice(..));
@@ -632,9 +689,68 @@ impl Scene3dRenderer {
     }
 }
 
+fn color_draw_order(objects: &[gpui::MeshDraw3d]) -> Vec<usize> {
+    let mut order: Vec<_> = (0..objects.len()).collect();
+    order.sort_by(|&a, &b| {
+        let a_blend = objects[a].alpha_mode == gpui::AlphaMode3d::Blend;
+        let b_blend = objects[b].alpha_mode == gpui::AlphaMode3d::Blend;
+        a_blend.cmp(&b_blend).then_with(|| {
+            if a_blend && b_blend {
+                objects[b].sort_depth.total_cmp(&objects[a].sort_depth)
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+    });
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene3d_color_order_keeps_depth_writers_first_and_blend_ties_stable() {
+        use gpui::AlphaMode3d::{Blend, Mask, Opaque};
+        let objects: Vec<_> = [
+            (Blend, 2.),
+            (Mask, 9.),
+            (Blend, 5.),
+            (Opaque, 1.),
+            (Blend, 5.),
+        ]
+        .into_iter()
+        .map(|(alpha_mode, sort_depth)| gpui::MeshDraw3d {
+            output_id: 1,
+            mesh: gpui::Mesh3d::new(
+                [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]
+                    .map(|position| gpui::MeshVertex3d {
+                        position,
+                        normal: [0., 0., 1.],
+                        uv: [0.; 2],
+                    })
+                    .to_vec(),
+                vec![0, 1, 2],
+            ),
+            model: [[0.; 4]; 4],
+            normal: [[0.; 4]; 4],
+            color: gpui::rgb(0xffffff),
+            texture: gpui::MeshTexture3d::None,
+            sampling: Default::default(),
+            image_color_space: Default::default(),
+            pbr: None,
+            metallic_roughness_texture: None,
+            emissive_texture: None,
+            normal_texture: None,
+            normal_scale: 1.,
+            unlit: true,
+            alpha_cutoff: 0.5,
+            alpha_mode,
+            sort_depth,
+        })
+        .collect();
+        assert_eq!(color_draw_order(&objects), vec![1, 3, 2, 4, 0]);
+    }
 
     #[test]
     fn scene3d_display_shader_validates() {

@@ -262,7 +262,20 @@ impl Mesh3d {
     }
 }
 
-/// Color input for an opaque or alpha-cutout mesh.
+/// Interpretation of base-color alpha.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u32)]
+pub enum AlphaMode3d {
+    /// Ignore alpha and write opaque color and depth.
+    Opaque = 0,
+    /// Discard pixels below the cutoff and make survivors opaque.
+    #[default]
+    Mask = 1,
+    /// Premultiplied source-over blending, with depth testing but no depth writes.
+    Blend = 2,
+}
+
+/// Color input for a mesh material.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum MeshTexture3d {
     /// Solid material color.
@@ -313,7 +326,12 @@ pub struct MeshDraw3d {
     pub normal_texture: Option<MaterialTexture3d>,
     /// Finite nonnegative scale of normal-map XY. Zero disables the map.
     pub normal_scale: f32,
-    /// Alpha below this threshold is discarded. Surviving pixels are opaque.
+    /// Base-color alpha interpretation.
+    pub alpha_mode: AlphaMode3d,
+    /// Finite camera-space forward depth for back-to-front Blend sorting.
+    /// Equal-depth objects retain submission order. Ignored by other modes.
+    pub sort_depth: f64,
+    /// Mask alpha threshold; ignored in Opaque and Blend modes.
     pub alpha_cutoff: f32,
     /// Bypass directional lighting.
     pub unlit: bool,

@@ -54,7 +54,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Phase 3: Materials and Lighting
 
-- [ ] **Transparent materials**: Separate Opaque, Mask, and Blend modes; define transparent object sorting, depth writes, and intersecting-surface limitations.
+- [x] **Transparent materials**: Opaque, Mask, and Blend modes; linear premultiplied blending, bounds-center object sorting, depth-write control, and alpha-aware picking/IDs. Intersecting and self-overlapping transparent surfaces require separate ordering solutions.
 - [x] **Color pipeline**: sRGB and linear image inputs, linear filtering and lighting, RGBA16Float intermediate results, exposure, None/Reinhard tone mapping, and premultiplied display composition shared by viewport and headless rendering.
 - [x] **PBR material factors**: Optional metallic-roughness shading, GGX/Smith/Schlick direct lighting, linear emissive radiance, and perspective/orthographic viewing directions shared by viewport and headless rendering.
 - [x] **PBR factor textures**: Linear G/B metallic-roughness and sRGB emissive maps, factor multiplication, independent UV sampling, and shared viewport/headless resource resolution.

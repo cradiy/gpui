@@ -3,11 +3,45 @@ use gpui::{
     div, prelude::*, px, rgb, size,
 };
 use gpui_3d::{
-    AffineTransform, Camera, EvaluatedScene, Material, Mesh, Node, NodeHandle, OrbitController,
-    Projection, SceneGraph, SubtreeInstance, viewport3d,
+    AffineTransform, Camera, EvaluatedScene, Interpolation, Keyframe, Material, Mesh, Node,
+    NodeHandle, OrbitController, Projection, RotationTrack, SceneGraph, SubtreeInstance,
+    TransformTrack, VectorTrack, viewport3d,
 };
 use gpui_platform::application;
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+const ANIMATION_LENGTH: Duration = Duration::from_secs(4);
+
+fn animation(interpolation: Interpolation) -> TransformTrack {
+    let vector = |values: [[f32; 3]; 3]| {
+        VectorTrack::new(
+            values
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| Keyframe::new(Duration::from_secs(index as u64 * 2), value)),
+            interpolation,
+        )
+        .unwrap()
+    };
+    TransformTrack::default()
+        .translation(vector([[0.; 3], [0., 1., 0.], [0.; 3]]))
+        .scale(vector([[1.; 3], [1.2, 0.8, 1.2], [1.; 3]]))
+        .rotation(
+            RotationTrack::new(
+                [
+                    Keyframe::new(Duration::ZERO, [0., 0., 0., 1.]),
+                    Keyframe::new(Duration::from_secs(2), [0., (3_f32).sqrt() * 0.5, 0., 0.5]),
+                    Keyframe::new(ANIMATION_LENGTH, [0., 0., 0., 1.]),
+                ],
+                interpolation,
+            )
+            .unwrap(),
+        )
+}
 
 fn local(position: [f32; 3], scale: [f32; 3]) -> AffineTransform {
     AffineTransform::from_trs(position, [0., 0., 0., 1.], scale).unwrap()
@@ -25,6 +59,10 @@ struct SceneDemo {
     hidden: [bool; 3],
     controls: OrbitController,
     bounds: Rc<Cell<Bounds<Pixels>>>,
+    tracks: [TransformTrack; 3],
+    position: Duration,
+    playing: bool,
+    last_frame: Instant,
     _activation: gpui::Subscription,
 }
 impl SceneDemo {
@@ -89,6 +127,15 @@ impl SceneDemo {
             hidden: [false; 3],
             controls: OrbitController::new(camera).unwrap(),
             bounds: Rc::new(Cell::new(Bounds::default())),
+            tracks: [
+                Interpolation::Step,
+                Interpolation::Linear,
+                Interpolation::CubicSpline,
+            ]
+            .map(animation),
+            position: Duration::ZERO,
+            playing: false,
+            last_frame: Instant::now(),
             _activation: cx.observe_window_activation(window, |this, window, _| {
                 if !window.is_window_active() {
                     this.controls.cancel_drag();
@@ -97,8 +144,25 @@ impl SceneDemo {
         }
     }
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.evaluated = self.graph.evaluate().unwrap();
+        self.evaluate_pose();
         cx.notify();
+    }
+    fn evaluate_pose(&mut self) {
+        let transforms = self
+            .instances
+            .iter()
+            .zip(&self.tracks)
+            .map(|(instance, track)| {
+                let root = instance.root();
+                let authored = self.graph.node(root).unwrap().local_transform();
+                (
+                    root,
+                    authored
+                        .compose(track.sample_transform(self.position).unwrap())
+                        .unwrap(),
+                )
+            });
+        self.evaluated = self.graph.evaluate_with_transforms(transforms).unwrap();
     }
     fn button(
         &self,
@@ -119,6 +183,17 @@ impl SceneDemo {
 }
 impl Render for SceneDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let now = Instant::now();
+        if self.playing {
+            self.position =
+                (self.position + now.duration_since(self.last_frame)).min(ANIMATION_LENGTH);
+            self.evaluate_pose();
+            self.playing = self.position < ANIMATION_LENGTH;
+            if self.playing {
+                window.request_animation_frame();
+            }
+        }
+        self.last_frame = now;
         let bounds = self.bounds.clone();
         let view_id = cx.entity_id();
         let mut stage = div()
@@ -227,7 +302,7 @@ impl Render for SceneDemo {
             .child(div().text_size(px(30.)).child("Shared shapes, independent nodes"))
             .child(div().text_color(rgb(0x9eb1cb)).child("Click an assembly to select · Right-drag to orbit · Middle-drag to pan · Scroll to zoom"))
             .child(div().flex().flex_wrap().gap_3()
-                .children([("one", "Instance 1"), ("two", "Instance 2"), ("three", "Instance 3")].into_iter().enumerate().map(|(index, (id, label))| {
+                .children([("one", "1 · Step"), ("two", "2 · Linear"), ("three", "3 · Cubic")].into_iter().enumerate().map(|(index, (id, label))| {
                     self.button(id, label, self.selected == index || self.hovered == Some(index)).on_click(cx.listener(move |this, _, _, cx| { this.selected = index; cx.notify(); }))
                 }))
                 .child(self.button("move", "Move body", self.raised[self.selected]).on_click(cx.listener(|this, _, _, cx| {
@@ -275,6 +350,27 @@ impl Render for SceneDemo {
                     this.refresh(cx);
                 })))
                 .child(self.button("reset", "Reset", false).on_click(cx.listener(|this, _, window, cx| { *this = Self::new(window, cx); cx.notify(); }))))
+            .child(div().flex().flex_wrap().items_center().gap_3()
+                .child(self.button("play", if self.playing { "Pause" } else { "Play" }, self.playing).on_click(cx.listener(|this, _, _, cx| {
+                    this.playing = !this.playing;
+                    if this.playing && this.position == ANIMATION_LENGTH { this.position = Duration::ZERO; }
+                    this.last_frame = Instant::now();
+                    this.refresh(cx);
+                })))
+                .child(self.button("seek-back", "−0.25 s", false).on_click(cx.listener(|this, _, _, cx| {
+                    this.playing = false;
+                    this.position = this.position.saturating_sub(Duration::from_millis(250));
+                    this.refresh(cx);
+                })))
+                .child(self.button("seek-forward", "+0.25 s", false).on_click(cx.listener(|this, _, _, cx| {
+                    this.playing = false;
+                    this.position = (this.position + Duration::from_millis(250)).min(ANIMATION_LENGTH);
+                    this.refresh(cx);
+                })))
+                .child(self.button("start", "Start pose", false).on_click(cx.listener(|this, _, _, cx| {
+                    this.playing = false; this.position = Duration::ZERO; this.refresh(cx);
+                })))
+                .child(format!("{:.2} / 4.00 s · Translation, rotation and scale", self.position.as_secs_f64())))
             .child(stage)
             .child(div().text_sm().text_color(rgb(0xa4bad2)).child(format!("Instance {} selected · 3 editable subtrees · 1 shared mesh allocation", self.selected + 1)))
             .when(!window.supports_scene3d(), |root| root.child("3D viewports are unavailable on this renderer."))

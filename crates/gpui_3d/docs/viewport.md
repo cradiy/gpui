@@ -422,9 +422,72 @@ scene's flattened visible-object list. Flat scenes built with `Scene::object`
 have no graph handle. An old evaluated scene may return a handle already removed
 from the live graph; validate it through `graph.node` before editing.
 
-The evaluated state contains static transforms and visibility. Animation time,
-constraints, asset readiness, and direct no-window 3D rendering are separate
-capabilities. The viewport still resolves image resources during rendering.
+The viewport resolves image resources during rendering. Constraints and asset
+readiness are independent of hierarchy evaluation.
+
+### Transform tracks
+
+`VectorTrack` samples XYZ values and `RotationTrack` samples XYZW quaternions at
+an explicit `Duration`. Tracks are immutable and clones share keyframe storage.
+Keyframes must be nonempty, strictly ordered by time, and contain finite values
+and tangents. Sampling before or after the key range holds the nearest endpoint;
+a single key is constant. Sampling has no playback history.
+
+| Interpolation | Vectors | Rotations |
+| --- | --- | --- |
+| `Step` | Hold the preceding key until the next timestamp. | Hold the normalized preceding quaternion. |
+| `Linear` | Component interpolation. | Normalized shortest-arc spherical interpolation. |
+| `CubicSpline` | Cubic Hermite interpolation. | Component Hermite interpolation, then normalization. |
+
+`Keyframe::tangents(incoming, outgoing)` supplies component derivatives per
+second, not per segment; the default tangents are zero. Cubic quaternion values
+and tangents retain their supplied signs and magnitudes. Use unit quaternion
+keys for orientation curves. A curve passing through a zero quaternion returns
+`AnimationError::InvalidSample`, as does a vector result outside finite `f32`
+range. Step and linear rotations accept finite nonzero quaternions of any length.
+
+`TransformTrack` combines independent channels with an explicit `TransformPose`.
+Missing channels retain the base translation, rotation, or scale. `sample` returns
+a pose, and `sample_transform` returns its validated affine transform. Signed
+scale is supported, but singular or unrepresentable transforms return an error,
+including interpolated scales crossing zero. No affine matrix decomposition is
+performed.
+
+```rust
+use gpui_3d::{
+    Interpolation, Keyframe, Node, SceneGraph, TransformPose, TransformTrack, VectorTrack,
+};
+use std::time::Duration;
+
+let mut graph = SceneGraph::new();
+let root = graph.insert(None, Node::new())?;
+let track = TransformTrack::new(TransformPose::default())?.translation(VectorTrack::new(
+    [
+        Keyframe::new(Duration::ZERO, [0., 0., 0.]),
+        Keyframe::new(Duration::from_secs(2), [4., 1., 0.]),
+    ],
+    Interpolation::Linear,
+)?);
+let local = track.sample_transform(Duration::from_millis(750))?;
+let pose = graph.evaluate_with_transforms([(root, local)])?;
+let scene = pose.scene(gpui_3d::Camera::default());
+# let _ = scene;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`evaluate_with_transforms` replaces local transforms only for the supplied nodes.
+It does not modify authored nodes or the graph revision. Omitted nodes retain
+their authored transforms; descendants inherit the resulting parent transforms.
+Duplicate, foreign, and expired handles return `SceneError`. World transforms,
+normal matrices, bounds, rendering, and queries use the same evaluated pose.
+Each evaluation has its own spatial index; previous snapshots remain unchanged.
+The evaluated revision identifies source graph edits, not the sampled time or
+overrides, so equal revisions do not imply equal poses.
+
+The caller owns the clock, time origin, looping, pause, and seek policy. Sample
+all channels before evaluating a snapshot. Additive or relative motion can be
+expressed by composing a sampled transform with an authored affine transform
+before passing it to `evaluate_with_transforms`.
 
 ## Materials and light
 
@@ -1229,7 +1292,7 @@ Each example is an independent executable.
 
 | Example | Controls and content |
 | --- | --- |
-| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, perspective/orthographic projection, framing, orbit and pan. |
+| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, camera controls, and translation/rotation/scale tracks with play, pause, and seek controls. |
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
 | `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |

@@ -71,7 +71,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Phase 4: Animation and Dynamic Content
 
-- [ ] **Transform evaluation**: Translation, quaternion rotation, and scale interpolation from explicit tracks and absolute-time inputs.
+- [x] **Transform evaluation**: Immutable translation, XYZW quaternion rotation, and scale tracks; Step, Linear/shortest-arc SLERP, and cubic Hermite interpolation; absolute-time sampling, explicit base poses, nonmutating hierarchy overrides, and shared rendering/query snapshots.
 - [ ] **Deformation**: Skeletal skinning and morph targets from explicit pose/weight inputs, shared by rendering and queries.
 - [ ] **Dynamic geometry**: Update vertex and instance data while reusing GPU buffers instead of rebuilding mesh resources each frame.
 

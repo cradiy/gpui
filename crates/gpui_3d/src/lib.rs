@@ -4,6 +4,7 @@
 #[doc = include_str!("../docs/viewport.md")]
 pub mod guide {}
 
+mod animation;
 mod camera;
 mod geometry;
 mod lighting;
@@ -13,6 +14,10 @@ mod render;
 mod scene;
 mod spatial;
 
+pub use animation::{
+    AnimationError, Interpolation, Keyframe, RotationTrack, TransformPose, TransformTrack,
+    VectorTrack,
+};
 pub use camera::{
     Camera, CameraError, OrbitController, OrbitError, OrbitSettings, Projection, Ray, RayError,
     ScreenPoint,

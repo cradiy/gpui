@@ -98,6 +98,7 @@ pub enum ReparentMode {
 pub enum SceneError {
     InvalidHandle(NodeHandle),
     DuplicateId(ObjectId),
+    DuplicateTransform(NodeHandle),
     Cycle(NodeHandle),
     NoMesh(NodeHandle),
     InvalidTransform {
@@ -110,6 +111,9 @@ impl fmt::Display for SceneError {
         match self {
             Self::InvalidHandle(node) => write!(f, "unknown or expired node {node:?}"),
             Self::DuplicateId(id) => write!(f, "duplicate node ID {id:?}"),
+            Self::DuplicateTransform(node) => {
+                write!(f, "duplicate local transform for node {node:?}")
+            }
             Self::Cycle(node) => write!(f, "parent assignment would create a cycle at {node:?}"),
             Self::NoMesh(node) => write!(f, "node {node:?} has no mesh"),
             Self::InvalidTransform { node, source } => write!(f, "node {node:?}: {source}"),
@@ -507,6 +511,23 @@ impl SceneGraph {
     /// Resolves world matrices, inherited visibility, and bounds in parent-first order.
     /// No playback history, window, layout, or GPU work is required.
     pub fn evaluate(&self) -> Result<EvaluatedScene, SceneError> {
+        self.evaluate_with_transforms([])
+    }
+
+    /// Evaluates replacement local transforms without changing the graph or its revision.
+    /// Omitted nodes use their authored transforms. Duplicate, foreign, and expired
+    /// handles are rejected. Each result owns independent world bounds and query indices.
+    pub fn evaluate_with_transforms(
+        &self,
+        transforms: impl IntoIterator<Item = (NodeHandle, AffineTransform)>,
+    ) -> Result<EvaluatedScene, SceneError> {
+        let mut locals = HashMap::new();
+        for (handle, transform) in transforms {
+            let key = self.key(handle)?;
+            if locals.insert(key, transform).is_some() {
+                return Err(SceneError::DuplicateTransform(handle));
+            }
+        }
         let mut evaluated = EvaluatedScene {
             revision: self.revision,
             nodes: Vec::with_capacity(self.len()),
@@ -528,7 +549,7 @@ impl SceneGraph {
             let parent: Option<&EvaluatedNode> = parent_index.map(|i| &evaluated.nodes[i]);
             let world = parent
                 .map_or(AffineTransform::IDENTITY, |parent| parent.world)
-                .compose(node.local)
+                .compose(locals.get(&key).copied().unwrap_or(node.local))
                 .map_err(|source| SceneError::InvalidTransform {
                     node: handle,
                     source,
@@ -610,6 +631,8 @@ pub struct EvaluatedScene {
     spatial_index: Arc<std::sync::OnceLock<crate::spatial::bvh::ObjectIndex>>,
 }
 impl EvaluatedScene {
+    /// Source graph revision. Local transform overrides are not part of this value;
+    /// equal revisions do not imply equal evaluated poses.
     pub fn revision(&self) -> u64 {
         self.revision
     }

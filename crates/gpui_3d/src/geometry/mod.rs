@@ -1,8 +1,10 @@
 mod bounds;
 mod mesh;
 mod morph;
+mod skin;
 mod transform;
 pub use bounds::Aabb;
 pub use mesh::Mesh;
 pub use morph::{MorphAttribute, MorphError, MorphTarget, MorphTargets};
+pub use skin::{Skin, SkinError, SkinInfluence};
 pub use transform::{AffineTransform, Transform, TransformError};

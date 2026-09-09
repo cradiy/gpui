@@ -1,6 +1,7 @@
 use gpui_3d::{
-    Camera, Material, Mesh, MeshError, MeshUpdateError, MorphAttribute, MorphError, MorphTarget,
-    MorphTargets, Node, Object, Ray, Scene, SceneError, SceneGraph, Vertex, VertexAttribute,
+    AffineTransform, Camera, Material, Mesh, MeshError, MeshUpdateError, MorphAttribute,
+    MorphError, MorphTarget, MorphTargets, Node, Object, Ray, Scene, SceneError, SceneGraph, Skin,
+    SkinError, SkinInfluence, Vertex, VertexAttribute,
 };
 
 fn vertices() -> Vec<Vertex> {
@@ -494,4 +495,347 @@ fn morph_validation_identifies_target_attributes_and_weight_failures() {
         targets.evaluate(&[0.]).unwrap().vertices(),
         source.vertices()
     ));
+}
+
+fn near3(actual: [f32; 3], expected: [f32; 3]) {
+    for (a, b) in actual.into_iter().zip(expected) {
+        assert!((a - b).abs() < 1e-5, "{actual:?} != {expected:?}");
+    }
+}
+
+#[test]
+fn skin_bind_pose_and_world_pose_cancel_output_placement_without_accumulation() {
+    let mesh = Mesh::plane();
+    let bind = AffineTransform::from_translation([0., 2., 0.]).unwrap();
+    let skin = Skin::new(
+        [bind.inverse()],
+        vec![
+            [SkinInfluence {
+                joint: 0,
+                weight: 2.
+            }];
+            4
+        ],
+    )
+    .unwrap();
+    let rest = skin.evaluate(&mesh, &[bind]).unwrap();
+    for (actual, base) in rest.vertices().iter().zip(mesh.vertices()) {
+        near3(actual.position, base.position);
+    }
+    let mesh_world =
+        AffineTransform::from_trs([3., -1., 2.], [0., 0., 1., 1.], [2., 3., 1.]).unwrap();
+    let offset = AffineTransform::from_translation([1., 0., 0.5]).unwrap();
+    let pose = mesh_world.compose(offset).unwrap().compose(bind).unwrap();
+    let moved = skin.evaluate_world(&mesh, mesh_world, &[pose]).unwrap();
+    let again = skin.evaluate_world(&mesh, mesh_world, &[pose]).unwrap();
+    for ((actual, base), repeat) in moved
+        .vertices()
+        .iter()
+        .zip(mesh.vertices())
+        .zip(again.vertices())
+    {
+        near3(
+            actual.position,
+            [base.position[0] + 1., base.position[1], 0.5],
+        );
+        near3(actual.position, repeat.position);
+        assert_eq!(actual.uv, base.uv);
+    }
+    near3(rest.bounds().min(), [-0.5, -0.5, 0.]);
+    assert!(std::ptr::eq(moved.indices(), mesh.indices()));
+    near3(mesh.vertices()[0].position, [-0.5, -0.5, 0.]);
+}
+
+#[test]
+fn skin_mixes_all_influences_and_normalizes_extreme_weights_per_vertex() {
+    let mesh = Mesh::plane();
+    let joints: Vec<_> = (0..6)
+        .map(|i| AffineTransform::from_translation([i as f32, 0., 0.]).unwrap())
+        .collect();
+    let influences = (0..4).map(|vertex| {
+        (0..6).map(move |joint| SkinInfluence {
+            joint,
+            weight: if vertex == 0 { f32::MAX } else { 2. },
+        })
+    });
+    let skin = Skin::new([AffineTransform::IDENTITY; 6], influences).unwrap();
+    let moved = skin.evaluate(&mesh, &joints).unwrap();
+    for (actual, base) in moved.vertices().iter().zip(mesh.vertices()) {
+        near3(
+            actual.position,
+            [base.position[0] + 2.5, base.position[1], 0.],
+        );
+    }
+    let tiny = Skin::new(
+        [AffineTransform::IDENTITY],
+        vec![
+            [SkinInfluence {
+                joint: 0,
+                weight: f32::from_bits(1)
+            }];
+            4
+        ],
+    )
+    .unwrap();
+    near3(
+        tiny.evaluate(&mesh, &joints[..1]).unwrap().bounds().min(),
+        mesh.bounds().min(),
+    );
+}
+
+#[test]
+fn skin_blended_linear_transform_controls_normals_and_reflected_tangent_frames() {
+    let k = std::f32::consts::FRAC_1_SQRT_2;
+    let mesh = Mesh::new(
+        vertices()
+            .into_iter()
+            .map(|v| Vertex {
+                normal: [k, k, 0.],
+                ..v
+            })
+            .collect(),
+        vec![0, 1, 2],
+    )
+    .with_tangents(vec![[k, -k, 0., -1.]; 3])
+    .unwrap();
+    let skin = Skin::new(
+        [AffineTransform::IDENTITY; 2],
+        vec![
+            [
+                SkinInfluence {
+                    joint: 0,
+                    weight: 1.
+                },
+                SkinInfluence {
+                    joint: 1,
+                    weight: 3.
+                }
+            ];
+            3
+        ],
+    )
+    .unwrap();
+    let scale = |s| AffineTransform::from_trs([0.; 3], [0., 0., 0., 1.], s).unwrap();
+    let moved = skin
+        .evaluate(&mesh, &[scale([2., 1., 1.]), scale([1., 3., 1.])])
+        .unwrap();
+    let k = 1. / 5_f32.sqrt();
+    near3(moved.vertices()[0].normal, [2. * k, k, 0.]);
+    let [x, y, z, w] = moved.tangents().unwrap()[0];
+    near3([x, y, z], [k, -2. * k, 0.]);
+    assert_eq!(w, -1.);
+    let reflected = skin.evaluate(&mesh, &[scale([-1., 1., 1.]); 2]).unwrap();
+    let k = std::f32::consts::FRAC_1_SQRT_2;
+    near3(reflected.vertices()[0].normal, [-k, k, 0.]);
+    let [x, y, z, w] = reflected.tangents().unwrap()[0];
+    near3([x, y, z], [-k, -k, 0.]);
+    assert_eq!(w, 1.);
+    let zero = mesh
+        .with_vertices(
+            mesh.vertices()
+                .iter()
+                .map(|v| Vertex {
+                    normal: [0.; 3],
+                    ..*v
+                })
+                .collect(),
+            None,
+        )
+        .unwrap();
+    assert!(
+        skin.evaluate(&zero, &[AffineTransform::IDENTITY; 2])
+            .unwrap()
+            .vertices()
+            .iter()
+            .all(|v| v.normal == [0.; 3])
+    );
+}
+
+#[test]
+fn skin_after_morph_updates_bounds_and_queries_without_changing_prior_snapshots() {
+    let base = Mesh::plane();
+    let morph = MorphTargets::new(
+        base.clone(),
+        [MorphTarget {
+            positions: Some(vec![[1., 0., 0.]; 4].into()),
+            ..Default::default()
+        }],
+    )
+    .unwrap()
+    .evaluate(&[1.])
+    .unwrap();
+    let skin = Skin::new(
+        [AffineTransform::IDENTITY],
+        vec![
+            [SkinInfluence {
+                joint: 0,
+                weight: 1.
+            }];
+            4
+        ],
+    )
+    .unwrap();
+    let pose = AffineTransform::from_trs([0., 0., 1.], [0., 0., 1., 1.], [1.; 3]).unwrap();
+    let result = skin.evaluate(&morph, &[pose]).unwrap();
+    near3(result.bounds().min(), [-0.5, 0.5, 1.]);
+    result.prepare_spatial_index();
+    let material = Material::color(gpui::rgb(0xffffff));
+    let scene = Scene::new().object(Object::new(result, material.clone()));
+    let ray = Ray::new([0., 1., 4.], [0., 0., -1.]).unwrap();
+    let hit = scene.raycast(ray).unwrap();
+    near3(hit.position, [0., 1., 1.]);
+    near3(hit.normal, [0., 0., 1.]);
+    assert!((hit.uv[0] - 0.5).abs() < 1e-5 && (hit.uv[1] - 0.5).abs() < 1e-5);
+    let rest = skin.evaluate(&morph, &[AffineTransform::IDENTITY]).unwrap();
+    assert!(
+        Scene::new()
+            .object(Object::new(rest, material))
+            .raycast(ray)
+            .is_none()
+    );
+    near3(scene.raycast(ray).unwrap().position, [0., 1., 1.]);
+    near3(base.bounds().min(), [-0.5, -0.5, 0.]);
+}
+
+#[test]
+fn skin_rejects_invalid_bindings_pose_sizes_and_collapsed_blends() {
+    let identity = AffineTransform::IDENTITY;
+    assert_eq!(
+        Skin::new(
+            [],
+            [[SkinInfluence {
+                joint: 0,
+                weight: 1.
+            }]]
+        )
+        .unwrap_err(),
+        SkinError::EmptyJoints
+    );
+    assert_eq!(
+        Skin::new([identity], std::iter::empty::<[SkinInfluence; 1]>()).unwrap_err(),
+        SkinError::EmptyVertices
+    );
+    for values in [
+        vec![],
+        vec![SkinInfluence {
+            joint: 0,
+            weight: 0.,
+        }],
+    ] {
+        assert_eq!(
+            Skin::new([identity], [values]).unwrap_err(),
+            SkinError::MissingInfluences { vertex: 0 }
+        );
+    }
+    for weight in [-1., f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(
+            Skin::new([identity], [[SkinInfluence { joint: 0, weight }]]).unwrap_err(),
+            SkinError::InvalidWeight {
+                vertex: 0,
+                influence: 0
+            }
+        );
+    }
+    assert_eq!(
+        Skin::new(
+            [identity],
+            [[SkinInfluence {
+                joint: 1,
+                weight: 0.
+            }]]
+        )
+        .unwrap_err(),
+        SkinError::JointIndex {
+            vertex: 0,
+            influence: 0,
+            joint: 1
+        }
+    );
+    let skin = Skin::new(
+        [identity; 2],
+        vec![
+            [
+                SkinInfluence {
+                    joint: 0,
+                    weight: 1.
+                },
+                SkinInfluence {
+                    joint: 1,
+                    weight: 1.
+                }
+            ];
+            4
+        ],
+    )
+    .unwrap();
+    let mesh = Mesh::plane();
+    assert_eq!(
+        skin.evaluate(&mesh, &[identity]).unwrap_err(),
+        SkinError::JointCount {
+            expected: 2,
+            actual: 1
+        }
+    );
+    assert_eq!(
+        skin.evaluate(&Mesh::cube(), &[identity; 2]).unwrap_err(),
+        SkinError::VertexCount {
+            expected: 4,
+            actual: 24
+        }
+    );
+    let reflection = AffineTransform::from_trs([0.; 3], [0., 0., 0., 1.], [-1., 1., 1.]).unwrap();
+    assert_eq!(
+        skin.evaluate(&mesh, &[identity, reflection]).unwrap_err(),
+        SkinError::InvalidVertexTransform { vertex: 0 }
+    );
+    let large = AffineTransform::from_translation([f32::MAX, 0., 0.]).unwrap();
+    let huge_skin = Skin::new(
+        [large],
+        vec![
+            [SkinInfluence {
+                joint: 0,
+                weight: 1.
+            }];
+            4
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        huge_skin.evaluate(&mesh, &[large]).unwrap_err(),
+        SkinError::InvalidJointTransform { joint: 0 }
+    );
+    let far = mesh
+        .with_vertices(
+            mesh.vertices()
+                .iter()
+                .map(|v| Vertex {
+                    position: [f32::MAX, 0., 0.],
+                    ..*v
+                })
+                .collect(),
+            None,
+        )
+        .unwrap();
+    let scale = AffineTransform::from_trs([0.; 3], [0., 0., 0., 1.], [2.; 3]).unwrap();
+    assert_eq!(
+        skin.evaluate(&far, &[scale; 2]).unwrap_err(),
+        SkinError::UnrepresentablePosition { vertex: 0 }
+    );
+    assert!(skin.evaluate(&mesh, &[identity; 2]).is_ok());
+    let folded = Skin::new(
+        [identity; 2],
+        (0..4).map(|vertex| {
+            [SkinInfluence {
+                joint: usize::from(vertex > 0),
+                weight: 1.,
+            }]
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        folded.evaluate(&mesh, &[identity, reflection]).unwrap_err(),
+        SkinError::Mesh(MeshUpdateError::Tangents(
+            gpui_3d::TangentError::MixedHandedness { triangle: 0 }
+        ))
+    );
 }

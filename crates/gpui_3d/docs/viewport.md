@@ -174,6 +174,76 @@ Failed evaluation does not modify the base or previous results. File-format
 decoding, sparse-array expansion, weight animation, and playback policy belong
 to the caller.
 
+### Skeletal skinning
+
+`Skin` stores shared inverse bind matrices and per-vertex `SkinInfluence` lists.
+An inverse bind matrix maps mesh bind-space coordinates into one joint's
+bind-local space. Influence joint indices address this array. The vertex lists
+must include unused vertices and match the vertex order of every sampled mesh.
+The binding does not own a mesh, so a morph result can be sampled directly.
+
+```rust
+use gpui_3d::{AffineTransform, Mesh, Skin, SkinInfluence};
+
+let mesh = Mesh::plane();
+let bind = AffineTransform::from_translation([0., 0.25, 0.])?;
+let skin = Skin::new(
+    [AffineTransform::IDENTITY, bind.inverse()],
+    mesh.vertices().iter().map(|v| {
+        let weight = v.position[1] + 0.5;
+        [
+            SkinInfluence { joint: 0, weight: 1. - weight },
+            SkinInfluence { joint: 1, weight },
+        ]
+    }),
+)?;
+let bent_joint = AffineTransform::from_trs(
+    [0., 0.25, 0.], [0., 0., 0.3_f32.sin(), 0.3_f32.cos()], [1.; 3],
+)?;
+let posed_mesh = skin.evaluate(&mesh, &[AffineTransform::IDENTITY, bent_joint])?;
+# let _ = posed_mesh;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Weights must be finite and nonnegative, with a positive total for each vertex.
+They are normalized per vertex during construction using f64 accumulation.
+Zero entries are discarded after their joint indices are validated; repeated
+joint entries contribute additively. There is no fixed joint or influence limit.
+Rigid vertices can reference one joint with a positive weight. Empty joint arrays,
+empty vertex lists, missing influences, and out-of-range joints return `SkinError`.
+
+`evaluate` accepts current joint-local-to-mesh-local transforms. Each is multiplied
+by its inverse bind matrix before per-vertex linear blending. `evaluate_world`
+instead accepts `mesh_world` and current world-space joint transforms, computing
+`inverse(mesh_world) * joint_world * inverse_bind`. Supply the complete joint
+array in binding order. With `SceneGraph`, first evaluate the joint hierarchy,
+collect each joint's `EvaluatedNode::world`, sample the skin, then assign the
+result with `set_mesh` and evaluate the scene again. Render under the same
+`mesh_world` used for sampling.
+
+Positions use the blended affine transform. Normals use its inverse transpose
+and are normalized; zero source normals remain zero without tangents. Tangent XYZ
+uses the blended linear transform and is orthogonalized against the output normal.
+Reflections flip tangent handedness. Triangle order is preserved, so skinning does
+not repair folded geometry or reversed winding. Mixed tangent handedness within
+one triangle returns a mesh validation error. Normals are not regenerated from
+deformed triangles or spatial weight gradients.
+
+All input and blended transforms must satisfy `AffineTransform`'s invertibility
+and finite f32 constraints. Even invertible joint transforms can blend to a
+singular matrix; this returns `SkinError::InvalidVertexTransform` with the vertex
+offset. Matrix composition overflow and out-of-range positions are also errors.
+Failed samples leave the source and previous results unchanged.
+
+Sampling is synchronous CPU linear-blend skinning, not dual-quaternion skinning
+or a GPU deformation pass. Work scales with joints, vertices, and retained
+influences. Results are immutable `Mesh` snapshots with shared indices, fresh
+bounds and query indices, and the existing topology-compatible GPU buffer reuse.
+Rendering and picking consume the same geometry. Apply morph targets first, then
+skin the morph result; do not feed a previous skinned result into the next sample.
+Keep the sampled mesh while the pose is unchanged. File loading, joint selection,
+animation playback, and pose caching remain caller-owned.
+
 ## Camera projection and queries
 
 `Camera::projection` selects `Projection::Perspective { vertical_fov }` in radians
@@ -1389,7 +1459,7 @@ Each example is an independent executable.
 
 | Example | Controls and content |
 | --- | --- |
-| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, camera controls, transform tracks, vertex tapering, and two-target morph blending with independent weights and playback controls. |
+| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, camera controls, transform tracks, vertex tapering, two-target morph blending, and two-joint skin bending with independent weights and playback controls. |
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
 | `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |

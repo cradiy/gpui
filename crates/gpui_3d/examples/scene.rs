@@ -4,8 +4,8 @@ use gpui::{
 };
 use gpui_3d::{
     AffineTransform, Camera, EvaluatedScene, Interpolation, Keyframe, Material, Mesh, MorphTarget,
-    MorphTargets, Node, NodeHandle, OrbitController, Projection, RotationTrack, SceneGraph,
-    SubtreeInstance, TransformTrack, VectorTrack, viewport3d,
+    MorphTargets, Node, NodeHandle, OrbitController, Projection, RotationTrack, SceneGraph, Skin,
+    SkinInfluence, SubtreeInstance, TransformTrack, VectorTrack, viewport3d,
 };
 use gpui_platform::application;
 use std::{
@@ -144,6 +144,44 @@ fn morphs(mesh: &Mesh) -> MorphTargets {
     MorphTargets::new(mesh.clone(), targets).unwrap()
 }
 
+fn body_geometry() -> Mesh {
+    let cube = Mesh::cube();
+    let mut vertices = Vec::new();
+    let mut tangents = Vec::new();
+    let mut indices = Vec::new();
+    const STEPS: u32 = 8;
+    for face in 0..6 {
+        let corners = &cube.vertices()[face * 4..face * 4 + 4];
+        let start = vertices.len() as u32;
+        for y in 0..=STEPS {
+            for x in 0..=STEPS {
+                let u = x as f32 / STEPS as f32;
+                let v = y as f32 / STEPS as f32;
+                vertices.push(gpui_3d::Vertex {
+                    position: std::array::from_fn(|i| {
+                        corners[0].position[i]
+                            + u * (corners[1].position[i] - corners[0].position[i])
+                            + v * (corners[3].position[i] - corners[0].position[i])
+                    }),
+                    normal: corners[0].normal,
+                    uv: [u, 1. - v],
+                });
+                tangents.push(cube.tangents().unwrap()[face * 4]);
+                if x < STEPS && y < STEPS {
+                    let a = start + y * (STEPS + 1) + x;
+                    let b = a + 1;
+                    let d = a + STEPS + 1;
+                    let c = d + 1;
+                    indices.extend([a, b, c, a, c, d]);
+                }
+            }
+        }
+    }
+    Mesh::new(vertices, indices)
+        .with_tangents(tangents)
+        .unwrap()
+}
+
 struct SceneDemo {
     graph: SceneGraph,
     evaluated: EvaluatedScene,
@@ -151,9 +189,11 @@ struct SceneDemo {
     body: NodeHandle,
     body_mesh: Mesh,
     morphs: MorphTargets,
+    skin: Skin,
+    skinning: bool,
     deformation: usize,
     morph_weights: [f32; 2],
-    mesh_sample: (Duration, usize, [f32; 2]),
+    mesh_sample: (Duration, usize, [f32; 2], bool),
     selected: usize,
     hovered: Option<usize>,
     raised: [bool; 3],
@@ -169,7 +209,7 @@ struct SceneDemo {
 }
 impl SceneDemo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let geometry = Mesh::cube();
+        let geometry = body_geometry();
         let mut source = SceneGraph::new();
         let root = source.insert(None, Node::new().id("assembly")).unwrap();
         let body = source
@@ -218,6 +258,20 @@ impl SceneDemo {
         camera.near = 0.01;
         camera.far = 100.;
         let morphs = morphs(&geometry);
+        let skin = Skin::new(
+            [AffineTransform::IDENTITY, local([0., 0.25, 0.], [1.; 3])],
+            geometry.vertices().iter().map(|v| {
+                let weight = (v.position[1] + 0.5).clamp(0., 1.);
+                [
+                    SkinInfluence {
+                        joint: 0,
+                        weight: 1. - weight,
+                    },
+                    SkinInfluence { joint: 1, weight },
+                ]
+            }),
+        )
+        .unwrap();
         Self {
             graph,
             evaluated,
@@ -225,9 +279,11 @@ impl SceneDemo {
             body,
             body_mesh: geometry,
             morphs,
+            skin,
+            skinning: false,
             deformation: 0,
             morph_weights: [0.65, 0.35],
-            mesh_sample: (Duration::ZERO, 0, [0.65, 0.35]),
+            mesh_sample: (Duration::ZERO, 0, [0.65, 0.35], false),
             selected: 1,
             hovered: None,
             raised: [false; 3],
@@ -256,12 +312,17 @@ impl SceneDemo {
         cx.notify();
     }
     fn evaluate_pose(&mut self) {
-        let position = if self.deformation != 0 {
+        let position = if self.deformation != 0 || self.skinning {
             self.position
         } else {
             Duration::ZERO
         };
-        let mesh_sample = (position, self.deformation, self.morph_weights);
+        let mesh_sample = (
+            position,
+            self.deformation,
+            self.morph_weights,
+            self.skinning,
+        );
         if self.mesh_sample != mesh_sample {
             let amount = if position == ANIMATION_LENGTH {
                 0.
@@ -269,7 +330,7 @@ impl SceneDemo {
                 (std::f32::consts::PI * position.as_secs_f32() / ANIMATION_LENGTH.as_secs_f32())
                     .sin()
             };
-            let mesh = match self.deformation {
+            let mut mesh = match self.deformation {
                 1 => taper(&self.body_mesh, amount * 1.2),
                 2 => self
                     .morphs
@@ -277,6 +338,19 @@ impl SceneDemo {
                     .unwrap(),
                 _ => self.body_mesh.clone(),
             };
+            if self.skinning {
+                let half_angle = 0.6 * amount;
+                let tip = AffineTransform::from_trs(
+                    [0., -0.25, 0.],
+                    [0., 0., half_angle.sin(), half_angle.cos()],
+                    [1.; 3],
+                )
+                .unwrap();
+                mesh = self
+                    .skin
+                    .evaluate(&mesh, &[AffineTransform::IDENTITY, tip])
+                    .unwrap();
+            }
             for instance in &self.instances {
                 self.graph
                     .set_mesh(instance.node(self.body).unwrap(), mesh.clone())
@@ -493,6 +567,13 @@ impl Render for SceneDemo {
                 .child(self.button("morph", "Blend shapes", self.deformation == 2).on_click(cx.listener(|this, _, _, cx| {
                     this.deformation = if this.deformation == 2 { 0 } else { 2 };
                     if this.deformation == 2 && !this.playing && (this.position == Duration::ZERO || this.position == ANIMATION_LENGTH) {
+                        this.position = Duration::from_secs(2);
+                    }
+                    this.refresh(cx);
+                })))
+                .child(self.button("skin", "Bend skin", self.skinning).on_click(cx.listener(|this, _, _, cx| {
+                    this.skinning = !this.skinning;
+                    if this.skinning && !this.playing && (this.position == Duration::ZERO || this.position == ANIMATION_LENGTH) {
                         this.position = Duration::from_secs(2);
                     }
                     this.refresh(cx);

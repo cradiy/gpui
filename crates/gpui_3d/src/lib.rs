@@ -23,8 +23,8 @@ pub use camera::{
     ScreenPoint,
 };
 pub use geometry::{
-    Aabb, AffineTransform, Mesh, MorphAttribute, MorphError, MorphTarget, MorphTargets, Transform,
-    TransformError,
+    Aabb, AffineTransform, Mesh, MorphAttribute, MorphError, MorphTarget, MorphTargets, Skin,
+    SkinError, SkinInfluence, Transform, TransformError,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use headless::*;

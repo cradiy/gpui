@@ -723,6 +723,80 @@ mod tests {
     }
 
     #[test]
+    fn skinned_hierarchy_poses_share_deformed_vertices_with_render_frames_and_rays() {
+        use crate::{Ray, Skin, SkinInfluence};
+        let source = Mesh::plane();
+        let skin = Skin::new(
+            [AffineTransform::IDENTITY; 2],
+            source.vertices().iter().map(|v| {
+                [SkinInfluence {
+                    joint: usize::from(v.position[1] > 0.),
+                    weight: 1.,
+                }]
+            }),
+        )
+        .unwrap();
+        let mut graph = SceneGraph::new();
+        let root = graph
+            .insert(
+                None,
+                Node::new().transform(
+                    AffineTransform::from_trs([2., 3., 0.], [0., 0., 0., 1.], [2., 1., 1.])
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        let lower = graph.insert(Some(root), Node::new()).unwrap();
+        let upper = graph
+            .insert(
+                Some(root),
+                Node::new().transform(AffineTransform::from_translation([0., 0., 1.]).unwrap()),
+            )
+            .unwrap();
+        let body = graph
+            .insert(
+                Some(root),
+                Node::new()
+                    .mesh(source.clone(), Material::color(rgb(0xffffff)))
+                    .transform(AffineTransform::from_translation([0., -1., 0.]).unwrap()),
+            )
+            .unwrap();
+        let pose = graph.evaluate().unwrap();
+        let mesh = skin
+            .evaluate_world(
+                &source,
+                pose.node(body).unwrap().world,
+                &[
+                    pose.node(lower).unwrap().world,
+                    pose.node(upper).unwrap().world,
+                ],
+            )
+            .unwrap();
+        graph.set_mesh(body, mesh.clone()).unwrap();
+        let evaluated = graph.evaluate().unwrap();
+        let bounds = evaluated.bounds().unwrap();
+        assert_eq!(bounds.min(), [1., 2.5, 0.]);
+        assert_eq!(bounds.max(), [3., 3.5, 1.]);
+        let scene = evaluated.scene(Camera::default());
+        let frame = scene
+            .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(&frame.objects[0].mesh, &mesh.0));
+        assert!(std::ptr::eq(
+            frame.objects[0].mesh.indices(),
+            source.indices()
+        ));
+        let ray = Ray::new([2., 3., 4.], [0., 0., -1.]).unwrap();
+        let hit = scene.raycast(ray).unwrap();
+        assert_eq!(hit.node, Some(body));
+        assert!((hit.position[2] - 0.5).abs() < 1e-5);
+        assert!((hit.uv[0] - 0.5).abs() < 1e-5 && (hit.uv[1] - 0.5).abs() < 1e-5);
+        graph.set_mesh(body, source).unwrap();
+        assert!((scene.raycast(ray).unwrap().position[2] - 0.5).abs() < 1e-5);
+        assert_eq!(frame.objects[0].mesh.vertices()[2].position[2], 1.);
+    }
+
+    #[test]
     fn prepared_frames_share_geometry_and_preserve_evaluated_world_transforms() {
         let mut graph = SceneGraph::new();
         let parent = graph

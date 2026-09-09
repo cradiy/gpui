@@ -65,8 +65,34 @@ pub struct MeshVertex3d {
 /// Immutable indexed triangles. Share the same allocation to reuse GPU buffers.
 #[derive(Debug)]
 pub struct Mesh3d {
-    vertices: Box<[MeshVertex3d]>,
-    indices: Box<[u32]>,
+    vertices: Arc<[MeshVertex3d]>,
+    indices: Arc<[u32]>,
+    tangents: Option<Arc<[[f32; 4]]>>,
+}
+
+/// Invalid tangent data. Offsets are zero-based.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum TangentError3d {
+    /// Every vertex, including unused vertices, requires a tangent.
+    #[error("expected {expected} tangents, received {actual}")]
+    Count {
+        /// Mesh vertex count.
+        expected: usize,
+        /// Supplied tangent count.
+        actual: usize,
+    },
+    /// The tangent or normal cannot form a finite basis, or W is not -1 or +1.
+    #[error("invalid tangent basis at vertex {vertex}")]
+    InvalidBasis {
+        /// Invalid vertex offset.
+        vertex: usize,
+    },
+    /// Mirrored UV seams must use separate vertices.
+    #[error("mixed tangent handedness in triangle {triangle}")]
+    MixedHandedness {
+        /// Triangle offset in the index buffer.
+        triangle: usize,
+    },
 }
 
 /// Vertex attribute containing an invalid component.
@@ -171,6 +197,7 @@ impl Mesh3d {
         Ok(Arc::new(Self {
             vertices: vertices.into(),
             indices: indices.into(),
+            tangents: None,
         }))
     }
 
@@ -181,6 +208,57 @@ impl Mesh3d {
     /// Triangle indices.
     pub fn indices(&self) -> &[u32] {
         &self.indices
+    }
+
+    /// Mesh-local tangent XYZ and handedness W. Bitangent is `cross(N, T) * W`.
+    pub fn tangents(&self) -> Option<&[[f32; 4]]> {
+        self.tangents.as_deref()
+    }
+
+    /// Creates a mesh sharing vertex/index storage with validated tangent data.
+    /// XYZ is orthogonalized against the vertex normal and normalized. W must be
+    /// -1 or +1 and constant within each triangle. The source mesh is unchanged.
+    pub fn with_tangents(&self, mut tangents: Vec<[f32; 4]>) -> Result<Arc<Self>, TangentError3d> {
+        if tangents.len() != self.vertices.len() {
+            return Err(TangentError3d::Count {
+                expected: self.vertices.len(),
+                actual: tangents.len(),
+            });
+        }
+        for (vertex, (tangent, data)) in tangents.iter_mut().zip(self.vertices.iter()).enumerate() {
+            let invalid = TangentError3d::InvalidBasis { vertex };
+            if !tangent.iter().all(|v| v.is_finite()) || tangent[3].abs() != 1. {
+                return Err(invalid);
+            }
+            let n = data.normal.map(f64::from);
+            let n_length = n.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if n_length == 0. {
+                return Err(invalid);
+            }
+            let n = n.map(|v| v / n_length);
+            let t = [tangent[0], tangent[1], tangent[2]].map(f64::from);
+            let t_length = t.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let dot = t.iter().zip(n).map(|(t, n)| t * n).sum::<f64>();
+            let t: [f64; 3] = std::array::from_fn(|i| t[i] - n[i] * dot);
+            let length = t.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if length <= t_length * 1e-6 {
+                return Err(invalid);
+            }
+            for i in 0..3 {
+                tangent[i] = (t[i] / length) as f32;
+            }
+        }
+        for (triangle, indices) in self.indices.chunks_exact(3).enumerate() {
+            let sign = tangents[indices[0] as usize][3];
+            if indices.iter().any(|i| tangents[*i as usize][3] != sign) {
+                return Err(TangentError3d::MixedHandedness { triangle });
+            }
+        }
+        Ok(Arc::new(Self {
+            vertices: self.vertices.clone(),
+            indices: self.indices.clone(),
+            tangents: Some(tangents.into()),
+        }))
     }
 }
 
@@ -231,6 +309,10 @@ pub struct MeshDraw3d {
     pub metallic_roughness_texture: Option<MaterialTexture3d>,
     /// sRGB RGB emission multiplier, decoded before filtering. Ignored without lit PBR.
     pub emissive_texture: Option<MaterialTexture3d>,
+    /// Linear tangent-space RGB normal map. Requires mesh tangents; lit PBR only.
+    pub normal_texture: Option<MaterialTexture3d>,
+    /// Finite nonnegative scale of normal-map XY. Zero disables the map.
+    pub normal_scale: f32,
     /// Alpha below this threshold is discarded. Surviving pixels are opaque.
     pub alpha_cutoff: f32,
     /// Bypass directional lighting.

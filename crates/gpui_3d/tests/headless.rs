@@ -5,6 +5,85 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn normal_maps_match_vertex_normals_across_reflections_and_back_faces() -> anyhow::Result<()> {
+    use gpui_3d::{Light, MaterialTexture, Object, PbrMaterial, Projection, Scene};
+    use std::sync::Arc;
+    let image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([204, 153, 230, 0])),
+    )]));
+    let material = Material::color(rgb(0x6897ab)).pbr(PbrMaterial {
+        metallic: 0.3,
+        roughness: 0.6,
+        ..Default::default()
+    });
+    let mut renderer = HeadlessRenderer::new()?;
+    for (scale, side) in [
+        ([1., 1., 1.], 1.),
+        ([-1., 1., 1.], 1.),
+        ([1., 1., 1.], -1.),
+        ([-1.5, 0.6, 2.], -1.),
+    ] {
+        let plane = Mesh::plane();
+        let mut vertices = plane.vertices().to_vec();
+        for vertex in &mut vertices {
+            vertex.normal = [
+                (204. / 255. * 2. - 1.) * f32::abs(scale[0]),
+                -(153. / 255. * 2. - 1.) * f32::abs(scale[1]),
+                (230. / 255. * 2. - 1.) * f32::abs(scale[2]),
+            ];
+        }
+        let reference = Mesh::new(vertices, plane.indices().to_vec());
+        let mut outputs = Vec::new();
+        for (mesh, material) in [
+            (reference, material.clone()),
+            (
+                plane,
+                material
+                    .clone()
+                    .normal_texture(MaterialTexture::new(image.clone())),
+            ),
+        ] {
+            let scene = Scene::new()
+                .camera(Camera {
+                    eye: [0., 0., side * 3.],
+                    projection: Projection::Orthographic { vertical_size: 2. },
+                    ..Default::default()
+                })
+                .light(Light {
+                    direction: [-0.4, 0.5, side],
+                    color: rgb(0xffffff),
+                    intensity: 1.,
+                    ambient: 0.1,
+                })
+                .object(Object::new(mesh, material).scale(scale).id("surface"));
+            let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+            let mut read = frame.readback()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(result) = read.try_read()? {
+                    outputs.push(result.pixels);
+                    break;
+                }
+                anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+        let reference = outputs[0].rgba.as_ref().unwrap();
+        let mapped = outputs[1].rgba.as_ref().unwrap();
+        assert_eq!(mapped[(32 * 65 + 32) * 4 + 3], 255);
+        for (actual, expected) in mapped.iter().zip(reference) {
+            assert!(
+                actual.abs_diff(*expected) <= 2,
+                "{actual} != {expected}; scale {scale:?}, side {side}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn material_maps_match_factors_with_independent_sampling_and_zero_alpha() -> anyhow::Result<()> {
     use gpui_3d::{
         Light, MaterialTexture, Object, PbrMaterial, Projection, Scene, TextureSampling,

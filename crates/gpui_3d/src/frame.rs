@@ -39,6 +39,18 @@ impl Scene {
                 object.material.pbr.is_none_or(|pbr| pbr.is_valid()),
                 "object {index} has invalid PBR parameters"
             );
+            ensure!(
+                object.material.normal_scale.is_finite() && object.material.normal_scale >= 0.,
+                "object {index} has invalid normal scale"
+            );
+            ensure!(
+                !object
+                    .material
+                    .pbr_textures()
+                    .any(|(slot, _)| slot == TextureSlot::Normal)
+                    || object.mesh.tangents().is_some(),
+                "object {index}: normal maps require mesh tangents"
+            );
             let transform = object.transform;
             ensure!(
                 object.world.is_some()
@@ -70,6 +82,7 @@ impl Scene {
             );
             let mut metallic_roughness_texture = None;
             let mut emissive_texture = None;
+            let mut normal_texture = None;
             let mut ready = true;
             for (slot, map) in object.material.pbr_textures() {
                 match resolve(index, slot, &Texture::Image(map.image.clone()))? {
@@ -81,6 +94,7 @@ impl Scene {
                         match slot {
                             TextureSlot::MetallicRoughness => metallic_roughness_texture = resolved,
                             TextureSlot::Emissive => emissive_texture = resolved,
+                            TextureSlot::Normal => normal_texture = resolved,
                             TextureSlot::BaseColor => unreachable!(),
                         }
                     }
@@ -107,6 +121,8 @@ impl Scene {
                 pbr: object.material.pbr,
                 metallic_roughness_texture,
                 emissive_texture,
+                normal_texture,
+                normal_scale: object.material.normal_scale,
                 alpha_cutoff: object.material.alpha_cutoff,
                 unlit: object.material.unlit,
             });
@@ -141,6 +157,41 @@ mod tests {
     use super::*;
     use crate::{AffineTransform, Camera, Material, Mesh, Node, Object, SceneGraph};
     use gpui::rgb;
+
+    #[test]
+    fn normal_maps_require_tangents_only_when_active() {
+        use crate::{MaterialTexture, PbrMaterial};
+        let plane = Mesh::plane();
+        let mesh = Mesh::new(plane.vertices().to_vec(), plane.indices().to_vec());
+        let material = Material::color(rgb(0xffffff))
+            .pbr(PbrMaterial::default())
+            .normal_texture(MaterialTexture::new("normal.png"));
+        let scene = |material| Scene::new().object(Object::new(mesh.clone(), material));
+        assert!(
+            scene(material.clone())
+                .prepare_frame(1., None, |_, _, _| unreachable!())
+                .is_err()
+        );
+        for inactive in [
+            material.clone().normal_scale(0.),
+            material.clone().unlit(true),
+        ] {
+            let frame = scene(inactive)
+                .prepare_frame(1., None, |_, slot, _| {
+                    assert_eq!(slot, TextureSlot::BaseColor);
+                    Ok(Some(MeshTexture3d::None))
+                })
+                .unwrap();
+            assert!(frame.objects[0].normal_texture.is_none());
+        }
+        for scale in [-1., f32::NAN, f32::INFINITY] {
+            assert!(
+                scene(material.clone().normal_scale(scale))
+                    .prepare_frame(1., None, |_, _, _| unreachable!())
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn material_map_readiness_preserves_ids_and_resolves_only_active_inputs() {

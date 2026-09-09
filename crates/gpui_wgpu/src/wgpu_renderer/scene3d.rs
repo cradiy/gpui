@@ -8,6 +8,7 @@ struct Vertex {
     position: [f32; 3],
     normal: [f32; 3],
     uv: [f32; 2],
+    tangent: [f32; 4],
 }
 
 #[repr(C)]
@@ -70,6 +71,8 @@ struct Params {
     emissive: [f32; 4],
     metallic_roughness_map: ImageParams,
     emissive_map: ImageParams,
+    normal_map: ImageParams,
+    normal_settings: [f32; 4],
 }
 
 struct Geometry {
@@ -118,8 +121,8 @@ impl Scene3dRenderer {
             label: Some("scene3d"), layout: None,
             vertex: wgpu::VertexState {
                 module: &shader, entry_point: Some("vertex"), compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2] })],
+                buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 48, step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] })],
             },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(if format == wgpu::TextureFormat::R32Uint { "object_id" } else { "fragment" }), compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format: mesh_format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
@@ -251,10 +254,12 @@ impl Scene3dRenderer {
                         .mesh
                         .vertices()
                         .iter()
-                        .map(|v| Vertex {
+                        .enumerate()
+                        .map(|(index, v)| Vertex {
                             position: v.position,
                             normal: v.normal,
                             uv: v.uv,
+                            tangent: object.mesh.tangents().map_or([0.; 4], |t| t[index]),
                         })
                         .collect::<Vec<_>>();
                     Arc::new(Geometry {
@@ -420,6 +425,10 @@ impl Scene3dRenderer {
             let maps_enabled = object.pbr.is_some() && !object.unlit;
             let metallic_roughness_map = object.metallic_roughness_texture.filter(|_| maps_enabled);
             let emissive_map = object.emissive_texture.filter(|_| maps_enabled);
+            let normal_map = object
+                .normal_texture
+                .filter(|_| maps_enabled && object.normal_scale > 0.);
+            let normal_image = normal_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
             let metallic_roughness_image =
                 metallic_roughness_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
             let emissive_image =
@@ -481,6 +490,8 @@ impl Scene3dRenderer {
                     gpui::TextureColorSpace3d::Linear,
                 ),
                 emissive_map: ImageParams::new(emissive_map, gpui::TextureColorSpace3d::Srgb),
+                normal_map: ImageParams::new(normal_map, gpui::TextureColorSpace3d::Linear),
+                normal_settings: [object.normal_scale, f32::from(normal_map.is_some()), 0., 0.],
             };
             let buffer = &self.slots[start + index];
             queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
@@ -500,6 +511,14 @@ impl Scene3dRenderer {
             ];
             if self.format != wgpu::TextureFormat::R32Uint {
                 entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(
+                            normal_image
+                                .as_ref()
+                                .map_or(&self.white, |image| &image.view),
+                        ),
+                    },
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: wgpu::BindingResource::TextureView(
@@ -665,6 +684,11 @@ mod tests {
                 std::mem::offset_of!(Params, metallic_roughness_map),
             ),
             ("emissive_map", std::mem::offset_of!(Params, emissive_map)),
+            ("normal_map", std::mem::offset_of!(Params, normal_map)),
+            (
+                "normal_settings",
+                std::mem::offset_of!(Params, normal_settings),
+            ),
         ] {
             let member = members
                 .iter()

@@ -58,7 +58,9 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Color pipeline**: sRGB and linear image inputs, linear filtering and lighting, RGBA16Float intermediate results, exposure, None/Reinhard tone mapping, and premultiplied display composition shared by viewport and headless rendering.
 - [x] **PBR material factors**: Optional metallic-roughness shading, GGX/Smith/Schlick direct lighting, linear emissive radiance, and perspective/orthographic viewing directions shared by viewport and headless rendering.
 - [x] **PBR factor textures**: Linear G/B metallic-roughness and sRGB emissive maps, factor multiplication, independent UV sampling, and shared viewport/headless resource resolution.
-- [ ] **Normal and occlusion textures**: Tangent-space normal maps, tangent data and transforms, and ambient occlusion maps with independent sampling.
+- [x] **Normal textures and tangent inputs**: Validated optional tangent data, built-in plane/cube tangents, linear RGB normal maps with independent sampling and XY strength, and reflection-aware world-space tangent frames.
+- [ ] **Tangent generation**: MikkTSpace-compatible tangent generation with UV seam splitting and explicit handling of degenerate inputs.
+- [ ] **Occlusion textures**: Ambient occlusion maps with independent sampling and strength.
 - [ ] **Light types**: Multiple directional, point, and spot lights with intensity, range, and attenuation controls.
 - [ ] **Directional shadows**: Shadow maps, soft shadows, bias, and quality settings to control self-shadowing artifacts and resource costs.
 - [ ] **Environment lighting**: HDR environment maps and diffuse and specular IBL, with independent background and lighting controls.

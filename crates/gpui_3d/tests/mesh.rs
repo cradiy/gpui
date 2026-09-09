@@ -113,3 +113,60 @@ fn inspection_shares_storage_and_preserves_triangle_identity() {
     drop(scene);
     assert_eq!(copy.indices(), indices);
 }
+
+#[test]
+fn tangent_inputs_preserve_geometry_and_reject_undefined_bases() {
+    use gpui_3d::TangentError;
+    let source = Mesh::new(vertices(), vec![0, 1, 2]);
+    let mesh = source.with_tangents(vec![[2., 0., 1., -1.]; 3]).unwrap();
+    assert!(source.tangents().is_none());
+    assert_eq!(mesh.tangents().unwrap(), &[[1., 0., 0., -1.]; 3]);
+    assert!(std::ptr::eq(source.vertices(), mesh.vertices()));
+    assert!(std::ptr::eq(source.indices(), mesh.indices()));
+    let ray = Ray::new([0., 0., 1.], [0., 0., -1.]).unwrap();
+    let hit = |mesh| {
+        Scene::new()
+            .object(Object::new(mesh, Material::color(gpui::rgb(0xffffff))))
+            .raycast(ray)
+            .unwrap()
+    };
+    let before = hit(source.clone());
+    let after = hit(mesh);
+    assert_eq!(before.position, after.position);
+    assert_eq!(before.normal, after.normal);
+    assert_eq!(before.triangle_index, after.triangle_index);
+    assert_eq!(
+        source.with_tangents(vec![]).unwrap_err(),
+        TangentError::Count {
+            expected: 3,
+            actual: 0
+        }
+    );
+    for invalid in [
+        [0.; 4],
+        [0., 0., 1., 1.],
+        [1., 0., 0., 0.],
+        [f32::NAN, 0., 0., 1.],
+    ] {
+        let mut tangents = vec![[1., 0., 0., 1.]; 3];
+        tangents[1] = invalid;
+        assert_eq!(
+            source.with_tangents(tangents).unwrap_err(),
+            TangentError::InvalidBasis { vertex: 1 }
+        );
+    }
+    assert_eq!(
+        source
+            .with_tangents(vec![[1., 0., 0., 1.], [1., 0., 0., -1.], [1., 0., 0., 1.]])
+            .unwrap_err(),
+        TangentError::MixedHandedness { triangle: 0 }
+    );
+    let mut data = vertices();
+    data[2].normal = [0.; 3];
+    assert_eq!(
+        Mesh::new(data, vec![0, 1, 2])
+            .with_tangents(vec![[1., 0., 0., 1.]; 3])
+            .unwrap_err(),
+        TangentError::InvalidBasis { vertex: 2 }
+    );
+}

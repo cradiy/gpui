@@ -24,6 +24,7 @@ pub use camera::{Camera, CameraError, Projection, Ray, RayError, ScreenPoint};
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
 pub use gpui::PbrMaterial3d as PbrMaterial;
+pub use gpui::TangentError3d as TangentError;
 pub use gpui::{
     ColorOutput3d as ColorOutput, TextureColorSpace3d as TextureColorSpace,
     ToneMapping3d as ToneMapping,
@@ -69,6 +70,18 @@ impl Mesh {
     /// Borrowed triangle indices in input order.
     pub fn indices(&self) -> &[u32] {
         self.0.indices()
+    }
+    /// Mesh-local tangent XYZ and handedness W, if supplied.
+    pub fn tangents(&self) -> Option<&[[f32; 4]]> {
+        self.0.tangents()
+    }
+    /// Attaches validated tangents without changing geometry, triangle identities
+    /// or the source mesh. XYZ is normalized and orthogonalized against normals;
+    /// W must be -1 or +1, constant within each triangle.
+    pub fn with_tangents(&self, tangents: Vec<[f32; 4]>) -> Result<Self, TangentError> {
+        self.0
+            .with_tangents(tangents)
+            .map(|mesh| Self(mesh, self.1.clone()))
     }
     pub fn vertex_count(&self) -> usize {
         self.vertices().len()
@@ -116,6 +129,7 @@ type Face = ([f32; 3], [f32; 3], [f32; 3]);
 fn face_mesh(faces: &[Face]) -> Arc<Mesh3d> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
+    let mut tangents = Vec::new();
     for &(center, right, up) in faces {
         let first = vertices.len() as u32;
         for (x, y, uv) in [
@@ -129,10 +143,13 @@ fn face_mesh(faces: &[Face]) -> Arc<Mesh3d> {
                 normal: math::cross(right, up),
                 uv,
             });
+            tangents.push([right[0], right[1], right[2], -1.]);
         }
         indices.extend([0, 1, 2, 0, 2, 3].map(|i| i + first));
     }
     Mesh3d::new(vertices, indices)
+        .with_tangents(tangents)
+        .expect("invalid face tangents")
 }
 
 #[derive(Clone)]
@@ -147,6 +164,7 @@ pub(crate) enum TextureSlot {
     BaseColor,
     MetallicRoughness,
     Emissive,
+    Normal,
 }
 
 /// An image and its independent mesh-UV sampling configuration.
@@ -184,6 +202,8 @@ pub struct Material {
     pbr: Option<PbrMaterial>,
     metallic_roughness_texture: Option<MaterialTexture>,
     emissive_texture: Option<MaterialTexture>,
+    normal_texture: Option<MaterialTexture>,
+    normal_scale: f32,
 }
 impl Material {
     /// Creates a lit solid material from an sRGB color.
@@ -198,6 +218,8 @@ impl Material {
             pbr: None,
             metallic_roughness_texture: None,
             emissive_texture: None,
+            normal_texture: None,
+            normal_scale: 1.,
         }
     }
     /// Uses an image's first decoded frame, stretched over mesh UVs.
@@ -250,6 +272,19 @@ impl Material {
         self.emissive_texture = Some(texture);
         self
     }
+    /// Uses linear RGB tangent-space normals decoded from [0, 1] to [-1, 1].
+    /// Alpha is ignored. Requires mesh tangents when lit PBR and nonzero scale
+    /// are enabled. Does not change geometry, silhouettes or picking normals.
+    pub fn normal_texture(mut self, texture: MaterialTexture) -> Self {
+        self.normal_texture = Some(texture);
+        self
+    }
+    /// Scales normal-map XY before normalization. Defaults to 1; zero disables
+    /// the map and its resource requests. Rendering rejects negative/non-finite values.
+    pub fn normal_scale(mut self, scale: f32) -> Self {
+        self.normal_scale = scale;
+        self
+    }
 
     pub(crate) fn pbr_textures(&self) -> impl Iterator<Item = (TextureSlot, &MaterialTexture)> {
         [
@@ -258,6 +293,12 @@ impl Material {
                 self.metallic_roughness_texture.as_ref(),
             ),
             (TextureSlot::Emissive, self.emissive_texture.as_ref()),
+            (
+                TextureSlot::Normal,
+                self.normal_texture
+                    .as_ref()
+                    .filter(|_| self.normal_scale != 0.),
+            ),
         ]
         .into_iter()
         .filter_map(|(slot, texture)| {

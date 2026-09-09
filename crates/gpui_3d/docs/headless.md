@@ -87,6 +87,10 @@ channel. Materials support diffuse or metallic-roughness shading through
 Metallic-roughness and emissive maps accept decoded `ImageSource::Render` inputs
 with independent sampling. Their channels multiply the material factors; map
 alpha does not affect coverage or object IDs.
+Normal maps use linear tangent-space vectors and require mesh tangent data.
+`normal_scale` controls XY strength; zero bypasses the map. Reflected transforms
+and back-face orientation follow the viewport conventions. Picking and depth
+remain geometric rather than normal-map perturbed.
 
 Surviving alpha-cutout fragments are opaque. Both channels use the same mesh
 visibility, transforms, clip planes, texture sampling, and alpha threshold.

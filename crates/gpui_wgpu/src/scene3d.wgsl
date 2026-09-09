@@ -9,21 +9,25 @@ struct Params {
     uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
     view: vec4<f32>, pbr: vec4<f32>, emissive: vec4<f32>,
     metallic_roughness_map: ImageParams, emissive_map: ImageParams,
+    normal_map: ImageParams, normal_settings: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
 @group(0) @binding(2) var image_sampler: sampler;
 @group(0) @binding(3) var metallic_roughness_image: texture_2d<f32>;
 @group(0) @binding(4) var emissive_image: texture_2d<f32>;
-struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32> };
+@group(0) @binding(5) var normal_image: texture_2d<f32>;
+struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32 };
 @vertex
-fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>) -> Output {
+fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) tangent: vec4<f32>) -> Output {
     var clip = params.camera * params.model * vec4<f32>(position, 1.0);
     let origin = params.bounds.xy / params.viewport.xy;
     let extent = params.bounds.zw / params.viewport.xy;
     clip.x = (origin.x * 2.0 - 1.0) * clip.w + (clip.x + clip.w) * extent.x;
     clip.y = (1.0 - origin.y * 2.0) * clip.w + (clip.y - clip.w) * extent.y;
-    return Output(clip, (params.normal * vec4<f32>(normal, 0.0)).xyz, uv, (params.model * vec4<f32>(position, 1.0)).xyz);
+    let handedness = sign(dot(cross(unit_vector(params.model[0].xyz), unit_vector(params.model[1].xyz)), unit_vector(params.model[2].xyz)));
+    let world_tangent = vec4<f32>((params.model * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w * handedness);
+    return Output(clip, (params.normal * vec4<f32>(normal, 0.0)).xyz, uv, (params.model * vec4<f32>(position, 1.0)).xyz, world_tangent, handedness);
 }
 fn address_coordinate(value: f32, mode: u32) -> f32 {
     if (mode == 1u) { return value - floor(value); }
@@ -89,8 +93,23 @@ fn object_id(input: Output) -> @location(0) u32 {
 }
 
 fn unit_vector(value: vec3<f32>) -> vec3<f32> {
-    let scaled = value / max(max(max(abs(value.x), abs(value.y)), abs(value.z)), 0.000001);
-    return scaled / max(length(scaled), 0.000001);
+    let magnitude = max(max(abs(value.x), abs(value.y)), abs(value.z));
+    if (magnitude == 0.0 || !(magnitude <= 3.402823466e+38)) { return vec3<f32>(0.0); }
+    let scaled = value / magnitude;
+    return scaled / length(scaled);
+}
+
+fn surface_normal(input: Output) -> vec3<f32> {
+    let n = unit_vector(input.normal);
+    if (params.normal_settings.y < 0.5) { return n; }
+    let t0 = unit_vector(input.tangent.xyz);
+    let t = unit_vector(t0 - n * dot(n, t0));
+    if (dot(t, t) < 0.5 || abs(input.tangent.w) < 0.5) { return n; }
+    let b = cross(n, t) * sign(input.tangent.w);
+    let decoded = sample_image(normal_image, params.normal_map, input.uv).xyz * 2.0 - 1.0;
+    let mapped = unit_vector(decoded * vec3<f32>(params.normal_settings.x, params.normal_settings.x, 1.0));
+    if (dot(mapped, mapped) < 0.5) { return n; }
+    return unit_vector(t * mapped.x + b * mapped.y + n * mapped.z);
 }
 
 fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
@@ -128,10 +147,10 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
     var illumination = vec3<f32>(1.0);
     if (params.flags.y < 0.5) {
         if (params.pbr.z > 0.5) {
-            let normal = unit_vector(input.normal) * select(-1.0, 1.0, front);
+            let normal = surface_normal(input) * select(-1.0, 1.0, front) * input.orientation;
             return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, input.world, input.uv), vec3<f32>(0.0), vec3<f32>(65504.0)), 1.0);
         }
-        let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front);
+        let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front) * input.orientation;
         let light = params.direction.xyz / max(length(params.direction.xyz), 0.00001);
         illumination = vec3<f32>(params.direction.w) + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);
     }

@@ -477,7 +477,7 @@ alpha cutout, depth writes, object IDs, or picking.
 
 The light model contains one directional light and diffuse ambient illumination.
 Pure metals receive no ambient diffuse light. Environment reflections, shadows,
-and normal/occlusion maps are not provided.
+and occlusion maps are not provided.
 Emission does not illuminate other objects or add a glow outside the surface.
 
 ### Material textures
@@ -516,6 +516,49 @@ the viewport omits the object from rendering and visible picking. Direct
 headless rendering requires decoded `ImageSource::Render` inputs for every map
 and returns an error for unresolved inputs. `.unlit(true)` and diffuse materials
 ignore material maps without requesting their resources.
+
+### Normal maps and tangents
+
+```rust,no_run
+use gpui::rgb;
+use gpui_3d::{Material, MaterialTexture, Mesh, PbrMaterial};
+
+let mesh = Mesh::plane();
+let material = Material::color(rgb(0x79a6b0))
+    .pbr(PbrMaterial { roughness: 0.35, ..Default::default() })
+    .normal_texture(MaterialTexture::new("normal.png"))
+    .normal_scale(0.8);
+```
+
+Normal-map RGB is linear vector data, decoded from `[0, 1]` to `[-1, 1]` and
+normalized after filtering. R points along the tangent, G along the bitangent,
+and B along the surface normal; alpha is ignored. `normal_scale` multiplies XY
+before normalization. It defaults to 1 and accepts finite nonnegative values.
+Zero disables the normal map and its resource requests. A zero decoded vector
+uses the interpolated mesh normal.
+
+Normal maps affect lit PBR shading only. They do not move vertices, alter
+silhouettes or depth, or change object IDs, ray intersections, and picking normals.
+They use independent `MaterialTexture` sampling. UV transforms and addressing
+change sampled locations, not the tangent frame or the decoded vector axes.
+
+`Mesh::plane()` and `Mesh::cube()` provide tangents. Custom meshes attach one
+`[f32; 4]` tangent per vertex using `mesh.with_tangents(data)`, returning a new
+mesh with shared vertex/index storage and unchanged geometry queries. XYZ is
+orthogonalized against the vertex normal and normalized; W is exactly -1 or +1.
+The bitangent is `cross(normal, tangent.xyz) * tangent.w`. Read the resulting
+data with `mesh.tangents()`.
+
+Invalid counts, non-finite or undefined bases, zero vertex normals, and mixed W
+signs within a triangle return `TangentError`. Split vertices at tangent-space
+seams before supplying data. Tangents are explicit inputs: the core does not
+generate MikkTSpace tangents or reconstruct missing bases from derivatives.
+Rendering an active normal map without mesh tangents returns an error.
+
+Tangents follow the model transform; normals use the inverse transpose. Shading
+reorthogonalizes the world-space frame, adjusts handedness for reflected transforms,
+and reverses the mapped normal on back faces. Vertex-normal shading uses the same
+reflection-aware face orientation.
 
 ### Color and exposure
 
@@ -788,6 +831,14 @@ nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
 
 ## Example
+
+```sh
+cargo run -p gpui_3d --example normal_mapping
+```
+
+Compare smooth and normal-mapped planes with identical geometry. Adjust normal
+strength and texture density, mirror the mapped plane, right-drag to orbit, and
+scroll to zoom. Strength zero displays the unperturbed surface.
 
 ```sh
 cargo run -p gpui_3d --example pbr_materials

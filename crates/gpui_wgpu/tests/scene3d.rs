@@ -50,6 +50,8 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         pbr: None,
         metallic_roughness_texture: None,
         emissive_texture: None,
+        normal_texture: None,
+        normal_scale: 1.,
         unlit: true,
         alpha_cutoff: 0.5,
     }

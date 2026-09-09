@@ -184,6 +184,20 @@ impl WgpuScene3dRenderer {
         );
         for object in frame.objects.iter() {
             ensure!(
+                object.normal_scale.is_finite() && object.normal_scale >= 0.,
+                "3D object {} has invalid normal scale",
+                object.output_id
+            );
+            ensure!(
+                object.normal_texture.is_none()
+                    || object.pbr.is_none()
+                    || object.unlit
+                    || object.normal_scale == 0.
+                    || object.mesh.tangents().is_some(),
+                "3D object {}: normal maps require mesh tangents",
+                object.output_id
+            );
+            ensure!(
                 object.pbr.is_none_or(|pbr| pbr.is_valid()),
                 "3D object {} has invalid PBR parameters",
                 object.output_id

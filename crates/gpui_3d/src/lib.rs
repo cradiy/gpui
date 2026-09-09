@@ -23,13 +23,14 @@ pub use camera::{Camera, CameraError, Projection, Ray, RayError, ScreenPoint};
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
 use gpui::{ImageSource, Mesh3d, Rgba};
+pub use gpui::{MeshError3d as MeshError, MeshVertexAttribute3d as VertexAttribute};
 pub use graph::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
     SceneSubtree, SubtreeInstance, SubtreeNode,
 };
-pub use math::Transform;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use headless::*;
+pub use math::Transform;
 pub use orbit::{OrbitController, OrbitError, OrbitSettings};
 pub use picking::{Hit, PickBehavior};
 use std::sync::{Arc, OnceLock};
@@ -40,8 +41,33 @@ pub use viewport::{Viewport3d, viewport3d};
 pub struct Mesh(Arc<Mesh3d>);
 impl Mesh {
     /// Creates counterclockwise triangles from mesh-local vertex data.
+    /// Panics for invalid geometry; use `try_new` for fallible construction.
+    #[track_caller]
     pub fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Self {
         Self(Mesh3d::new(vertices, indices))
+    }
+    /// Validates nonempty indexed triangles with finite vertex attributes.
+    /// Preserves unused vertices, degenerate triangles and input ordering.
+    pub fn try_new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Result<Self, MeshError> {
+        Mesh3d::try_new(vertices, indices).map(Self)
+    }
+    /// Borrowed mesh-local vertices, including unreferenced vertices.
+    pub fn vertices(&self) -> &[Vertex] {
+        self.0.vertices()
+    }
+    /// Borrowed triangle indices in input order.
+    pub fn indices(&self) -> &[u32] {
+        self.0.indices()
+    }
+    pub fn vertex_count(&self) -> usize {
+        self.vertices().len()
+    }
+    pub fn index_count(&self) -> usize {
+        self.indices().len()
+    }
+    /// Number of indexed triangles, including degenerate triangles.
+    pub fn triangle_count(&self) -> usize {
+        self.index_count() / 3
     }
     /// Unit XY plane centered at the origin, facing positive Z.
     pub fn plane() -> Self {

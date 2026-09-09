@@ -40,7 +40,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Static scene evaluation**: Camera-independent owned results, world and aggregate bounds, node identities in picking, and a hierarchy example.
 - [ ] **Camera and light nodes**: Attach cameras and lights to hierarchy nodes and derive their world-space state during evaluation.
 - [x] **Subtree reuse**: Immutable local snapshots, atomic cross-graph instantiation, explicit application-ID remapping, source-to-instance handles, shared geometry/images, and independent node properties.
-- [ ] **Resource interfaces**: Fallible geometry construction, public resource inspection, and renderer upload/readiness interfaces usable by external importers and resource managers.
+- [x] **Mesh resource interfaces**: Fallible geometry construction with structured errors, borrowed vertex/index inspection, counts, local bounds, and shared immutable storage.
+- [ ] **Renderer resource interfaces**: Upload/readiness interfaces usable by external importers and resource managers.
 - [x] **Camera extensions**: Orthographic projection, explicit up vectors, public view/projection matrices, viewport rays, world-to-screen projection, and framing from object bounds.
 - [x] **World-ray queries**: Normalized arbitrary rays with camera-independent geometric intersection and stable node identities.
 - [ ] **Camera optics**: Focal-length/sensor-size conversion and explicit off-center projection support.

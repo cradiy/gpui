@@ -39,6 +39,40 @@ cube centered at the origin. Both reuse shared geometry. `Mesh::new` accepts
 vertices with position, normal and UV, plus counterclockwise triangle indices.
 UV `(0, 0)` is at the top left. Faces render from both sides.
 
+`Mesh::try_new(vertices, indices)` returns `Result<Mesh, MeshError>`. Vertices and
+indices must be nonempty, index counts must be multiples of three, and each index
+must reference an existing vertex. Position, normal and UV components must be
+finite, including those of unused vertices. Errors identify an invalid index's
+buffer offset or a non-finite vertex's attribute and component, all zero-based.
+`Mesh::new` uses the same validation and panics on invalid input.
+
+```rust
+use gpui_3d::{Mesh, Vertex};
+
+# fn main() -> Result<(), gpui_3d::MeshError> {
+let vertices = [[-1., -1., 0.], [1., -1., 0.], [0., 1., 0.]]
+    .map(|position| Vertex { position, normal: [0., 0., 1.], uv: [0.; 2] })
+    .to_vec();
+let mesh = Mesh::try_new(vertices, vec![0, 1, 2])?;
+let triangle = &mesh.indices()[..3];
+let first_position = mesh.vertices()[triangle[0] as usize].position;
+# Ok(())
+# }
+```
+
+`vertices()` and `indices()` borrow immutable storage; mesh clones share that
+storage. `vertex_count()`, `index_count()` and `triangle_count()` report the stored
+data, without filtering. `bounds()` computes mesh-local bounds of all vertices,
+including unused ones, and permits zero extent.
+
+Construction preserves ordering, repeated indices, zero normals and finite UVs
+outside `[0, 1]`. It does not generate normals or remove degenerate triangles.
+Zero-area triangles have no filled surface and are skipped by ray picking;
+retaining their indices preserves subsequent `Hit::triangle_index` values.
+Nonzero normals are normalized during shading. Geometry validation does not
+guarantee that every camera or transform will yield numerically representable
+rendering or intersection results.
+
 Object transforms apply scale, X/Y/Z Euler rotation, then translation. Normals
 use inverse-transpose transforms for nonuniform scale. Scale components must be
 finite and nonzero. Camera clip distances must satisfy `0 < near < far`.

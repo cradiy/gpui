@@ -69,24 +69,109 @@ pub struct Mesh3d {
     indices: Box<[u32]>,
 }
 
+/// Vertex attribute containing an invalid component.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeshVertexAttribute3d {
+    /// Mesh-local XYZ coordinates.
+    Position,
+    /// Mesh-local surface normal.
+    Normal,
+    /// Texture coordinates.
+    Uv,
+}
+
+/// Invalid indexed triangle data. Vertex, index-buffer and component offsets
+/// are zero-based.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum MeshError3d {
+    /// No vertex data was supplied.
+    #[error("mesh vertices are empty")]
+    EmptyVertices,
+    /// No triangle indices were supplied.
+    #[error("mesh indices are empty")]
+    EmptyIndices,
+    /// The index buffer ends with a partial triangle.
+    #[error("index count {index_count} is not a multiple of three")]
+    IncompleteTriangle {
+        /// Total number of supplied indices.
+        index_count: usize,
+    },
+    /// An index does not reference a supplied vertex.
+    #[error("index {index} at offset {offset} is outside {vertex_count} vertices")]
+    IndexOutOfBounds {
+        /// Position in the index buffer.
+        offset: usize,
+        /// Invalid vertex index.
+        index: u32,
+        /// Number of supplied vertices.
+        vertex_count: usize,
+    },
+    /// A vertex attribute contains NaN or infinity.
+    #[error("vertex {vertex} has a non-finite {attribute:?} component at {component}")]
+    NonFiniteVertex {
+        /// Position in the vertex buffer.
+        vertex: usize,
+        /// Attribute containing the invalid value.
+        attribute: MeshVertexAttribute3d,
+        /// Position within the attribute's components.
+        component: usize,
+    },
+}
+
 impl Mesh3d {
     /// Creates triangles with counterclockwise front faces.
     /// Panics for empty, non-finite or out-of-range geometry.
     #[track_caller]
     pub fn new(vertices: Vec<MeshVertex3d>, indices: Vec<u32>) -> Arc<Self> {
-        assert!(!vertices.is_empty() && !indices.is_empty() && indices.len().is_multiple_of(3));
-        assert!(indices.iter().all(|i| (*i as usize) < vertices.len()));
-        assert!(vertices.iter().all(|v| {
-            v.position
-                .iter()
-                .chain(&v.normal)
-                .chain(&v.uv)
-                .all(|x| x.is_finite())
-        }));
-        Arc::new(Self {
+        Self::try_new(vertices, indices).expect("invalid mesh geometry")
+    }
+
+    /// Validates indexed triangles without panicking for invalid geometry.
+    /// Retains vertex/index order, unused vertices and degenerate triangles.
+    /// Zero normals and finite UVs outside 0..=1 are accepted.
+    pub fn try_new(
+        vertices: Vec<MeshVertex3d>,
+        indices: Vec<u32>,
+    ) -> Result<Arc<Self>, MeshError3d> {
+        if vertices.is_empty() {
+            return Err(MeshError3d::EmptyVertices);
+        }
+        if indices.is_empty() {
+            return Err(MeshError3d::EmptyIndices);
+        }
+        if !indices.len().is_multiple_of(3) {
+            return Err(MeshError3d::IncompleteTriangle {
+                index_count: indices.len(),
+            });
+        }
+        for (offset, &index) in indices.iter().enumerate() {
+            if index as usize >= vertices.len() {
+                return Err(MeshError3d::IndexOutOfBounds {
+                    offset,
+                    index,
+                    vertex_count: vertices.len(),
+                });
+            }
+        }
+        for (vertex, data) in vertices.iter().enumerate() {
+            for (attribute, values) in [
+                (MeshVertexAttribute3d::Position, data.position.as_slice()),
+                (MeshVertexAttribute3d::Normal, data.normal.as_slice()),
+                (MeshVertexAttribute3d::Uv, data.uv.as_slice()),
+            ] {
+                if let Some(component) = values.iter().position(|value| !value.is_finite()) {
+                    return Err(MeshError3d::NonFiniteVertex {
+                        vertex,
+                        attribute,
+                        component,
+                    });
+                }
+            }
+        }
+        Ok(Arc::new(Self {
             vertices: vertices.into(),
             indices: indices.into(),
-        })
+        }))
     }
 
     /// Mesh-local vertex data.

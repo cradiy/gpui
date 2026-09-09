@@ -4,14 +4,22 @@
 #[doc = include_str!("../docs/viewport.md")]
 pub mod guide {}
 
+mod affine;
+mod bounds;
+mod graph;
 mod math;
 mod picking;
 mod ui_input;
 mod viewport;
 
+pub use affine::{AffineTransform, TransformError};
+pub use bounds::Aabb;
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
 use gpui::{ImageSource, Mesh3d, Rgba};
+pub use graph::{
+    EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
+};
 pub use math::{Camera, Transform};
 pub use picking::{Hit, PickBehavior};
 use std::sync::{Arc, OnceLock};
@@ -142,8 +150,17 @@ pub struct Object {
     mesh: Mesh,
     material: Material,
     transform: Transform,
+    node: Option<NodeHandle>,
+    world: Option<AffineTransform>,
 }
 impl Object {
+    pub(crate) fn matrices(&self) -> (math::Matrix, math::Matrix) {
+        self.world.map_or_else(
+            || self.transform.matrices(),
+            |world| (world.matrix(), world.normal_matrix()),
+        )
+    }
+
     /// Creates a mesh at the origin.
     pub fn new(mesh: Mesh, material: Material) -> Self {
         Self {
@@ -152,6 +169,8 @@ impl Object {
             mesh,
             material,
             transform: Transform::default(),
+            node: None,
+            world: None,
         }
     }
     /// Assigns a stable application-defined identity for picking callbacks.

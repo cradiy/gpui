@@ -1,6 +1,6 @@
 # gpui_3d TODO
 
-Lightweight 3D scenes embedded in GUIs, with declarative construction and composition with GPUI layout, input, and effects.
+General-purpose 3D scenes, assets, evaluation, queries, and rendering, with viewports composed through GPUI layout, input, and effects.
 
 Checked items are implemented. Unchecked items are planned, grouped by implementation phase.
 
@@ -32,7 +32,11 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Phase 2: Scenes and Assets
 
-- [ ] **Scene hierarchy**: Nodes, parent-child transforms, visibility, and stable identities, with group movement and hiding.
+- [x] **Scene hierarchy**: Group and mesh nodes, graph-scoped generational handles, unique application IDs, inherited visibility, atomic reparenting, and subtree removal.
+- [x] **Affine transforms**: Quaternion TRS and full affine matrices, including shear and negative scale, with keep-local/keep-world reparenting and inverse-transpose normals.
+- [x] **Static scene evaluation**: Camera-independent owned results, world and aggregate bounds, node identities in picking, and a hierarchy example.
+- [ ] **Camera and light nodes**: Attach cameras and lights to hierarchy nodes and derive their world-space state during evaluation.
+- [ ] **Model instances**: Preserve asset, instance, node, and primitive ownership; share geometry/material resources with explicit instance overrides.
 - [ ] **Camera extensions**: Orthographic projection, viewport rays, world-to-screen projection, and framing from object bounds.
 - [ ] **Geometry primitives**: Spheres, cylinders, cones, and subdivided planes with segment configuration, bounds, and normal and tangent generation.
 - [ ] **Texture sampling**: UV transforms, addressing and filtering modes, mipmaps, anisotropic filtering, and distinct handling of color and data textures.
@@ -60,6 +64,9 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Phase 5: Performance and Platforms
 
+- [ ] **Direct headless 3D rendering**: Consume evaluated scenes without creating a native window or running UI layout; share rendering with GPUI viewports and expose GPU outputs plus bounded asynchronous readback.
+- [ ] **Data outputs**: Color, linear camera depth, normals, and integer object IDs from the same evaluated state, with explicit coverage, background, format, and ID-mapping contracts.
+- [ ] **Capabilities and diagnostics**: Query formats, channels, sample counts, limits, and backend support; return actionable asset and rendering failures.
 - [ ] **Viewport-sized render targets**: Allocate color, depth, and MSAA targets to viewport bounds, with configurable resolution and sample count to limit GPU memory use.
 - [ ] **On-demand updates**: Track scene, camera, and UI texture invalidation separately; reuse results when static, invisible, or paused without continuously requesting frames.
 - [ ] **Culling and instancing**: Frustum culling, instanced rendering of shared geometry, and material batching with reproducible benchmarks.
@@ -69,10 +76,13 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Near-Term Order
 
-1. Multiple UI textures.
-2. Captured UI picking visibility and pointer mapping.
-3. Reusable camera controllers, scene hierarchy, and more geometry primitives.
-4. Texture sampling, transparent materials, and static glTF / GLB loading.
-5. Color pipeline, PBR, lights, and shadows.
+1. Public camera projection/ray queries, orthographic projection, bounds framing, and reusable controllers.
+2. Shared viewport/headless rendering inputs and explicit Color/ID output contracts.
+3. Static glTF / GLB assets, resource readiness, model instances, and accelerated spatial queries.
+4. Texture sampling, linear HDR color, PBR, and transparent materials.
+5. Depth/normal outputs, environment lighting, and directional shadows.
+6. Skeletal/morph animation with absolute-time evaluation, followed by attachments and constraints.
+
+Keep multiple UI textures, capture-alpha picking, and focus/overlay support as independent GUI extensions.
 
 Address performance, resource lifecycle, and platform validation alongside each feature.

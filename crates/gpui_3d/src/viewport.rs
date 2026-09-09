@@ -320,7 +320,7 @@ impl Element for Content {
                         MeshTexture3d::Image(tile)
                     }
                 };
-                let (model, normal) = object.transform.matrices();
+                let (model, normal) = object.matrices();
                 Some(MeshDraw3d {
                     mesh: object.mesh.0.clone(),
                     model,

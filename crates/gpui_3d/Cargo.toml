@@ -10,6 +10,7 @@ test-support = ["gpui/test-support"]
 
 [dependencies]
 gpui.workspace = true
+slotmap.workspace = true
 
 [dev-dependencies]
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }

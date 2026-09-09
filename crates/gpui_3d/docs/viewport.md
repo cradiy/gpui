@@ -41,6 +41,102 @@ Object transforms apply scale, X/Y/Z Euler rotation, then translation. Normals
 use inverse-transpose transforms for nonuniform scale. Scale components must be
 finite and nonzero. Camera clip distances must satisfy `0 < near < far`.
 
+## Scene hierarchy
+
+`SceneGraph` manages group and mesh nodes independently of a window or GPU.
+Each node has a local `AffineTransform` and inherited visibility. Evaluate the
+graph once, then create scenes for different cameras from the same result.
+
+```rust
+use gpui::{Styled, rgb};
+use gpui_3d::{AffineTransform, Camera, Material, Mesh, Node, ReparentMode, SceneGraph, viewport3d};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut graph = SceneGraph::new();
+let group = graph.insert(None, Node::new().id("assembly"))?;
+let part = graph.insert(Some(group),
+    Node::new().id("part")
+        .mesh(Mesh::cube(), Material::color(rgb(0x89c8ee)))
+        .transform(AffineTransform::from_translation([1., 0., 0.])?),
+)?;
+
+graph.set_transform(group, AffineTransform::from_trs(
+    [2., 0., 0.], [0., 0., 0., 1.], [1., 2., 1.],
+)?)?;
+let evaluated = graph.evaluate()?;
+let world = evaluated.node(part).unwrap().world;
+assert_eq!(world.transform_point([0., 0., 0.]), [3., 0., 0.]);
+let viewport = viewport3d("assembly-view", evaluated.scene(Camera::default())).size_full();
+
+graph.reparent(part, None, ReparentMode::KeepWorld)?;
+graph.set_visible(group, false)?;
+# Ok(())
+# }
+```
+
+### Identity and editing
+
+- `NodeHandle` is a graph-scoped generational handle. Removing a node invalidates
+  its handle; another graph or a replacement node cannot use it interchangeably.
+  Handles are runtime identities, not project serialization IDs.
+- `Node::id` is an optional application ID, unique across groups and mesh nodes
+  in a graph. `find` maps it to a handle. An application can also maintain its
+  own external-ID-to-handle map.
+- `node`, `parent`, `children`, and `roots` expose the hierarchy. `replace`
+  changes node properties while retaining the handle and parent-child links.
+  `set_transform`, `set_visible`, and `set_material` update individual properties.
+- `remove_subtree` removes a node and all descendants, returning the invalidated
+  handles. Their application IDs become available for reuse.
+- Invalid or foreign handles, duplicate application IDs, cycles, and invalid
+  keep-world transforms return `SceneError` without partially applying an edit.
+  Individually valid local matrices can overflow when composed; evaluation
+  returns the affected node and transform error instead of a partial result.
+
+`Mesh` clones share immutable geometry. A node owns its material value and local
+transform; editing either does not modify another node using the same mesh.
+Groups can organize several mesh nodes under one application-defined instance.
+Asset import, model-instance resources, and camera/light attachments are not
+provided by the graph.
+
+### Transforms and bounds
+
+`AffineTransform::from_trs` applies scale, quaternion rotation, then translation.
+Quaternion order is `[x, y, z, w]`; finite nonzero quaternions are normalized.
+Negative scale is supported. `from_matrix` accepts a column-major affine matrix,
+including shear, with last row `[0, 0, 0, 1]`. Non-finite, singular, numerically
+near-collinear, or unrepresentable transforms return `TransformError`.
+
+World matrices are `parent_world * local`. `KeepLocal` retains the local matrix
+when reparenting; `KeepWorld` computes a new local matrix without decomposing away
+shear. Floating-point tolerance applies. Visibility is inherited from the new
+parent in either mode. Normals use the world inverse-transpose matrix.
+
+`Mesh::bounds` and `Node::local_bounds` describe mesh-local AABBs. Evaluated nodes
+provide conservative world-aligned bounds and subtree bounds, including hidden
+geometry. Empty groups have no own bounds. `EvaluatedScene::bounds` includes only
+geometry with inherited visibility enabled; it does not test camera clipping or
+occlusion. Bounds are not exact mesh overlap or collision queries.
+
+### Evaluation and picking
+
+`evaluate` returns an owned, camera-independent `EvaluatedScene`, retaining shared
+geometry and image sources. Later edits or deletion do not change previous
+results. The revision identifies graph edits within that graph; it is not a
+global asset version or image-readiness indicator. Evaluation traverses the
+hierarchy without recursive calls and performs no image loading or GPU work.
+
+`evaluated.scene(camera)` supplies visible objects to the ordinary viewport and
+`Scene::pick`, using the same world and normal matrices. `Hit::node` identifies
+the source graph node, even without an application ID. `Hit::object_id` carries
+its application ID, while `object_index` is only the index in that evaluated
+scene's flattened visible-object list. Flat scenes built with `Scene::object`
+have no graph handle. An old evaluated scene may return a handle already removed
+from the live graph; validate it through `graph.node` before editing.
+
+The evaluated state contains static transforms and visibility. Animation time,
+constraints, asset readiness, and direct no-window 3D rendering are separate
+capabilities. The viewport still resolves image resources during rendering.
+
 ## Materials and light
 
 - `Material::color(color)` creates a lit solid surface.
@@ -240,6 +336,15 @@ UI texture targets and their rendering resources are reused while attached;
 pixel-size changes resize the capture targets independently of the window.
 
 ## Example
+
+```sh
+cargo run -p gpui_3d --example hierarchy
+```
+
+Rotate groups A and B, toggle group A's visibility, and reparent the coral cube
+with either keep-world or keep-local behavior. Remove and restore coral to create
+a new handle. Click geometry to inspect its node identity. Right-drag to orbit
+and scroll to zoom. The graph is reevaluated after edits, not camera movement.
 
 ```sh
 cargo run -p gpui_3d --example ui_interaction

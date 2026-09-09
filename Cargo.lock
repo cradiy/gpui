@@ -2953,6 +2953,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "slotmap",
  "uic",
 ]
 

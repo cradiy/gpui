@@ -70,9 +70,11 @@ fn image_alpha(image: &RenderImage, uv: [f32; 2]) -> f32 {
 /// The nearest triangle intersection within the camera's clip range.
 #[derive(Clone, Debug)]
 pub struct Hit {
+    /// Graph identity, or `None` for an object built directly in a flat scene.
+    pub node: Option<crate::NodeHandle>,
     /// Application identity, or `None` for an unnamed object.
     pub object_id: Option<ObjectId>,
-    /// Object index in scene insertion order.
+    /// Index in this scene's flattened object list; not a stable identity.
     pub object_index: usize,
     /// Triangle index in the mesh's index buffer.
     pub triangle_index: usize,
@@ -129,7 +131,7 @@ impl Scene {
             {
                 continue;
             }
-            let (model, normal_matrix) = object.transform.matrices();
+            let (model, normal_matrix) = object.matrices();
             for (triangle_index, indices) in object.mesh.0.indices().chunks_exact(3).enumerate() {
                 let vertices: [_; 3] =
                     std::array::from_fn(|i| &object.mesh.0.vertices()[indices[i] as usize]);
@@ -166,6 +168,7 @@ impl Scene {
                 );
                 let normal = unit([n[0], n[1], n[2]]).map(|v| if front { v } else { -v });
                 closest = Some(Hit {
+                    node: object.node,
                     object_id: object.id.clone(),
                     object_index,
                     triangle_index,
@@ -240,7 +243,7 @@ impl DragProjection {
         let indices = &object.mesh.0.indices()[hit.triangle_index * 3..][..3];
         let vertices: [_; 3] =
             std::array::from_fn(|i| &object.mesh.0.vertices()[indices[i] as usize]);
-        let (model, _) = object.transform.matrices();
+        let (model, _) = object.matrices();
         Self {
             camera: snapshot.scene.camera,
             bounds: snapshot.bounds,

@@ -37,15 +37,17 @@ impl EnvironmentBackground {
         aspect: f32,
     ) -> Result<gpui::EnvironmentBackground3d, crate::CameraError> {
         let view = camera.view_matrix()?;
+        let projection = camera.projection_matrix(aspect)?;
         let (x, y) = match camera.projection {
-            crate::Projection::Perspective { vertical_fov } => {
-                let y = (vertical_fov * 0.5).tan();
-                (y * aspect, y)
-            }
+            crate::Projection::Perspective { .. } => (1. / projection[0][0], 1. / projection[1][1]),
             crate::Projection::Orthographic { .. } => (0., 0.),
         };
         let rays = [
-            [-view[0][2], -view[1][2], -view[2][2]],
+            std::array::from_fn(|i| {
+                -view[i][2]
+                    + view[i][0] * camera.lens_shift[0] * x
+                    + view[i][1] * camera.lens_shift[1] * y
+            }),
             [view[0][0] * x, view[1][0] * x, view[2][0] * x],
             [view[0][1] * y, view[1][1] * y, view[2][1] * y],
         ];
@@ -214,43 +216,47 @@ mod tests {
             Projection::Perspective { vertical_fov: 1.2 },
             Projection::Orthographic { vertical_size: 7. },
         ] {
-            let camera = Camera {
-                eye: [2., 3., 5.],
-                target: [-1., 0.5, 1.],
-                up: [0.2, 1., 0.1],
-                projection,
-                ..Default::default()
-            };
-            for (width, height) in [(800., 300.), (250., 700.)] {
-                let viewport = Bounds::new(point(px(71.), px(43.)), size(px(width), px(height)));
-                let prepared = background.prepare(camera, width / height).unwrap();
-                for (u, v) in [(0., 0.), (0.5, 0.5), (1., 1.), (0.2, 0.75)] {
-                    let pixel = viewport.origin + point(px(u * width), px(v * height));
-                    let expected = camera.screen_to_ray(viewport, pixel).unwrap().direction();
-                    let direction = std::array::from_fn(|i| {
-                        prepared.rays[0][i]
-                            + (u * 2. - 1.) * prepared.rays[1][i]
-                            + (1. - v * 2.) * prepared.rays[2][i]
-                    });
-                    let actual = Ray::new([0.; 3], direction).unwrap().direction();
-                    for (actual, expected) in actual.into_iter().zip(expected) {
+            for lens_shift in [[0.; 2], [0.75, -0.3], [2., 1.]] {
+                let camera = Camera {
+                    eye: [2., 3., 5.],
+                    target: [-1., 0.5, 1.],
+                    up: [0.2, 1., 0.1],
+                    projection,
+                    lens_shift,
+                    ..Default::default()
+                };
+                for (width, height) in [(800., 300.), (250., 700.)] {
+                    let viewport =
+                        Bounds::new(point(px(71.), px(43.)), size(px(width), px(height)));
+                    let prepared = background.prepare(camera, width / height).unwrap();
+                    for (u, v) in [(0., 0.), (0.5, 0.5), (1., 1.), (0.2, 0.75)] {
+                        let pixel = viewport.origin + point(px(u * width), px(v * height));
+                        let expected = camera.screen_to_ray(viewport, pixel).unwrap().direction();
+                        let direction = std::array::from_fn(|i| {
+                            prepared.rays[0][i]
+                                + (u * 2. - 1.) * prepared.rays[1][i]
+                                + (1. - v * 2.) * prepared.rays[2][i]
+                        });
+                        let actual = Ray::new([0.; 3], direction).unwrap().direction();
+                        for (actual, expected) in actual.into_iter().zip(expected) {
+                            assert!((actual - expected).abs() < 0.00001);
+                        }
+                    }
+                    let moved = Camera {
+                        eye: camera.eye.map(|v| v + 16.),
+                        target: camera.target.map(|v| v + 16.),
+                        ..camera
+                    };
+                    for (actual, expected) in background
+                        .prepare(moved, width / height)
+                        .unwrap()
+                        .rays
+                        .iter()
+                        .flatten()
+                        .zip(prepared.rays.iter().flatten())
+                    {
                         assert!((actual - expected).abs() < 0.00001);
                     }
-                }
-                let moved = Camera {
-                    eye: camera.eye.map(|v| v + 16.),
-                    target: camera.target.map(|v| v + 16.),
-                    ..camera
-                };
-                for (actual, expected) in background
-                    .prepare(moved, width / height)
-                    .unwrap()
-                    .rays
-                    .iter()
-                    .flatten()
-                    .zip(prepared.rays.iter().flatten())
-                {
-                    assert!((actual - expected).abs() < 0.00001);
                 }
             }
         }

@@ -241,6 +241,8 @@ impl Render for Materials {
                         ("exposure", "Exposure"),
                         ("tone", "Tone mapping"),
                         ("projection", "Switch projection"),
+                        ("focal", "Focal length"),
+                        ("lens", "Lens shift"),
                         ("reset", "Reset view"),
                     ]
                     .into_iter()
@@ -270,6 +272,19 @@ impl Render for Materials {
                                     "filter" => this.filter = if this.filter == TextureFilter::Linear { TextureFilter::Nearest } else { TextureFilter::Linear },
                                     "exposure" => this.exposure = if this.exposure < 2. { this.exposure+1. } else { -2. },
                                     "tone" => this.tone_mapping = if this.tone_mapping == ToneMapping::Reinhard { ToneMapping::None } else { ToneMapping::Reinhard },
+                                    "focal" => {
+                                        let mut camera = this.controls.camera();
+                                        let focal = camera.projection.focal_length(24.).unwrap_or(0.);
+                                        camera.projection = Projection::from_focal_length(
+                                            if focal < 34. { 35. } else if focal < 49. { 50. } else if focal < 84. { 85. } else { 35. }, 24.,
+                                        ).unwrap();
+                                        this.controls.set_camera(camera).unwrap();
+                                    }
+                                    "lens" => {
+                                        let mut camera = this.controls.camera();
+                                        camera.lens_shift = if camera.lens_shift[0] == 0. { [0.6,0.25] } else if camera.lens_shift[0] > 0. { [-0.6,0.25] } else { [0.;2] };
+                                        this.controls.set_camera(camera).unwrap();
+                                    }
                                     "projection" => {
                                         let mut camera = this.controls.camera();
                                         let distance = camera
@@ -391,13 +406,14 @@ impl Render for Materials {
             )
             .child(div().text_color(rgb(0xa8bdd6)).child(format!("Normal {} · AO {} · {:?} · {:?} / {:?} · Exposure {:+.0} · {:?}", self.normal, self.ao, self.alpha, self.address, self.filter, self.exposure, self.tone_mapping)))
             .child(div().text_color(rgb(0xa8bdd6)).child(format!(
-                "Roughness {:.2} · Emission {:.1}× · Maps {} · Density {:.0}× · Emission offset {:.3} · {:?}",
+                "Roughness {:.2} · Emission {:.1}× · Maps {} · Density {:.0}× · Emission offset {:.3} · {:?} · Lens shift {:?}",
                 self.roughness,
                 self.emission,
                 if self.maps { "On" } else { "Off" },
                 self.density,
                 self.emission_offset,
-                self.controls.camera().projection
+                self.controls.camera().projection,
+                self.controls.camera().lens_shift
             )))
     }
 }

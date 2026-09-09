@@ -8,7 +8,8 @@ use crate::{
 use gpui::{Bounds, Pixels, Point, point, px};
 use std::fmt;
 
-/// Centered projection. Aspect ratio is supplied by the output viewport.
+/// Projection scale. Aspect ratio is supplied by the output viewport;
+/// `Camera::lens_shift` positions the projection center.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Projection {
     /// Vertical angle in radians, strictly between zero and pi.
@@ -22,6 +23,47 @@ impl Default for Projection {
         Self::Perspective {
             vertical_fov: std::f32::consts::FRAC_PI_4,
         }
+    }
+}
+
+impl Projection {
+    /// Converts focal length and sensor height in matching units (for example mm)
+    /// to vertical perspective FOV. Viewport aspect determines horizontal coverage.
+    pub fn from_focal_length(focal_length: f32, sensor_height: f32) -> Result<Self, CameraError> {
+        if ![focal_length, sensor_height]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.)
+        {
+            return Err(CameraError::InvalidProjection);
+        }
+        let vertical_fov =
+            (2. * (f64::from(sensor_height) / (2. * f64::from(focal_length))).atan()) as f32;
+        if vertical_fov <= 0. || vertical_fov >= std::f32::consts::PI {
+            return Err(CameraError::Unrepresentable);
+        }
+        Ok(Self::Perspective { vertical_fov })
+    }
+
+    /// Recovers focal length in the same units as sensor height. Orthographic
+    /// projections and invalid sensor dimensions return `InvalidProjection`.
+    pub fn focal_length(self, sensor_height: f32) -> Result<f32, CameraError> {
+        let Self::Perspective { vertical_fov } = self else {
+            return Err(CameraError::InvalidProjection);
+        };
+        if !sensor_height.is_finite()
+            || sensor_height <= 0.
+            || !vertical_fov.is_finite()
+            || vertical_fov <= 0.
+            || vertical_fov >= std::f32::consts::PI
+        {
+            return Err(CameraError::InvalidProjection);
+        }
+        let focal =
+            (f64::from(sensor_height) / (2. * (f64::from(vertical_fov) * 0.5).tan())) as f32;
+        if !focal.is_finite() || focal <= 0. {
+            return Err(CameraError::Unrepresentable);
+        }
+        Ok(focal)
     }
 }
 
@@ -108,6 +150,10 @@ pub struct Camera {
     pub target: [f32; 3],
     pub up: [f32; 3],
     pub projection: Projection,
+    /// Projection-center offset in half-viewport spans. Positive X/Y moves
+    /// coverage right/up in camera space; the optical axis projects to -shift NDC.
+    /// Applies to perspective and orthographic views. Any finite value is valid.
+    pub lens_shift: [f32; 2],
     pub near: f32,
     pub far: f32,
 }
@@ -118,6 +164,7 @@ impl Default for Camera {
             target: [0.; 3],
             up: [0., 1., 0.],
             projection: Projection::default(),
+            lens_shift: [0.; 2],
             near: 0.05,
             far: 100.,
         }
@@ -224,11 +271,12 @@ impl Camera {
             || !self.far.is_finite()
             || self.near <= 0.
             || self.far <= self.near
+            || !self.lens_shift.iter().all(|v| v.is_finite())
         {
             return Err(CameraError::InvalidProjection);
         }
         let range = self.near - self.far;
-        finite_matrix(match self.projection {
+        let matrix = finite_matrix(match self.projection {
             Projection::Perspective { vertical_fov } => {
                 if !vertical_fov.is_finite()
                     || vertical_fov <= 0.
@@ -241,7 +289,7 @@ impl Camera {
                 [
                     [f / aspect, 0., 0., 0.],
                     [0., f, 0., 0.],
-                    [0., 0., z, -1.],
+                    [self.lens_shift[0], self.lens_shift[1], z, -1.],
                     [0., 0., z * self.near, 0.],
                 ]
             }
@@ -253,10 +301,19 @@ impl Camera {
                     [2. / vertical_size / aspect, 0., 0., 0.],
                     [0., 2. / vertical_size, 0., 0.],
                     [0., 0., 1. / range, 0.],
-                    [0., 0., self.near / range, 1.],
+                    [
+                        -self.lens_shift[0],
+                        -self.lens_shift[1],
+                        self.near / range,
+                        1.,
+                    ],
                 ]
             }
-        })
+        })?;
+        if matrix[0][0] <= 0. || matrix[1][1] <= 0. {
+            return Err(CameraError::Unrepresentable);
+        }
+        Ok(matrix)
     }
 
     /// Column-major world-to-clip transform. Hardware depth runs from zero to one.
@@ -334,26 +391,19 @@ impl Camera {
         {
             return Err(CameraError::InvalidPoint);
         }
-        self.projection_matrix(width / height)?;
+        let projection = self.projection_matrix(width / height)?;
         let [right, up, backward] = self.axes()?;
-        let x = 2. * f32::from(position.x - viewport.origin.x) / width - 1.;
-        let y = 1. - 2. * f32::from(position.y - viewport.origin.y) / height;
+        let x = (2. * f32::from(position.x - viewport.origin.x) / width - 1. + self.lens_shift[0])
+            / projection[0][0];
+        let y = (1. - 2. * f32::from(position.y - viewport.origin.y) / height + self.lens_shift[1])
+            / projection[1][1];
         let (origin, direction) = match self.projection {
-            Projection::Perspective { vertical_fov } => {
-                let extent = (vertical_fov * 0.5).tan();
-                (
-                    self.eye,
-                    std::array::from_fn(|i| {
-                        right[i] * x * width / height * extent + up[i] * y * extent - backward[i]
-                    }),
-                )
-            }
-            Projection::Orthographic { vertical_size } => (
-                std::array::from_fn(|i| {
-                    self.eye[i]
-                        + right[i] * x * width / height * vertical_size * 0.5
-                        + up[i] * y * vertical_size * 0.5
-                }),
+            Projection::Perspective { .. } => (
+                self.eye,
+                std::array::from_fn(|i| right[i] * x + up[i] * y - backward[i]),
+            ),
+            Projection::Orthographic { .. } => (
+                std::array::from_fn(|i| self.eye[i] + right[i] * x + up[i] * y),
                 backward.map(|v| -v),
             ),
         };
@@ -361,15 +411,17 @@ impl Camera {
     }
 
     /// Frames all AABB corners while preserving viewing direction, up, and projection
-    /// kind. Adjusts eye, target, clip planes, and orthographic size. Margin is a
-    /// multiplicative screen-space factor >= 1. Does not change scene geometry.
+    /// kind and lens shift. Centers the bounds in the shifted image; target may
+    /// differ from the bounds center. Adjusts eye, target, clip planes, and
+    /// orthographic size. Margin is a multiplicative screen-space factor >= 1.
+    /// Does not change scene geometry.
     pub fn frame_bounds(
         mut self,
         bounds: Aabb,
         aspect: f32,
         margin: f32,
     ) -> Result<Self, CameraError> {
-        self.projection_matrix(aspect)?;
+        let projection = self.projection_matrix(aspect)?;
         let [right, up, backward] = self.axes()?;
         if !margin.is_finite() || margin < 1. {
             return Err(CameraError::InvalidFraming);
@@ -395,14 +447,25 @@ impl Camera {
             .map(|p| p.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt() as f32)
             .fold(0., f32::max)
             .max(0.001);
-        let mut distance = radius * 1.01;
+        let mut distance = f64::from(radius) * 1.01;
+        let half_size;
         match self.projection {
-            Projection::Perspective { vertical_fov } => {
-                let tangent = (vertical_fov * 0.5).tan();
+            Projection::Perspective { .. } => {
+                let extent = [
+                    1. / f64::from(projection[0][0]),
+                    1. / f64::from(projection[1][1]),
+                ];
                 for p in &points {
-                    distance = distance
-                        .max(p[2] + margin * (p[0].abs() / aspect).max(p[1].abs()) / tangent);
+                    let required = (0..2)
+                        .map(|i| {
+                            (f64::from(p[i]) / extent[i]
+                                + f64::from(self.lens_shift[i]) * f64::from(p[2]))
+                            .abs()
+                        })
+                        .fold(0., f64::max);
+                    distance = distance.max(f64::from(p[2]) + f64::from(margin) * required);
                 }
+                half_size = extent.map(|v| v * distance);
             }
             Projection::Orthographic { .. } => {
                 let half = points
@@ -413,19 +476,34 @@ impl Camera {
                 self.projection = Projection::Orthographic {
                     vertical_size: half * 2. * margin,
                 };
-                distance = radius * 2.;
+                distance = f64::from(radius) * 2.;
+                half_size = [
+                    f64::from(half) * f64::from(margin) * f64::from(aspect),
+                    f64::from(half) * f64::from(margin),
+                ];
             }
         }
-        self.target = center;
-        self.eye = std::array::from_fn(|i| center[i] + backward[i] * distance);
+        self.target = std::array::from_fn(|i| {
+            (f64::from(center[i])
+                - f64::from(right[i]) * f64::from(self.lens_shift[0]) * half_size[0]
+                - f64::from(up[i]) * f64::from(self.lens_shift[1]) * half_size[1])
+                as f32
+        });
+        self.eye = std::array::from_fn(|i| {
+            (f64::from(self.target[i]) + f64::from(backward[i]) * distance) as f32
+        });
         let min_depth = points
             .iter()
-            .map(|p| distance - p[2])
-            .fold(f32::INFINITY, f32::min);
-        let max_depth = points.iter().map(|p| distance - p[2]).fold(0., f32::max);
-        self.near = (min_depth * 0.5).max(f32::MIN_POSITIVE);
-        self.far = max_depth * 1.5;
-        self.view_projection(aspect)?;
+            .map(|p| distance - f64::from(p[2]))
+            .fold(f64::INFINITY, f64::min);
+        let max_depth = points
+            .iter()
+            .map(|p| distance - f64::from(p[2]))
+            .fold(0., f64::max);
+        self.near = ((min_depth * 0.5) as f32).max(f32::MIN_POSITIVE);
+        self.far = (max_depth * 1.5) as f32;
+        self.view_projection(aspect)
+            .map_err(|_| CameraError::Unrepresentable)?;
         Ok(self)
     }
 

@@ -29,8 +29,8 @@ The viewport does not schedule animation frames itself.
 
 World coordinates are right-handed, with positive Y up. The default camera is
 at `[0, 0, 6]`, looking toward the origin. Angles are radians. `Camera::orbit`
-orbits the origin; `Camera` exposes `eye`, `target`, `up`, `projection`, and clip
-distances for explicit positioning. Projection matrices are column-major, with
+orbits the origin; `Camera` exposes `eye`, `target`, `up`, `projection`,
+`lens_shift`, and clip distances for explicit positioning. Projection matrices are column-major, with
 camera forward along local -Z and hardware depth from zero to one. Scene units
 are application-defined; camera distances and geometry must use the same units.
 
@@ -432,6 +432,48 @@ indices accelerate queries, not render submission or GPU draw batching.
 Invalid camera, viewport, and point inputs return `CameraError` from the public
 matrix/projection/query methods. Invalid rays return `RayError`.
 
+### Focal length and lens shift
+
+`Projection::from_focal_length(focal_length, sensor_height)` constructs a
+perspective projection. Both dimensions must be positive and finite and use the
+same units, such as millimeters. The vertical FOV is
+`2 * atan(sensor_height / (2 * focal_length))`.
+`projection.focal_length(sensor_height)` performs the inverse conversion for
+perspective views. Orthographic views have no focal length. Invalid inputs return
+`InvalidProjection`; values outside representable f32 optics return
+`CameraError::Unrepresentable`.
+
+Viewport aspect determines horizontal coverage. For a 36 × 24 mm sensor, use
+aspect `36 / 24` to retain the full sensor gate. Other output aspects preserve
+vertical FOV and change horizontal coverage; cropping or fitting a sensor gate
+is an application decision.
+
+```rust
+use gpui_3d::{Camera, Projection};
+
+let camera = Camera {
+    projection: Projection::from_focal_length(50., 24.)?,
+    lens_shift: [0.4, -0.2],
+    ..Default::default()
+};
+let matrix = camera.projection_matrix(36. / 24.)?;
+let focal_mm = camera.projection.focal_length(24.)?;
+# Ok::<(), gpui_3d::CameraError>(())
+```
+
+`lens_shift` defaults to `[0, 0]`. Its X/Y values move the projection center in
+camera-right/up directions, measured in half-viewport spans. A value of one
+moves coverage by half the full width or height. The optical axis projects to
+NDC `[-shift_x, -shift_y]`, so positive X shifts objects left on screen and
+positive Y shifts them down. Any finite shift is accepted, including views whose
+optical axis lies outside the image.
+
+Shift applies to both projection kinds without moving or rotating the camera.
+Matrices, picking rays, frustum culling, environment backgrounds, and captured UI
+mapping use the same shifted projection. Orthographic background directions stay
+parallel. Orbit, pan, dolly, and zoom retain the shift; optical zoom remains
+centered around the shifted principal point rather than the viewport center.
+
 ### Framing bounds
 
 ```rust
@@ -444,9 +486,11 @@ let camera = Camera::orbit(0.4, 0.3, 8.).frame_bounds(bounds, 16. / 9., 1.2)?;
 # }
 ```
 
-`frame_bounds` preserves viewing direction, up, and projection kind. It centers
-the target on the box and adjusts eye distance, near/far planes, and orthographic
-span as needed. Margin is a finite screen-space multiplier of at least one.
+`frame_bounds` preserves viewing direction, up, projection kind, and lens shift.
+It centers the box in the image and adjusts eye, target, near/far planes, and
+orthographic span as needed. With a lens shift, the target is offset from the
+box center to preserve the viewing direction. Margin is a finite screen-space
+multiplier of at least one.
 The result contains all eight corners for the supplied aspect ratio, without
 changing any scene objects. Reframe when a changed output aspect requires it.
 
@@ -458,7 +502,8 @@ another target; zero-extent boxes use a small finite framing extent.
 `Camera::transformed(affine)` maps local eye and target positions and the
 orthogonalized up direction into another coordinate space. The result has a
 right-handed orthogonal view basis, including under shear or reflection.
-Projection, near/far distances, and orthographic span are unchanged by scale.
+Projection, lens shift, near/far distances, and orthographic span are unchanged
+by scale.
 Invalid inputs or coordinates that lose a representable view return `CameraError`.
 
 ## Camera controls

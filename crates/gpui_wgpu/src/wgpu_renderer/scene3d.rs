@@ -464,7 +464,8 @@ pub(crate) struct Scene3dRenderer {
     images: Arc<parking_lot::Mutex<images::ImageCache>>,
     slots: Vec<BatchSlot>,
     offsets: HashMap<usize, usize>,
-    plans: HashMap<usize, instances::BatchPlan>,
+    plans: instances::BatchPlanCache,
+    batch_limit: usize,
     targets: HashMap<[u32; 2], Targets>,
     regions: HashMap<usize, RenderRegion>,
     format: wgpu::TextureFormat,
@@ -634,7 +635,8 @@ impl Scene3dRenderer {
             images: Default::default(),
             slots: Vec::new(),
             offsets: HashMap::new(),
-            plans: HashMap::new(),
+            plans: instances::BatchPlanCache::default(),
+            batch_limit: instance_limit(device),
             targets: HashMap::default(),
             regions: HashMap::default(),
             format,
@@ -692,7 +694,8 @@ impl Scene3dRenderer {
     }
 
     fn plan(&self, frame: &gpui::Scene3dFrame) -> &instances::BatchPlan {
-        &self.plans[&(frame as *const _ as usize)]
+        self.plans
+            .get(frame, self.blend_pipeline.is_some(), self.batch_limit)
     }
 
     pub(crate) fn draw_statistics(
@@ -721,18 +724,11 @@ impl Scene3dRenderer {
         self.images
             .lock()
             .retain(frames.iter().flat_map(|frame| frame.objects.iter()));
-        self.plans.clear();
-        for frame in &frames {
-            self.plans
-                .entry(*frame as *const _ as usize)
-                .or_insert_with(|| {
-                    instances::BatchPlan::new(
-                        frame,
-                        self.blend_pipeline.is_some(),
-                        instance_limit(device),
-                    )
-                });
-        }
+        self.plans.prepare(
+            frames.iter().copied(),
+            self.blend_pipeline.is_some(),
+            self.batch_limit,
+        );
         if let Some(specular) = &mut self.specular {
             specular.prepare(
                 device,
@@ -864,16 +860,31 @@ impl Scene3dRenderer {
     pub(crate) fn reuse_resources_from(&mut self, other: &Self) {
         self.geometry.reuse_from(&other.geometry);
         self.images = other.images.clone();
+        self.reuse_plans_from(other);
     }
 
-    pub(crate) fn retain_geometry_for(&mut self, frame: Option<&gpui::Scene3dFrame>) {
-        let shadows = self.shadow_pipeline.is_some();
+    pub(crate) fn reuse_plans_from(&mut self, other: &Self) {
+        self.plans.reuse_from(&other.plans);
+    }
+
+    pub(crate) fn prepare_frame_retention(
+        &mut self,
+        frame: Option<&gpui::Scene3dFrame>,
+        retain_geometry: bool,
+    ) {
+        let color = self.blend_pipeline.is_some();
+        self.plans.prepare(frame, color, self.batch_limit);
+        if !retain_geometry {
+            return;
+        }
+        let plans = &self.plans;
+        let limit = self.batch_limit;
         self.geometry.retain(frame.into_iter().flat_map(|frame| {
-            frame
-                .objects
+            plans
+                .get(frame, color, limit)
+                .order
                 .iter()
-                .filter(move |object| instances::Visibility::new(frame, object, shadows).any())
-                .map(|object| object.mesh.clone())
+                .map(|&index| frame.objects[index].mesh.clone())
         }));
     }
 
@@ -1694,14 +1705,14 @@ mod tests {
         assert_eq!(child_count, 1);
     }
 
-    const IDENTITY: [[f32; 4]; 4] = [
+    pub(super) const IDENTITY: [[f32; 4]; 4] = [
         [1., 0., 0., 0.],
         [0., 1., 0., 0.],
         [0., 0., 1., 0.],
         [0., 0., 0., 1.],
     ];
 
-    fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
+    pub(super) fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
         gpui::Scene3dFrame {
             viewport_quality: Default::default(),
             ui_texture: None,
@@ -1722,7 +1733,7 @@ mod tests {
         }
     }
 
-    fn object() -> gpui::MeshDraw3d {
+    pub(super) fn object() -> gpui::MeshDraw3d {
         gpui::MeshDraw3d {
             cast_shadows: true,
             receive_shadows: true,

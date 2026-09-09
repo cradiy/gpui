@@ -95,6 +95,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Retained CPU preparation**: Single-entry scene/snapshot reuse, camera/aspect/UI configuration invalidation, per-call active resource refresh, immutable prepared outputs, and viewport/headless-local ownership.
   - [x] **Submitted viewport outputs**: Immutable frame identity, captured paint content, referenced atlas generations, submission-gated pixel reuse, bounded viewport-local output storage, dynamic-input bypass, and renderer-owned external submission.
   - [x] **UI capture reuse**: Retain static capture pixels independently of mesh output, compare newly painted content after unrelated UI updates, and isolate caller-owned pending writes.
+  - [x] **Retained draw plans**: Immutable object snapshots, camera/shadow clip matrices, output mode and batch-limit keys; active-plan eviction and shared geometry-channel plans.
 - [ ] **Culling and instancing**: Frustum culling, instanced rendering of shared geometry, and material batching with reproducible benchmarks.
   - [x] **Instanced material batches**: Shared-mesh, compatible-material batching for color, shadow, and geometry outputs without reordering depth writers.
   - [x] **Frustum culling**: Cached indexed mesh bounds, perspective/orthographic clip-volume tests with full object transforms, independent camera/shadow eligibility, resource-resolution pruning, and per-frame draw plans without renumbering IDs or changing world-ray queries.

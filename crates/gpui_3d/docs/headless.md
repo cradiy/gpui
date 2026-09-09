@@ -261,10 +261,16 @@ resolved tile changes invalidate this cache. Output size changes that preserve
 aspect reuse CPU preparation but still render into the requested output targets.
 Every `render` call produces GPU output; this cache does not retain rendered pixels.
 
+WGPU draw plans separately retain visibility, transparent ordering, and instance
+batches for immutable object snapshots. Camera/shadow clip matrices, output mode,
+and batch limits participate in the key. ID, depth, and normal channels share
+compatible plans. Inactive plans are evicted during preparation, and resource
+validation still runs on every render.
+
 `HeadlessRenderer::clear_caches()` releases its cached mesh buffers, intermediate
 targets, shadow maps, environment uploads, image mip chains, pipelines, and
-private image atlas, along with retained CPU preparation. The next render rebuilds
-resources from the supplied scene.
+private image atlas, along with retained CPU preparation and draw plans. The next
+render rebuilds resources from the supplied scene.
 It can be called repeatedly, including before the first render. Renderers sharing
 a `WgpuContext` retain independent caches.
 

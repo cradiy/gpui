@@ -405,6 +405,7 @@ impl WgpuScene3dRenderer {
         let device = &self.context.device;
         let queue = &self.context.queue;
         let mut primary = true;
+        let mut plan_source = None;
         for (enabled, renderer) in [
             (
                 config.channels.shaded(),
@@ -420,10 +421,18 @@ impl WgpuScene3dRenderer {
                 self.normals.as_mut(),
             ),
         ] {
-            if enabled && primary {
+            let retain_geometry = !enabled || !primary;
+            if enabled {
                 primary = false;
-            } else if let Some(renderer) = renderer {
-                renderer.retain_geometry_for(enabled.then_some(frame));
+            }
+            if let Some(renderer) = renderer {
+                if enabled && let Some(source) = plan_source {
+                    renderer.reuse_plans_from(source);
+                }
+                renderer.prepare_frame_retention(enabled.then_some(frame), retain_geometry);
+                if enabled {
+                    plan_source = Some(renderer);
+                }
             }
         }
         self.atlas.before_frame();

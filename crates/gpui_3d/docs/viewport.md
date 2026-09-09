@@ -1994,6 +1994,12 @@ pixel-size changes resize the capture targets independently of the window.
 
 ### Submitted viewport outputs
 
+WGPU retains visibility, transparent ordering, and instance-batch plans for
+unchanged object snapshots, camera/shadow clip matrices, output mode, and batch
+limits. Lighting or display settings that do not affect those inputs preserve
+the plan. Unused plans are evicted on preparation. This CPU reuse does not depend
+on command submission and does not skip resource checks or request UI frames.
+
 WGPU window rendering reuses submitted mesh pixels when the immutable
 `Scene3dFrame`, raster region, and referenced atlas generations are unchanged.
 `Viewport3d` preserves frame identity across CPU preparation cache hits with the

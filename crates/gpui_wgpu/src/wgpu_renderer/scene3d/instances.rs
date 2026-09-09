@@ -1,5 +1,107 @@
 use gpui::{AlphaMode3d, MaterialTexture3d, MeshDraw3d, MeshTexture3d, Scene3dFrame};
-use std::{ops::Range, sync::Arc};
+use std::{
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    ops::Range,
+    sync::Arc,
+};
+
+#[derive(Clone)]
+struct PlanKey {
+    objects: Arc<[MeshDraw3d]>,
+    camera: [[u32; 4]; 4],
+    shadow: Option<[[u32; 4]; 4]>,
+    color: bool,
+    limit: usize,
+}
+
+impl PlanKey {
+    fn new(frame: &Scene3dFrame, color: bool, limit: usize) -> Self {
+        Self {
+            objects: frame.objects.clone(),
+            camera: frame.view_projection.map(|column| column.map(f32::to_bits)),
+            shadow: color
+                .then_some(frame.directional_shadow)
+                .flatten()
+                .map(|shadow| {
+                    shadow
+                        .view_projection
+                        .map(|column| column.map(f32::to_bits))
+                }),
+            color,
+            limit,
+        }
+    }
+}
+
+impl PartialEq for PlanKey {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.objects, &other.objects)
+            && self.camera == other.camera
+            && self.shadow == other.shadow
+            && self.color == other.color
+            && self.limit == other.limit
+    }
+}
+
+impl Eq for PlanKey {}
+
+impl Hash for PlanKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.objects.as_ptr() as usize).hash(state);
+        self.objects.len().hash(state);
+        self.camera.hash(state);
+        self.shadow.hash(state);
+        self.color.hash(state);
+        self.limit.hash(state);
+    }
+}
+
+#[derive(Default)]
+pub(super) struct BatchPlanCache {
+    entries: HashMap<PlanKey, CachedPlan>,
+    epoch: bool,
+}
+
+struct CachedPlan {
+    plan: Arc<BatchPlan>,
+    epoch: bool,
+}
+
+impl BatchPlanCache {
+    pub(super) fn prepare<'a>(
+        &mut self,
+        frames: impl IntoIterator<Item = &'a Scene3dFrame>,
+        color: bool,
+        limit: usize,
+    ) {
+        self.epoch = !self.epoch;
+        for frame in frames {
+            let key = PlanKey::new(frame, color, limit);
+            let entry = self.entries.entry(key).or_insert_with(|| CachedPlan {
+                plan: Arc::new(BatchPlan::new(frame, color, limit)),
+                epoch: self.epoch,
+            });
+            entry.epoch = self.epoch;
+        }
+        self.entries.retain(|_, entry| entry.epoch == self.epoch);
+    }
+
+    pub(super) fn get(&self, frame: &Scene3dFrame, color: bool, limit: usize) -> &BatchPlan {
+        &self.entries[&PlanKey::new(frame, color, limit)].plan
+    }
+
+    pub(super) fn reuse_from(&mut self, other: &Self) {
+        for (key, entry) in &other.entries {
+            self.entries
+                .entry(key.clone())
+                .or_insert_with(|| CachedPlan {
+                    plan: entry.plan.clone(),
+                    epoch: self.epoch,
+                });
+        }
+    }
+}
 
 pub(super) struct BatchPlan {
     pub order: Vec<usize>,
@@ -137,4 +239,143 @@ pub(super) fn capacity(required: usize, limit: usize) -> usize {
         .checked_next_power_of_two()
         .unwrap_or(limit)
         .min(limit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{IDENTITY, frame, object};
+    use super::*;
+
+    fn retained(
+        cache: &BatchPlanCache,
+        frame: &Scene3dFrame,
+        color: bool,
+        limit: usize,
+    ) -> Arc<BatchPlan> {
+        cache.entries[&PlanKey::new(frame, color, limit)]
+            .plan
+            .clone()
+    }
+
+    #[test]
+    fn scene3d_batch_cache_reuses_snapshots_and_invalidates_camera_and_object_changes() {
+        let object = object();
+        let mut outside = object.clone();
+        outside.model[3][0] = 5.;
+        let mut input = frame(&[object.clone(), object, outside]);
+        let mut cache = BatchPlanCache::default();
+        cache.prepare([&input], true, 100);
+        let saved = retained(&cache, &input, true, 100);
+        assert_eq!(saved.order, [0, 1]);
+        assert_eq!(saved.batches, [0..2]);
+        input.ambient = 0.8;
+        input.light[3] = 2.;
+        cache.prepare([&input.clone()], true, 100);
+        assert!(Arc::ptr_eq(&saved, &retained(&cache, &input, true, 100)));
+
+        input.view_projection[3][0] = -5.;
+        cache.prepare([&input], true, 100);
+        assert_eq!(cache.get(&input, true, 100).order, [2]);
+        assert!(!Arc::ptr_eq(&saved, &retained(&cache, &input, true, 100)));
+        input.view_projection = IDENTITY;
+        cache.prepare([&input], true, 100);
+        let before_edit = input.clone();
+        let before_plan = retained(&cache, &input, true, 100);
+        Arc::make_mut(&mut input.objects)[0].model[3][0] = 8.;
+        cache.prepare([&input, &before_edit], true, 100);
+        assert_eq!(cache.get(&input, true, 100).order, [1]);
+        assert_eq!(before_plan.order, [0, 1]);
+        assert!(Arc::ptr_eq(
+            &before_plan,
+            &retained(&cache, &before_edit, true, 100)
+        ));
+        assert!(!Arc::ptr_eq(
+            &before_plan,
+            &retained(&cache, &input, true, 100)
+        ));
+
+        let mut material = before_edit.clone();
+        Arc::make_mut(&mut material.objects)[0].unlit = false;
+        cache.prepare([&material], true, 100);
+        assert_eq!(cache.get(&material, true, 100).batches, [0..1, 1..2]);
+    }
+
+    #[test]
+    fn scene3d_batch_cache_separates_color_shadows_limits_and_transparency_order() {
+        let object = object();
+        let mut caster = object.clone();
+        caster.model[3][0] = 4.;
+        let mut near = object.clone();
+        near.alpha_mode = AlphaMode3d::Blend;
+        near.sort_depth = 1.;
+        let mut far = near.clone();
+        far.sort_depth = 3.;
+        let mut input = frame(&[object.clone(), object, caster, near, far]);
+        let mut shadow_matrix = IDENTITY;
+        shadow_matrix[3][0] = -4.;
+        input.directional_shadow = Some(gpui::DirectionalShadow3d {
+            light_index: 0,
+            view_projection: shadow_matrix,
+            resolution: 256,
+            depth_bias: 0.,
+            normal_bias: 0.,
+            softness: 0.,
+        });
+        let mut cache = BatchPlanCache::default();
+        cache.prepare([&input], true, 100);
+        let color = retained(&cache, &input, true, 100);
+        assert_eq!(color.order, [0, 1, 2, 4, 3]);
+        assert_eq!(color.statistics(&input).shadow_instances, 1);
+        cache.prepare([&input], true, 1);
+        assert_eq!(cache.get(&input, true, 1).batches.len(), 5);
+        assert!(!Arc::ptr_eq(&color, &retained(&cache, &input, true, 1)));
+        cache.prepare([&input], false, 100);
+        let data = retained(&cache, &input, false, 100);
+        assert_eq!(data.order, [0, 1, 3, 4]);
+        assert_eq!(data.statistics(&input).shadow_instances, 0);
+        input.directional_shadow.as_mut().unwrap().view_projection = IDENTITY;
+        cache.prepare([&input], false, 100);
+        assert!(Arc::ptr_eq(&data, &retained(&cache, &input, false, 100)));
+        cache.prepare([&input], true, 100);
+        assert_eq!(cache.get(&input, true, 100).order, [0, 1, 4, 3]);
+        assert_eq!(
+            cache
+                .get(&input, true, 100)
+                .statistics(&input)
+                .shadow_instances,
+            2
+        );
+    }
+
+    #[test]
+    fn scene3d_batch_cache_shares_active_channels_and_releases_inactive_snapshots() {
+        let source = object();
+        let first = frame(&[source.clone(), source]);
+        let mut second = first.clone();
+        second.view_projection[3][0] = 10.;
+        let mut ids = BatchPlanCache::default();
+        ids.prepare([&first, &second, &first], false, 100);
+        assert_eq!(ids.entries.len(), 2);
+        let first_plan = retained(&ids, &first, false, 100);
+        let second_plan = Arc::downgrade(&retained(&ids, &second, false, 100));
+        let mut depth = BatchPlanCache::default();
+        depth.reuse_from(&ids);
+        depth.prepare([&first], false, 100);
+        assert_eq!(depth.entries.len(), 1);
+        assert!(Arc::ptr_eq(
+            &first_plan,
+            &retained(&depth, &first, false, 100)
+        ));
+        ids.prepare([&first], false, 100);
+        assert!(second_plan.upgrade().is_none());
+
+        let objects = Arc::downgrade(&first.objects);
+        drop(first);
+        drop(second);
+        ids.prepare([], false, 100);
+        assert!(objects.upgrade().is_some());
+        depth.prepare([], false, 100);
+        assert!(objects.upgrade().is_none());
+        assert!(ids.entries.is_empty() && depth.entries.is_empty());
+    }
 }

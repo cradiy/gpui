@@ -27,7 +27,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Multiple UI textures**: Attach independently sized UI sources to distinct scene materials.
 - [x] **UI pointer mapping**: Route a named UI object's UVs into existing button, hover, scroll, and slider handlers, with gesture continuity outside the mesh and camera-input separation.
 - [ ] **Focus and overlays**: Define ownership, positioning, and dismissal for keyboard focus, input methods, tooltips, and menus; specify unsupported interactions.
-- [ ] **Camera controllers**: Reusable orbit, pan, and zoom with configurable targets, distance and angle limits, optional damping, and input conflict handling.
+- [x] **Camera controllers**: Immediate orbit, target-plane pan, dolly, and optical zoom with configurable bindings, speeds, distance/pitch/optical limits, and gesture ownership.
+- [ ] **Camera damping**: Optional inertia and damping with explicit time advancement and on-demand redraw scheduling.
 - [ ] **Interaction example**: Object selection, highlighting, and interactive 3D UI panels covering occlusion, device scales, and viewport sizes.
 
 ## Phase 2: Scenes and Assets
@@ -66,8 +67,9 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Phase 5: Performance and Platforms
 
-- [ ] **Direct headless 3D rendering**: Consume evaluated scenes without creating a native window or running UI layout; share rendering with GPUI viewports and expose GPU outputs plus bounded asynchronous readback.
-- [ ] **Data outputs**: Color, linear camera depth, normals, and integer object IDs from the same evaluated state, with explicit coverage, background, format, and ID-mapping contracts.
+- [x] **Direct headless 3D rendering**: Solid and decoded-image scenes without native windows or UI layout; shared viewport preparation and mesh passes, owned GPU outputs, and bounded nonblocking readback.
+- [x] **Color and object ID outputs**: Display-encoded RGBA8 and exact R32Uint IDs, explicit pixel-center/MSAA coverage, zero ID background, and retained node/application identity maps.
+- [ ] **Depth and normal outputs**: Linear camera depth and normals from the same evaluated state, with explicit space, units, background, format, and coverage contracts.
 - [ ] **Capabilities and diagnostics**: Query formats, channels, sample counts, limits, and backend support; return actionable asset and rendering failures.
 - [ ] **Viewport-sized render targets**: Allocate color, depth, and MSAA targets to viewport bounds, with configurable resolution and sample count to limit GPU memory use.
 - [ ] **On-demand updates**: Track scene, camera, and UI texture invalidation separately; reuse results when static, invisible, or paused without continuously requesting frames.
@@ -78,12 +80,10 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Near-Term Order
 
-1. Reusable orbit/pan/dolly/zoom controllers with input ownership and configurable limits.
-2. Shared viewport/headless rendering inputs and explicit Color/ID output contracts.
-3. Static glTF / GLB assets, resource readiness, model instances, and accelerated spatial queries.
-4. Texture sampling, linear HDR color, PBR, and transparent materials.
-5. Depth/normal outputs, environment lighting, and directional shadows.
-6. Skeletal/morph animation with absolute-time evaluation, followed by attachments and constraints.
+1. Static glTF / GLB assets, resource readiness, model instances, and accelerated spatial queries.
+2. Texture sampling, linear HDR color, PBR, and transparent materials.
+3. Depth/normal outputs, environment lighting, and directional shadows.
+4. Skeletal/morph animation with absolute-time evaluation, followed by attachments and constraints.
 
 Keep multiple UI textures, capture-alpha picking, and focus/overlay support as independent GUI extensions.
 

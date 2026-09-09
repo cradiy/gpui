@@ -39,6 +39,7 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         uv,
     });
     MeshDraw3d {
+        output_id: 1,
         mesh: Mesh3d::new(vertices.to_vec(), vec![0, 1, 2, 0, 2, 3]),
         model: IDENTITY,
         normal: IDENTITY,
@@ -92,6 +93,125 @@ fn scene(layer: SubtreeLayer) -> Scene {
     scene.insert_primitive(Primitive::SubtreeLayer(layer));
     scene.finish();
     scene
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn direct_outputs_preserve_integer_ids_cutouts_and_frame_lifetimes() -> anyhow::Result<()> {
+    use gpui_wgpu::{Scene3dChannels, Scene3dOutputConfig, WgpuScene3dRenderer};
+    let mut renderer = WgpuScene3dRenderer::new_headless()?;
+    let tile = gpui::PlatformAtlas::get_or_insert_with(
+        renderer.sprite_atlas().as_ref(),
+        &gpui::RenderImageParams {
+            image_id: gpui::ImageId(98001),
+            frame_index: 0,
+        }
+        .into(),
+        &mut || {
+            Ok(Some((
+                size(DevicePixels(2), DevicePixels(1)),
+                std::borrow::Cow::Borrowed(&[255, 255, 255, 255, 255, 255, 255, 0]),
+            )))
+        },
+    )?
+    .unwrap();
+    let mut near = mesh(0.2, 0xff0000ff, MeshTexture3d::Image(tile));
+    near.output_id = 0xfe12_ab34;
+    let mut far = mesh(0.8, 0x0000ffff, MeshTexture3d::None);
+    far.output_id = 0x1000_0001;
+    let mut input = layer(
+        bounds(0., 0., 67., 49.),
+        Scene::default(),
+        vec![near.clone(), far.clone()],
+        1.,
+    )
+    .scene3d
+    .unwrap()
+    .as_ref()
+    .clone();
+    let config = Scene3dOutputConfig {
+        size: [67, 49],
+        channels: Scene3dChannels::ColorAndObjectId,
+        color_samples: 1,
+    };
+    let first = renderer.render(&input, config)?;
+    input.objects = vec![far, near].into();
+    let reversed = renderer.render(&input, config)?;
+    input.objects = Arc::default();
+    let empty = renderer.render(
+        &input,
+        Scene3dOutputConfig {
+            size: [31, 17],
+            ..config
+        },
+    )?;
+
+    let mut read = first.readback()?;
+    assert!(reversed.readback().is_err());
+    let poll = |read: &mut gpui_wgpu::Scene3dReadback| -> anyhow::Result<gpui_wgpu::Scene3dPixels> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(pixels) = read.try_read()? {
+                return Ok(pixels);
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    };
+    let first_pixels = poll(&mut read)?;
+    assert!(read.try_read().is_err());
+    let ids = first_pixels.object_ids.as_ref().unwrap();
+    let rgba = first_pixels.rgba.as_ref().unwrap();
+    assert_eq!(ids.len(), 67 * 49);
+    assert_eq!(rgba.len(), 67 * 49 * 4);
+    assert_eq!(ids[24 * 67 + 20], 0xfe12_ab34);
+    assert_eq!(ids[24 * 67 + 47], 0x1000_0001);
+    assert_eq!(
+        &rgba[(24 * 67 + 20) * 4..(24 * 67 + 20) * 4 + 4],
+        &[255, 0, 0, 255]
+    );
+    assert_eq!(
+        &rgba[(24 * 67 + 47) * 4..(24 * 67 + 47) * 4 + 4],
+        &[0, 0, 255, 255]
+    );
+    assert_eq!(ids[0], 0);
+    assert_eq!(&rgba[..4], &[0; 4]);
+    let reversed_pixels = poll(&mut reversed.readback()?)?;
+    assert_eq!(first_pixels.object_ids, reversed_pixels.object_ids);
+    assert_eq!(first_pixels.rgba, reversed_pixels.rgba);
+    let empty_pixels = poll(&mut empty.readback()?)?;
+    assert_eq!(empty_pixels.size, [31, 17]);
+    assert!(empty_pixels.rgba.unwrap().iter().all(|v| *v == 0));
+    assert!(empty_pixels.object_ids.unwrap().iter().all(|v| *v == 0));
+
+    let ids_only = renderer.render(
+        &input,
+        Scene3dOutputConfig {
+            channels: Scene3dChannels::ObjectId,
+            ..config
+        },
+    )?;
+    assert!(ids_only.color().is_none());
+    let pending = ids_only.readback()?;
+    drop(pending);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut next = loop {
+        if let Ok(read) = ids_only.readback() {
+            break read;
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "cancelled readback retained its permit"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    assert!(poll(&mut next)?.rgba.is_none());
+    assert!(
+        renderer
+            .render(&input, Scene3dOutputConfig::new([0, 10]))
+            .is_err()
+    );
+    Ok(())
 }
 
 #[test]

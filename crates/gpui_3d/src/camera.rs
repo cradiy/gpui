@@ -379,6 +379,7 @@ impl Camera {
         Ok(self)
     }
 
+    #[cfg(test)]
     pub(crate) fn matrix(self, aspect: f32) -> Matrix {
         self.view_projection(aspect)
             .expect("valid camera and viewport")

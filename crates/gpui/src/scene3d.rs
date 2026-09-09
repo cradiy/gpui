@@ -114,6 +114,9 @@ pub enum MeshTexture3d {
 /// One indexed mesh and its material parameters.
 #[derive(Clone, Debug)]
 pub struct MeshDraw3d {
+    /// Exact frame-local output ID. Zero is reserved for the background.
+    /// The caller retains the mapping to application or scene-node identities.
+    pub output_id: u32,
     /// Shared geometry.
     pub mesh: Arc<Mesh3d>,
     /// Column-major object-to-world matrix.

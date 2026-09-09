@@ -23,6 +23,7 @@ struct Params {
     color: [f32; 4],
     texture_rect: [f32; 4],
     flags: [f32; 4],
+    ids: [u32; 4],
 }
 
 struct Geometry {
@@ -32,11 +33,11 @@ struct Geometry {
     count: u32,
 }
 
-pub(super) struct Scene3dRenderer {
+pub(crate) struct Scene3dRenderer {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
-    geometry: HashMap<usize, Geometry>,
+    geometry: HashMap<usize, Arc<Geometry>>,
     slots: Vec<wgpu::Buffer>,
     offsets: HashMap<usize, usize>,
     targets: Option<(wgpu::Texture, wgpu::Texture)>,
@@ -45,7 +46,7 @@ pub(super) struct Scene3dRenderer {
 }
 
 impl Scene3dRenderer {
-    pub(super) fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
@@ -62,7 +63,7 @@ impl Scene3dRenderer {
                 buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2] })],
             },
-            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fragment"), compilation_options: Default::default(),
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(if format == wgpu::TextureFormat::R32Uint { "object_id" } else { "fragment" }), compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
@@ -120,7 +121,7 @@ impl Scene3dRenderer {
         height: u32,
     ) {
         self.offsets.clear();
-        let mut used = HashSet::new();
+        let mut frames = Vec::new();
         let mut slot_count = 0;
         scene.visit(&mut |scene| {
             for layer in &scene.subtree_layers {
@@ -129,40 +130,56 @@ impl Scene3dRenderer {
                 };
                 self.offsets.insert(layer as *const _ as usize, slot_count);
                 slot_count += frame.objects.len();
-                for object in frame.objects.iter() {
-                    let key = Arc::as_ptr(&object.mesh) as usize;
-                    used.insert(key);
-                    self.geometry.entry(key).or_insert_with(|| {
-                        let vertices = object
-                            .mesh
-                            .vertices()
-                            .iter()
-                            .map(|v| Vertex {
-                                position: v.position,
-                                normal: v.normal,
-                                uv: v.uv,
-                            })
-                            .collect::<Vec<_>>();
-                        Geometry {
-                            _mesh: object.mesh.clone(),
-                            vertices: device.create_buffer_init(
-                                &wgpu::util::BufferInitDescriptor {
-                                    label: Some("mesh_vertices"),
-                                    contents: bytemuck::cast_slice(&vertices),
-                                    usage: wgpu::BufferUsages::VERTEX,
-                                },
-                            ),
-                            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("mesh_indices"),
-                                contents: bytemuck::cast_slice(object.mesh.indices()),
-                                usage: wgpu::BufferUsages::INDEX,
-                            }),
-                            count: object.mesh.indices().len() as u32,
-                        }
-                    });
-                }
+                frames.push(frame.clone());
             }
         });
+        self.prepare_frames(device, frames.iter().map(AsRef::as_ref), width, height);
+    }
+
+    pub(crate) fn prepare_frames<'a>(
+        &mut self,
+        device: &wgpu::Device,
+        frames: impl IntoIterator<Item = &'a gpui::Scene3dFrame>,
+        width: u32,
+        height: u32,
+    ) {
+        let mut used = HashSet::new();
+        let mut slot_count = 0;
+        let mut has_frame = false;
+        for frame in frames {
+            has_frame = true;
+            slot_count += frame.objects.len();
+            for object in frame.objects.iter() {
+                let key = Arc::as_ptr(&object.mesh) as usize;
+                used.insert(key);
+                self.geometry.entry(key).or_insert_with(|| {
+                    let vertices = object
+                        .mesh
+                        .vertices()
+                        .iter()
+                        .map(|v| Vertex {
+                            position: v.position,
+                            normal: v.normal,
+                            uv: v.uv,
+                        })
+                        .collect::<Vec<_>>();
+                    Arc::new(Geometry {
+                        _mesh: object.mesh.clone(),
+                        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("mesh_vertices"),
+                            contents: bytemuck::cast_slice(&vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        }),
+                        indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("mesh_indices"),
+                            contents: bytemuck::cast_slice(object.mesh.indices()),
+                            usage: wgpu::BufferUsages::INDEX,
+                        }),
+                        count: object.mesh.indices().len() as u32,
+                    })
+                });
+            }
+        }
         self.geometry.retain(|key, _| used.contains(key));
         self.slots.truncate(slot_count);
         while self.slots.len() < slot_count {
@@ -174,7 +191,7 @@ impl Scene3dRenderer {
                     mapped_at_creation: false,
                 }));
         }
-        if self.offsets.is_empty() {
+        if !has_frame {
             self.targets = None;
             return;
         }
@@ -206,6 +223,10 @@ impl Scene3dRenderer {
         }
     }
 
+    pub(crate) fn reuse_geometry_from(&mut self, other: &Self) {
+        self.geometry.clone_from(&other.geometry);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn encode(
         &self,
@@ -218,9 +239,6 @@ impl Scene3dRenderer {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let frame = layer.scene3d.as_ref().unwrap();
-        let (depth, color) = self.targets.as_ref().unwrap();
-        let width = depth.width() as f32;
-        let height = depth.height() as f32;
         let bounds = layer.composite.bounds;
         let rect = [
             bounds.origin.x.0,
@@ -229,6 +247,35 @@ impl Scene3dRenderer {
             bounds.size.height.0,
         ];
         let start = self.offsets[&(layer as *const _ as usize)];
+        self.encode_frame(
+            device,
+            queue,
+            atlas,
+            frame,
+            rect,
+            start,
+            Some(source),
+            destination,
+            encoder,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_frame(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: &WgpuAtlas,
+        frame: &gpui::Scene3dFrame,
+        rect: [f32; 4],
+        start: usize,
+        source: Option<&wgpu::TextureView>,
+        destination: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        let (depth, color) = self.targets.as_ref().unwrap();
+        let width = depth.width() as f32;
+        let height = depth.height() as f32;
         let layout = self.pipeline.get_bind_group_layout(0);
         let mut groups = Vec::with_capacity(frame.objects.len());
         for (index, object) in frame.objects.iter().enumerate() {
@@ -243,7 +290,11 @@ impl Scene3dRenderer {
                         let size = texture.pixel_size();
                         [0., 0., size.width.0 as f32, size.height.0 as f32]
                     });
-                    (source, texture_rect, 1.)
+                    (
+                        source.expect("UI texture requires a captured subtree"),
+                        texture_rect,
+                        1.,
+                    )
                 }
                 MeshTexture3d::Image(tile) => {
                     let r = tile.bounds;
@@ -285,6 +336,7 @@ impl Scene3dRenderer {
                     premultiplied,
                     0.,
                 ],
+                ids: [object.output_id, 0, 0, 0],
             };
             let buffer = &self.slots[start + index];
             queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
@@ -350,5 +402,41 @@ impl Scene3dRenderer {
             pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..geometry.count, 0, 0..1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene3d_shader_validates_and_matches_uniform_layout() {
+        let module = naga::front::wgsl::parse_str(include_str!("../scene3d.wgsl")).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+        let (members, span) = module
+            .types
+            .iter()
+            .find_map(|(_, ty)| {
+                if ty.name.as_deref() != Some("Params") {
+                    return None;
+                }
+                if let naga::TypeInner::Struct { members, span } = &ty.inner {
+                    Some((members, *span))
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(span as usize, std::mem::size_of::<Params>());
+        let ids = members
+            .iter()
+            .find(|member| member.name.as_deref() == Some("ids"))
+            .unwrap();
+        assert_eq!(ids.offset as usize, std::mem::offset_of!(Params, ids));
     }
 }

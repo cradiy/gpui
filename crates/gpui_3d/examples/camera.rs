@@ -1,10 +1,10 @@
 use gpui::{
-    App, Bounds, Context, MouseButton, Pixels, Point, Render, Window, WindowBounds, WindowOptions,
-    canvas, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, MouseButton, Pixels, Render, Window, WindowBounds, WindowOptions, canvas,
+    div, prelude::*, px, rgb, size,
 };
 use gpui_3d::{
-    AffineTransform, Camera, EvaluatedScene, Material, Mesh, Node, NodeHandle, Projection,
-    SceneGraph, viewport3d,
+    AffineTransform, Camera, EvaluatedScene, Material, Mesh, Node, NodeHandle, OrbitController,
+    OrbitSettings, Projection, SceneGraph, viewport3d,
 };
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc};
@@ -15,10 +15,7 @@ struct CameraDemo {
     items: Vec<(NodeHandle, &'static str, u32)>,
     selected: Option<NodeHandle>,
     hovered: Option<NodeHandle>,
-    camera: Camera,
-    yaw: f32,
-    pitch: f32,
-    drag: Option<Point<Pixels>>,
+    controls: OrbitController,
     viewport: Rc<Cell<Bounds<Pixels>>>,
     _activation: gpui::Subscription,
 }
@@ -50,8 +47,18 @@ impl CameraDemo {
         })
         .collect();
         let evaluated = graph.evaluate().unwrap();
-        let camera = Camera::orbit(0.35, 0.35, 10.)
+        let mut camera = Camera::orbit(0.35, 0.35, 10.)
             .frame_bounds(evaluated.bounds().unwrap(), 1.5, 1.3)
+            .unwrap();
+        camera.near = 0.01;
+        camera.far = 100.;
+        let mut controls = OrbitController::new(camera).unwrap();
+        controls
+            .set_settings(OrbitSettings {
+                distance: 0.5..=30.,
+                orthographic_size: 0.2..=40.,
+                ..Default::default()
+            })
             .unwrap();
         Self {
             graph,
@@ -59,14 +66,11 @@ impl CameraDemo {
             items,
             selected: None,
             hovered: None,
-            camera,
-            yaw: 0.35,
-            pitch: 0.35,
-            drag: None,
+            controls,
             viewport: Rc::new(Cell::new(Bounds::default())),
             _activation: cx.observe_window_activation(window, |this, window, _| {
                 if !window.is_window_active() {
-                    this.drag = None;
+                    this.controls.cancel_drag();
                 }
             }),
         }
@@ -81,23 +85,25 @@ impl CameraDemo {
         }
     }
     fn distance(&self) -> f32 {
-        self.camera
+        self.controls
+            .camera()
             .eye
             .iter()
-            .zip(self.camera.target)
+            .zip(self.controls.camera().target)
             .map(|(a, b)| (a - b).powi(2))
             .sum::<f32>()
             .sqrt()
     }
-    fn orient(&mut self, distance: f32) {
+    fn orient(&mut self, yaw: f32, pitch: f32) {
+        let distance = self.distance();
         let direction = [
-            self.yaw.sin() * self.pitch.cos(),
-            self.pitch.sin(),
-            self.yaw.cos() * self.pitch.cos(),
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            yaw.cos() * pitch.cos(),
         ];
-        self.camera.eye = std::array::from_fn(|i| self.camera.target[i] + direction[i] * distance);
-        self.camera.near = 0.01;
-        self.camera.far = distance + 100.;
+        let mut camera = self.controls.camera();
+        camera.eye = std::array::from_fn(|i| camera.target[i] + direction[i] * distance);
+        self.controls.set_camera(camera).unwrap();
     }
     fn frame(&mut self, selected: bool) {
         let bounds = if selected {
@@ -108,10 +114,14 @@ impl CameraDemo {
             self.evaluated.bounds()
         };
         if let Some(bounds) = bounds {
-            self.camera = self
-                .camera
+            let mut camera = self
+                .controls
+                .camera()
                 .frame_bounds(bounds, self.aspect(), 1.3)
                 .unwrap();
+            camera.near = 0.01;
+            camera.far = 100.;
+            self.controls.set_camera(camera).unwrap();
         }
     }
     fn label(&self, node: Option<NodeHandle>) -> &'static str {
@@ -140,11 +150,12 @@ impl CameraDemo {
 
 impl Render for CameraDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let orthographic = matches!(self.camera.projection, Projection::Orthographic { .. });
+        let camera = self.controls.camera();
+        let orthographic = matches!(camera.projection, Projection::Orthographic { .. });
         let viewport_bounds = self.viewport.clone();
         let view_id = cx.entity_id();
-        let scene = self.evaluated.scene(self.camera);
-        let projection_info = match self.camera.projection {
+        let scene = self.evaluated.scene(camera);
+        let projection_info = match camera.projection {
             Projection::Perspective { vertical_fov } => {
                 format!("Vertical FOV: {:.0}°", vertical_fov.to_degrees())
             }
@@ -156,7 +167,7 @@ impl Render for CameraDemo {
             .selected
             .and_then(|node| self.evaluated.node(node))
             .and_then(|node| {
-                self.camera
+                camera
                     .world_to_screen(self.viewport.get(), node.world.transform_point([0.; 3]))
                     .ok()
                     .flatten()
@@ -180,22 +191,26 @@ impl Render for CameraDemo {
         div().size_full().p_6().flex().flex_col().gap_4().bg(rgb(0x0b1422)).text_color(rgb(0xeaf2fc))
             .child(div().flex().flex_col().gap_2()
                 .child(div().text_size(px(30.)).child("A matter of perspective"))
-                .child(div().text_color(rgb(0x9eb1cb)).child("Six equal cubes at three depths · Click to select · Right-drag to orbit · Scroll to zoom")))
+                .child(div().text_color(rgb(0x9eb1cb)).child("Click to select · Right-drag to orbit · Middle-drag to pan · Scroll to dolly / orthographic zoom")))
             .child(div().flex().flex_wrap().gap_3()
                 .children([(false, "perspective", "Perspective"), (true, "orthographic", "Orthographic")].map(|(ortho, id, label)| {
                     self.button(id, label, ortho == orthographic).on_click(cx.listener(move |this, _, _, cx| {
-                        match (this.camera.projection, ortho) {
+                        let mut camera = this.controls.camera();
+                        match (camera.projection, ortho) {
                             (Projection::Perspective { vertical_fov }, true) => {
-                                this.camera.projection = Projection::Orthographic {
+                                camera.projection = Projection::Orthographic {
                                     vertical_size: this.distance() * 2. * (vertical_fov * 0.5).tan(),
                                 };
                             }
                             (Projection::Orthographic { vertical_size }, false) => {
-                                this.camera.projection = Projection::default();
-                                this.orient(vertical_size / (2. * (std::f32::consts::FRAC_PI_4 * 0.5).tan()));
+                                camera.projection = Projection::default();
+                                let distance = vertical_size / (2. * (std::f32::consts::FRAC_PI_4 * 0.5).tan());
+                                let backward = camera.axes().unwrap()[2];
+                                camera.eye = std::array::from_fn(|i| camera.target[i] + backward[i] * distance);
                             }
                             _ => return,
                         }
+                        this.controls.set_camera(camera).unwrap();
                         this.hovered = None;
                         cx.notify();
                     }))
@@ -204,31 +219,33 @@ impl Render for CameraDemo {
                 .child(self.button("selection", "Frame selected", false).on_click(cx.listener(|this, _, _, cx| { this.frame(true); cx.notify(); })))
                 .children([(0., 0., "front", "Front"), (0., std::f32::consts::FRAC_PI_2, "top", "Top"), (0.65, 0.4, "oblique", "Oblique")].map(|(yaw, pitch, id, label)| {
                     self.button(id, label, false).on_click(cx.listener(move |this, _, _, cx| {
-                        this.yaw = yaw; this.pitch = pitch; this.orient(this.distance()); this.frame(false); cx.notify();
+                        this.orient(yaw, pitch); this.frame(false); cx.notify();
+                    }))
+                }))
+                .children([("lens-in", "Lens +", 0.85), ("lens-out", "Lens −", 1. / 0.85)].map(|(id, label, factor)| {
+                    self.button(id, label, false).on_click(cx.listener(move |this, _, _, cx| {
+                        this.controls.cancel_drag();
+                        if this.controls.zoom(factor).unwrap_or(false) { cx.notify(); }
                     }))
                 })))
             .child(div().id("camera").relative().w_full().flex_1().min_h_0().rounded(px(24.)).overflow_hidden().bg(rgb(0x142237))
-                .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &gpui::MouseDownEvent, _, _| this.drag = Some(event.position)))
-                .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-                    if let Some(previous) = this.drag {
-                        if event.pressed_button == Some(MouseButton::Right) {
-                            let delta = event.position - previous;
-                            this.yaw -= f32::from(delta.x) * 0.008;
-                            this.pitch = (this.pitch + f32::from(delta.y) * 0.008).clamp(-1.5, 1.5);
-                            this.orient(this.distance()); this.drag = Some(event.position); cx.notify();
-                        } else { this.drag = None; }
-                    }
+                .on_mouse_down(MouseButton::Right, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                    if this.controls.begin_drag(event.button, event.position, this.viewport.get()).unwrap_or(false) { cx.stop_propagation(); }
                 }))
-                .on_mouse_up(MouseButton::Right, cx.listener(|this, _, _, _| this.drag = None))
-                .on_mouse_up_out(MouseButton::Right, cx.listener(|this, _, _, _| this.drag = None))
-                .on_hover(cx.listener(|this, hovered: &bool, _, _| { if !hovered { this.drag = None; } }))
+                .on_mouse_down(MouseButton::Middle, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                    if this.controls.begin_drag(event.button, event.position, this.viewport.get()).unwrap_or(false) { cx.stop_propagation(); }
+                }))
+                .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
+                    if this.controls.update_drag(event.position, event.pressed_button, this.viewport.get()).unwrap_or(false) { cx.notify(); }
+                    if this.controls.is_dragging() { cx.stop_propagation(); }
+                }))
+                .on_mouse_up(MouseButton::Right, cx.listener(|this, _, _, cx| { if this.controls.end_drag(MouseButton::Right) { cx.stop_propagation(); } }))
+                .on_mouse_up_out(MouseButton::Right, cx.listener(|this, _, _, _| { this.controls.end_drag(MouseButton::Right); }))
+                .on_mouse_up(MouseButton::Middle, cx.listener(|this, _, _, cx| { if this.controls.end_drag(MouseButton::Middle) { cx.stop_propagation(); } }))
+                .on_mouse_up_out(MouseButton::Middle, cx.listener(|this, _, _, _| { this.controls.end_drag(MouseButton::Middle); }))
+                .on_hover(cx.listener(|this, hovered: &bool, _, _| { if !hovered { this.controls.cancel_drag(); } }))
                 .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
-                    let factor = (f32::from(event.delta.pixel_delta(px(20.)).y) * 0.002).exp();
-                    match &mut this.camera.projection {
-                        Projection::Orthographic { vertical_size } => *vertical_size = (*vertical_size * factor).clamp(0.2, 40.),
-                        Projection::Perspective { .. } => this.orient((this.distance() * factor).clamp(0.5, 30.)),
-                    }
-                    cx.notify();
+                    if this.controls.scroll(f32::from(event.delta.pixel_delta(px(20.)).y)).unwrap_or(false) { cx.stop_propagation(); cx.notify(); }
                 }))
                 .child(viewport3d("scene", scene).size_full()
                     .on_object_hover(cx.listener(|this, hit: &Option<gpui_3d::Hit>, _, cx| {

@@ -134,6 +134,75 @@ frame one mesh, or `subtree_bounds` to include its descendants. Subtree bounds
 include hidden geometry. Framing an empty group requires the caller to choose
 another target; zero-extent boxes use a small finite framing extent.
 
+## Camera controls
+
+`OrbitController` owns a camera and applies input immediately, without a window,
+animation clock, or continuous redraw. Read `camera()` when building a scene and
+notify the view when an operation returns `true`.
+
+```rust
+use gpui::{Bounds, MouseButton, point, px, size};
+use gpui_3d::{Camera, OrbitController, OrbitSettings};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut controls = OrbitController::new(Camera::orbit(0.4, 0.3, 8.))?;
+controls.set_settings(OrbitSettings {
+    distance: 0.5..=50.,
+    pitch: -1.4..=1.4,
+    ..Default::default()
+})?;
+let viewport = Bounds::new(point(px(40.), px(80.)), size(px(800.), px(600.)));
+controls.begin_drag(MouseButton::Right, point(px(300.), px(200.)), viewport)?;
+let changed = controls.update_drag(
+    point(px(325.), px(210.)), Some(MouseButton::Right), viewport,
+)?;
+controls.end_drag(MouseButton::Right);
+let camera = controls.camera();
+# Ok(())
+# }
+```
+
+| Operation | Effect |
+| --- | --- |
+| `orbit_by([dx, dy])` | Rotate around the current target and up axis, preserving distance |
+| `pan_by(viewport, delta)` | Translate eye and target so target-plane points follow the pointer |
+| `dolly(factor)` | Multiply eye-to-target distance without changing projection |
+| `zoom(factor)` | Multiply orthographic span or perspective tangent half-FOV without moving the camera |
+| `scroll(pixels)` | Dolly in perspective or zoom in orthographic; positive pixels zoom out |
+
+Default drag bindings are right-button orbit and middle-button pan; left-button
+input is unassigned. Each binding can be changed or disabled with `None`.
+`dolly_button` optionally assigns a vertical drag to distance control in either
+projection. Positions, viewport bounds, and displacements use logical pixels;
+convert wheel line deltas with `event.delta.pixel_delta(...)` before calling
+`scroll`. `pan_speed` scales target-plane motion, `orbit_speed` is radians per
+pixel, and `zoom_speed` controls logarithmic wheel/dolly sensitivity.
+
+Settings constrain distance, pitch, orthographic span, and perspective FOV.
+Default pitch limits are -1.5 to 1.5 radians, keeping orbit input below the poles.
+`set_camera` preserves the supplied pose exactly, including an off-origin target
+or a pose outside the configured limits. Further input can move an out-of-range
+value toward its range but cannot move it farther away. Clipping planes are not
+changed by controls; choose them for the navigable scene or frame bounds before
+calling `set_camera`. Invalid settings, cameras, or direct-operation inputs return
+`OrbitError` without changing the camera.
+
+### Input ownership
+
+`begin_drag` claims only a configured button pressed inside a valid viewport.
+An active gesture cannot be replaced by another button, and wheel input is
+ignored until it ends. `update_drag` accepts positions outside the viewport when
+the caller provides pointer capture. A changed viewport, missing/mismatched
+pressed button, or invalid movement cancels the gesture. Only a matching button
+release ends it through `end_drag`.
+
+The caller owns event routing and pointer capture. Use bubbling handlers so
+embedded UI can consume its input first, and stop propagation when claiming a
+gesture. Call `cancel_drag` on window deactivation or capture loss, and on pointer
+leave when not using capture. Successful `set_camera` and `set_settings` calls
+also cancel active gestures. Neither the controller nor its camera requires a
+background frame loop.
+
 ## Scene hierarchy
 
 `SceneGraph` manages group and mesh nodes independently of a window or GPU.
@@ -430,6 +499,14 @@ run when GPUI repaints; there is no autonomous background render loop.
 UI texture targets and their rendering resources are reused while attached;
 pixel-size changes resize the capture targets independently of the window.
 
+## Headless output
+
+The optional `wgpu` feature provides `HeadlessRenderer` for the same scenes without
+a native window or UI layout. It accepts solid and decoded-image materials and
+returns GPU Color/Object ID textures with a frame-local identity map and bounded
+nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
+coverage, resource readiness, and ownership.
+
 ## Example
 
 ```sh
@@ -438,8 +515,10 @@ cargo run -p gpui_3d --example camera
 
 Compare six equal cubes at different depths with perspective and orthographic
 projection. Click a cube to select it, frame the selection or the whole scene,
-and switch between front, top, and oblique views. Right-drag to orbit; scrolling
-moves a perspective camera or changes the orthographic span. The footer reports
+and switch between front, top, and oblique views. Right-drag to orbit and
+middle-drag to pan. Scrolling moves a perspective camera or changes the
+orthographic span; `Lens + / −` changes FOV or span without moving the eye.
+Drags end when the pointer leaves the viewport. The footer reports
 the selected node's projected position and linear forward depth.
 
 ```sh

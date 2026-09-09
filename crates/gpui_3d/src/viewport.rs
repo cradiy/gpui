@@ -2,8 +2,8 @@ use crate::picking::{PickSnapshot, PickSurface};
 use crate::{Hit, ObjectId, PickBehavior, Scene, Texture, ui_input::UiInput};
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, MeshDraw3d, MeshTexture3d, Pixels, PointerTransform, Scene3dFrame, Size,
-    Style, StyleRefinement, Styled, UiTexture3d, Window, div, prelude::*,
+    IntoElement, LayoutId, MeshTexture3d, Pixels, PointerTransform, Size, Style, StyleRefinement,
+    Styled, UiTexture3d, Window, div, prelude::*,
 };
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -296,42 +296,39 @@ impl Element for Content {
         let scene = &self.0.scene;
         let mut surfaces = Vec::with_capacity(scene.objects.len());
         let has_ui = self.0.texture.is_some();
-        let objects = scene
-            .objects
-            .iter()
-            .filter_map(|object| {
-                surfaces.push(PickSurface::Absent);
-                let surface = surfaces.last_mut().unwrap();
-                let texture = match &object.material.texture {
-                    Texture::None => {
-                        *surface = PickSurface::Solid;
-                        MeshTexture3d::None
-                    }
-                    Texture::Ui => {
-                        if has_ui {
+        let frame = scene
+            .prepare_frame(
+                f32::from(bounds.size.width) / f32::from(bounds.size.height),
+                texture_state.as_ref().map(|state| state.config),
+                |_, source| {
+                    surfaces.push(PickSurface::Absent);
+                    let surface = surfaces.last_mut().unwrap();
+                    let texture = match source {
+                        Texture::None => {
                             *surface = PickSurface::Solid;
+                            MeshTexture3d::None
                         }
-                        MeshTexture3d::Subtree
-                    }
-                    Texture::Image(source) => {
-                        let image = source.use_data(None, window, cx)?.ok()?;
-                        let tile = window.prepare_effect_image(&image, 0).ok()?;
-                        *surface = PickSurface::Image(image);
-                        MeshTexture3d::Image(tile)
-                    }
-                };
-                let (model, normal) = object.matrices();
-                Some(MeshDraw3d {
-                    mesh: object.mesh.0.clone(),
-                    model,
-                    normal,
-                    color: object.material.color,
-                    texture,
-                    alpha_cutoff: object.material.alpha_cutoff,
-                    unlit: object.material.unlit,
-                })
-            })
-            .collect::<Vec<_>>();
+                        Texture::Ui => {
+                            if has_ui {
+                                *surface = PickSurface::Solid;
+                            }
+                            MeshTexture3d::Subtree
+                        }
+                        Texture::Image(source) => {
+                            let Some(Ok(image)) = source.use_data(None, window, cx) else {
+                                return Ok(None);
+                            };
+                            let Ok(tile) = window.prepare_effect_image(&image, 0) else {
+                                return Ok(None);
+                            };
+                            *surface = PickSurface::Image(image);
+                            MeshTexture3d::Image(tile)
+                        }
+                    };
+                    Ok(Some(texture))
+                },
+            )
+            .expect("invalid 3D scene");
         *self.0.pick_snapshot.borrow_mut() = Some(PickSnapshot {
             scene: scene.clone(),
             bounds,
@@ -343,29 +340,7 @@ impl Element for Content {
             input.read(cx).set_snapshot(self.0.pick_snapshot.clone());
             input.read(cx).paint(&state.hitbox, window);
         }
-        let light = scene.light;
-        assert!(
-            light
-                .direction
-                .iter()
-                .chain([light.intensity, light.ambient].iter())
-                .all(|x| x.is_finite())
-        );
-        let frame = Arc::new(Scene3dFrame {
-            ui_texture: texture_state.as_ref().map(|state| state.config),
-            view_projection: scene
-                .camera
-                .matrix(f32::from(bounds.size.width) / f32::from(bounds.size.height)),
-            light_direction: light.direction,
-            light: [
-                light.color.r,
-                light.color.g,
-                light.color.b,
-                light.intensity.max(0.),
-            ],
-            ambient: light.ambient.max(0.),
-            objects: objects.into(),
-        });
+        let frame = Arc::new(frame);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.with_scene3d(bounds, frame, |window| {
                 if let Some(state) = texture_state {

@@ -2,6 +2,7 @@ struct Params {
     model: mat4x4<f32>, normal: mat4x4<f32>, camera: mat4x4<f32>,
     bounds: vec4<f32>, viewport: vec4<f32>, direction: vec4<f32>, light: vec4<f32>,
     color: vec4<f32>, texture_rect: vec4<f32>, flags: vec4<f32>,
+    ids: vec4<u32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
@@ -16,13 +17,22 @@ fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @loc
     clip.y = (1.0 - origin.y * 2.0) * clip.w + (clip.y - clip.w) * extent.y;
     return Output(clip, (params.normal * vec4<f32>(normal, 0.0)).xyz, uv);
 }
-@fragment
-fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn base_color(input: Output) -> vec4<f32> {
     let uv = (params.texture_rect.xy + vec2<f32>(0.5) + clamp(input.uv, vec2<f32>(0.0), vec2<f32>(1.0)) * max(params.texture_rect.zw - 1.0, vec2<f32>(0.0))) / vec2<f32>(textureDimensions(image));
     var sampled = textureSample(image, image_sampler, uv);
     if (params.flags.z > 0.5) { sampled = vec4<f32>(sampled.rgb / max(sampled.a, 0.00001), sampled.a); }
     let base = sampled * params.color;
     if (base.a < params.flags.x) { discard; }
+    return base;
+}
+@fragment
+fn object_id(input: Output) -> @location(0) u32 {
+    let base = base_color(input);
+    return params.ids.x;
+}
+@fragment
+fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let base = base_color(input);
     var illumination = vec3<f32>(1.0);
     if (params.flags.y < 0.5) {
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front);

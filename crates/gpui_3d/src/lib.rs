@@ -7,8 +7,12 @@ pub mod guide {}
 mod affine;
 mod bounds;
 mod camera;
+mod frame;
 mod graph;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub mod headless;
 mod math;
+mod orbit;
 mod picking;
 mod ui_input;
 mod viewport;
@@ -23,6 +27,9 @@ pub use graph::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
 };
 pub use math::Transform;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use headless::*;
+pub use orbit::{OrbitController, OrbitError, OrbitSettings};
 pub use picking::{Hit, PickBehavior};
 use std::sync::{Arc, OnceLock};
 pub use viewport::{Viewport3d, viewport3d};

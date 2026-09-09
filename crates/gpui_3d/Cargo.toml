@@ -7,15 +7,22 @@ license = "MIT"
 
 [features]
 test-support = ["gpui/test-support"]
+wgpu = ["dep:gpui_wgpu"]
 
 [dependencies]
+anyhow.workspace = true
 gpui.workspace = true
+gpui_wgpu = { workspace = true, optional = true }
 slotmap.workspace = true
 
 [dev-dependencies]
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 image.workspace = true
 uic = { path = "../../uic" }
+
+[[example]]
+name = "headless"
+required-features = ["wgpu"]
 
 [lints]
 workspace = true

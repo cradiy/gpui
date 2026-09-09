@@ -28,7 +28,7 @@ mod distance_field;
 mod fluid;
 mod particle_transition;
 mod particles;
-mod scene3d;
+pub(crate) mod scene3d;
 mod ui_capture;
 
 #[derive(Clone, Copy)]

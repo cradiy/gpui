@@ -254,11 +254,10 @@ pub(crate) fn validate_device_limits(limits: &wgpu::Limits) -> anyhow::Result<()
     Ok(())
 }
 
-fn instance_buffer(device: &wgpu::Device, count: usize) -> wgpu::Buffer {
+fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("mesh_instances"),
-        size: (instances::capacity(count, instance_limit(device)) * std::mem::size_of::<Instance>())
-            as u64,
+        size: (capacity * std::mem::size_of::<Instance>()) as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
@@ -787,6 +786,10 @@ impl Scene3dRenderer {
         }
         self.slots.truncate(batch_sizes.len());
         for (index, count) in batch_sizes.into_iter().enumerate() {
+            let current = self.slots.get(index).map_or(0, |slot| {
+                (slot.instances.size() / std::mem::size_of::<Instance>() as u64) as usize
+            });
+            let capacity = instances::retained_capacity(current, count, self.batch_limit);
             if index == self.slots.len() {
                 self.slots.push(BatchSlot {
                     params: device.create_buffer(&wgpu::BufferDescriptor {
@@ -795,12 +798,10 @@ impl Scene3dRenderer {
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     }),
-                    instances: instance_buffer(device, count),
+                    instances: instance_buffer(device, capacity),
                 });
-            } else if self.slots[index].instances.size()
-                < (count * std::mem::size_of::<Instance>()) as u64
-            {
-                self.slots[index].instances = instance_buffer(device, count);
+            } else if current != capacity {
+                self.slots[index].instances = instance_buffer(device, capacity);
             }
         }
         if !has_frame {
@@ -1767,6 +1768,59 @@ mod tests {
             alpha_mode: gpui::AlphaMode3d::Opaque,
             sort_depth: 0.,
         }
+    }
+
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn scene3d_instance_buffers_shrink_reuse_and_release_with_active_batches() -> anyhow::Result<()>
+    {
+        let context = crate::WgpuContext::new_headless()?;
+        let source = object();
+        let dense = frame(&vec![source.clone(); 512]);
+        let medium = frame(&vec![source.clone(); 257]);
+        let sparse = frame(&vec![source.clone(); 8]);
+        let nearby = frame(&vec![source.clone(); 7]);
+        let mut different = source;
+        different.alpha_mode = gpui::AlphaMode3d::Mask;
+        let split = frame(&[dense.objects[0].clone(), different]);
+        for format in [
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::R32Uint,
+        ] {
+            let mut renderer = Scene3dRenderer::new(&context.device, &context.queue, format, 1);
+            renderer.prepare_frames(&context.device, &context.queue, [&dense], [[16, 16]]);
+            assert_eq!(renderer.slots.len(), 1);
+            let large = renderer.slots[0].instances.clone();
+            let params = renderer.slots[0].params.clone();
+            assert_eq!(large.size(), 512 * std::mem::size_of::<Instance>() as u64);
+            renderer.prepare_frames(&context.device, &context.queue, [&medium], [[16, 16]]);
+            assert_eq!(renderer.slots[0].instances, large);
+
+            renderer.prepare_frames(&context.device, &context.queue, [&sparse], [[16, 16]]);
+            let small = renderer.slots[0].instances.clone();
+            assert_eq!(small.size(), 8 * std::mem::size_of::<Instance>() as u64);
+            assert_ne!(small, large);
+            assert_eq!(renderer.slots[0].params, params);
+            assert_eq!(large.size(), 512 * std::mem::size_of::<Instance>() as u64);
+            renderer.prepare_frames(&context.device, &context.queue, [&nearby], [[16, 16]]);
+            assert_eq!(renderer.slots[0].instances, small);
+
+            renderer.prepare_frames(&context.device, &context.queue, [&split], [[16, 16]]);
+            assert_eq!(renderer.slots.len(), 2);
+            assert!(
+                renderer
+                    .slots
+                    .iter()
+                    .all(|slot| slot.instances.size() == std::mem::size_of::<Instance>() as u64)
+            );
+            renderer.prepare_frames(&context.device, &context.queue, [&dense], [[16, 16]]);
+            assert_eq!(renderer.slots.len(), 1);
+            assert_eq!(renderer.slots[0].instances.size(), large.size());
+            assert_ne!(renderer.slots[0].instances, large);
+            renderer.prepare_frames(&context.device, &context.queue, [], []);
+            assert!(renderer.slots.is_empty());
+        }
+        Ok(())
     }
 
     #[test]

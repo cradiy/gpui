@@ -241,10 +241,53 @@ pub(super) fn capacity(required: usize, limit: usize) -> usize {
         .min(limit)
 }
 
+pub(super) fn retained_capacity(current: usize, required: usize, limit: usize) -> usize {
+    let desired = capacity(required, limit);
+    if current < required || current > limit || required <= current / 4 {
+        desired
+    } else {
+        current
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::{IDENTITY, frame, object};
     use super::*;
+
+    #[test]
+    fn scene3d_instance_capacity_reclaims_peaks_without_threshold_churn() {
+        let limit = 1000;
+        let mut retained = 0;
+        let mut allocations = 0;
+        for required in [1, 513, 999, 501, 251, 500, 251] {
+            let next = retained_capacity(retained, required, limit);
+            allocations += usize::from(next != retained);
+            retained = next;
+            assert!((required..=limit).contains(&retained));
+        }
+        assert_eq!(allocations, 2);
+        assert_eq!(retained, 1000);
+        retained = retained_capacity(retained, 250, limit);
+        assert_eq!(retained, 256);
+        for required in [249, 250, 251, 256, 249, 251] {
+            assert_eq!(retained_capacity(retained, required, limit), retained);
+        }
+        retained = retained_capacity(retained, 1, limit);
+        assert_eq!(retained, 1);
+
+        let mut retained = 0;
+        for required in (1..=limit).chain((1..=limit).rev()) {
+            retained = retained_capacity(retained, required, limit);
+            assert!(retained >= required && retained <= limit);
+            assert!(retained / 4 < required);
+        }
+        assert_eq!(retained, 1);
+        let huge = usize::MAX / 2 + 1;
+        assert_eq!(retained_capacity(usize::MAX, huge, usize::MAX), usize::MAX);
+        assert_eq!(retained_capacity(usize::MAX, 1, usize::MAX), 1);
+        assert_eq!(retained_capacity(usize::MAX, 17, 100), 32);
+    }
 
     fn retained(
         cache: &BatchPlanCache,

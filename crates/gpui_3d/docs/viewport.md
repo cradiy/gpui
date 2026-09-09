@@ -2021,6 +2021,13 @@ temporary attachments; other configurations have separate attachments retained
 only while used by the current scene. A window resize preserves attachments whose viewport dimensions remain
 unchanged. Fully off-surface viewports do not allocate mesh attachments.
 
+Instance buffers grow in power-of-two steps capped by the device batch limit.
+An active batch reuses its capacity while demand stays above one quarter of it;
+at or below that threshold, the next preparation allocates a smaller buffer.
+Removed batches release their buffers. The same policy applies to viewport and
+direct-output passes, without changing draw order or object identities. Queued
+commands retain any replaced resources they still reference.
+
 Mesh output is placed back into surface coordinates for subtree composition and
 enclosing effects. Generic subtree-composition textures remain surface-sized, so many
 nested captures can still consume substantial GPU memory. UI capture and composition

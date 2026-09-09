@@ -9,31 +9,38 @@ use gpui::{MeshTexture3d, Scene3dFrame};
 
 use crate::{WgpuAtlas, WgpuContext, wgpu_renderer::scene3d::Scene3dRenderer};
 
-/// Requested 3D outputs. ID pixels are single-sampled and never color-resolved.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Scene3dChannels {
-    Color,
-    ObjectId,
-    #[default]
-    ColorAndObjectId,
+bitflags::bitflags! {
+    /// Independently selectable outputs. Non-color channels use the pixel center.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Scene3dChannels: u8 {
+        const COLOR = 1;
+        const OBJECT_ID = 2;
+        const LINEAR_DEPTH = 4;
+        const WORLD_NORMAL = 8;
+    }
+}
+impl Default for Scene3dChannels {
+    fn default() -> Self {
+        Self::COLOR | Self::OBJECT_ID
+    }
 }
 impl Scene3dChannels {
     fn color(self) -> bool {
-        self != Self::ObjectId
+        self.contains(Self::COLOR)
     }
     fn ids(self) -> bool {
-        self != Self::Color
+        self.contains(Self::OBJECT_ID)
     }
 }
 
-/// Physical output dimensions and color sampling. The background is transparent
-/// black for color and zero for IDs. Color uses display-encoded RGBA8 after
+/// Physical output dimensions and color sampling. Background values are zero
+/// in all channels. Color uses display-encoded RGBA8 after
 /// linear HDR shading, exposure, and tone mapping.
 #[derive(Clone, Copy, Debug)]
 pub struct Scene3dOutputConfig {
     pub size: [u32; 2],
     pub channels: Scene3dChannels,
-    /// One or four samples. Object IDs always use the pixel-center sample.
+    /// One or four samples. Non-color channels always use the pixel-center sample.
     pub color_samples: u32,
 }
 impl Scene3dOutputConfig {
@@ -52,9 +59,23 @@ pub struct Scene3dCapabilities {
     pub max_dimension: u32,
     pub max_pixels: u64,
     pub color_msaa4: bool,
+    /// Maximum size of each staging buffer, including padded rows.
+    pub max_readback_buffer_bytes: u64,
+    pub geometry_outputs: bool,
 }
 impl Scene3dCapabilities {
     pub fn validate(self, config: Scene3dOutputConfig) -> Result<()> {
+        ensure!(
+            !config.channels.is_empty() && Scene3dChannels::all().contains(config.channels),
+            "3D outputs must select known channels"
+        );
+        ensure!(
+            self.geometry_outputs
+                || !config
+                    .channels
+                    .intersects(Scene3dChannels::LINEAR_DEPTH | Scene3dChannels::WORLD_NORMAL),
+            "3D geometry output formats are unavailable on this device"
+        );
         let [width, height] = config.size;
         ensure!(
             width > 0 && height > 0 && width <= self.max_dimension && height <= self.max_dimension,
@@ -73,6 +94,17 @@ impl Scene3dCapabilities {
             !config.channels.color() || config.color_samples == 1 || self.color_msaa4,
             "4x color MSAA is unavailable on this device"
         );
+        let bytes_per_pixel = if config.channels.contains(Scene3dChannels::WORLD_NORMAL) {
+            16
+        } else {
+            4
+        };
+        let stride = readback_stride(width, bytes_per_pixel);
+        ensure!(
+            stride <= u64::from(u32::MAX)
+                && stride * u64::from(height) <= self.max_readback_buffer_bytes,
+            "3D output exceeds the readback buffer limit"
+        );
         Ok(())
     }
 }
@@ -84,6 +116,8 @@ pub struct WgpuScene3dRenderer {
     atlas: Arc<WgpuAtlas>,
     color: Option<(u32, Scene3dRenderer)>,
     ids: Option<Scene3dRenderer>,
+    depth: Option<Scene3dRenderer>,
+    normals: Option<Scene3dRenderer>,
     capabilities: Scene3dCapabilities,
     readback_busy: Arc<AtomicBool>,
 }
@@ -123,12 +157,27 @@ impl WgpuScene3dRenderer {
             max_pixels: 16_777_216,
             color_msaa4: supports_msaa(wgpu::TextureFormat::Rgba16Float)
                 && supports_msaa(wgpu::TextureFormat::Depth32Float),
+            max_readback_buffer_bytes: context.device.limits().max_buffer_size,
+            geometry_outputs: [
+                wgpu::TextureFormat::R32Float,
+                wgpu::TextureFormat::Rgba32Float,
+            ]
+            .into_iter()
+            .all(|format| {
+                context
+                    .adapter
+                    .get_texture_format_features(format)
+                    .allowed_usages
+                    .contains(usages)
+            }),
         };
         Ok(Self {
             atlas: Arc::new(WgpuAtlas::from_context(&context)),
             context,
             color: None,
             ids: None,
+            depth: None,
+            normals: None,
             capabilities,
             readback_busy: Arc::new(AtomicBool::new(false)),
         })
@@ -168,6 +217,7 @@ impl WgpuScene3dRenderer {
                 .view_projection
                 .iter()
                 .flatten()
+                .chain(frame.world_to_view.iter().flatten())
                 .chain(&frame.camera_position)
                 .chain(frame.orthographic_view_direction.iter().flatten())
                 .chain(&frame.light_direction)
@@ -277,15 +327,24 @@ impl WgpuScene3dRenderer {
             self.color = None;
             None
         };
-        let ids = if config.channels.ids() {
-            let renderer = self.ids.get_or_insert_with(|| {
-                Scene3dRenderer::new(device, queue, wgpu::TextureFormat::R32Uint, 1)
-            });
-            if let Some((_, color)) = &self.color {
-                renderer.reuse_geometry_from(color);
+        let (mut ids, mut depth, mut normals) = (None, None, None);
+        let mut geometry_source = self.color.as_ref().map(|(_, renderer)| renderer);
+        for (kind, cache, output) in [
+            (OutputKind::ObjectId, &mut self.ids, &mut ids),
+            (OutputKind::LinearDepth, &mut self.depth, &mut depth),
+            (OutputKind::WorldNormal, &mut self.normals, &mut normals),
+        ] {
+            if !config.channels.contains(kind.channel()) {
+                *cache = None;
+                continue;
+            }
+            let renderer =
+                cache.get_or_insert_with(|| Scene3dRenderer::new(device, queue, kind.format(), 1));
+            if let Some(source) = geometry_source {
+                renderer.reuse_geometry_from(source);
             }
             renderer.prepare_frames(device, [frame], width, height);
-            let texture = output_texture(device, config.size, wgpu::TextureFormat::R32Uint);
+            let texture = output_texture(device, config.size, kind.format());
             renderer.encode_frame(
                 device,
                 queue,
@@ -297,20 +356,58 @@ impl WgpuScene3dRenderer {
                 &texture.create_view(&Default::default()),
                 &mut encoder,
             );
-            Some(texture)
-        } else {
-            self.ids = None;
-            None
-        };
+            *output = Some(texture);
+            geometry_source = Some(renderer);
+        }
         self.context.queue.submit([encoder.finish()]);
         Ok(Scene3dGpuOutput {
             context: self.context.clone(),
             config,
             color,
             ids,
+            depth,
+            normals,
             readback_busy: self.readback_busy.clone(),
         })
     }
+}
+
+#[derive(Clone, Copy)]
+enum OutputKind {
+    Color,
+    ObjectId,
+    LinearDepth,
+    WorldNormal,
+}
+impl OutputKind {
+    fn channel(self) -> Scene3dChannels {
+        match self {
+            Self::Color => Scene3dChannels::COLOR,
+            Self::ObjectId => Scene3dChannels::OBJECT_ID,
+            Self::LinearDepth => Scene3dChannels::LINEAR_DEPTH,
+            Self::WorldNormal => Scene3dChannels::WORLD_NORMAL,
+        }
+    }
+    fn format(self) -> wgpu::TextureFormat {
+        match self {
+            Self::Color => wgpu::TextureFormat::Rgba8Unorm,
+            Self::ObjectId => wgpu::TextureFormat::R32Uint,
+            Self::LinearDepth => wgpu::TextureFormat::R32Float,
+            Self::WorldNormal => wgpu::TextureFormat::Rgba32Float,
+        }
+    }
+    fn bytes_per_pixel(self) -> u32 {
+        if matches!(self, Self::WorldNormal) {
+            16
+        } else {
+            4
+        }
+    }
+}
+
+fn readback_stride(width: u32, bytes_per_pixel: u32) -> u64 {
+    let alignment = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    (u64::from(width) * u64::from(bytes_per_pixel)).div_ceil(alignment) * alignment
 }
 
 fn output_texture(
@@ -343,6 +440,8 @@ pub struct Scene3dGpuOutput {
     config: Scene3dOutputConfig,
     color: Option<wgpu::Texture>,
     ids: Option<wgpu::Texture>,
+    depth: Option<wgpu::Texture>,
+    normals: Option<wgpu::Texture>,
     readback_busy: Arc<AtomicBool>,
 }
 impl Scene3dGpuOutput {
@@ -356,6 +455,18 @@ impl Scene3dGpuOutput {
     /// R32Uint with zero background and exact, unfiltered object IDs.
     pub fn object_ids(&self) -> Option<&wgpu::Texture> {
         self.ids.as_ref()
+    }
+
+    /// R32Float: positive camera-forward depth in scene units; zero background.
+    pub fn linear_depth(&self) -> Option<&wgpu::Texture> {
+        self.depth.as_ref()
+    }
+
+    /// Rgba32Float: interpolated world-space vertex normal, normalized and oriented
+    /// toward the visible side. W is one for a surface and zero for background.
+    /// Normal maps are not applied. Zero-length input normals remain zero XYZ.
+    pub fn world_normals(&self) -> Option<&wgpu::Texture> {
+        self.normals.as_ref()
     }
 
     /// Starts a bounded, nonblocking readback. Poll its result or drop to cancel.
@@ -377,18 +488,22 @@ impl Scene3dGpuOutput {
             finished: false,
         };
         let [width, height] = self.config.size;
-        let stride = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let mut encoder =
             self.context
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("scene3d.readback"),
                 });
-        for (is_id, texture) in [(false, self.color.as_ref()), (true, self.ids.as_ref())] {
+        for (kind, texture) in [
+            (OutputKind::Color, self.color.as_ref()),
+            (OutputKind::ObjectId, self.ids.as_ref()),
+            (OutputKind::LinearDepth, self.depth.as_ref()),
+            (OutputKind::WorldNormal, self.normals.as_ref()),
+        ] {
             let Some(texture) = texture else {
                 continue;
             };
+            let stride = readback_stride(width, kind.bytes_per_pixel()) as u32;
             let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("scene3d.readback"),
                 size: u64::from(stride) * u64::from(height),
@@ -411,7 +526,7 @@ impl Scene3dGpuOutput {
                 buffer,
                 receiver: None,
                 stride,
-                is_id,
+                kind,
                 ready: false,
             });
         }
@@ -434,7 +549,7 @@ struct ReadbackSlot {
     buffer: wgpu::Buffer,
     receiver: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     stride: u32,
-    is_id: bool,
+    kind: OutputKind,
     ready: bool,
 }
 
@@ -445,12 +560,58 @@ impl Drop for ReadbackPermit {
     }
 }
 
-/// Top-left-origin, tightly packed output. Color rows are width * 4 bytes;
-/// ID rows are width u32 values. Channels not requested are None.
+/// Top-left-origin, tightly packed output. Every channel contains width * height
+/// pixels, without GPU row padding. Channels not requested are None.
 pub struct Scene3dPixels {
     pub size: [u32; 2],
     pub rgba: Option<Vec<u8>>,
     pub object_ids: Option<Vec<u32>>,
+    /// Positive camera-forward distance per pixel, in scene units; zero background.
+    pub linear_depth: Option<Vec<f32>>,
+    /// World XYZ normal and surface-validity W. Normal maps are not applied.
+    pub world_normals: Option<Vec<[f32; 4]>>,
+}
+
+impl Scene3dPixels {
+    fn read_channel(&mut self, kind: OutputKind, stride: u32, data: &[u8]) {
+        let width_bytes = self.size[0] as usize * kind.bytes_per_pixel() as usize;
+        let packed = data
+            .chunks_exact(stride as usize)
+            .take(self.size[1] as usize)
+            .flat_map(|row| row[..width_bytes].iter().copied())
+            .collect::<Vec<_>>();
+        match kind {
+            OutputKind::Color => self.rgba = Some(packed),
+            OutputKind::ObjectId => {
+                self.object_ids = Some(
+                    packed
+                        .chunks_exact(4)
+                        .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+                        .collect(),
+                )
+            }
+            OutputKind::LinearDepth => {
+                self.linear_depth = Some(
+                    packed
+                        .chunks_exact(4)
+                        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+                        .collect(),
+                )
+            }
+            OutputKind::WorldNormal => {
+                self.world_normals = Some(
+                    packed
+                        .chunks_exact(16)
+                        .map(|bytes| {
+                            std::array::from_fn(|i| {
+                                f32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
+                            })
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
 }
 
 /// Pending readback that owns its staging buffers and renderer queue permit.
@@ -497,25 +658,12 @@ impl Scene3dReadback {
             size: self.size,
             rgba: None,
             object_ids: None,
+            linear_depth: None,
+            world_normals: None,
         };
-        let width_bytes = self.size[0] as usize * 4;
         for slot in &self.slots {
             let mapped = slot.buffer.get_mapped_range(..)?;
-            let packed = mapped
-                .chunks_exact(slot.stride as usize)
-                .take(self.size[1] as usize)
-                .flat_map(|row| row[..width_bytes].iter().copied())
-                .collect::<Vec<_>>();
-            if slot.is_id {
-                pixels.object_ids = Some(
-                    packed
-                        .chunks_exact(4)
-                        .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-                        .collect(),
-                );
-            } else {
-                pixels.rgba = Some(packed);
-            }
+            pixels.read_channel(slot.kind, slot.stride, &mapped);
         }
         Ok(Some(pixels))
     }
@@ -529,5 +677,95 @@ impl Scene3dReadback {
 impl Drop for Scene3dReadback {
     fn drop(&mut self) {
         self.release();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene3d_readback_decodes_float_channels_without_row_padding() {
+        let mut pixels = Scene3dPixels {
+            size: [3, 2],
+            rgba: None,
+            object_ids: None,
+            linear_depth: None,
+            world_normals: None,
+        };
+        let depth: [f32; 6] = [0., 0.125, 70000., 3.25, 1.5, 100.];
+        let normals = [
+            [0., 0., 0., 0.],
+            [-1., 0., 0., 1.],
+            [0., -1., 0., 1.],
+            [0., 0., -1., 1.],
+            [0.6, 0.8, 0., 1.],
+            [0.; 4],
+        ];
+        for (kind, values) in [
+            (OutputKind::LinearDepth, depth.to_vec()),
+            (
+                OutputKind::WorldNormal,
+                normals.into_iter().flatten().collect(),
+            ),
+        ] {
+            let stride = readback_stride(3, kind.bytes_per_pixel()) as usize;
+            let row_len = 3 * kind.bytes_per_pixel() as usize;
+            let packed: Vec<_> = values.into_iter().flat_map(f32::to_le_bytes).collect();
+            let mut padded = vec![0xff; stride * 2];
+            for (row, bytes) in packed.chunks_exact(row_len).enumerate() {
+                padded[row * stride..row * stride + row_len].copy_from_slice(bytes);
+            }
+            pixels.read_channel(kind, stride as u32, &padded);
+        }
+        assert_eq!(pixels.linear_depth.as_deref(), Some(depth.as_slice()));
+        assert_eq!(pixels.world_normals.as_deref(), Some(normals.as_slice()));
+        assert!(pixels.rgba.is_none() && pixels.object_ids.is_none());
+    }
+
+    #[test]
+    fn scene3d_output_limits_account_for_selected_channels_and_padded_rows() {
+        let caps = Scene3dCapabilities {
+            max_dimension: 4096,
+            max_pixels: 1_000_000,
+            color_msaa4: false,
+            max_readback_buffer_bytes: 1024,
+            geometry_outputs: true,
+        };
+        let config = Scene3dOutputConfig {
+            size: [17, 3],
+            channels: Scene3dChannels::LINEAR_DEPTH,
+            color_samples: 4,
+        };
+        assert!(caps.validate(config).is_ok());
+        assert!(
+            caps.validate(Scene3dOutputConfig {
+                channels: Scene3dChannels::WORLD_NORMAL,
+                ..config
+            })
+            .is_err()
+        );
+        assert!(
+            caps.validate(Scene3dOutputConfig {
+                channels: Scene3dChannels::COLOR,
+                ..config
+            })
+            .is_err()
+        );
+        assert!(
+            caps.validate(Scene3dOutputConfig {
+                channels: Scene3dChannels::empty(),
+                ..config
+            })
+            .is_err()
+        );
+        assert!(
+            Scene3dCapabilities {
+                geometry_outputs: false,
+                ..caps
+            }
+            .validate(config)
+            .is_err()
+        );
     }
 }

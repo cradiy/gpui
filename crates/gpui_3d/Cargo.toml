@@ -24,5 +24,9 @@ uic = { path = "../../uic" }
 name = "headless"
 required-features = ["wgpu"]
 
+[[example]]
+name = "geometry_outputs"
+required-features = ["wgpu"]
+
 [lints]
 workspace = true

@@ -73,6 +73,7 @@ struct Params {
     emissive_map: ImageParams,
     normal_map: ImageParams,
     normal_settings: [f32; 4],
+    depth_plane: [f32; 4],
 }
 
 struct Geometry {
@@ -112,8 +113,19 @@ impl Scene3dRenderer {
             label: Some("scene3d"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../scene3d.wgsl").into()),
         });
-        let is_id = format == wgpu::TextureFormat::R32Uint;
-        let mesh_format = if is_id {
+        let data_output = matches!(
+            format,
+            wgpu::TextureFormat::R32Uint
+                | wgpu::TextureFormat::R32Float
+                | wgpu::TextureFormat::Rgba32Float
+        );
+        let fragment = match format {
+            wgpu::TextureFormat::R32Uint => "object_id",
+            wgpu::TextureFormat::R32Float => "linear_depth",
+            wgpu::TextureFormat::Rgba32Float => "world_normal",
+            _ => "fragment",
+        };
+        let mesh_format = if data_output {
             format
         } else {
             wgpu::TextureFormat::Rgba16Float
@@ -136,7 +148,11 @@ impl Scene3dRenderer {
                 count: None,
             },
         ];
-        for binding in if is_id { &[1][..] } else { &[1, 3, 4, 5][..] } {
+        for binding in if data_output {
+            &[1][..]
+        } else {
+            &[1, 3, 4, 5][..]
+        } {
             bindings.push(wgpu::BindGroupLayoutEntry {
                 binding: *binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -165,7 +181,7 @@ impl Scene3dRenderer {
                 buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 48, step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] })],
             },
-            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(if format == wgpu::TextureFormat::R32Uint { "object_id" } else { "fragment" }), compilation_options: Default::default(),
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(fragment), compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState { format: mesh_format, blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }),
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
@@ -176,8 +192,8 @@ impl Scene3dRenderer {
         })
         };
         let pipeline = create_pipeline(false);
-        let blend_pipeline = (!is_id).then(|| create_pipeline(true));
-        let display_pipeline = (!is_id).then(|| {
+        let blend_pipeline = (!data_output).then(|| create_pipeline(true));
+        let display_pipeline = (!data_output).then(|| {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("scene3d_display"),
                 source: wgpu::ShaderSource::Wgsl(include_str!("../scene3d_display.wgsl").into()),
@@ -537,6 +553,7 @@ impl Scene3dRenderer {
                 emissive_map: ImageParams::new(emissive_map, gpui::TextureColorSpace3d::Srgb),
                 normal_map: ImageParams::new(normal_map, gpui::TextureColorSpace3d::Linear),
                 normal_settings: [object.normal_scale, f32::from(normal_map.is_some()), 0., 0.],
+                depth_plane: frame.world_to_view.map(|column| -column[2]),
             };
             let buffer = &self.slots[start + index];
             queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
@@ -554,7 +571,7 @@ impl Scene3dRenderer {
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ];
-            if self.format != wgpu::TextureFormat::R32Uint {
+            if self.display_pipeline.is_some() {
                 entries.extend([
                     wgpu::BindGroupEntry {
                         binding: 5,
@@ -793,6 +810,7 @@ mod tests {
             ("uv_v", std::mem::offset_of!(Params, uv_v)),
             ("sampling", std::mem::offset_of!(Params, sampling)),
             ("view", std::mem::offset_of!(Params, view)),
+            ("depth_plane", std::mem::offset_of!(Params, depth_plane)),
             ("pbr", std::mem::offset_of!(Params, pbr)),
             ("emissive", std::mem::offset_of!(Params, emissive)),
             (

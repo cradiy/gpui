@@ -863,7 +863,8 @@ pixel-size changes resize the capture targets independently of the window.
 
 The optional `wgpu` feature provides `HeadlessRenderer` for the same scenes without
 a native window or UI layout. It accepts solid and decoded-image materials and
-returns GPU Color/Object ID textures with a frame-local identity map and bounded
+returns independently selectable color, object-ID, linear-depth, and world-normal
+textures with a frame-local identity map and bounded
 nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
 

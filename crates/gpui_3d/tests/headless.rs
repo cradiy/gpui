@@ -5,6 +5,109 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow::Result<()> {
+    use gpui::{Bounds, RenderImage, point, px, rgba, size};
+    use gpui_3d::{
+        AlphaMode, MaterialTexture, Object, PbrMaterial, Projection, Scene, Scene3dChannels,
+    };
+    use std::sync::Arc;
+    let normal_map = Arc::new(RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([230, 180, 220, 255])),
+    )]));
+    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(67.), px(49.)));
+    let mut renderer = HeadlessRenderer::new()?;
+    for projection in [
+        Projection::default(),
+        Projection::Orthographic { vertical_size: 3. },
+    ] {
+        for side in [-1., 1.] {
+            for alpha in [0., 0.25] {
+                let camera = Camera {
+                    eye: [0.3, 0.2, side * 4.],
+                    projection,
+                    ..Default::default()
+                };
+                let mut tint = rgba(0x89c6efff);
+                tint.a = alpha;
+                let scene = Scene::new()
+                    .camera(camera)
+                    .object(
+                        Object::new(
+                            Mesh::cube(),
+                            Material::color(tint)
+                                .alpha_mode(AlphaMode::Blend)
+                                .pbr(PbrMaterial::default())
+                                .normal_texture(MaterialTexture::new(normal_map.clone())),
+                        )
+                        .position([0., 0., side * 0.6])
+                        .rotation([0.1, 0.35, 0.])
+                        .scale([-1.2, 0.8, 1.]),
+                    )
+                    .object(
+                        Object::new(Mesh::plane(), Material::color(rgb(0xd4a373)))
+                            .scale([2.5, 2., 1.]),
+                    );
+                let frame = renderer.render(
+                    &scene,
+                    Scene3dOutputConfig {
+                        size: [67, 49],
+                        channels: Scene3dChannels::OBJECT_ID
+                            | Scene3dChannels::LINEAR_DEPTH
+                            | Scene3dChannels::WORLD_NORMAL,
+                        color_samples: 4,
+                    },
+                )?;
+                assert!(frame.gpu().color().is_none());
+                let mut read = frame.readback()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let result = loop {
+                    if let Some(result) = read.try_read()? {
+                        break result;
+                    }
+                    anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                };
+                let pixels = result.pixels;
+                let depths = pixels.linear_depth.unwrap();
+                let normals = pixels.world_normals.unwrap();
+                let ids = pixels.object_ids.unwrap();
+                let mut hits = 0;
+                for y in (3..49).step_by(7) {
+                    for x in (2..67).step_by(7) {
+                        let index = y * 67 + x;
+                        let p = point(px(x as f32 + 0.5), px(y as f32 + 0.5));
+                        if let Some(hit) = scene.pick(viewport, p) {
+                            if hit.barycentric.iter().any(|v| *v < 0.005) {
+                                continue;
+                            }
+                            hits += 1;
+                            let depth = camera
+                                .world_to_screen(viewport, hit.position)?
+                                .unwrap()
+                                .depth;
+                            assert!((depths[index] - depth).abs() < 0.001);
+                            assert_eq!(ids[index], hit.object_index as u32 + 1);
+                            assert_eq!(normals[index][3], 1.);
+                            let orientation = if hit.object_index == 0 { -1. } else { 1. };
+                            for (actual, expected) in normals[index][..3].iter().zip(hit.normal) {
+                                assert!((actual - expected * orientation).abs() < 0.001);
+                            }
+                        } else {
+                            assert_eq!(ids[index], 0);
+                            assert_eq!(depths[index], 0.);
+                            assert_eq!(normals[index], [0.; 4]);
+                        }
+                    }
+                }
+                assert!(hits > 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn normal_maps_match_vertex_normals_across_reflections_and_back_faces() -> anyhow::Result<()> {
     use gpui_3d::{Light, MaterialTexture, Object, PbrMaterial, Projection, Scene};
     use std::sync::Arc;

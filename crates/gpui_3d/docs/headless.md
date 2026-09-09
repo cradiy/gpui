@@ -67,16 +67,20 @@ can still be stale when queried against a modified graph.
 ## Output contract
 
 `Scene3dOutputConfig` takes physical pixel dimensions, requested channels, and
-one or four color samples. `Scene3dChannels` selects Color, ObjectId, or both.
-Only requested output attachments are created. Defaults request both channels
-with four color samples.
+one or four color samples. Combine `Scene3dChannels::COLOR`, `OBJECT_ID`,
+`LINEAR_DEPTH`, and `WORLD_NORMAL` with `|`, or use `Scene3dChannels::all()`.
+The default selects color and object IDs with four color samples. Empty or
+unknown channel selections are rejected. Unrequested channels are not allocated
+or read back.
 
 | Channel | GPU format | CPU layout | Background and coverage |
 | --- | --- | --- | --- |
 | Color | `Rgba8Unorm` | RGBA bytes, width × 4 bytes per row | Transparent black; premultiplied alpha |
 | Object ID | `R32Uint` | `u32` values, width values per row | Zero background; nearest surviving surface at the pixel center |
+| Linear depth | `R32Float` | `f32` values, width values per row | Zero background; positive camera-forward depth in scene units |
+| World normal | `Rgba32Float` | `[f32; 4]` values, width values per row | Zero background; world XYZ normal and validity W |
 
-Both images have a top-left origin. Readback strips GPU row padding. Color uses
+All images have a top-left origin. Readback strips GPU row padding. Color uses
 sRGB-encoded RGB after linear lighting, `Rgba16Float` intermediate storage,
 the scene's `ColorOutput` exposure and tone mapping per sample, and display-color MSAA resolve.
 Color conversion preserves premultiplied coverage at MSAA edges. The returned
@@ -98,7 +102,7 @@ Color draws depth-writing surfaces first, then blended objects from far to near
 by transformed bounds-center depth, without depth writes. Sorting is per object;
 intersecting and self-overlapping transparent surfaces are not resolved.
 
-Both channels use the same mesh visibility, transforms, clip planes, texture
+Color and object IDs use the same mesh visibility, transforms, clip planes, texture
 sampling, and alpha-mode discard rules. Object IDs select the nearest surviving
 surface, including low-opacity blended surfaces, rather than the largest color contributor.
 IDs are written as integers, without color conversion, filtering, or MSAA
@@ -106,7 +110,63 @@ averaging. With four color samples, an edge pixel may have partial color coverag
 but a zero ID when its center is outside the mesh. Use one color sample for
 matching pixel-center coverage. Equal-depth ID overlaps keep the first submitted
 surface; equal-depth blended color layers compose in submission order.
-Depth/normal exports and raw HDR output are not available.
+Raw HDR output is not available.
+
+### Geometry channels
+
+```no_run
+use gpui_3d::{HeadlessRenderer, Scene, Scene3dChannels, Scene3dOutputConfig};
+# fn capture(renderer: &mut HeadlessRenderer, scene: &Scene) -> anyhow::Result<()> {
+let frame = renderer.render(scene, Scene3dOutputConfig {
+    size: [800, 600],
+    channels: Scene3dChannels::OBJECT_ID
+        | Scene3dChannels::LINEAR_DEPTH
+        | Scene3dChannels::WORLD_NORMAL,
+    color_samples: 1,
+})?;
+let depth_texture = frame.gpu().linear_depth().unwrap();
+let normal_texture = frame.gpu().world_normals().unwrap();
+let mut pending = frame.readback()?;
+if let Some(result) = pending.try_read()? {
+    let depths = result.pixels.linear_depth.as_ref().unwrap();
+    let normals = result.pixels.world_normals.as_ref().unwrap();
+}
+# Ok(())
+# }
+```
+
+Linear depth is the negated view-space Z coordinate, not hardware depth in
+`[0, 1]` and not radial distance from the camera. It uses the same scene units
+as object positions, for both perspective and orthographic cameras. Zero means
+background for a valid camera whose near plane is positive.
+
+Normals are perspective-correctly interpolated vertex normals, transformed by
+the inverse transpose, normalized, and oriented to the visible side using the
+same double-sided/reflection convention as lighting. They are world-space
+vectors in `[-1, 1]`, not display colors. Normal maps do not perturb this output.
+W is one for a surface and zero for background; a surface with zero-length
+vertex normals can have zero XYZ with W still one.
+
+Both channels use single-sample pixel-center coverage and depth writes,
+independent of color MSAA. Their nearest surface matches the ID pass, including
+low-opacity blended surfaces and alpha cutouts. Values are not blended between
+transparent layers, color converted, tone mapped, or averaged at edges.
+Lighting changes do not affect these geometric outputs.
+
+Use `capabilities().geometry_outputs` to check geometry-format support. All
+outputs remain subject to dimension/pixel budgets and the per-buffer
+`max_readback_buffer_bytes` limit, including row padding. The normal channel
+requires 16 bytes per pixel, while the other channels require four.
+
+```sh
+cargo run -p gpui_3d --features wgpu --example geometry_outputs -- /tmp/gpui-3d-outputs
+```
+
+The example writes aligned `color.png`, `depth.png`, and `normals.png` previews.
+Depth is mapped from the visible range to grayscale with nearer surfaces brighter;
+normal XYZ is mapped from `[-1, 1]` to RGB `[0, 1]`. Preview mappings do not change
+the raw floating-point outputs. The translucent plane contributes blended color
+but has a single surface depth and normal.
 
 ## GPU ownership and readback
 

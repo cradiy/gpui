@@ -153,13 +153,13 @@ impl Scene {
             });
         }
         Ok(Scene3dFrame {
+            world_to_view: view,
             ui_texture,
             view_projection,
             camera_position: self.camera.eye,
             orthographic_view_direction: match self.camera.projection {
                 crate::Projection::Perspective { .. } => None,
                 crate::Projection::Orthographic { .. } => {
-                    let view = self.camera.view_matrix()?;
                     Some([view[0][2], view[1][2], view[2][2]])
                 }
             },

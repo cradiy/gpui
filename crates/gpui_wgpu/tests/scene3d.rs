@@ -69,6 +69,7 @@ fn layer(
         scene3d: Some(Arc::new(Scene3dFrame {
             ui_texture: None,
             view_projection: IDENTITY,
+            world_to_view: [IDENTITY[0], IDENTITY[1], IDENTITY[2], [0., 0., -3., 1.]],
             camera_position: [0., 0., 3.],
             orthographic_view_direction: None,
             light_direction: [0., 0., 1.],
@@ -159,7 +160,7 @@ fn blended_layers_preserve_linear_color_depth_and_nearest_ids() -> anyhow::Resul
                     &input,
                     Scene3dOutputConfig {
                         size: [32, 32],
-                        channels: Scene3dChannels::ColorAndObjectId,
+                        channels: Scene3dChannels::COLOR | Scene3dChannels::OBJECT_ID,
                         color_samples: samples,
                     },
                 )?;
@@ -225,7 +226,7 @@ fn direct_outputs_preserve_integer_ids_cutouts_and_frame_lifetimes() -> anyhow::
     .clone();
     let config = Scene3dOutputConfig {
         size: [67, 49],
-        channels: Scene3dChannels::ColorAndObjectId,
+        channels: Scene3dChannels::COLOR | Scene3dChannels::OBJECT_ID,
         color_samples: 1,
     };
     let first = renderer.render(&input, config)?;
@@ -281,7 +282,7 @@ fn direct_outputs_preserve_integer_ids_cutouts_and_frame_lifetimes() -> anyhow::
     let ids_only = renderer.render(
         &input,
         Scene3dOutputConfig {
-            channels: Scene3dChannels::ObjectId,
+            channels: Scene3dChannels::OBJECT_ID,
             ..config
         },
     )?;

@@ -10,6 +10,7 @@ struct Params {
     view: vec4<f32>, pbr: vec4<f32>, emissive: vec4<f32>,
     metallic_roughness_map: ImageParams, emissive_map: ImageParams,
     normal_map: ImageParams, normal_settings: vec4<f32>,
+    depth_plane: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
@@ -92,6 +93,19 @@ fn base_color(input: Output) -> vec4<f32> {
 fn object_id(input: Output) -> @location(0) u32 {
     let base = base_color(input);
     return params.ids.x;
+}
+
+@fragment
+fn linear_depth(input: Output) -> @location(0) f32 {
+    let base = base_color(input);
+    return dot(params.depth_plane, vec4<f32>(input.world, 1.0));
+}
+
+@fragment
+fn world_normal(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let base = base_color(input);
+    let normal = unit_vector(input.normal) * select(-1.0, 1.0, front) * input.orientation;
+    return vec4<f32>(normal, 1.0);
 }
 
 fn unit_vector(value: vec3<f32>) -> vec3<f32> {

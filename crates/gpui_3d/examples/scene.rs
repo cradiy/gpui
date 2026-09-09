@@ -47,11 +47,54 @@ fn local(position: [f32; 3], scale: [f32; 3]) -> AffineTransform {
     AffineTransform::from_trs(position, [0., 0., 0., 1.], scale).unwrap()
 }
 
+fn taper(mesh: &Mesh, amount: f32) -> Mesh {
+    if amount == 0. {
+        return mesh.clone();
+    }
+    let vertices = mesh
+        .vertices()
+        .iter()
+        .map(|vertex| {
+            let [x, y, z] = vertex.position;
+            let [nx, ny, nz] = vertex.normal;
+            let scale = 1. + amount * y;
+            gpui_3d::Vertex {
+                position: [x * scale, y, z * scale],
+                normal: [
+                    nx / scale,
+                    ny - amount * (x * nx + z * nz) / scale,
+                    nz / scale,
+                ],
+                uv: vertex.uv,
+            }
+        })
+        .collect();
+    let tangents = mesh
+        .tangents()
+        .unwrap()
+        .iter()
+        .zip(mesh.vertices())
+        .map(|(t, v)| {
+            let scale = 1. + amount * v.position[1];
+            [
+                scale * t[0] + amount * v.position[0] * t[1],
+                t[1],
+                scale * t[2] + amount * v.position[2] * t[1],
+                t[3],
+            ]
+        })
+        .collect();
+    mesh.with_vertices(vertices, Some(tangents)).unwrap()
+}
+
 struct SceneDemo {
     graph: SceneGraph,
     evaluated: EvaluatedScene,
     instances: Vec<SubtreeInstance>,
     body: NodeHandle,
+    body_mesh: Mesh,
+    deform: bool,
+    mesh_position: Duration,
     selected: usize,
     hovered: Option<usize>,
     raised: [bool; 3],
@@ -93,7 +136,7 @@ impl SceneDemo {
                 Some(root),
                 Node::new()
                     .id("base")
-                    .mesh(geometry, Material::color(rgb(0x526a87)))
+                    .mesh(geometry.clone(), Material::color(rgb(0x526a87)))
                     .transform(local([0., -0.85, 0.], [1.8, 0.12, 1.6])),
             )
             .unwrap();
@@ -120,6 +163,9 @@ impl SceneDemo {
             evaluated,
             instances,
             body,
+            body_mesh: geometry,
+            deform: false,
+            mesh_position: Duration::ZERO,
             selected: 1,
             hovered: None,
             raised: [false; 3],
@@ -148,6 +194,27 @@ impl SceneDemo {
         cx.notify();
     }
     fn evaluate_pose(&mut self) {
+        let position = if self.deform {
+            self.position
+        } else {
+            Duration::ZERO
+        };
+        if self.mesh_position != position {
+            let amount = if position == ANIMATION_LENGTH {
+                0.
+            } else {
+                (std::f32::consts::PI * position.as_secs_f32() / ANIMATION_LENGTH.as_secs_f32())
+                    .sin()
+                    * 1.2
+            };
+            let mesh = taper(&self.body_mesh, amount);
+            for instance in &self.instances {
+                self.graph
+                    .set_mesh(instance.node(self.body).unwrap(), mesh.clone())
+                    .unwrap();
+            }
+            self.mesh_position = position;
+        }
         let transforms = self
             .instances
             .iter()
@@ -351,6 +418,9 @@ impl Render for SceneDemo {
                 })))
                 .child(self.button("reset", "Reset", false).on_click(cx.listener(|this, _, window, cx| { *this = Self::new(window, cx); cx.notify(); }))))
             .child(div().flex().flex_wrap().items_center().gap_3()
+                .child(self.button("deform", "Taper mesh", self.deform).on_click(cx.listener(|this, _, _, cx| {
+                    this.deform = !this.deform; this.refresh(cx);
+                })))
                 .child(self.button("play", if self.playing { "Pause" } else { "Play" }, self.playing).on_click(cx.listener(|this, _, _, cx| {
                     this.playing = !this.playing;
                     if this.playing && this.position == ANIMATION_LENGTH { this.position = Duration::ZERO; }
@@ -372,7 +442,7 @@ impl Render for SceneDemo {
                 })))
                 .child(format!("{:.2} / 4.00 s · Translation, rotation and scale", self.position.as_secs_f64())))
             .child(stage)
-            .child(div().text_sm().text_color(rgb(0xa4bad2)).child(format!("Instance {} selected · 3 editable subtrees · 1 shared mesh allocation", self.selected + 1)))
+            .child(div().text_sm().text_color(rgb(0xa4bad2)).child(format!("Instance {} selected · 3 editable subtrees · Shared mesh topology", self.selected + 1)))
             .when(!window.supports_scene3d(), |root| root.child("3D viewports are unavailable on this renderer."))
     }
 }

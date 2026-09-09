@@ -77,6 +77,52 @@ Object transforms apply scale, X/Y/Z Euler rotation, then translation. Normals
 use inverse-transpose transforms for nonuniform scale. Scale components must be
 finite and nonzero. Camera clip distances must satisfy `0 < near < far`.
 
+### Fixed-topology updates
+
+`Mesh::with_vertices(vertices, tangents)` returns an immutable snapshot with new
+positions, normals, and UVs. Vertex count and triangle indices remain unchanged,
+including unused vertices and degenerate triangles. Snapshots share index storage
+but have independent vertex data, bounds, and lazy query indices. Earlier meshes,
+evaluated scenes, and submitted headless outputs remain valid.
+
+```rust
+use gpui_3d::{Material, Mesh, Node, SceneGraph};
+
+let source = Mesh::plane();
+let mut vertices = source.vertices().to_vec();
+for vertex in &mut vertices {
+    vertex.position[2] += 0.25;
+}
+let updated = source.with_vertices(vertices, source.tangents().map(<[_]>::to_vec))?;
+let mut graph = SceneGraph::new();
+let node = graph.insert(None, Node::new().mesh(source, Material::color(gpui::rgb(0xffffff))))?;
+graph.set_mesh(node, updated)?;
+let evaluated = graph.evaluate()?;
+# let _ = evaluated;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+All replacement attributes must be finite. Supply tangents appropriate for the
+new normals; `None` explicitly omits them. Tangent validation orthogonalizes XYZ
+and retains triangle handedness requirements. `MeshUpdateError` distinguishes
+vertex count, geometry, and tangent failures. Replacements do not generate normals
+or tangents automatically.
+
+`SceneGraph::set_mesh` updates an existing mesh node and its local bounds without
+changing its material, identity, hierarchy, or transform. Groups return
+`SceneError::NoMesh`; failed updates leave the graph unchanged. Evaluate the graph
+again for current world bounds and picking.
+
+The WGPU renderer reuses vertex and index buffers from retired snapshots with
+shared topology and equal vertex counts. Simultaneously visible snapshots keep
+separate vertex contents. Replacement uploads are ordered before their draws,
+including shadow and geometry-output passes. Upload staging storage is allocated
+per replacement snapshot; cached replacements replay that copy when drawn.
+Meshes kept in their original allocations require no vertex uploads.
+Cache entries absent from the prepared scenes are released. Vertex/index count
+changes require a new `Mesh`; batched instance streams are separate from vertex
+replacement.
+
 ## Camera projection and queries
 
 `Camera::projection` selects `Projection::Perspective { vertical_fov }` in radians
@@ -1292,7 +1338,7 @@ Each example is an independent executable.
 
 | Example | Controls and content |
 | --- | --- |
-| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, camera controls, and translation/rotation/scale tracks with play, pause, and seek controls. |
+| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, camera controls, transform tracks, and vertex tapering with play, pause, and seek controls. |
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
 | `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |

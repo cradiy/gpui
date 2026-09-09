@@ -3,6 +3,7 @@ use gpui::{Mesh3d, MeshTexture3d, SubtreeLayer};
 use wgpu::util::DeviceExt;
 
 mod background;
+mod geometry;
 mod specular;
 
 #[repr(C)]
@@ -137,10 +138,59 @@ struct Params {
 }
 
 struct Geometry {
-    _mesh: Arc<Mesh3d>,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
+    upload: Option<wgpu::Buffer>,
+}
+
+impl Geometry {
+    fn prepare(device: &wgpu::Device, previous: Option<Self>, mesh: &Mesh3d) -> Self {
+        let vertices = mesh
+            .vertices()
+            .iter()
+            .enumerate()
+            .map(|(index, v)| Vertex {
+                position: v.position,
+                normal: v.normal,
+                uv: v.uv,
+                tangent: mesh.tangents().map_or([0.; 4], |t| t[index]),
+            })
+            .collect::<Vec<_>>();
+        let contents = bytemuck::cast_slice(&vertices);
+        if let Some(mut previous) = previous {
+            previous.upload = Some(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh_vertex_upload"),
+                    contents,
+                    usage: wgpu::BufferUsages::COPY_SRC,
+                }),
+            );
+            previous
+        } else {
+            Self {
+                vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh_vertices"),
+                    contents,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                }),
+                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh_indices"),
+                    contents: bytemuck::cast_slice(mesh.indices()),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+                count: mesh.indices().len() as u32,
+                upload: None,
+            }
+        }
+    }
+
+    fn encode_upload(&self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(upload) = &self.upload {
+            // Keep the copy in command order and replay it after abandoned encoders.
+            encoder.copy_buffer_to_buffer(upload, 0, &self.vertices, 0, upload.size());
+        }
+    }
 }
 
 struct Targets {
@@ -160,7 +210,7 @@ pub(crate) struct Scene3dRenderer {
     shadow_sampler: wgpu::Sampler,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
-    geometry: HashMap<usize, Arc<Geometry>>,
+    geometry: geometry::GeometryCache<Geometry>,
     slots: Vec<wgpu::Buffer>,
     offsets: HashMap<usize, usize>,
     targets: Option<Targets>,
@@ -401,7 +451,7 @@ impl Scene3dRenderer {
                 ..Default::default()
             }),
             white: white.create_view(&Default::default()),
-            geometry: HashMap::new(),
+            geometry: geometry::GeometryCache::default(),
             slots: Vec::new(),
             offsets: HashMap::new(),
             targets: None,
@@ -465,7 +515,12 @@ impl Scene3dRenderer {
                 frames.iter().filter_map(|frame| frame.background.as_ref()),
             );
         }
-        let mut used = HashSet::new();
+        self.geometry.prepare(
+            frames
+                .iter()
+                .flat_map(|frame| frame.objects.iter().map(|object| object.mesh.clone())),
+            |previous, mesh| Geometry::prepare(device, previous, mesh),
+        );
         let mut shadow_sizes = HashSet::new();
         let mut slot_count = 0;
         let mut has_frame = false;
@@ -485,40 +540,7 @@ impl Scene3dRenderer {
             }
             has_frame = true;
             slot_count += frame.objects.len();
-            for object in frame.objects.iter() {
-                let key = Arc::as_ptr(&object.mesh) as usize;
-                used.insert(key);
-                self.geometry.entry(key).or_insert_with(|| {
-                    let vertices = object
-                        .mesh
-                        .vertices()
-                        .iter()
-                        .enumerate()
-                        .map(|(index, v)| Vertex {
-                            position: v.position,
-                            normal: v.normal,
-                            uv: v.uv,
-                            tangent: object.mesh.tangents().map_or([0.; 4], |t| t[index]),
-                        })
-                        .collect::<Vec<_>>();
-                    Arc::new(Geometry {
-                        _mesh: object.mesh.clone(),
-                        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mesh_vertices"),
-                            contents: bytemuck::cast_slice(&vertices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        }),
-                        indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mesh_indices"),
-                            contents: bytemuck::cast_slice(object.mesh.indices()),
-                            usage: wgpu::BufferUsages::INDEX,
-                        }),
-                        count: object.mesh.indices().len() as u32,
-                    })
-                });
-            }
         }
-        self.geometry.retain(|key, _| used.contains(key));
         self.shadow_maps
             .retain(|size, _| shadow_sizes.contains(size));
         for resolution in shadow_sizes {
@@ -586,7 +608,15 @@ impl Scene3dRenderer {
     }
 
     pub(crate) fn reuse_geometry_from(&mut self, other: &Self) {
-        self.geometry.clone_from(&other.geometry);
+        self.geometry.reuse_from(&other.geometry);
+    }
+
+    pub(crate) fn retain_geometry_for(&mut self, frame: Option<&gpui::Scene3dFrame>) {
+        self.geometry.retain(
+            frame
+                .into_iter()
+                .flat_map(|frame| frame.objects.iter().map(|object| object.mesh.clone())),
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -636,6 +666,12 @@ impl Scene3dRenderer {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let targets = self.targets.as_ref().unwrap();
+        let mut uploaded = HashSet::new();
+        for object in frame.objects.iter() {
+            if uploaded.insert(Arc::as_ptr(&object.mesh)) {
+                self.geometry.get(&object.mesh).encode_upload(encoder);
+            }
+        }
         let specular_environment = frame
             .specular_environment
             .as_ref()
@@ -937,7 +973,7 @@ impl Scene3dRenderer {
                 if !object.cast_shadows || object.alpha_mode == gpui::AlphaMode3d::Blend {
                     continue;
                 }
-                let geometry = &self.geometry[&(Arc::as_ptr(&object.mesh) as usize)];
+                let geometry = self.geometry.get(&object.mesh);
                 pass.set_bind_group(0, &shadow_groups[index], &[]);
                 pass.set_vertex_buffer(0, geometry.vertices.slice(..));
                 pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -1004,7 +1040,7 @@ impl Scene3dRenderer {
                     &self.pipeline
                 };
                 pass.set_pipeline(pipeline);
-                let geometry = &self.geometry[&(Arc::as_ptr(&object.mesh) as usize)];
+                let geometry = self.geometry.get(&object.mesh);
                 pass.set_bind_group(0, group, &[]);
                 pass.set_vertex_buffer(0, geometry.vertices.slice(..));
                 pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);

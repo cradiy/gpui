@@ -76,6 +76,25 @@ pub struct Mesh3d {
     tangents: Option<Arc<[[f32; 4]]>>,
 }
 
+/// Invalid fixed-topology vertex replacement.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum MeshUpdateError3d {
+    /// Replacement vertices must preserve every vertex, including unused vertices.
+    #[error("expected {expected} vertices, received {actual}")]
+    VertexCount {
+        /// Source vertex count.
+        expected: usize,
+        /// Supplied vertex count.
+        actual: usize,
+    },
+    /// Invalid replacement attributes.
+    #[error(transparent)]
+    Geometry(#[from] MeshError3d),
+    /// Invalid replacement tangent basis.
+    #[error(transparent)]
+    Tangents(#[from] TangentError3d),
+}
+
 /// Invalid tangent data. Offsets are zero-based.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TangentError3d {
@@ -185,6 +204,15 @@ impl Mesh3d {
                 });
             }
         }
+        Self::validate_vertices(&vertices)?;
+        Ok(Arc::new(Self {
+            vertices: vertices.into(),
+            indices: indices.into(),
+            tangents: None,
+        }))
+    }
+
+    fn validate_vertices(vertices: &[MeshVertex3d]) -> Result<(), MeshError3d> {
         for (vertex, data) in vertices.iter().enumerate() {
             for (attribute, values) in [
                 (MeshVertexAttribute3d::Position, data.position.as_slice()),
@@ -200,11 +228,33 @@ impl Mesh3d {
                 }
             }
         }
-        Ok(Arc::new(Self {
+        Ok(())
+    }
+
+    /// Replaces fixed-count vertex attributes while sharing triangle index storage.
+    /// The source and its snapshots remain unchanged. Tangents must be supplied
+    /// for the new normals, or `None` explicitly removes them.
+    pub fn with_vertices(
+        &self,
+        vertices: Vec<MeshVertex3d>,
+        tangents: Option<Vec<[f32; 4]>>,
+    ) -> Result<Arc<Self>, MeshUpdateError3d> {
+        if vertices.len() != self.vertices.len() {
+            return Err(MeshUpdateError3d::VertexCount {
+                expected: self.vertices.len(),
+                actual: vertices.len(),
+            });
+        }
+        Self::validate_vertices(&vertices)?;
+        let mesh = Self {
             vertices: vertices.into(),
-            indices: indices.into(),
+            indices: self.indices.clone(),
             tangents: None,
-        }))
+        };
+        Ok(match tangents {
+            Some(tangents) => mesh.with_tangents(tangents)?,
+            None => Arc::new(mesh),
+        })
     }
 
     /// Mesh-local vertex data.

@@ -371,6 +371,28 @@ impl WgpuScene3dRenderer {
         );
         let device = &self.context.device;
         let queue = &self.context.queue;
+        let mut primary = true;
+        for (enabled, renderer) in [
+            (
+                config.channels.shaded(),
+                self.color.as_mut().map(|(_, renderer)| renderer),
+            ),
+            (config.channels.ids(), self.ids.as_mut()),
+            (
+                config.channels.contains(Scene3dChannels::LINEAR_DEPTH),
+                self.depth.as_mut(),
+            ),
+            (
+                config.channels.contains(Scene3dChannels::WORLD_NORMAL),
+                self.normals.as_mut(),
+            ),
+        ] {
+            if enabled && primary {
+                primary = false;
+            } else if let Some(renderer) = renderer {
+                renderer.retain_geometry_for(enabled.then_some(frame));
+            }
+        }
         self.atlas.before_frame();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene3d.direct"),

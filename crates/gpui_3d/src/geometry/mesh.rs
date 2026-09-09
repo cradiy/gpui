@@ -1,4 +1,4 @@
-use crate::{MeshError, TangentError, Vertex, math, spatial::bvh};
+use crate::{MeshError, MeshUpdateError, TangentError, Vertex, math, spatial::bvh};
 use gpui::Mesh3d;
 use std::sync::{Arc, OnceLock};
 
@@ -36,6 +36,19 @@ impl Mesh {
         self.0
             .with_tangents(tangents)
             .map(|mesh| Self(mesh, self.1.clone()))
+    }
+    /// Returns a fixed-topology snapshot with replacement positions, normals and UVs.
+    /// Vertex count and triangle identities are preserved; index storage is shared.
+    /// Supply tangents for the replacement normals, or `None` to omit them.
+    /// The new snapshot has independent bounds and a fresh lazy query index.
+    pub fn with_vertices(
+        &self,
+        vertices: Vec<Vertex>,
+        tangents: Option<Vec<[f32; 4]>>,
+    ) -> Result<Self, MeshUpdateError> {
+        self.0
+            .with_vertices(vertices, tangents)
+            .map(|mesh| Self(mesh, Arc::default()))
     }
     pub fn vertex_count(&self) -> usize {
         self.vertices().len()

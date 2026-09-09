@@ -1,4 +1,7 @@
-use gpui_3d::{Material, Mesh, MeshError, Object, Ray, Scene, Vertex, VertexAttribute};
+use gpui_3d::{
+    Camera, Material, Mesh, MeshError, MeshUpdateError, Node, Object, Ray, Scene, SceneError,
+    SceneGraph, Vertex, VertexAttribute,
+};
 
 fn vertices() -> Vec<Vertex> {
     [[-1., -1., 0.], [1., -1., 0.], [0., 1., 0.]]
@@ -112,6 +115,116 @@ fn inspection_shares_storage_and_preserves_triangle_identity() {
     );
     drop(scene);
     assert_eq!(copy.indices(), indices);
+}
+
+#[test]
+fn vertex_snapshots_preserve_topology_and_refresh_bounds_queries_and_nodes() {
+    let original = Mesh::plane();
+    original.prepare_spatial_index();
+    let mut vertices = original.vertices().to_vec();
+    for vertex in &mut vertices {
+        vertex.position[0] += 4.;
+        vertex.position[2] = 0.25;
+        vertex.uv = [0.3, 0.7];
+        vertex.normal = [0.2, 0., 1.];
+    }
+    let moved = original
+        .with_vertices(vertices, original.tangents().map(<[_]>::to_vec))
+        .unwrap();
+    assert!(std::ptr::eq(original.indices(), moved.indices()));
+    assert!(!std::ptr::eq(original.vertices(), moved.vertices()));
+    assert_eq!(moved.bounds().min(), [3.5, -0.5, 0.25]);
+    let n = moved.vertices()[0].normal;
+    let t = moved.tangents().unwrap()[0];
+    assert!((n[0] * t[0] + n[1] * t[1] + n[2] * t[2]).abs() < 1e-6);
+    let mut graph = SceneGraph::new();
+    let root = graph.insert(None, Node::new()).unwrap();
+    let node = graph
+        .insert(
+            Some(root),
+            Node::new()
+                .id("mesh")
+                .mesh(original.clone(), Material::color(gpui::rgb(0xffffff))),
+        )
+        .unwrap();
+    let before = graph.evaluate().unwrap();
+    before.prepare_spatial_index();
+    let revision = graph.revision();
+    assert!(
+        matches!(graph.set_mesh(root, moved.clone()), Err(SceneError::NoMesh(handle)) if handle == root)
+    );
+    assert_eq!(graph.revision(), revision);
+    graph.set_mesh(node, moved.clone()).unwrap();
+    let after = graph.evaluate().unwrap();
+    assert_eq!(graph.revision(), revision + 1);
+    assert_eq!(graph.parent(node).unwrap(), Some(root));
+    assert_eq!(after.bounds(), Some(moved.bounds()));
+    assert_eq!(after.node(root).unwrap().subtree_bounds, after.bounds());
+    let scene = after.scene(Camera::default());
+    let old_ray = Ray::new([0., 0., 2.], [0., 0., -1.]).unwrap();
+    let new_ray = Ray::new([4., 0., 2.], [0., 0., -1.]).unwrap();
+    assert!(scene.raycast(old_ray).is_none());
+    let hit = scene.raycast(new_ray).unwrap();
+    assert_eq!(hit.node, Some(node));
+    assert_eq!(hit.object_id, Some("mesh".into()));
+    assert!((hit.position[2] - 0.25).abs() < 1e-6);
+    assert!((hit.uv[0] - 0.3).abs() < 1e-6);
+    assert!(hit.normal[0] > 0.);
+    assert!(before.scene(Camera::default()).raycast(old_ray).is_some());
+    assert!(before.scene(Camera::default()).raycast(new_ray).is_none());
+    graph.set_mesh(node, original).unwrap();
+    assert!(
+        graph
+            .evaluate()
+            .unwrap()
+            .scene(Camera::default())
+            .raycast(old_ray)
+            .is_some()
+    );
+    assert!(scene.raycast(new_ray).is_some());
+}
+
+#[test]
+fn vertex_replacement_validates_all_attributes_and_requires_explicit_tangents() {
+    let source = Mesh::plane();
+    assert!(matches!(
+        source.with_vertices(vec![], None),
+        Err(MeshUpdateError::VertexCount {
+            expected: 4,
+            actual: 0
+        })
+    ));
+    let mut vertices = source.vertices().to_vec();
+    vertices[3].uv[1] = f32::NAN;
+    assert!(matches!(
+        source.with_vertices(vertices, None),
+        Err(MeshUpdateError::Geometry(MeshError::NonFiniteVertex {
+            vertex: 3,
+            attribute: VertexAttribute::Uv,
+            component: 1
+        }))
+    ));
+    let without = source
+        .with_vertices(source.vertices().to_vec(), None)
+        .unwrap();
+    assert!(without.tangents().is_none());
+    assert!(source.tangents().is_some());
+    assert!(matches!(
+        source.with_vertices(source.vertices().to_vec(), Some(vec![[1., 0., 0., 1.]])),
+        Err(MeshUpdateError::Tangents(gpui_3d::TangentError::Count {
+            expected: 4,
+            actual: 1
+        }))
+    ));
+    let mut vertices = source.vertices().to_vec();
+    vertices[0].normal = [1., 0., 0.];
+    assert!(matches!(
+        source.with_vertices(vertices, Some(source.tangents().unwrap().to_vec())),
+        Err(MeshUpdateError::Tangents(
+            gpui_3d::TangentError::InvalidBasis { vertex: 0 }
+        ))
+    ));
+    assert_eq!(source.vertices()[0].normal, [0., 0., 1.]);
 }
 
 #[test]

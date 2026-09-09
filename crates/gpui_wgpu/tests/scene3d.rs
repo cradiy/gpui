@@ -119,6 +119,152 @@ fn scene(layer: SubtreeLayer) -> Scene {
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn vertex_snapshots_preserve_concurrent_views_and_replayed_frames() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(64)))?;
+    let original = mesh(0.2, 0xff0000ff, MeshTexture3d::None);
+    let mut updated = original.clone();
+    let vertices = original
+        .mesh
+        .vertices()
+        .iter()
+        .map(|v| MeshVertex3d {
+            position: [v.position[0] + 1.2, v.position[1], 0.4],
+            ..*v
+        })
+        .collect();
+    updated.mesh = original.mesh.with_vertices(vertices, None)?;
+    updated.color = rgba(0x00ff00ff);
+    for objects in [
+        vec![original.clone()],
+        vec![updated.clone()],
+        vec![original.clone()],
+    ] {
+        renderer.render_rgba(&scene(layer(
+            bounds(0., 0., 64., 64.),
+            Scene::default(),
+            objects,
+            1.,
+        )))?;
+    }
+    let mut input = Scene::default();
+    input.insert_primitive(Primitive::SubtreeLayer(layer(
+        bounds(0., 0., 64., 64.),
+        Scene::default(),
+        vec![original],
+        1.,
+    )));
+    input.insert_primitive(Primitive::SubtreeLayer(layer(
+        bounds(64., 0., 64., 64.),
+        Scene::default(),
+        vec![updated],
+        1.,
+    )));
+    input.finish();
+    let pixels = renderer.render_rgba(&input)?;
+    let at = |x: usize| &pixels[(32 * 128 + x) * 4..(32 * 128 + x) * 4 + 4];
+    assert_eq!(at(32), &[255, 0, 0, 255]);
+    assert_eq!(at(96), &[0; 4]);
+    assert_eq!(at(120), &[0, 255, 0, 255]);
+    assert_eq!(renderer.render_rgba(&input)?, pixels);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn vertex_updates_keep_owned_outputs_and_geometry_channels_in_sync() -> anyhow::Result<()> {
+    use gpui_wgpu::{Scene3dChannels, Scene3dOutputConfig, WgpuScene3dRenderer};
+    let mut renderer = WgpuScene3dRenderer::new_headless()?;
+    let original = mesh(0.2, 0xff0000ff, MeshTexture3d::None);
+    let mut updated = original.clone();
+    updated.mesh = original.mesh.with_vertices(
+        original
+            .mesh
+            .vertices()
+            .iter()
+            .map(|v| MeshVertex3d {
+                position: [v.position[0] + 1.2, v.position[1], 0.4],
+                normal: [1., 0., 1.],
+                ..*v
+            })
+            .collect(),
+        None,
+    )?;
+    updated.color = rgba(0x00ff00ff);
+    updated.output_id = 2;
+    let mut outputs = Vec::new();
+    for (objects, shaded, center_id, right_id) in [
+        (vec![original.clone()], true, 1, 0),
+        (vec![updated.clone()], true, 0, 2),
+        (vec![original.clone(), updated.clone()], true, 1, 2),
+        (vec![original.clone()], false, 1, 0),
+        (vec![updated.clone()], false, 0, 2),
+        (vec![original, updated], true, 1, 2),
+    ] {
+        let input = layer(bounds(0., 0., 64., 64.), Scene::default(), objects, 1.)
+            .scene3d
+            .unwrap();
+        let channels = if shaded {
+            Scene3dChannels::all()
+        } else {
+            Scene3dChannels::OBJECT_ID
+                | Scene3dChannels::LINEAR_DEPTH
+                | Scene3dChannels::WORLD_NORMAL
+        };
+        outputs.push((
+            renderer.render(
+                &input,
+                Scene3dOutputConfig {
+                    size: [64, 64],
+                    channels,
+                    color_samples: 1,
+                },
+            )?,
+            center_id,
+            right_id,
+        ));
+    }
+    for (output, center_id, right_id) in outputs {
+        let mut read = output.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(pixels) = read.try_read()? {
+                break pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        for (index, id) in [(32 * 64 + 32, center_id), (32 * 64 + 56, right_id)] {
+            assert_eq!(pixels.object_ids.as_ref().unwrap()[index], id);
+            let depth = pixels.linear_depth.as_ref().unwrap()[index];
+            let normal = pixels.world_normals.as_ref().unwrap()[index];
+            let expected = match id {
+                1 => ([255, 0, 0, 255], 2.8, [0., 0., 1., 1.]),
+                2 => (
+                    [0, 255, 0, 255],
+                    2.6,
+                    [
+                        std::f32::consts::FRAC_1_SQRT_2,
+                        0.,
+                        std::f32::consts::FRAC_1_SQRT_2,
+                        1.,
+                    ],
+                ),
+                _ => ([0; 4], 0., [0.; 4]),
+            };
+            if let Some(rgba) = &pixels.rgba {
+                assert_eq!(&rgba[index * 4..index * 4 + 4], &expected.0);
+            }
+            assert!((depth - expected.1).abs() < 1e-5);
+            for (a, b) in normal.into_iter().zip(expected.2) {
+                assert!((a - b).abs() < 1e-5);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn environment_backgrounds_preserve_viewport_clipping_opacity_and_shared_maps() -> anyhow::Result<()>
 {
     let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(96)))?;

@@ -417,6 +417,18 @@ impl SceneGraph {
         Ok(())
     }
 
+    /// Replaces an existing mesh and its local bounds, retaining material, identity,
+    /// hierarchy and transform. Previous evaluated scenes keep their geometry.
+    pub fn set_mesh(&mut self, handle: NodeHandle, mesh: Mesh) -> Result<(), SceneError> {
+        let key = self.key(handle)?;
+        let node = &mut self.nodes[key].node;
+        let (current, _) = node.surface.as_mut().ok_or(SceneError::NoMesh(handle))?;
+        node.bounds = Some(mesh.bounds());
+        *current = mesh;
+        self.revision += 1;
+        Ok(())
+    }
+
     fn siblings_mut(&mut self, parent: Option<NodeKey>) -> &mut Vec<NodeKey> {
         match parent {
             Some(parent) => &mut self.nodes[parent].children,

@@ -2,8 +2,8 @@ use std::{hint::black_box, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use gpui_3d::{
-    Camera, Material, Mesh, Object, PbrMaterial, Projection, ResolvedTexture, Scene, TextureSource,
-    TextureState,
+    Camera, Material, Mesh, Object, PbrMaterial, PreparationCache, Projection, ResolvedTexture,
+    Scene, TextureRequest, TextureSource, TextureState,
 };
 
 fn scene(count: usize, workload: &str) -> Scene {
@@ -41,39 +41,54 @@ fn scene(count: usize, workload: &str) -> Scene {
 }
 
 fn preparation(c: &mut Criterion) {
-    let mut group = c.benchmark_group("scene_preparation");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_millis(200));
-    group.measurement_time(Duration::from_millis(500));
-    for count in [1024, 16384] {
-        group.throughput(Throughput::Elements(count as u64));
-        for workload in [
-            "shared_geometry",
-            "mixed_materials",
-            "mostly_culled",
-            "pending_images",
-        ] {
-            let scene = scene(count, workload);
-            group.bench_with_input(BenchmarkId::new(workload, count), &scene, |b, scene| {
-                b.iter(|| {
-                    black_box(
-                        scene
-                            .prepare(black_box(1.), None, |request| {
-                                Ok(match request.source {
-                                    TextureSource::Image(_) => TextureState::Pending,
-                                    TextureSource::Solid => {
-                                        TextureState::Ready(ResolvedTexture::None)
-                                    }
-                                    TextureSource::Ui => unreachable!(),
-                                })
-                            })
-                            .unwrap(),
-                    )
+    for retained in [false, true] {
+        let mut group = c.benchmark_group(if retained {
+            "retained_preparation"
+        } else {
+            "scene_preparation"
+        });
+        group.sample_size(10);
+        group.warm_up_time(Duration::from_millis(200));
+        group.measurement_time(Duration::from_millis(500));
+        for count in [1024, 16384] {
+            group.throughput(Throughput::Elements(count as u64));
+            for workload in [
+                "shared_geometry",
+                "mixed_materials",
+                "mostly_culled",
+                "pending_images",
+            ] {
+                let scene = scene(count, workload);
+                group.bench_with_input(BenchmarkId::new(workload, count), &scene, |b, scene| {
+                    let resolve = |request: TextureRequest<'_>| {
+                        Ok(match request.source {
+                            TextureSource::Image(_) => TextureState::Pending,
+                            TextureSource::Solid => TextureState::Ready(ResolvedTexture::None),
+                            TextureSource::Ui => unreachable!(),
+                        })
+                    };
+                    let mut cache = PreparationCache::new();
+                    if retained {
+                        let first = cache.prepare(scene, 1., None, resolve).unwrap();
+                        let next = cache.prepare(scene, 1., None, resolve).unwrap();
+                        assert!(std::sync::Arc::ptr_eq(&first, &next));
+                    }
+                    b.iter(|| {
+                        if retained {
+                            black_box(
+                                cache
+                                    .prepare(black_box(scene), black_box(1.), None, resolve)
+                                    .unwrap(),
+                            );
+                        } else {
+                            black_box(scene.prepare(black_box(1.), None, resolve).unwrap());
+                        }
+                    });
                 });
-            });
+            }
         }
+        group.finish();
     }
-    group.finish();
 }
 
 criterion_group!(benches, preparation);

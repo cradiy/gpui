@@ -1,4 +1,6 @@
+mod cache;
 mod frame;
+pub use cache::PreparationCache;
 mod preparation;
 pub use preparation::{
     PendingTexture, PrepareError, PreparedScene, RenderObject, TextureRequest, TextureSource,

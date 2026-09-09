@@ -40,8 +40,8 @@ pub use material::{Material, MaterialTexture, TextureSlot};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use render::headless;
 pub use render::{
-    PendingTexture, PrepareError, PreparedScene, RenderObject, TextureRequest, TextureSource,
-    TextureState, Viewport3d, viewport3d,
+    PendingTexture, PreparationCache, PrepareError, PreparedScene, RenderObject, TextureRequest,
+    TextureSource, TextureState, Viewport3d, viewport3d,
 };
 pub use scene::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ReparentMode, Scene, SceneError,

@@ -7,7 +7,7 @@ use gpui::{ImageId, ImageSource, MeshTexture3d, PlatformAtlas, RenderImageParams
 use gpui_wgpu::{Scene3dGpuOutput, Scene3dReadback, WgpuScene3dRenderer};
 
 pub use crate::RenderObject;
-use crate::{Scene, TextureSource, TextureState};
+use crate::{PreparationCache, Scene, TextureSource, TextureState};
 
 pub use gpui_wgpu::{
     Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities, Scene3dDrawStatistics,
@@ -19,12 +19,14 @@ pub use gpui_wgpu::{
 pub struct HeadlessRenderer {
     renderer: WgpuScene3dRenderer,
     images: HashSet<ImageId>,
+    preparation: PreparationCache,
 }
 impl HeadlessRenderer {
     pub fn new() -> Result<Self> {
         Ok(Self {
             renderer: WgpuScene3dRenderer::new_headless()?,
             images: HashSet::new(),
+            preparation: PreparationCache::new(),
         })
     }
     /// Reuses a GPU context instead of creating a device for each renderer.
@@ -32,6 +34,7 @@ impl HeadlessRenderer {
         Ok(Self {
             renderer: WgpuScene3dRenderer::new(context)?,
             images: HashSet::new(),
+            preparation: PreparationCache::new(),
         })
     }
     pub fn context(&self) -> &WgpuContext {
@@ -44,13 +47,14 @@ impl HeadlessRenderer {
         self.renderer.device_capabilities()
     }
 
-    /// Releases cached GPU resources, including this renderer's image atlas.
+    /// Releases retained CPU preparation and cached GPU resources, including the image atlas.
     /// Subsequent renders rebuild resources from the supplied scene. Returned
     /// frames and pending readbacks remain valid. Does not wait for the GPU.
     pub fn clear_caches(&mut self) {
         self.renderer.clear_caches();
         self.renderer.sprite_atlas().clear();
         self.images.clear();
+        self.preparation.clear();
     }
 
     /// Renders the supplied scene without a native window or UI layout. Geometry,
@@ -60,7 +64,8 @@ impl HeadlessRenderer {
         let max_dimension = self.capabilities().max_dimension;
         let atlas = self.renderer.sprite_atlas();
         let mut used = HashSet::new();
-        let prepared = scene.prepare(
+        let prepared = self.preparation.prepare(
+            scene,
             config.size[0] as f32 / config.size[1] as f32,
             None,
             |request| {

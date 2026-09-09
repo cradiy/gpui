@@ -597,6 +597,7 @@ impl SceneGraph {
             }
         }
         let mut evaluated = EvaluatedScene {
+            preparation_revision: Arc::new(()),
             revision: self.revision,
             nodes: Vec::with_capacity(self.len()),
             indices: HashMap::with_capacity(self.len()),
@@ -720,6 +721,7 @@ pub struct EvaluatedNode {
 /// Camera-independent evaluated hierarchy. Resources remain shared and alive.
 #[derive(Clone)]
 pub struct EvaluatedScene {
+    preparation_revision: Arc<()>,
     revision: u64,
     nodes: Vec<EvaluatedNode>,
     indices: HashMap<NodeHandle, usize>,
@@ -750,6 +752,7 @@ impl EvaluatedScene {
     /// Graphs without light properties retain the default source; all-hidden lights disable it.
     pub fn scene(&self, camera: Camera) -> Scene {
         Scene {
+            preparation_revision: self.preparation_revision.clone(),
             camera,
             lights: self
                 .lights

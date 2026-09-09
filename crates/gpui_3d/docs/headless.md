@@ -254,9 +254,17 @@ construct the ready scene on the worker when needed.
 
 ### Cache release
 
+Each renderer retains one CPU scene preparation. Unchanged scene clones reuse
+validation, matrices, culling, and identity mapping while decoded-image atlas
+references are refreshed on every render. Scene content, camera, aspect, and
+resolved tile changes invalidate this cache. Output size changes that preserve
+aspect reuse CPU preparation but still render into the requested output targets.
+Every `render` call produces GPU output; this cache does not retain rendered pixels.
+
 `HeadlessRenderer::clear_caches()` releases its cached mesh buffers, intermediate
 targets, shadow maps, environment uploads, image mip chains, pipelines, and
-private image atlas. The next render rebuilds resources from the supplied scene.
+private image atlas, along with retained CPU preparation. The next render rebuilds
+resources from the supplied scene.
 It can be called repeatedly, including before the first render. Renderers sharing
 a `WgpuContext` retain independent caches.
 

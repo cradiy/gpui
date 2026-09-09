@@ -90,6 +90,7 @@ impl Object {
 /// Camera, lighting and objects for one independent depth buffer.
 #[derive(Clone, Default)]
 pub struct Scene {
+    pub(crate) preparation_revision: Arc<()>,
     pub(crate) camera: Camera,
     pub(crate) light: Light,
     pub(crate) lights: Option<Arc<[gpui::PunctualLight3d]>>,
@@ -113,6 +114,7 @@ impl Scene {
     }
     /// Sets a single directional light and ambient illumination, clearing explicit lights.
     pub fn light(mut self, light: Light) -> Self {
+        Arc::make_mut(&mut self.preparation_revision);
         self.light = light;
         self.lights = None;
         self
@@ -121,37 +123,44 @@ impl Scene {
     /// An empty list disables direct light. Ambient and environment illumination are preserved.
     /// Rendering rejects excess lights rather than truncating them.
     pub fn lights(mut self, lights: impl IntoIterator<Item = PunctualLight>) -> Self {
+        Arc::make_mut(&mut self.preparation_revision);
         self.lights = Some(lights.into_iter().map(|light| light.0).collect());
         self
     }
     /// Sets one directional shadow map. None disables shadows; invalid settings fail rendering.
     pub fn directional_shadow(mut self, shadow: Option<DirectionalShadow>) -> Self {
+        Arc::make_mut(&mut self.preparation_revision);
         self.directional_shadow = shadow;
         self
     }
     /// Adds distant diffuse illumination without changing the scene background.
     pub fn diffuse_environment(mut self, environment: DiffuseEnvironment) -> Self {
+        Arc::make_mut(&mut self.preparation_revision);
         self.diffuse_environment = Some(environment);
         self
     }
     /// Displays a distant HDR environment independently of scene lighting and picking.
     /// None preserves transparent background; zero intensity draws opaque black.
     pub fn background(mut self, background: Option<crate::EnvironmentBackground>) -> Self {
+        Arc::make_mut(&mut self.preparation_revision);
         self.background = background;
         self
     }
     /// Sets distant PBR reflections independently of background and diffuse illumination.
     pub fn specular_environment(mut self, environment: Option<crate::SpecularEnvironment>) -> Self {
+        Arc::make_mut(&mut self.preparation_revision);
         self.specular_environment = environment;
         self
     }
     /// Sets exposure and tone mapping for the scene's linear HDR result.
     pub fn color_output(mut self, output: ColorOutput) -> Self {
+        Arc::make_mut(&mut self.preparation_revision);
         self.color_output = output;
         self
     }
     /// Adds an object; distinct opaque depths do not depend on insertion order.
     pub fn object(mut self, object: Object) -> Self {
+        Arc::make_mut(&mut self.preparation_revision);
         self.objects.push(object);
         if let Some(index) = Arc::get_mut(&mut self.spatial_index) {
             index.take();

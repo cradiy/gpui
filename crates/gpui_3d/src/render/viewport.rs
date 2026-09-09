@@ -1,8 +1,8 @@
 use super::ui_input::UiInput;
 use crate::spatial::picking::{PickSnapshot, PickSurface};
 use crate::{
-    Hit, ObjectId, PickBehavior, PreparedScene, Scene, Texture, TextureSlot, TextureSource,
-    TextureState,
+    Hit, ObjectId, PickBehavior, PreparationCache, PreparedScene, Scene, Texture, TextureSlot,
+    TextureSource, TextureState,
 };
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
@@ -325,7 +325,7 @@ impl Element for Content {
     }
     fn paint(
         &mut self,
-        _: Option<&GlobalElementId>,
+        id: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut (),
@@ -340,41 +340,47 @@ impl Element for Content {
         let scene = &self.0.scene;
         let mut surfaces: Vec<_> = scene.objects.iter().map(|_| PickSurface::Absent).collect();
         let has_ui = self.0.texture.is_some();
-        let prepared = scene
-            .prepare(
-                f32::from(bounds.size.width) / f32::from(bounds.size.height),
-                texture_state.as_ref().map(|state| state.config),
-                |request| {
-                    let mut surface = PickSurface::Absent;
-                    let texture = match request.source {
-                        TextureSource::Solid => {
-                            surface = PickSurface::Solid;
-                            MeshTexture3d::None
-                        }
-                        TextureSource::Ui => {
-                            if has_ui {
-                                surface = PickSurface::Solid;
+        let prepared =
+            window.with_element_state(id.unwrap(), |cache: Option<PreparationCache>, window| {
+                let mut cache = cache.unwrap_or_default();
+                let prepared = cache
+                    .prepare(
+                        scene,
+                        f32::from(bounds.size.width) / f32::from(bounds.size.height),
+                        texture_state.as_ref().map(|state| state.config),
+                        |request| {
+                            let mut surface = PickSurface::Absent;
+                            let texture = match request.source {
+                                TextureSource::Solid => {
+                                    surface = PickSurface::Solid;
+                                    MeshTexture3d::None
+                                }
+                                TextureSource::Ui => {
+                                    if has_ui {
+                                        surface = PickSurface::Solid;
+                                    }
+                                    MeshTexture3d::Subtree
+                                }
+                                TextureSource::Image(source) => {
+                                    let Some(Ok(image)) = source.use_data(None, window, cx) else {
+                                        return Ok(TextureState::Pending);
+                                    };
+                                    let Ok(tile) = window.prepare_effect_image(&image, 0) else {
+                                        return Ok(TextureState::Pending);
+                                    };
+                                    surface = PickSurface::Image(image);
+                                    MeshTexture3d::Image(tile)
+                                }
+                            };
+                            if request.slot == TextureSlot::BaseColor {
+                                surfaces[request.object_index] = surface;
                             }
-                            MeshTexture3d::Subtree
-                        }
-                        TextureSource::Image(source) => {
-                            let Some(Ok(image)) = source.use_data(None, window, cx) else {
-                                return Ok(TextureState::Pending);
-                            };
-                            let Ok(tile) = window.prepare_effect_image(&image, 0) else {
-                                return Ok(TextureState::Pending);
-                            };
-                            surface = PickSurface::Image(image);
-                            MeshTexture3d::Image(tile)
-                        }
-                    };
-                    if request.slot == TextureSlot::BaseColor {
-                        surfaces[request.object_index] = surface;
-                    }
-                    Ok(TextureState::Ready(texture))
-                },
-            )
-            .expect("invalid 3D scene");
+                            Ok(TextureState::Ready(texture))
+                        },
+                    )
+                    .expect("invalid 3D scene");
+                (prepared, cache)
+            });
         *self.0.pick_snapshot.borrow_mut() =
             Some(pick_snapshot(scene, bounds, surfaces, &prepared));
         if let Some(state) = texture_state
@@ -383,7 +389,7 @@ impl Element for Content {
             input.read(cx).set_snapshot(self.0.pick_snapshot.clone());
             input.read(cx).paint(&state.hitbox, window);
         }
-        let mut frame = prepared.into_frame();
+        let mut frame = prepared.frame().clone();
         frame.viewport_quality = self.0.quality;
         let frame = Arc::new(frame);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -471,9 +477,10 @@ mod tests {
             )
             .object(Object::new(Mesh::plane(), Material::color(rgb(0x80a0c0))).id("back"));
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
-        for ready in [false, true, false] {
-            let prepared = scene
-                .prepare(1., None, |request| {
+        let mut cache = PreparationCache::new();
+        for ready in [false, false, true, true, false] {
+            let prepared = cache
+                .prepare(&scene, 1., None, |request| {
                     Ok(if request.slot == TextureSlot::Normal {
                         if ready {
                             TextureState::Ready(MeshTexture3d::Image(gpui::AtlasTile {

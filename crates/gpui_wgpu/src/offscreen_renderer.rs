@@ -3,9 +3,7 @@ use std::sync::mpsc;
 use anyhow::Context as _;
 use gpui::{DevicePixels, Scene, Size};
 
-use crate::{
-    WgpuContext, WgpuExternalRenderTarget, WgpuExternalRendererConfig, WgpuRenderer, wgpu,
-};
+use crate::{WgpuContext, WgpuExternalRendererConfig, WgpuRenderer, wgpu};
 
 /// Renders GPUI scenes into CPU-readable RGBA pixels without a native window.
 pub struct WgpuOffscreenRenderer {
@@ -74,33 +72,9 @@ impl WgpuOffscreenRenderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("gpui.offscreen.encoder"),
                 });
-        {
-            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("gpui.offscreen.clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.target_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
         anyhow::ensure!(
-            self.renderer.encode_external(
-                scene,
-                WgpuExternalRenderTarget {
-                    texture: &self.target,
-                    view: &self.target_view,
-                    command_encoder: &mut encoder,
-                },
-            ),
+            self.renderer
+                .draw_external(scene, &self.target, &self.target_view, wgpu::Color::BLACK),
             "GPUI renderer requested a larger instance buffer; retry the frame"
         );
         encoder.copy_texture_to_buffer(

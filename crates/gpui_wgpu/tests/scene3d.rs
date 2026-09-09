@@ -6,6 +6,55 @@ use gpui::{
 use gpui_wgpu::WgpuOffscreenRenderer;
 use std::{rc::Rc, sync::Arc};
 
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn submitted_viewports_restore_pixels_and_invalidate_changed_frames_and_ui() {
+    let mut renderer =
+        WgpuOffscreenRenderer::new(size(DevicePixels(64), DevicePixels(64))).unwrap();
+    let mut capture = layer(
+        bounds(8., 4., 48., 48.),
+        Scene::default(),
+        vec![mesh(0.5, 0xff0000ff, MeshTexture3d::None)],
+        1.,
+    );
+    let first_scene = scene(capture.clone());
+    let first = renderer.render_rgba(&first_scene).unwrap();
+    assert_eq!(renderer.render_rgba(&first_scene).unwrap(), first);
+    assert_eq!(renderer.render_rgba(&first_scene).unwrap(), first);
+    let frame = Arc::make_mut(capture.scene3d.as_mut().unwrap());
+    Arc::make_mut(&mut frame.objects)[0].color = rgba(0x00ff00ff);
+    let changed = renderer.render_rgba(&scene(capture.clone())).unwrap();
+    assert_ne!(changed, first);
+    assert_eq!(renderer.render_rgba(&first_scene).unwrap(), first);
+
+    let frame = Arc::make_mut(capture.scene3d.as_mut().unwrap());
+    let object = &mut Arc::make_mut(&mut frame.objects)[0];
+    object.color = rgba(0xffffffff);
+    object.texture = MeshTexture3d::Subtree;
+    frame.ui_texture = Some(gpui::UiTexture3d::new(
+        size(gpui::px(32.), gpui::px(32.)),
+        1.,
+    ));
+    let mut source = Scene::default();
+    source.insert_primitive(quad(bounds(0., 0., 32., 32.), 0x0000ffff));
+    source.finish();
+    capture.scene = Rc::new(source);
+    let blue_scene = scene(capture.clone());
+    let blue = renderer.render_rgba(&blue_scene).unwrap();
+    assert_eq!(renderer.render_rgba(&blue_scene).unwrap(), blue);
+    assert_eq!(renderer.render_rgba(&blue_scene).unwrap(), blue);
+    let mut source = Scene::default();
+    source.insert_primitive(quad(bounds(0., 0., 32., 32.), 0xff0000ff));
+    source.finish();
+    capture.scene = Rc::new(source);
+    let red = renderer.render_rgba(&scene(capture.clone())).unwrap();
+    assert_ne!(red, blue);
+    assert_eq!(renderer.render_rgba(&blue_scene).unwrap(), blue);
+    capture.composite.bounds = bounds(0., 0., 32., 48.);
+    capture.composite.effect_bounds = capture.composite.bounds;
+    assert_ne!(renderer.render_rgba(&scene(capture)).unwrap(), red);
+}
+
 const IDENTITY: [[f32; 4]; 4] = [
     [1., 0., 0., 0.],
     [0., 1., 0., 0.],

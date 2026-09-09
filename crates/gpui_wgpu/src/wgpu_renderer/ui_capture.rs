@@ -6,6 +6,16 @@ pub(super) struct UiCapture {
     pub(super) texture: wgpu::Texture,
 }
 
+impl UiCapture {
+    pub(super) fn clear_scene3d_caches(&mut self) {
+        self.renderer.clear_scene3d_caches();
+    }
+
+    pub(super) fn commit_scene3d_outputs(&self, submitted: bool) {
+        self.renderer.commit_scene3d_outputs(submitted);
+    }
+}
+
 impl WgpuRenderer {
     pub(super) fn commit_ui_captures(&self, encoded: bool) {
         for capture in &self.resources().ui_captures {
@@ -17,6 +27,7 @@ impl WgpuRenderer {
         &mut self,
         scene: &Scene,
         encoder: &mut wgpu::CommandEncoder,
+        retain_outputs: bool,
     ) -> bool {
         fn collect<'a>(scene: &'a Scene, captures: &mut Vec<(&'a SubtreeLayer, UiTexture3d)>) {
             for layer in &scene.subtree_layers {
@@ -94,6 +105,7 @@ impl WgpuRenderer {
                     view: &view,
                     command_encoder: encoder,
                 },
+                retain_outputs,
             ) {
                 return false;
             }

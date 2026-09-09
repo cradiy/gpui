@@ -216,7 +216,7 @@ fn viewport(
     require_format(
         formats,
         target,
-        Usage::RENDER_ATTACHMENT | Usage::TEXTURE_BINDING | Usage::COPY_SRC,
+        Usage::RENDER_ATTACHMENT | Usage::TEXTURE_BINDING | Usage::COPY_SRC | Usage::COPY_DST,
         Flags::FILTERABLE | Flags::BLENDABLE,
     )?;
     Ok(gpui::Scene3dViewportCapabilities {

@@ -14,6 +14,12 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 type HoverListener = Box<dyn Fn(&Option<Hit>, &mut Window, &mut App)>;
 type ClickListener = Box<dyn Fn(&Hit, &mut Window, &mut App)>;
 
+#[derive(Default)]
+struct ViewportPreparation {
+    cache: PreparationCache,
+    output: Option<(Arc<PreparedScene>, Arc<gpui::Scene3dFrame>)>,
+}
+
 /// Creates a layout-sized 3D viewport. The caller owns camera interaction and animation.
 pub fn viewport3d(id: impl Into<ElementId>, scene: Scene) -> Viewport3d {
     Viewport3d {
@@ -340,10 +346,11 @@ impl Element for Content {
         let scene = &self.0.scene;
         let mut surfaces: Vec<_> = scene.objects.iter().map(|_| PickSurface::Absent).collect();
         let has_ui = self.0.texture.is_some();
-        let prepared =
-            window.with_element_state(id.unwrap(), |cache: Option<PreparationCache>, window| {
-                let mut cache = cache.unwrap_or_default();
-                let prepared = cache
+        let (prepared, frame) =
+            window.with_element_state(id.unwrap(), |state: Option<ViewportPreparation>, window| {
+                let mut state = state.unwrap_or_default();
+                let prepared = state
+                    .cache
                     .prepare(
                         scene,
                         f32::from(bounds.size.width) / f32::from(bounds.size.height),
@@ -379,7 +386,20 @@ impl Element for Content {
                         },
                     )
                     .expect("invalid 3D scene");
-                (prepared, cache)
+                let frame = state
+                    .output
+                    .as_ref()
+                    .filter(|(previous, frame)| {
+                        Arc::ptr_eq(previous, &prepared) && frame.viewport_quality == self.0.quality
+                    })
+                    .map(|(_, frame)| frame.clone())
+                    .unwrap_or_else(|| {
+                        let mut frame = prepared.frame().clone();
+                        frame.viewport_quality = self.0.quality;
+                        Arc::new(frame)
+                    });
+                state.output = Some((prepared.clone(), frame.clone()));
+                ((prepared, frame), state)
             });
         *self.0.pick_snapshot.borrow_mut() =
             Some(pick_snapshot(scene, bounds, surfaces, &prepared));
@@ -389,9 +409,6 @@ impl Element for Content {
             input.read(cx).set_snapshot(self.0.pick_snapshot.clone());
             input.read(cx).paint(&state.hitbox, window);
         }
-        let mut frame = prepared.frame().clone();
-        frame.viewport_quality = self.0.quality;
-        let frame = Arc::new(frame);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.with_scene3d(bounds, frame, |window| {
                 if let Some(state) = texture_state {

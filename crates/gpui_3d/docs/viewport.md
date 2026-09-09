@@ -1985,16 +1985,47 @@ unchanged. Fully off-surface viewports do not allocate mesh attachments.
 
 Mesh output is placed back into surface coordinates for subtree composition and
 enclosing effects. Generic subtree-composition textures remain surface-sized, so many
-nested captures can still consume substantial GPU memory. UI capture, mesh
-rendering and composition run when GPUI repaints; there is no autonomous background
-render loop. UI layout, texture sampling coordinates, picking, and pointer routing
+nested captures can still consume substantial GPU memory. UI capture and composition
+run when GPUI repaints; there is no autonomous background render loop. UI layout,
+texture sampling coordinates, picking, and pointer routing
 are independent of mesh attachment dimensions.
 UI texture targets and their rendering resources are reused while attached;
 pixel-size changes resize the capture targets independently of the window.
 
+### Submitted viewport outputs
+
+WGPU window rendering reuses submitted mesh pixels when the immutable
+`Scene3dFrame`, raster region, and referenced atlas generations are unchanged.
+`Viewport3d` preserves frame identity across CPU preparation cache hits with the
+same raster quality. Camera, material, lighting, geometry, or quality changes
+produce a new frame and redraw the mesh.
+
+Meshes sampling UI also require the same captured `Scene` and image-pass
+snapshots. Replayed captures can reuse mesh output; newly painted captures
+invalidate it. Particle, fluid, feedback, particle-transition, and external-surface
+inputs bypass output reuse. UI layout, capture rendering, and interaction remain
+active independently of mesh output reuse.
+
+The cache holds only viewport-covered display pixels, with a 64 MiB retained-output
+limit per WGPU renderer. Independent UI capture renderers have separate limits.
+Inputs must repeat before a pixel texture is allocated; continuously changing
+snapshots do not allocate output-cache textures. Surface-size, transparency-mode,
+and subpixel-layout changes invalidate retained outputs.
+Entries are retained only for the current visible viewport list; oversized or
+uncacheable inputs render normally. This limit excludes intermediate attachments,
+atlas resources, and outputs still held by submitted GPU commands. Abandoned
+encodings never make an output reusable.
+
+`WgpuRenderer::draw_external` clears, renders, and submits an external target,
+enabling the same output reuse without a native window. `WgpuOffscreenRenderer`
+uses this path before readback. `encode_external` leaves submission to its caller
+and does not retain 3D output pixels. Direct `HeadlessRenderer` outputs are
+independent per-call textures, not viewport pixel-cache entries.
+
 `Window::clear_scene3d_caches()` releases mesh buffers, intermediate mesh targets,
-shadow maps, environment uploads, image mip chains, and mesh pipelines for all
-viewports in that window. Shared 2D atlas entries, UI capture textures, and generic
+shadow maps, environment uploads, image mip chains, retained mesh output pixels,
+and mesh pipelines for all viewports, including those inside UI captures.
+Shared 2D atlas entries, UI capture textures, and generic
 subtree-effect resources remain intact. The next mesh draw rebuilds its caches.
 The call does not request a repaint or wait for GPU completion, and unsupported
 backends do nothing. In-flight commands retain the resources they use, so release

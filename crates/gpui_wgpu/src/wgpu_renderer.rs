@@ -2106,6 +2106,14 @@ impl WgpuRenderer {
     }
 
     pub fn set_subpixel_layout(&mut self, is_bgr: bool) {
+        if self.is_bgr != is_bgr
+            && let Some(renderer) = self
+                .resources
+                .as_mut()
+                .and_then(|resources| resources.scene3d.as_mut())
+        {
+            renderer.invalidate_outputs();
+        }
         self.is_bgr = is_bgr;
     }
 
@@ -2141,6 +2149,9 @@ impl WgpuRenderer {
             resources.failed_effect_pipelines.clear();
             resources.backdrop_effect_pipelines.clear();
             resources.failed_backdrop_effect_pipelines.clear();
+            if let Some(renderer) = &mut resources.scene3d {
+                renderer.invalidate_outputs();
+            }
         }
     }
 
@@ -2204,6 +2215,9 @@ impl WgpuRenderer {
     pub fn clear_scene3d_caches(&mut self) {
         if let Some(resources) = self.resources.as_mut() {
             resources.scene3d = None;
+            for capture in &mut resources.ui_captures {
+                capture.clear_scene3d_caches();
+            }
         }
     }
 
@@ -2327,8 +2341,10 @@ impl WgpuRenderer {
                 &frame_view,
                 &mut encoder,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                true,
             ) {
                 self.commit_encoded_scene(false);
+                self.commit_scene3d_outputs(false);
                 drop(encoder);
                 if self.instance_buffer_capacity >= self.max_buffer_size {
                     log::error!(
@@ -2342,9 +2358,10 @@ impl WgpuRenderer {
                 continue;
             }
 
-            self.commit_encoded_scene(true);
             let resources = self.resources();
             resources.queue.submit(std::iter::once(encoder.finish()));
+            self.commit_encoded_scene(true);
+            self.commit_scene3d_outputs(true);
             #[cfg(target_os = "linux")]
             if !dma_buf_leases.is_empty() {
                 resources
@@ -2356,9 +2373,58 @@ impl WgpuRenderer {
         }
     }
 
+    /// Encodes into caller-owned commands without retaining 3D output pixels.
+    /// Use `draw_external` for renderer-owned submission and output reuse.
     pub fn encode_external(&mut self, scene: &Scene, target: WgpuExternalRenderTarget<'_>) -> bool {
-        let encoded = self.encode_external_scene(scene, target);
+        let encoded = self.encode_external_scene(scene, target, false);
         self.commit_encoded_scene(encoded);
+        encoded
+    }
+
+    /// Clears, encodes, and submits an external target on this renderer's queue.
+    /// Enables reuse of submitted 3D viewport outputs. A false result submits no
+    /// frame commands; capacity growth may require a retry. The target must match this
+    /// renderer's configured size/format and support render attachments.
+    pub fn draw_external(
+        &mut self,
+        scene: &Scene,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        clear: wgpu::Color,
+    ) -> bool {
+        let mut encoder =
+            self.resources()
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("gpui_external_encoder"),
+                });
+        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("gpui_external_clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        }));
+        let encoded = self.encode_external_scene(
+            scene,
+            WgpuExternalRenderTarget {
+                texture,
+                view,
+                command_encoder: &mut encoder,
+            },
+            true,
+        );
+        if encoded {
+            self.resources().queue.submit([encoder.finish()]);
+        }
+        self.commit_encoded_scene(encoded);
+        self.commit_scene3d_outputs(encoded);
         encoded
     }
 
@@ -2366,6 +2432,7 @@ impl WgpuRenderer {
         &mut self,
         scene: &Scene,
         target: WgpuExternalRenderTarget<'_>,
+        retain_outputs: bool,
     ) -> bool {
         assert!(
             self.resources().surface.is_none(),
@@ -2390,6 +2457,7 @@ impl WgpuRenderer {
             target.view,
             target.command_encoder,
             wgpu::LoadOp::Load,
+            retain_outputs,
         );
         if !encoded && self.instance_buffer_capacity < self.max_buffer_size {
             self.grow_instance_buffer();
@@ -2425,7 +2493,8 @@ impl WgpuRenderer {
                     format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::COPY_SRC,
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 }));
         }
@@ -2876,6 +2945,7 @@ impl WgpuRenderer {
         target_view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
+        retain_outputs: bool,
     ) -> bool {
         let mut has_scene3d = false;
         scene.visit(&mut |scene| {
@@ -2896,7 +2966,7 @@ impl WgpuRenderer {
         } else {
             None
         };
-        if !self.encode_ui_captures(scene, encoder) {
+        if !self.encode_ui_captures(scene, encoder, retain_outputs) {
             return false;
         }
         let format = self.surface_config.format;
@@ -2926,6 +2996,7 @@ impl WgpuRenderer {
         });
         scene.visit(&mut |scene| has_fluid |= !scene.fluids.is_empty());
         {
+            let atlas = self.atlas.clone();
             let resources = self.resources_mut();
             if has_scene3d && resources.scene3d.is_none() {
                 resources.scene3d = Some(scene3d::ViewportRenderer::new(
@@ -2940,6 +3011,8 @@ impl WgpuRenderer {
                     scene,
                     viewport[0] as u32,
                     viewport[1] as u32,
+                    &atlas,
+                    retain_outputs,
                 );
             }
             if has_particle_transition && resources.particle_transition.is_none() {
@@ -3030,6 +3103,15 @@ impl WgpuRenderer {
             {
                 textures.committed.set(Some(snapshot));
             }
+        }
+    }
+
+    fn commit_scene3d_outputs(&self, submitted: bool) {
+        if let Some(renderer) = &self.resources().scene3d {
+            renderer.commit_outputs(submitted);
+        }
+        for capture in &self.resources().ui_captures {
+            capture.commit_scene3d_outputs(submitted);
         }
     }
 
@@ -3393,7 +3475,7 @@ impl WgpuRenderer {
                                     &self.atlas,
                                     layer,
                                     &source_view,
-                                    &destination,
+                                    &resources.subtree_textures[depth + 1],
                                     encoder,
                                 );
                                 source_view = destination;

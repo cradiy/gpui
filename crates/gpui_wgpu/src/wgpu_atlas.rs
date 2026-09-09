@@ -94,6 +94,14 @@ impl WgpuAtlas {
         )
     }
 
+    pub(crate) fn tile_generation(&self, tile: AtlasTile) -> Option<u64> {
+        self.0
+            .lock()
+            .tile_generations
+            .get(&(tile.texture_id, tile.tile_id.0))
+            .copied()
+    }
+
     /// Clears all cached textures and tiles, forcing them to be recreated.
     /// Use this for incremental recovery when the device is still valid.
     pub fn clear(&self) {

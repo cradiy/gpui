@@ -93,7 +93,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Viewport quality controls**: Positive finite resolution scale, one/four color samples with capability fallback, mixed-quality viewport pipelines, device-bounded attachments, bilinear reconstruction, and unchanged input/UI texture coordinates.
 - [ ] **On-demand updates**: Track scene, camera, and UI texture invalidation separately; reuse results when static, invisible, or paused without continuously requesting frames.
   - [x] **Retained CPU preparation**: Single-entry scene/snapshot reuse, camera/aspect/UI configuration invalidation, per-call active resource refresh, immutable prepared outputs, and viewport/headless-local ownership.
-  - [ ] **Rendered output reuse**: Track UI pixels, atlas generations, and submitted GPU output validity independently of CPU preparation.
+  - [x] **Submitted viewport outputs**: Immutable frame/capture identity, referenced atlas generations, submission-gated pixel reuse, bounded viewport-local output storage, dynamic-input bypass, and renderer-owned external submission.
+  - [ ] **UI capture reuse**: Retain static capture pixels independently of mesh output and avoid recapturing unchanged content after unrelated UI updates.
 - [ ] **Culling and instancing**: Frustum culling, instanced rendering of shared geometry, and material batching with reproducible benchmarks.
   - [x] **Instanced material batches**: Shared-mesh, compatible-material batching for color, shadow, and geometry outputs without reordering depth writers.
   - [x] **Frustum culling**: Cached indexed mesh bounds, perspective/orthographic clip-volume tests with full object transforms, independent camera/shadow eligibility, resource-resolution pruning, and per-frame draw plans without renumbering IDs or changing world-ray queries.

@@ -6,6 +6,7 @@ mod background;
 mod geometry;
 mod images;
 mod instances;
+mod output_cache;
 mod specular;
 mod target;
 mod viewport;
@@ -654,7 +655,7 @@ impl Scene3dRenderer {
         self.regions.clear();
         let mut frames = Vec::new();
         let mut layers = Vec::new();
-        scene.visit(&mut |scene| {
+        viewport::visit_scenes(scene, |scene| {
             for layer in &scene.subtree_layers {
                 let Some(frame) = &layer.scene3d else {
                     continue;
@@ -1497,6 +1498,201 @@ fn color_draw_order(objects: &[gpui::MeshDraw3d]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn output_layer(texture: MeshTexture3d) -> SubtreeLayer {
+        let mut object = object();
+        object.texture = texture;
+        let bounds = gpui::Bounds::new(
+            gpui::point(gpui::ScaledPixels(8.), gpui::ScaledPixels(4.)),
+            gpui::size(gpui::ScaledPixels(32.), gpui::ScaledPixels(24.)),
+        );
+        SubtreeLayer {
+            scene3d: Some(Arc::new(frame(&[object]))),
+            scene: std::rc::Rc::new(Scene::default()),
+            second_scene: None,
+            intermediate_effects: Arc::default(),
+            composite: gpui::EffectQuad {
+                order: 0,
+                bounds,
+                effect_bounds: bounds,
+                transformation: Default::default(),
+                content_mask: gpui::ContentMask { bounds },
+                shader: gpui::EffectShader::wgsl_image(
+                    "fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return sample_effect_image(input, input.uv); }",
+                ),
+                uniforms: Default::default(),
+                time: 0.,
+                corner_radii: Default::default(),
+                opacity: 1.,
+                image_tile: None,
+                second_image_tile: None,
+                third_image_tile: None,
+                fourth_image_tile: None,
+            },
+        }
+    }
+
+    #[test]
+    fn output_reuse_requires_submission_and_failed_encoding_does_not_commit_pixels() {
+        let state = output_cache::OutputValidity::default();
+        state.commit(true);
+        assert!(!state.reusable());
+        state.encoded();
+        assert!(!state.reusable());
+        state.commit(false);
+        assert!(!state.reusable());
+        state.encoded();
+        state.commit(true);
+        assert!(state.reusable());
+        state.commit(false);
+        assert!(state.reusable());
+    }
+
+    #[test]
+    fn output_keys_track_owned_frames_regions_ui_snapshots_and_atlas_versions() {
+        use output_cache::OutputKey;
+        let tile = gpui::AtlasTile {
+            texture_id: gpui::AtlasTextureId {
+                index: 0,
+                kind: gpui::AtlasTextureKind::Polychrome,
+            },
+            tile_id: gpui::TileId(1),
+            padding: 0,
+            bounds: gpui::Bounds::new(
+                gpui::point(gpui::DevicePixels(0), gpui::DevicePixels(0)),
+                gpui::size(gpui::DevicePixels(8), gpui::DevicePixels(8)),
+            ),
+        };
+        let mut layer = output_layer(MeshTexture3d::Image(tile));
+        let region = RenderRegion::viewport([8., 4., 32., 24.], [64, 64], 1., 4096).unwrap();
+        let key = OutputKey::new(&layer, region, |_| Some(10)).unwrap();
+        assert!(key.matches(&OutputKey::new(&layer.clone(), region, |_| Some(10)).unwrap()));
+        assert!(!key.matches(&OutputKey::new(&layer, region, |_| Some(11)).unwrap()));
+        assert!(OutputKey::new(&layer, region, |_| None).is_none());
+        let scaled = RenderRegion::viewport([8., 4., 32., 24.], [64, 64], 0.5, 4096).unwrap();
+        assert!(!key.matches(&OutputKey::new(&layer, scaled, |_| Some(10)).unwrap()));
+        layer.scene = std::rc::Rc::new(Scene::default());
+        assert!(key.matches(&OutputKey::new(&layer, region, |_| Some(10)).unwrap()));
+        Arc::make_mut(layer.scene3d.as_mut().unwrap()).ambient = 0.7;
+        assert!(!key.matches(&OutputKey::new(&layer, region, |_| Some(10)).unwrap()));
+
+        let mut ui = output_layer(MeshTexture3d::Subtree);
+        let mut image = ui.composite.clone();
+        image.image_tile = Some(tile);
+        std::rc::Rc::get_mut(&mut ui.scene)
+            .unwrap()
+            .insert_primitive(image);
+        let ui_key = OutputKey::new(&ui, region, |input| {
+            assert_eq!(input, tile);
+            Some(20)
+        })
+        .unwrap();
+        assert!(ui_key.matches(&OutputKey::new(&ui.clone(), region, |_| Some(20)).unwrap()));
+        assert!(!ui_key.matches(&OutputKey::new(&ui, region, |_| Some(21)).unwrap()));
+        ui.scene = std::rc::Rc::new(Scene::default());
+        assert!(!ui_key.matches(&OutputKey::new(&ui, region, |_| Some(20)).unwrap()));
+        ui.intermediate_effects = vec![gpui::SubtreeEffectPass {
+            shader: ui.composite.shader.clone(),
+            uniforms: Default::default(),
+            time: 0.,
+            images: Default::default(),
+            bloom: None,
+            feedback: None,
+            distance_field: None,
+            particles: None,
+            particle_transition: None,
+        }]
+        .into();
+        let processed = OutputKey::new(&ui, region, |_| Some(20)).unwrap();
+        ui.composite.effect_bounds.size.width.0 += 4.;
+        assert!(!processed.matches(&OutputKey::new(&ui, region, |_| Some(20)).unwrap()));
+
+        let mesh_frame = Arc::make_mut(layer.scene3d.as_mut().unwrap());
+        let object = &mut Arc::make_mut(&mut mesh_frame.objects)[0];
+        for (index, slot) in [
+            &mut object.metallic_roughness_texture,
+            &mut object.emissive_texture,
+            &mut object.normal_texture,
+            &mut object.occlusion_texture,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            *slot = Some(gpui::MaterialTexture3d {
+                tile: gpui::AtlasTile {
+                    tile_id: gpui::TileId(index as u32 + 2),
+                    ..tile
+                },
+                sampling: Default::default(),
+            });
+        }
+        let mut referenced = Vec::new();
+        let mapped = OutputKey::new(&layer, region, |tile| {
+            referenced.push(tile.tile_id.0);
+            Some(u64::from(tile.tile_id.0))
+        })
+        .unwrap();
+        assert_eq!(referenced, vec![1, 2, 3, 4, 5]);
+        for changed in referenced {
+            assert!(
+                !mapped.matches(
+                    &OutputKey::new(&layer, region, |tile| {
+                        Some(
+                            u64::from(tile.tile_id.0)
+                                + if tile.tile_id.0 == changed { 100 } else { 0 },
+                        )
+                    })
+                    .unwrap()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_ui_is_not_reused_and_capture_boundaries_have_independent_ownership() {
+        let mut layer = output_layer(MeshTexture3d::Subtree);
+        let region = RenderRegion::full([64, 64]);
+        let draw = gpui::ParticleDraw {
+            order: 0,
+            bounds: layer.composite.bounds,
+            content_mask: layer.composite.content_mask,
+            scale_factor: 1.,
+            opacity: 1.,
+            frame: Arc::new(gpui::ParticleFrame {
+                id: gpui::EffectHistoryId::new(),
+                generation: 0,
+                frame: 0,
+                time: Default::default(),
+                capacity: 16,
+                physics: Default::default(),
+                spawns: Arc::default(),
+                needs_animation: true,
+            }),
+        };
+        std::rc::Rc::get_mut(&mut layer.scene)
+            .unwrap()
+            .insert_primitive(draw);
+        assert!(output_cache::OutputKey::new(&layer, region, |_| Some(0)).is_none());
+        let nested = output_layer(MeshTexture3d::None);
+        std::rc::Rc::get_mut(&mut layer.scene)
+            .unwrap()
+            .insert_primitive(gpui::Primitive::SubtreeLayer(nested));
+        Arc::get_mut(layer.scene3d.as_mut().unwrap())
+            .unwrap()
+            .ui_texture = Some(gpui::UiTexture3d::new(
+            gpui::size(gpui::px(64.), gpui::px(64.)),
+            1.,
+        ));
+        let mut scene = Scene::default();
+        scene.insert_primitive(gpui::Primitive::SubtreeLayer(layer));
+        let mut count = 0;
+        viewport::visit_scenes(&scene, |scene| count += scene.subtree_layers.len());
+        assert_eq!(count, 1);
+        let child = &scene.subtree_layers[0].scene;
+        let mut child_count = 0;
+        viewport::visit_scenes(child, |scene| child_count += scene.subtree_layers.len());
+        assert_eq!(child_count, 1);
+    }
 
     const IDENTITY: [[f32; 4]; 4] = [
         [1., 0., 0., 0.],

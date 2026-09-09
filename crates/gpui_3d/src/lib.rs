@@ -6,6 +6,7 @@ pub mod guide {}
 
 mod affine;
 mod bounds;
+mod bvh;
 mod camera;
 mod frame;
 mod graph;
@@ -38,18 +39,18 @@ pub use viewport::{Viewport3d, viewport3d};
 
 /// Shared immutable indexed geometry.
 #[derive(Clone, Debug)]
-pub struct Mesh(Arc<Mesh3d>);
+pub struct Mesh(Arc<Mesh3d>, Arc<OnceLock<bvh::Bvh>>);
 impl Mesh {
     /// Creates counterclockwise triangles from mesh-local vertex data.
     /// Panics for invalid geometry; use `try_new` for fallible construction.
     #[track_caller]
     pub fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Self {
-        Self(Mesh3d::new(vertices, indices))
+        Self(Mesh3d::new(vertices, indices), Arc::default())
     }
     /// Validates nonempty indexed triangles with finite vertex attributes.
     /// Preserves unused vertices, degenerate triangles and input ordering.
     pub fn try_new(vertices: Vec<Vertex>, indices: Vec<u32>) -> Result<Self, MeshError> {
-        Mesh3d::try_new(vertices, indices).map(Self)
+        Mesh3d::try_new(vertices, indices).map(|geometry| Self(geometry, Arc::default()))
     }
     /// Borrowed mesh-local vertices, including unreferenced vertices.
     pub fn vertices(&self) -> &[Vertex] {
@@ -71,18 +72,21 @@ impl Mesh {
     }
     /// Unit XY plane centered at the origin, facing positive Z.
     pub fn plane() -> Self {
-        static PLANE: OnceLock<Arc<Mesh3d>> = OnceLock::new();
-        Self(
-            PLANE
-                .get_or_init(|| face_mesh(&[([0., 0., 0.], [1., 0., 0.], [0., 1., 0.])]))
-                .clone(),
-        )
+        static PLANE: OnceLock<Mesh> = OnceLock::new();
+        PLANE
+            .get_or_init(|| {
+                Self(
+                    face_mesh(&[([0., 0., 0.], [1., 0., 0.], [0., 1., 0.])]),
+                    Arc::default(),
+                )
+            })
+            .clone()
     }
     /// Unit cube centered at the origin, with per-face normals and UVs.
     pub fn cube() -> Self {
-        static CUBE: OnceLock<Arc<Mesh3d>> = OnceLock::new();
-        Self(
-            CUBE.get_or_init(|| {
+        static CUBE: OnceLock<Mesh> = OnceLock::new();
+        CUBE.get_or_init(|| {
+            Self(
                 face_mesh(&[
                     ([0., 0., 0.5], [1., 0., 0.], [0., 1., 0.]),
                     ([0., 0., -0.5], [-1., 0., 0.], [0., 1., 0.]),
@@ -90,10 +94,11 @@ impl Mesh {
                     ([-0.5, 0., 0.], [0., 0., 1.], [0., 1., 0.]),
                     ([0., 0.5, 0.], [1., 0., 0.], [0., 0., -1.]),
                     ([0., -0.5, 0.], [1., 0., 0.], [0., 0., 1.]),
-                ])
-            })
-            .clone(),
-        )
+                ]),
+                Arc::default(),
+            )
+        })
+        .clone()
     }
 }
 
@@ -270,6 +275,7 @@ pub struct Scene {
     camera: Camera,
     light: Light,
     objects: Vec<Object>,
+    spatial_index: Arc<OnceLock<bvh::ObjectIndex>>,
 }
 impl Scene {
     /// Creates an empty scene with the default camera and light.
@@ -289,6 +295,24 @@ impl Scene {
     /// Adds an object; distinct opaque depths do not depend on insertion order.
     pub fn object(mut self, object: Object) -> Self {
         self.objects.push(object);
+        if let Some(index) = Arc::get_mut(&mut self.spatial_index) {
+            index.take();
+        } else {
+            self.spatial_index = Arc::default();
+        }
         self
+    }
+
+    /// Prepares the shared object index. Mesh triangle indices remain lazy.
+    /// This synchronous CPU operation needs no window or GPU.
+    pub fn prepare_spatial_index(&self) {
+        self.spatial_index
+            .get_or_init(|| bvh::ObjectIndex::build(&self.objects));
+    }
+
+    fn visit_objects(&self, ray: Ray, visit: impl FnMut(usize)) {
+        self.spatial_index
+            .get_or_init(|| bvh::ObjectIndex::build(&self.objects))
+            .visit(ray, visit);
     }
 }

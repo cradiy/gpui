@@ -501,6 +501,7 @@ impl SceneGraph {
             indices: HashMap::with_capacity(self.len()),
             objects: Vec::new(),
             bounds: None,
+            spatial_index: Arc::default(),
         };
         let mut pending = self
             .roots
@@ -592,6 +593,7 @@ pub struct EvaluatedScene {
     indices: HashMap<NodeHandle, usize>,
     objects: Vec<Object>,
     bounds: Option<Aabb>,
+    spatial_index: Arc<std::sync::OnceLock<crate::bvh::ObjectIndex>>,
 }
 impl EvaluatedScene {
     pub fn revision(&self) -> u64 {
@@ -613,8 +615,15 @@ impl EvaluatedScene {
         Scene {
             camera,
             objects: self.objects.clone(),
+            spatial_index: self.spatial_index.clone(),
             ..Scene::default()
         }
+    }
+
+    /// Prepares the camera-independent object index shared by derived scenes.
+    pub fn prepare_spatial_index(&self) {
+        self.spatial_index
+            .get_or_init(|| crate::bvh::ObjectIndex::build(&self.objects));
     }
 }
 

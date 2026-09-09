@@ -139,8 +139,41 @@ for either camera type.
 direction. `Scene::raycast(ray)` ignores the camera and its clipping planes,
 while respecting mesh geometry, constant material alpha, and picking behavior.
 It does not resolve images or sample image alpha. Query distance is measured from
-the ray origin. Queries still scan triangles directly; no spatial acceleration
-structure is provided.
+the ray origin.
+
+Mesh queries use a CPU bounding-volume hierarchy (BVH) built lazily on the first
+query. `mesh.prepare_spatial_index()` builds it synchronously in advance, without
+a window or GPU; a worker can prepare a mesh clone before interactive use.
+Clones and subtree instances share the index. Object transforms and material
+changes do not rebuild it, and dropping the last mesh reference releases it.
+Meshes used only for rendering do not build a query index.
+
+Traversal tests conservative world-space bounds, then intersects candidate
+triangles with the same world-space geometry used by picking. Source vertices
+and indices remain unchanged. Exactly equal hit distances prefer the earlier
+object in scene order, then the earlier triangle in its index buffer. Alpha
+cutouts and clip rejection continue searching for eligible surfaces behind the
+rejected hit; occluder-only surfaces still block them.
+
+Queries first traverse a world-space object BVH, then the candidate meshes' BVHs.
+`Scene::prepare_spatial_index()` prepares only the object index; triangle indices
+remain lazy. Local bounds are computed once per shared geometry during object
+index construction. Objects with unrepresentable bounds remain candidates for
+the ordinary triangle query rather than being silently culled.
+
+Scene clones share their object index. Changing a scene's camera or lighting
+retains it; appending an object creates a fresh index without changing earlier
+clones. Each `EvaluatedScene` owns a shared index that all scenes derived through
+`scene(camera)` reuse. `EvaluatedScene::prepare_spatial_index()` prepares it
+without selecting a camera. After graph edits, call `evaluate()` for a new state
+with current transforms and inherited visibility. Earlier evaluated states and
+their queries remain unchanged, including after node deletion.
+
+Index preparation is synchronous and CPU-only. Reusing an evaluated state across
+camera updates avoids rebuilding the object hierarchy. New evaluations rebuild
+their object index lazily; incremental refitting is not provided. Heavily
+overlapping object or triangle bounds can still require broad traversal. These
+indices accelerate queries, not render submission or GPU draw batching.
 
 Invalid camera, viewport, and point inputs return `CameraError` from the public
 matrix/projection/query methods. Invalid rays return `RayError`.

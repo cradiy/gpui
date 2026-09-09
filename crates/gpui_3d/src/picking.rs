@@ -147,16 +147,35 @@ impl Scene {
         within: impl Fn([f32; 3]) -> bool,
         alpha: impl Fn(usize, [f32; 2]) -> f32,
     ) -> Option<Hit> {
+        self.trace_with(
+            ray,
+            within,
+            alpha,
+            |visit| self.visit_objects(ray, visit),
+            |mesh, model, ray, visit| mesh.visit_triangles(model, ray, visit),
+        )
+    }
+
+    fn trace_with(
+        &self,
+        ray: crate::Ray,
+        within: impl Fn([f32; 3]) -> bool,
+        alpha: impl Fn(usize, [f32; 2]) -> f32,
+        objects: impl FnOnce(&mut dyn FnMut(usize)),
+        mut candidates: impl FnMut(&crate::Mesh, crate::math::Matrix, crate::Ray, &mut dyn FnMut(usize)),
+    ) -> Option<Hit> {
         let direction = ray.direction();
         let mut closest: Option<Hit> = None;
-        for (object_index, object) in self.objects.iter().enumerate() {
+        let mut visit_object = |object_index: usize| {
+            let object = &self.objects[object_index];
             if object.pick_behavior == PickBehavior::Ignore
                 || object.material.color.a < object.material.alpha_cutoff
             {
-                continue;
+                return;
             }
             let (model, normal_matrix) = object.matrices();
-            for (triangle_index, indices) in object.mesh.0.indices().chunks_exact(3).enumerate() {
+            let mut visit = |triangle_index: usize| {
+                let indices = &object.mesh.indices()[triangle_index * 3..][..3];
                 let vertices: [_; 3] =
                     std::array::from_fn(|i| &object.mesh.0.vertices()[indices[i] as usize]);
                 let world = vertices.map(|v| {
@@ -166,21 +185,26 @@ impl Scene {
                 let Some((distance, barycentric, front)) =
                     intersect(ray.origin(), direction, world, true)
                 else {
-                    continue;
+                    return;
                 };
-                if closest.as_ref().is_some_and(|hit| distance >= hit.distance) {
-                    continue;
+                if closest.as_ref().is_some_and(|hit| {
+                    distance > hit.distance
+                        || (distance == hit.distance
+                            && (object_index, triangle_index)
+                                >= (hit.object_index, hit.triangle_index))
+                }) {
+                    return;
                 }
                 let position = ray.at(distance);
                 if !within(position) {
-                    continue;
+                    return;
                 }
                 let uv = std::array::from_fn(|i| {
                     (0..3).map(|j| vertices[j].uv[i] * barycentric[j]).sum()
                 });
                 if alpha(object_index, uv) * object.material.color.a < object.material.alpha_cutoff
                 {
-                    continue;
+                    return;
                 }
                 let local_normal = std::array::from_fn::<_, 3, _>(|i| {
                     (0..3).map(|j| vertices[j].normal[i] * barycentric[j]).sum()
@@ -201,8 +225,10 @@ impl Scene {
                     barycentric,
                     distance,
                 });
-            }
-        }
+            };
+            candidates(&object.mesh, model, ray, &mut visit);
+        };
+        objects(&mut visit_object);
         closest.filter(|hit| self.objects[hit.object_index].pick_behavior != PickBehavior::Occlude)
     }
 }
@@ -294,11 +320,371 @@ mod tests {
         Object::new(Mesh::plane(), Material::color(rgb(0xffffff)))
     }
 
+    fn layered_grid(side: usize) -> Mesh {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for z in [0., -0.5] {
+            for y in 0..side {
+                for x in 0..side {
+                    let first = vertices.len() as u32;
+                    for [dx, dy] in [[0., 0.], [1., 0.], [1., 1.], [0., 1.]] {
+                        let u = (x as f32 + dx) / side as f32;
+                        let v = (y as f32 + dy) / side as f32;
+                        vertices.push(crate::Vertex {
+                            position: [u * 2. - 1., v * 2. - 1., z],
+                            normal: [0., 0., 1.],
+                            uv: [u, v],
+                        });
+                    }
+                    indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+                }
+            }
+        }
+        // Overlapping and degenerate primitives must retain their input IDs.
+        indices.extend([0, 1, 2, 0, 0, 0]);
+        Mesh::new(vertices, indices)
+    }
+
+    fn same_hit(actual: Option<Hit>, expected: Option<Hit>) {
+        let (actual, expected) = match (actual, expected) {
+            (None, None) => return,
+            (Some(actual), Some(expected)) => (actual, expected),
+            pair => panic!("different query results: {pair:?}"),
+        };
+        assert_eq!(actual.object_index, expected.object_index);
+        assert_eq!(actual.object_id, expected.object_id);
+        assert_eq!(actual.node, expected.node);
+        assert_eq!(actual.triangle_index, expected.triangle_index);
+        assert_eq!(actual.distance, expected.distance);
+        assert_eq!(actual.position, expected.position);
+        assert_eq!(actual.normal, expected.normal);
+        assert_eq!(actual.uv, expected.uv);
+        assert_eq!(actual.barycentric, expected.barycentric);
+    }
+
+    #[test]
+    fn bvh_matches_exhaustive_queries_across_affine_instances_and_filters() {
+        use crate::{AffineTransform, Node, Ray, SceneGraph};
+        let mesh = layered_grid(16);
+        let mut graph = SceneGraph::new();
+        let group = graph.insert(None, Node::new()).unwrap();
+        let node = graph
+            .insert(
+                Some(group),
+                Node::new()
+                    .id("grid")
+                    .mesh(mesh.clone(), Material::color(rgb(0xffffff))),
+            )
+            .unwrap();
+        graph
+            .insert(
+                Some(group),
+                Node::new()
+                    .id("overlap")
+                    .mesh(mesh, Material::color(rgb(0xffffff))),
+            )
+            .unwrap();
+        let poses = [
+            AffineTransform::default(),
+            AffineTransform::from_matrix([
+                [-2., 0.3, 0.1, 0.],
+                [0.5, 0.7, 0.2, 0.],
+                [0.2, -0.1, 1.3, 0.],
+                [3., -2., 1., 1.],
+            ])
+            .unwrap(),
+            AffineTransform::from_trs(
+                [10000., -20000., 30000.],
+                [0.3, 0.5, -0.1, 0.8],
+                [100., -200., 50.],
+            )
+            .unwrap(),
+            AffineTransform::from_trs([0.; 3], [0.2, 0.3, 0.1, 0.9], [0.01, 0.02, 0.03]).unwrap(),
+        ];
+        let mut hits = 0;
+        for pose in poses {
+            graph.set_transform(group, pose).unwrap();
+            let evaluated = graph.evaluate().unwrap();
+            let mut scene = evaluated.scene(Camera::default());
+            for mode in [
+                PickBehavior::Target,
+                PickBehavior::Occlude,
+                PickBehavior::Ignore,
+            ] {
+                scene.objects[0].pick_behavior = mode;
+                for y in 0..9 {
+                    for x in 0..9 {
+                        for side in [-1., 1.] {
+                            let x = x as f32 * 0.3 - 1.2;
+                            let y = y as f32 * 0.3 - 1.2;
+                            let origin = pose.transform_point([x, y, side * 2.]);
+                            let target = pose.transform_point([x + 0.05, y - 0.03, -0.25]);
+                            let ray = Ray::new(origin, sub(target, origin)).unwrap();
+                            let within = |p: [f32; 3]| {
+                                pose.inverse().transform_point(p)[2] >= -0.4 || x > 0.
+                            };
+                            let alpha = |index, uv: [f32; 2]| {
+                                if index == 0 && uv[0] > 0.4 { 0. } else { 1. }
+                            };
+                            let expected = scene.trace_with(
+                                ray,
+                                within,
+                                alpha,
+                                |visit| (0..scene.objects.len()).for_each(visit),
+                                |mesh, _, _, visit| {
+                                    for triangle in 0..mesh.triangle_count() {
+                                        visit(triangle);
+                                    }
+                                },
+                            );
+                            let actual = scene.trace(ray, within, alpha);
+                            hits += usize::from(actual.is_some());
+                            same_hit(actual, expected);
+                        }
+                    }
+                }
+            }
+            assert_eq!(evaluated.node(node).unwrap().world, pose);
+        }
+        assert!(hits > 100);
+    }
+
+    #[test]
+    fn bvh_prunes_dense_meshes_and_reuses_the_index_after_motion() {
+        use crate::{AffineTransform, Ray};
+        let mesh = layered_grid(64);
+        let clone = mesh.clone();
+        assert!(mesh.1.get().is_none());
+        std::thread::spawn(move || clone.prepare_spatial_index())
+            .join()
+            .unwrap();
+        let index = mesh.1.get().unwrap();
+        let rays = [
+            Ray::new([0.213, -0.317, 2.], [0., 0., -1.]).unwrap(),
+            Ray::new([4., 4., 2.], [0., 0., -1.]).unwrap(),
+            Ray::new([0., 0., 2.], [1., 0., 0.]).unwrap(),
+            Ray::new([1., 1., 0.], [0., 0., -1.]).unwrap(),
+            Ray::new([0., 0., -0.25], [0., 0., -1.]).unwrap(),
+        ];
+        let scene = Scene::new().object(Object::new(mesh.clone(), Material::color(rgb(0xffffff))));
+        for ray in rays {
+            let mut tested = 0;
+            let actual = scene.trace_with(
+                ray,
+                |_| true,
+                |_, _| 1.,
+                |visit| scene.visit_objects(ray, visit),
+                |mesh, model, ray, visit| {
+                    mesh.visit_triangles(model, ray, |triangle| {
+                        tested += 1;
+                        visit(triangle);
+                    });
+                },
+            );
+            let expected = scene.trace_with(
+                ray,
+                |_| true,
+                |_, _| 1.,
+                |visit| (0..scene.objects.len()).for_each(visit),
+                |mesh, _, _, visit| {
+                    for triangle in 0..mesh.triangle_count() {
+                        visit(triangle);
+                    }
+                },
+            );
+            same_hit(actual, expected);
+            assert!(
+                tested < mesh.triangle_count() / 100,
+                "tested {tested} triangles"
+            );
+        }
+        let mut moved = scene.clone();
+        moved.objects[0].transform.position = [10., 0., 0.];
+        moved.spatial_index = Arc::default();
+        assert!(moved.raycast(rays[0]).is_none());
+        assert!(
+            moved
+                .raycast(Ray::new([10.213, -0.317, 2.], [0., 0., -1.]).unwrap())
+                .is_some()
+        );
+        assert!(std::ptr::eq(index, moved.objects[0].mesh.1.get().unwrap()));
+        assert!(scene.raycast(rays[0]).is_some());
+        let mut tested = 0;
+        mesh.visit_triangles(AffineTransform::default().matrix(), rays[1], |_| {
+            tested += 1
+        });
+        assert_eq!(tested, 0);
+    }
+
     fn alpha_image(width: u32, height: u32, alpha: &[u8]) -> Arc<RenderImage> {
         let bytes = alpha.iter().flat_map(|a| [255, 255, 255, *a]).collect();
         Arc::new(RenderImage::new(vec![image::Frame::new(
             image::RgbaImage::from_raw(width, height, bytes).unwrap(),
         )]))
+    }
+
+    #[test]
+    fn object_index_prunes_instances_and_survives_camera_changes_and_append() {
+        use crate::{Projection, Ray};
+        let plane = Mesh::plane();
+        let mesh = Mesh::new(plane.vertices().to_vec(), plane.indices().to_vec());
+        let mut scene = Scene::new();
+        for y in 0..64 {
+            for x in 0..64 {
+                scene = scene.object(
+                    Object::new(mesh.clone(), Material::color(rgb(0xffffff))).position([
+                        x as f32 * 2.,
+                        y as f32 * 2.,
+                        0.,
+                    ]),
+                );
+            }
+        }
+        scene.prepare_spatial_index();
+        assert!(
+            mesh.1.get().is_none(),
+            "object preparation must not build triangle indices"
+        );
+        let ray = Ray::new([40.1, 30.2, 5.], [0., 0., -1.]).unwrap();
+        let mut tested = 0;
+        let actual = scene.trace_with(
+            ray,
+            |_| true,
+            |_, _| 1.,
+            |visit| {
+                scene.visit_objects(ray, |index| {
+                    tested += 1;
+                    visit(index);
+                });
+            },
+            |mesh, model, ray, visit| mesh.visit_triangles(model, ray, visit),
+        );
+        let expected = scene.trace_with(
+            ray,
+            |_| true,
+            |_, _| 1.,
+            |visit| (0..scene.objects.len()).for_each(visit),
+            |mesh, _, _, visit| (0..mesh.triangle_count()).for_each(visit),
+        );
+        assert_eq!(actual.as_ref().unwrap().object_index, 15 * 64 + 20);
+        same_hit(actual, expected);
+        assert!(
+            tested < scene.objects.len() / 100,
+            "visited {tested} objects"
+        );
+        let mut missed = 0;
+        scene.visit_objects(Ray::new([-5., -5., 5.], [0., 0., -1.]).unwrap(), |_| {
+            missed += 1
+        });
+        assert_eq!(missed, 0);
+        let camera = Camera {
+            projection: Projection::Orthographic { vertical_size: 3. },
+            eye: [40.1, 30.2, 5.],
+            target: [40.1, 30.2, 0.],
+            ..Camera::default()
+        };
+        let other_camera = scene.clone().camera(camera);
+        assert!(Arc::ptr_eq(
+            &scene.spatial_index,
+            &other_camera.spatial_index
+        ));
+        same_hit(
+            other_camera.pick(bounds(), bounds().center()),
+            scene.raycast(ray),
+        );
+        let updated = scene.clone().object(
+            Object::new(mesh, Material::color(rgb(0xffffff)))
+                .id("front")
+                .position([40., 30., 1.]),
+        );
+        assert!(!Arc::ptr_eq(&scene.spatial_index, &updated.spatial_index));
+        assert_eq!(
+            updated.raycast(ray).unwrap().object_id,
+            Some("front".into())
+        );
+        assert_eq!(scene.raycast(ray).unwrap().object_index, 15 * 64 + 20);
+        assert!(Scene::new().raycast(ray).is_none());
+    }
+
+    #[test]
+    fn evaluated_object_indices_follow_hierarchy_edits_without_changing_old_snapshots() {
+        use crate::{AffineTransform, Node, Ray, ReparentMode, SceneGraph};
+        let mut graph = SceneGraph::new();
+        let parent = graph.insert(None, Node::new()).unwrap();
+        let surface = graph
+            .insert(
+                Some(parent),
+                Node::new()
+                    .id("surface")
+                    .mesh(Mesh::plane(), Material::color(rgb(0xffffff))),
+            )
+            .unwrap();
+        let ray = Ray::new([0.1, 0.2, 5.], [0., 0., -1.]).unwrap();
+        let old = graph.evaluate().unwrap();
+        old.prepare_spatial_index();
+        let before = old.scene(Camera::default());
+        let cloned = old.scene(Camera::orbit(0.3, 0.2, 7.));
+        assert!(Arc::ptr_eq(&before.spatial_index, &cloned.spatial_index));
+        assert_eq!(before.raycast(ray).unwrap().node, Some(surface));
+
+        graph
+            .set_transform(
+                parent,
+                AffineTransform::from_translation([4., 0., 0.]).unwrap(),
+            )
+            .unwrap();
+        let translated = graph.evaluate().unwrap();
+        let moved = translated.scene(Camera::default());
+        let moved_ray = Ray::new([4.1, 0.2, 5.], [0., 0., -1.]).unwrap();
+        assert!(!Arc::ptr_eq(&before.spatial_index, &moved.spatial_index));
+        assert!(moved.raycast(ray).is_none());
+        assert_eq!(moved.raycast(moved_ray).unwrap().node, Some(surface));
+        graph.set_visible(parent, false).unwrap();
+        assert!(
+            graph
+                .evaluate()
+                .unwrap()
+                .scene(Camera::default())
+                .raycast(moved_ray)
+                .is_none()
+        );
+        graph.set_visible(parent, true).unwrap();
+        graph
+            .reparent(surface, None, ReparentMode::KeepWorld)
+            .unwrap();
+        graph.remove_subtree(parent).unwrap();
+        assert_eq!(
+            graph
+                .evaluate()
+                .unwrap()
+                .scene(Camera::default())
+                .raycast(moved_ray)
+                .unwrap()
+                .node,
+            Some(surface)
+        );
+        graph.remove_subtree(surface).unwrap();
+        let replacement = graph
+            .insert(
+                None,
+                Node::new().mesh(Mesh::plane(), Material::color(rgb(0xffffff))),
+            )
+            .unwrap();
+        assert_ne!(replacement, surface);
+        assert_eq!(
+            graph
+                .evaluate()
+                .unwrap()
+                .scene(Camera::default())
+                .raycast(ray)
+                .unwrap()
+                .node,
+            Some(replacement)
+        );
+        assert_eq!(before.raycast(ray).unwrap().node, Some(surface));
+        assert_eq!(moved.raycast(moved_ray).unwrap().node, Some(surface));
+        drop(graph);
+        same_hit(before.raycast(ray), cloned.raycast(ray));
     }
 
     #[test]

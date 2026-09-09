@@ -44,6 +44,9 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Renderer resource interfaces**: Upload/readiness interfaces usable by external importers and resource managers.
 - [x] **Camera extensions**: Orthographic projection, explicit up vectors, public view/projection matrices, viewport rays, world-to-screen projection, and framing from object bounds.
 - [x] **World-ray queries**: Normalized arbitrary rays with camera-independent geometric intersection and stable node identities.
+- [x] **Mesh query acceleration**: Shared lazy CPU BVHs, explicit preparation, conservative transformed bounds, and original triangle identities for picking and world rays.
+- [x] **Scene query acceleration**: Lazy object BVHs shared by scene clones and camera views of evaluated states, fresh indices after graph evaluation or object insertion, and preserved snapshot queries.
+- [ ] **Spatial index refitting**: Incremental object-bound updates for changed transforms and visibility without full index reconstruction.
 - [ ] **Camera optics**: Focal-length/sensor-size conversion and explicit off-center projection support.
 - [ ] **Geometry primitives**: Spheres, cylinders, cones, and subdivided planes with segment configuration, bounds, and normal and tangent generation.
 - [ ] **Texture sampling**: UV transforms, addressing and filtering modes, mipmaps, anisotropic filtering, and distinct handling of color and data textures.

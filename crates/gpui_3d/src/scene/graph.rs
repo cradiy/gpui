@@ -1,6 +1,6 @@
 use crate::{
-    Aabb, AffineTransform, Camera, CameraError, LightError, Material, Mesh, Object, ObjectId,
-    PickBehavior, PunctualLight, Scene, TransformError,
+    Aabb, AffineTransform, AimError, Camera, CameraError, ConstraintStatus, LightError, Material,
+    Mesh, Object, ObjectId, PickBehavior, PunctualLight, Scene, TransformError,
 };
 use slotmap::{SlotMap, new_key_type};
 use std::{
@@ -125,6 +125,10 @@ pub enum SceneError {
         target: NodeHandle,
     },
     ConstraintCycle(Vec<NodeHandle>),
+    InvalidAim {
+        node: NodeHandle,
+        source: AimError,
+    },
     Cycle(NodeHandle),
     NoMesh(NodeHandle),
     NoCamera(NodeHandle),
@@ -157,6 +161,9 @@ impl fmt::Display for SceneError {
                 )
             }
             Self::ConstraintCycle(path) => write!(f, "transform dependency cycle: {path:?}"),
+            Self::InvalidAim { node, source } => {
+                write!(f, "aim constraint on node {node:?}: {source}")
+            }
             Self::Cycle(node) => write!(f, "parent assignment would create a cycle at {node:?}"),
             Self::NoMesh(node) => write!(f, "node {node:?} has no mesh"),
             Self::NoCamera(node) => write!(f, "node {node:?} has no camera"),
@@ -172,6 +179,7 @@ impl std::error::Error for SceneError {
             Self::InvalidTransform { source, .. } => Some(source),
             Self::InvalidCamera { source, .. } => Some(source),
             Self::InvalidLight { source, .. } => Some(source),
+            Self::InvalidAim { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -642,6 +650,7 @@ impl SceneGraph {
             bounds: None,
             spatial_index: Arc::default(),
             spatial_source: Arc::default(),
+            constraint_status: HashMap::new(),
         };
         let mut spatial_source = Vec::new();
         let mut pending = self
@@ -765,6 +774,7 @@ pub struct EvaluatedNode {
 /// Camera-independent evaluated hierarchy. Resources remain shared and alive.
 #[derive(Clone)]
 pub struct EvaluatedScene {
+    pub(super) constraint_status: HashMap<NodeHandle, ConstraintStatus>,
     preparation_revision: Arc<()>,
     revision: u64,
     nodes: Vec<EvaluatedNode>,
@@ -776,6 +786,11 @@ pub struct EvaluatedScene {
     spatial_source: Arc<Vec<crate::spatial::bvh::IndexObject>>,
 }
 impl EvaluatedScene {
+    /// Outcome of a node's constraint, or `None` for an unconstrained or absent node.
+    pub fn constraint_status(&self, node: NodeHandle) -> Option<ConstraintStatus> {
+        self.constraint_status.get(&node).copied()
+    }
+
     /// Source graph revision. Transform overrides and constraints are not part of this value;
     /// equal revisions do not imply equal evaluated poses.
     pub fn revision(&self) -> u64 {

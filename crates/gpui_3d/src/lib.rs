@@ -23,9 +23,10 @@ pub use camera::{
     ScreenPoint,
 };
 pub use geometry::{
-    Aabb, AffineTransform, ConeOptions, CylinderOptions, GeneratedTangents, Mesh, MorphAttribute,
-    MorphError, MorphTarget, MorphTargets, PlaneOptions, PrimitiveError, Skin, SkinError,
-    SkinInfluence, SphereOptions, TangentGenerationError, Transform, TransformError,
+    Aabb, AffineTransform, AimError, AimResult, AimSettings, AimStatus, ConeOptions,
+    CylinderOptions, GeneratedTangents, Mesh, MorphAttribute, MorphError, MorphTarget,
+    MorphTargets, PlaneOptions, PrimitiveError, Skin, SkinError, SkinInfluence, SphereOptions,
+    TangentGenerationError, Transform, TransformError,
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
@@ -44,8 +45,8 @@ pub use render::{
     TextureSource, TextureState, Viewport3d, viewport3d,
 };
 pub use scene::{
-    EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ReparentMode, Scene, SceneError,
-    SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode, TransformConstraint,
+    ConstraintStatus, EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ReparentMode, Scene,
+    SceneError, SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode, TransformConstraint,
 };
 pub use spatial::{Hit, PickBehavior};
 

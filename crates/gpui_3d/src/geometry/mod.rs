@@ -1,3 +1,4 @@
+mod aim;
 mod bounds;
 mod mesh;
 mod morph;
@@ -5,6 +6,7 @@ mod primitives;
 mod skin;
 mod tangents;
 mod transform;
+pub use aim::{AimError, AimResult, AimSettings, AimStatus};
 pub use bounds::Aabb;
 pub use mesh::Mesh;
 pub use morph::{MorphAttribute, MorphError, MorphTarget, MorphTargets};

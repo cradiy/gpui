@@ -1053,6 +1053,76 @@ release an attachment while preserving its current world transform, supply
 retain the same evaluated parent pose; for roots, use the world transform itself.
 Persistent hierarchy changes use `reparent` instead.
 
+#### Aim and LookAt
+
+`AimSettings::solve(world_transform, world_target)` rotates a transform around
+its own origin without changing translation, scale, shear, or handedness.
+It returns an `AimResult` containing the transform and an `AimStatus`. No graph,
+camera, GPU, or playback history is required.
+
+The default local forward is `-Z`, local up is `+Y`, and world up is `+Y`.
+Custom axes need not be normalized. Forward aligns with the target direction;
+the component of transformed local up perpendicular to forward aligns with
+projected world up. The solver applies a world-space rigid rotation to the
+entire linear transform, without decomposing it into TRS. Up need not become
+perpendicular to forward when the input affine shape contains shear.
+
+`max_angle` limits the shortest **total orientation correction**, including
+roll, relative to the supplied pose. Its range is `0..=pi` radians; the default
+`pi` allows a full correction. Zero preserves the supplied transform, while
+still validating the inputs. This is not a yaw/pitch cone or an angular speed.
+`AimStatus` reports the requested angle, applied angle, and whether the result
+was limited. A limited result may not face the target exactly. Exact half-turns
+use a deterministic rotation axis.
+
+```rust
+use gpui_3d::{AffineTransform, AimSettings};
+
+let result = AimSettings {
+    local_forward: [1., 0., 0.],
+    max_angle: std::f32::consts::FRAC_PI_4,
+    ..Default::default()
+}.solve(AffineTransform::IDENTITY, [0., 0., -2.])?;
+assert!(result.status.limited);
+let transform = result.transform;
+# Ok::<(), gpui_3d::AimError>(())
+```
+
+Within a graph, `TransformConstraint::Aim` uses the node's local pose composed
+with its final parent transform. `target_offset` is a point in the target node's
+local coordinates; the target's final world transform supplies its world position.
+The `world_up` setting is a world-space vector and does not follow the target's
+orientation. Both target and parent participate in dependency-cycle detection.
+
+```rust
+use gpui_3d::{AimSettings, ConstraintStatus, Node, SceneGraph, TransformConstraint};
+
+let mut graph = SceneGraph::new();
+let node = graph.insert(None, Node::new())?;
+let target = graph.insert(None, Node::new())?;
+let pose = graph.evaluate_with_constraints([], [(node, TransformConstraint::Aim {
+    target,
+    target_offset: [2., 0., -3.],
+    settings: AimSettings::default(),
+})])?;
+if let Some(ConstraintStatus::Aim(status)) = pose.constraint_status(node) {
+    assert!(!status.limited);
+}
+# Ok::<(), gpui_3d::SceneError>(())
+```
+
+`EvaluatedScene::constraint_status` retains `Follow` or `Aim` outcomes only for
+constrained nodes; unconstrained or absent nodes return `None`. Each snapshot
+keeps its own results after later evaluations. To constrain an animated pose,
+sample its local tracks independently for each requested time; feeding previous
+solver outputs back as base poses instead accumulates rotation across calls.
+
+Non-finite or zero axes, coincident targets, invalid limits, and unrepresentable
+results return `AimError`; graph evaluation wraps it in `SceneError::InvalidAim`
+with the controlled node handle. Transformed local forward/up and target/world-up
+pairs must have a sine angle greater than `1e-6`. Parallel or nearly parallel
+pairs are errors, not automatic alternate-axis selections.
+
 ## Materials and light
 
 - `Material::color(color)` creates a lit solid surface.

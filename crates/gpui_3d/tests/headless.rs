@@ -149,8 +149,13 @@ fn cache_release_preserves_frames_readbacks_and_image_reconstruction() -> anyhow
     let rebuilt = renderer.render(&scene, config)?;
     assert!(rebuilt.readback().is_err());
 
+    let resized_camera = Camera {
+        eye: [0., 0., 8.],
+        lens_shift: [0.1, 0.],
+        ..camera
+    };
     let resized_scene = Scene::new()
-        .camera(camera)
+        .camera(resized_camera)
         .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff)).unlit(true)).id("solid"));
     let resized = renderer.render(
         &resized_scene,
@@ -162,8 +167,14 @@ fn cache_release_preserves_frames_readbacks_and_image_reconstruction() -> anyhow
     renderer.clear_caches();
     drop(renderer);
 
+    assert_eq!(original.camera(), camera);
+    assert_eq!(resized.camera(), resized_camera);
     let first = read(pending)?;
     let second = read(rebuilt.readback()?)?;
+    assert_eq!(first.camera(), camera);
+    assert_eq!(second.camera(), camera);
+    let first_world = first.world_position_at(32, 32)?.unwrap();
+    assert!(first_world.into_iter().all(|value| value.abs() < 0.001));
     assert_eq!(first.pixels.size, [65, 65]);
     assert_eq!(first.pixels.rgba, second.pixels.rgba);
     assert_eq!(first.pixels.linear_rgba, second.pixels.linear_rgba);
@@ -177,6 +188,15 @@ fn cache_release_preserves_frames_readbacks_and_image_reconstruction() -> anyhow
     assert_eq!(color[3], 255);
 
     let third = read(resized.readback()?)?;
+    assert_eq!(third.camera(), resized_camera);
+    for (actual, expected) in third
+        .world_position_at(16, 16)?
+        .unwrap()
+        .into_iter()
+        .zip([0.15, 0., 0.])
+    {
+        assert!((actual - expected).abs() < 0.001);
+    }
     assert_eq!(third.pixels.size, [33, 33]);
     assert_eq!(third.object_at(16, 16).unwrap().id, Some("solid".into()));
     let offset = (16 * 33 + 16) * 4;
@@ -185,6 +205,8 @@ fn cache_release_preserves_frames_readbacks_and_image_reconstruction() -> anyhow
         &[255; 4]
     );
     let retained = read(original.readback()?)?;
+    assert_eq!(retained.camera(), camera);
+    assert_eq!(retained.world_position_at(32, 32)?, Some(first_world));
     assert_eq!(first.pixels.rgba, retained.pixels.rgba);
     assert_eq!(first.pixels.object_ids, retained.pixels.object_ids);
     Ok(())
@@ -891,10 +913,11 @@ fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow
                     anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
                     std::thread::sleep(std::time::Duration::from_millis(2));
                 };
-                let pixels = result.pixels;
-                let depths = pixels.linear_depth.unwrap();
-                let normals = pixels.world_normals.unwrap();
-                let ids = pixels.object_ids.unwrap();
+                assert_eq!(result.camera(), camera);
+                let pixels = &result.pixels;
+                let depths = pixels.linear_depth.as_ref().unwrap();
+                let normals = pixels.world_normals.as_ref().unwrap();
+                let ids = pixels.object_ids.as_ref().unwrap();
                 let mut hits = 0;
                 for y in (3..49).step_by(7) {
                     for x in (2..67).step_by(7) {
@@ -910,6 +933,10 @@ fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow
                                 .unwrap()
                                 .depth;
                             assert!((depths[index] - depth).abs() < 0.001);
+                            let world = result.world_position_at(x as u32, y as u32)?.unwrap();
+                            for (actual, expected) in world.into_iter().zip(hit.position) {
+                                assert!((actual - expected).abs() < 0.001);
+                            }
                             assert_eq!(ids[index], hit.object_index as u32 + 1);
                             assert_eq!(normals[index][3], 1.);
                             let orientation = if hit.object_index == 0 { -1. } else { 1. };
@@ -917,6 +944,7 @@ fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow
                                 assert!((actual - expected * orientation).abs() < 0.001);
                             }
                         } else {
+                            assert_eq!(result.world_position_at(x as u32, y as u32)?, None);
                             assert_eq!(ids[index], 0);
                             assert_eq!(depths[index], 0.);
                             assert_eq!(normals[index], [0.; 4]);

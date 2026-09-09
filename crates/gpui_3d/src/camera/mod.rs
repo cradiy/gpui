@@ -73,6 +73,7 @@ pub enum CameraError {
     InvalidProjection,
     InvalidViewport,
     InvalidPoint,
+    InvalidDepth,
     InvalidFraming,
     Unrepresentable,
 }
@@ -87,6 +88,7 @@ impl fmt::Display for CameraError {
                 "viewport requires finite origin and positive finite dimensions"
             }
             Self::InvalidPoint => "point coordinates must be finite",
+            Self::InvalidDepth => "linear camera depth must be positive and finite",
             Self::InvalidFraming => "framing margin must be finite and at least one",
             Self::Unrepresentable => "camera calculation exceeds finite coordinate precision",
         })
@@ -374,6 +376,51 @@ impl Camera {
                 && ndc[0].abs() <= 1.
                 && ndc[1].abs() <= 1.,
         }))
+    }
+
+    /// Reconstructs a world position from top-left-origin screen coordinates and
+    /// positive linear camera-forward depth, not ray distance or hardware depth.
+    /// Positions outside the viewport and depths outside near/far are not clipped.
+    pub fn screen_to_world(
+        self,
+        viewport: Bounds<Pixels>,
+        position: Point<Pixels>,
+        depth: f32,
+    ) -> Result<[f32; 3], CameraError> {
+        let [width, height] = viewport_size(viewport)?;
+        if ![f32::from(position.x), f32::from(position.y)]
+            .iter()
+            .all(|v| v.is_finite())
+        {
+            return Err(CameraError::InvalidPoint);
+        }
+        if !depth.is_finite() || depth <= 0. {
+            return Err(CameraError::InvalidDepth);
+        }
+        let projection = self.projection_matrix(width / height)?;
+        let [right, up, backward] = self.axes()?;
+        let x = (2. * (f64::from(position.x) - f64::from(viewport.origin.x)) / f64::from(width)
+            - 1.
+            + f64::from(self.lens_shift[0]))
+            / f64::from(projection[0][0]);
+        let y = (1.
+            - 2. * (f64::from(position.y) - f64::from(viewport.origin.y)) / f64::from(height)
+            + f64::from(self.lens_shift[1]))
+            / f64::from(projection[1][1]);
+        let depth = f64::from(depth);
+        let span = match self.projection {
+            Projection::Perspective { .. } => depth,
+            Projection::Orthographic { .. } => 1.,
+        };
+        let world = std::array::from_fn(|i| {
+            (f64::from(self.eye[i]) + (f64::from(right[i]) * x + f64::from(up[i]) * y) * span
+                - f64::from(backward[i]) * depth) as f32
+        });
+        if world.iter().all(|v| v.is_finite()) {
+            Ok(world)
+        } else {
+            Err(CameraError::Unrepresentable)
+        }
     }
 
     /// Positions may lie outside the viewport for captured drags. Perspective

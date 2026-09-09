@@ -192,6 +192,41 @@ Linear depth is the negated view-space Z coordinate, not hardware depth in
 as object positions, for both perspective and orthographic cameras. Zero means
 background for a valid camera whose near plane is positive.
 
+`RenderedFrame::camera()` and `ReadFrame::camera()` retain the camera that
+produced each output. Camera edits, resizing, and renderer destruction do not
+change this snapshot. `ReadFrame::world_position_at(x, y)` reconstructs the
+nearest surface from the depth sample at the physical pixel center. It requires
+only `LINEAR_DEPTH`, not an ID or normal channel. Background, missing samples,
+and coordinates outside the image return `Ok(None)`; invalid nonzero samples
+or unrepresentable coordinates return a `CameraError`.
+
+```no_run
+# use gpui_3d::ReadFrame;
+# fn position(result: &ReadFrame) -> Result<(), gpui_3d::CameraError> {
+if let Some(world) = result.world_position_at(400, 300)? {
+    let camera = result.camera();
+    let view = camera.world_to_view(world)?;
+}
+# Ok(())
+# }
+```
+
+GPU consumers can load the depth texture directly with `textureLoad`; no CPU
+readback is needed. Use texel centers with top-left UV coordinates
+`u = (x + 0.5) / width`, `v = (y + 0.5) / height`. Do not interpolate depth
+across surface/background boundaries. For depth `d > 0`, the matching camera's
+`projection_matrix(width / height)` and `axes()` give:
+
+- `a = (2*u - 1 + lens_shift.x) / projection[0][0]`
+- `b = (1 - 2*v + lens_shift.y) / projection[1][1]`
+- `s = d` for perspective, or `s = 1` for orthographic
+- `world = eye + s * (a * right + b * up) - d * backward`
+
+This uses the unnormalized camera-plane direction, not a normalized picking ray.
+`Camera::screen_to_world` provides the same reconstruction for screen coordinates
+with an arbitrary viewport origin. Geometry-channel coverage is at pixel centers;
+reconstructed positions do not represent partially covered color MSAA samples.
+
 Normals are perspective-correctly interpolated vertex normals, transformed by
 the inverse transpose, normalized, and oriented to the visible side using the
 same double-sided/reflection convention as lighting. They are world-space

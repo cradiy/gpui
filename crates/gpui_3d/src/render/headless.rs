@@ -3,11 +3,13 @@
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
 use anyhow::{Context as _, Result, bail, ensure};
-use gpui::{ImageId, ImageSource, MeshTexture3d, PlatformAtlas, RenderImageParams};
+use gpui::{
+    Bounds, ImageId, ImageSource, MeshTexture3d, PlatformAtlas, RenderImageParams, point, px, size,
+};
 use gpui_wgpu::{Scene3dGpuOutput, Scene3dReadback, WgpuScene3dRenderer};
 
 pub use crate::RenderObject;
-use crate::{PreparationCache, Scene, TextureSource, TextureState};
+use crate::{Camera, CameraError, PreparationCache, Scene, TextureSource, TextureState};
 
 pub use gpui_wgpu::{
     Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities, Scene3dDrawStatistics,
@@ -130,7 +132,11 @@ impl HeadlessRenderer {
         let prepared = prepared?;
         let output = self.renderer.render(prepared.frame(), config)?;
         let objects = prepared.identities();
-        Ok(RenderedFrame { output, objects })
+        Ok(RenderedFrame {
+            output,
+            objects,
+            camera: scene.camera,
+        })
     }
 }
 
@@ -139,8 +145,14 @@ impl HeadlessRenderer {
 pub struct RenderedFrame {
     output: Scene3dGpuOutput,
     objects: Arc<[RenderObject]>,
+    camera: Camera,
 }
 impl RenderedFrame {
+    /// Camera used for this output, independent of subsequent scene changes.
+    pub fn camera(&self) -> Camera {
+        self.camera
+    }
+
     pub fn gpu(&self) -> &Scene3dGpuOutput {
         &self.output
     }
@@ -155,6 +167,7 @@ impl RenderedFrame {
         Ok(FrameReadback {
             pending: self.output.readback()?,
             objects: self.objects.clone(),
+            camera: self.camera,
         })
     }
 }
@@ -163,12 +176,14 @@ impl RenderedFrame {
 pub struct FrameReadback {
     pending: Scene3dReadback,
     objects: Arc<[RenderObject]>,
+    camera: Camera,
 }
 impl FrameReadback {
     pub fn try_read(&mut self) -> Result<Option<ReadFrame>> {
         Ok(self.pending.try_read()?.map(|pixels| ReadFrame {
             pixels,
             objects: self.objects.clone(),
+            camera: self.camera,
         }))
     }
 }
@@ -177,8 +192,45 @@ impl FrameReadback {
 pub struct ReadFrame {
     pub pixels: Scene3dPixels,
     objects: Arc<[RenderObject]>,
+    camera: Camera,
 }
 impl ReadFrame {
+    /// Camera used to produce these pixels.
+    pub fn camera(&self) -> Camera {
+        self.camera
+    }
+
+    /// Reconstructs the nearest surface at a physical pixel center using this
+    /// frame's camera and linear depth. Background, out-of-bounds coordinates,
+    /// or missing depth samples return `None`. Invalid nonzero depth values and
+    /// unrepresentable world coordinates return an error.
+    pub fn world_position_at(&self, x: u32, y: u32) -> Result<Option<[f32; 3]>, CameraError> {
+        let [width, height] = self.pixels.size;
+        if x >= width || y >= height {
+            return Ok(None);
+        }
+        let index = (y as usize)
+            .checked_mul(width as usize)
+            .and_then(|row| row.checked_add(x as usize));
+        let depth = index.and_then(|index| self.pixels.linear_depth.as_ref()?.get(index));
+        let Some(&depth) = depth else {
+            return Ok(None);
+        };
+        if depth == 0. {
+            return Ok(None);
+        }
+        self.camera
+            .screen_to_world(
+                Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(width as f32), px(height as f32)),
+                ),
+                point(px(x as f32 + 0.5), px(y as f32 + 0.5)),
+                depth,
+            )
+            .map(Some)
+    }
+
     pub fn objects(&self) -> &[RenderObject] {
         &self.objects
     }
@@ -201,4 +253,83 @@ impl ReadFrame {
 }
 fn lookup(objects: &[RenderObject], output_id: u32) -> Option<&RenderObject> {
     objects.get(output_id.checked_sub(1)? as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Projection;
+
+    fn depth_frame(projection: Projection) -> ReadFrame {
+        ReadFrame {
+            pixels: Scene3dPixels {
+                size: [3, 2],
+                rgba: None,
+                linear_rgba: None,
+                object_ids: None,
+                linear_depth: Some(vec![0., 2., 4., 6., 0., 8.]),
+                world_normals: None,
+            },
+            objects: Arc::from([]),
+            camera: Camera {
+                eye: [2., 3., 5.],
+                target: [2., 3., 4.],
+                projection,
+                lens_shift: [0.25, -0.5],
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn depth_pixels_reconstruct_world_surfaces_without_an_id_channel() {
+        for (projection, upper_right, lower_left) in [
+            (
+                Projection::Perspective {
+                    vertical_fov: std::f32::consts::FRAC_PI_2,
+                },
+                [7.5, 3., 1.],
+                [-1.75, -3., -1.],
+            ),
+            (
+                Projection::Orthographic { vertical_size: 4. },
+                [4.75, 3., 1.],
+                [0.75, 1., -1.],
+            ),
+        ] {
+            let frame = depth_frame(projection);
+            for (pixel, expected) in [([2, 0], upper_right), ([0, 1], lower_left)] {
+                let world = frame
+                    .world_position_at(pixel[0], pixel[1])
+                    .unwrap()
+                    .unwrap();
+                for (actual, expected) in world.into_iter().zip(expected) {
+                    assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
+                }
+            }
+            assert_eq!(frame.world_position_at(0, 0).unwrap(), None);
+            assert_eq!(frame.world_position_at(1, 1).unwrap(), None);
+            assert_eq!(frame.world_position_at(3, 0).unwrap(), None);
+            assert_eq!(frame.world_position_at(0, 2).unwrap(), None);
+            assert_eq!(frame.world_position_at(u32::MAX, u32::MAX).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn depth_pixel_queries_handle_missing_samples_and_report_invalid_values() {
+        let mut frame = depth_frame(Projection::default());
+        for depth in [-1., f32::INFINITY, f32::NAN] {
+            frame.pixels.linear_depth.as_mut().unwrap()[2] = depth;
+            assert_eq!(
+                frame.world_position_at(2, 0),
+                Err(CameraError::InvalidDepth)
+            );
+        }
+        frame.pixels.linear_depth = Some(vec![0.]);
+        assert_eq!(frame.world_position_at(2, 0).unwrap(), None);
+        frame.pixels.linear_depth = None;
+        assert_eq!(frame.world_position_at(2, 0).unwrap(), None);
+        frame.pixels.size = [0, 0];
+        assert_eq!(frame.world_position_at(0, 0).unwrap(), None);
+    }
 }

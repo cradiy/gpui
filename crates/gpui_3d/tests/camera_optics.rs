@@ -111,6 +111,12 @@ fn shifted_matrix_rays_and_screen_coordinates_agree_across_camera_poses() {
                         let ray = camera.screen_to_ray(rect, pixel).unwrap();
                         let world = ray.at(8.);
                         let screen = camera.world_to_screen(rect, world).unwrap().unwrap();
+                        let reconstructed = camera
+                            .screen_to_world(rect, screen.position, screen.depth)
+                            .unwrap();
+                        for (actual, expected) in reconstructed.into_iter().zip(world) {
+                            close(actual, expected);
+                        }
                         close(
                             f32::from(screen.position.x) / 600.,
                             f32::from(pixel.x) / 600.,
@@ -131,6 +137,91 @@ fn shifted_matrix_rays_and_screen_coordinates_agree_across_camera_poses() {
             }
         }
     }
+}
+
+#[test]
+fn linear_depth_reconstruction_preserves_offsets_scale_and_unclipped_positions() {
+    for projection in projections() {
+        let camera = camera(projection, [0.25, -0.5]);
+        for scale in [1., 1.5, 2.] {
+            let rect = viewport(1.5, scale);
+            for uv in [[0.5, 0.5], [0., 1.], [-0.3, 1.2]] {
+                let pixel = rect.origin + point(rect.size.width * uv[0], rect.size.height * uv[1]);
+                for depth in [0.025, 0.1, 2., 100., 150.] {
+                    let world = camera.screen_to_world(rect, pixel, depth).unwrap();
+                    let projected = camera.world_to_screen(rect, world).unwrap().unwrap();
+                    close(projected.depth, depth);
+                    close(f32::from(projected.position.x - pixel.x) / scale, 0.);
+                    close(f32::from(projected.position.y - pixel.y) / scale, 0.);
+                    let reference = camera
+                        .screen_to_world(
+                            viewport(1.5, 1.),
+                            point(pixel.x / scale, pixel.y / scale),
+                            depth,
+                        )
+                        .unwrap();
+                    for (actual, expected) in world.into_iter().zip(reference) {
+                        close(actual, expected);
+                    }
+                    let ray = camera.screen_to_ray(rect, pixel).unwrap();
+                    let distance = depth / -ray.direction()[2];
+                    for (actual, expected) in world.into_iter().zip(ray.at(distance)) {
+                        close(actual, expected);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn linear_depth_reconstruction_rejects_invalid_inputs_and_checks_result_precision() {
+    let camera = camera(Projection::Orthographic { vertical_size: 4. }, [0.; 2]);
+    let rect = viewport(1., 1.);
+    for depth in [0., -1., f32::INFINITY, f32::NAN] {
+        assert_eq!(
+            camera.screen_to_world(rect, rect.center(), depth),
+            Err(CameraError::InvalidDepth)
+        );
+    }
+    assert_eq!(
+        camera.screen_to_world(rect, point(px(f32::NAN), px(0.)), 1.),
+        Err(CameraError::InvalidPoint)
+    );
+    assert_eq!(
+        camera.screen_to_world(Bounds::default(), rect.center(), 1.),
+        Err(CameraError::InvalidViewport)
+    );
+    assert_eq!(
+        Camera { near: 0., ..camera }.screen_to_world(rect, rect.center(), 1.),
+        Err(CameraError::InvalidProjection)
+    );
+    assert_eq!(
+        Camera {
+            eye: camera.target,
+            ..camera
+        }
+        .screen_to_world(rect, rect.center(), 1.),
+        Err(CameraError::InvalidView)
+    );
+    let wide = Bounds::new(
+        point(px(-f32::MAX * 0.75), px(0.)),
+        size(px(f32::MAX), px(f32::MAX)),
+    );
+    let world = camera
+        .screen_to_world(wide, point(px(f32::MAX * 0.75), px(0.)), 1.)
+        .unwrap();
+    close(world[0], 4.);
+    close(world[1], 2.);
+    close(world[2], -1.);
+    assert_eq!(
+        Camera {
+            projection: Projection::default(),
+            ..camera
+        }
+        .screen_to_world(rect, point(px(f32::MAX), px(0.)), f32::MAX),
+        Err(CameraError::Unrepresentable)
+    );
 }
 
 #[test]

@@ -389,6 +389,7 @@ let camera = Camera {
 let viewport = Bounds::new(point(px(80.), px(40.)), size(px(800.), px(600.)));
 let projected = camera.world_to_screen(viewport, [1., 0., 0.])?.unwrap();
 let ray = camera.screen_to_ray(viewport, projected.position)?;
+let world = camera.screen_to_world(viewport, projected.position, projected.depth)?;
 let view = camera.world_to_view([1., 0., 0.])?;
 let matrix = camera.view_projection(800. / 600.)?;
 # Ok(())
@@ -406,6 +407,7 @@ These APIs require no `Window`, layout, or GPU:
 | `world_to_view(point)` | Camera-space position; points in front have negative Z |
 | `world_to_screen(viewport, point)` | Screen position, NDC, linear forward depth, and frustum membership |
 | `screen_to_ray(viewport, position)` | Normalized world-space ray |
+| `screen_to_world(viewport, position, depth)` | World position from positive linear camera-forward depth |
 
 Screen coordinates use a top-left origin and include the viewport offset. Use
 logical viewport bounds and logical input positions for GPUI handlers. The math
@@ -418,6 +420,13 @@ before querying. No implicit DPI conversion is performed.
 outside the viewport or clip planes retain their projected coordinates with
 `in_frustum = false`. The near plane is included and the far plane excluded.
 Frustum membership is geometric, not proof that a point is unoccluded.
+
+`screen_to_world` inverts screen projection using linear forward depth in scene
+units, not normalized hardware depth or distance along a picking ray. Depth must
+be finite and strictly positive. Off-screen positions and depths outside the
+near/far interval remain valid inputs; reconstruction does not test visibility.
+Viewport offsets, DPI-scaled coordinates, and lens shifts follow the same
+conventions as `world_to_screen`.
 
 Perspective rays originate at the eye. Orthographic rays originate at the
 corresponding point on the eye plane and have parallel directions. Both extend

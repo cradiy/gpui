@@ -68,6 +68,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Specular IBL**: Explicit bounded GGX cube prefiltering, external prefiltered inputs, cached RGBA16Float cube levels and integrated BRDF lookup, normal-map-aware roughness-dependent reflections, independent intensity/rotation, and shared viewport/headless shading.
   - [x] **Environment background**: Shared decoded HDR maps, independent visibility/intensity/world-Y rotation, camera-correct distant rays, linear composition, cached uploads, and shared viewport/headless rendering without geometry-channel coverage.
 - [ ] **Effect integration**: Compose Bloom and color grading through `gpui_effects`; define depth texture access and coordinate conventions for depth-dependent effects.
+  - [x] **Depth coordinates**: Retained output-camera snapshots, linear-depth world reconstruction for perspective/orthographic projections and lens shifts, physical pixel-center queries, and direct GPU sampling conventions.
 
 ## Phase 4: Animation and Dynamic Content
 

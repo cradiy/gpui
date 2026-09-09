@@ -82,7 +82,8 @@ the scene's `ColorOutput` exposure and tone mapping per sample, and display-colo
 Color conversion preserves premultiplied coverage at MSAA edges. The returned
 `Rgba8Unorm` texture stores encoded values; GPU consumers must decode RGB when
 using it in linear calculations. The internal HDR texture is not an exported
-channel. The lighting model is diffuse, without PBR materials.
+channel. Materials support diffuse or metallic-roughness shading through
+`Material::pbr`, including linear emissive radiance and view-dependent highlights.
 
 Surviving alpha-cutout fragments are opaque. Both channels use the same mesh
 visibility, transforms, clip planes, texture sampling, and alpha threshold.

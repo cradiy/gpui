@@ -4,11 +4,12 @@ struct Params {
     color: vec4<f32>, texture_rect: vec4<f32>, flags: vec4<f32>,
     ids: vec4<u32>,
     uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
+    view: vec4<f32>, pbr: vec4<f32>, emissive: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
 @group(0) @binding(2) var image_sampler: sampler;
-struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32> };
+struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32> };
 @vertex
 fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>) -> Output {
     var clip = params.camera * params.model * vec4<f32>(position, 1.0);
@@ -16,7 +17,7 @@ fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @loc
     let extent = params.bounds.zw / params.viewport.xy;
     clip.x = (origin.x * 2.0 - 1.0) * clip.w + (clip.x + clip.w) * extent.x;
     clip.y = (1.0 - origin.y * 2.0) * clip.w + (clip.y - clip.w) * extent.y;
-    return Output(clip, (params.normal * vec4<f32>(normal, 0.0)).xyz, uv);
+    return Output(clip, (params.normal * vec4<f32>(normal, 0.0)).xyz, uv, (params.model * vec4<f32>(position, 1.0)).xyz);
 }
 fn address_coordinate(value: f32, mode: u32) -> f32 {
     if (mode == 1u) { return value - floor(value); }
@@ -80,11 +81,48 @@ fn object_id(input: Output) -> @location(0) u32 {
     let base = base_color(input);
     return params.ids.x;
 }
+
+fn unit_vector(value: vec3<f32>) -> vec3<f32> {
+    let scaled = value / max(max(max(abs(value.x), abs(value.y)), abs(value.z)), 0.000001);
+    return scaled / max(length(scaled), 0.000001);
+}
+
+fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    let metal = params.pbr.x;
+    let roughness = max(params.pbr.y, 0.045);
+    let view = unit_vector(params.view.xyz - world * params.view.w);
+    let light = unit_vector(params.direction.xyz);
+    let nv = clamp(dot(normal, view), 0.0, 1.0);
+    let nl = clamp(dot(normal, light), 0.0, 1.0);
+    let diffuse = base * (1.0 - metal);
+    var result = diffuse * params.direction.w + params.emissive.rgb;
+    if (nv <= 0.0 || nl <= 0.0) { return result; }
+    let half_vector = unit_vector(view + light);
+    let nh = clamp(dot(normal, half_vector), 0.0, 1.0);
+    let vh = clamp(dot(view, half_vector), 0.0, 1.0);
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let d = (1.0 - nh * nh) + a2 * nh * nh;
+    let distribution = a2 / max(3.14159265359 * d * d, 1e-12);
+    let visibility = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2)
+        + nv * sqrt(nl * nl * (1.0 - a2) + a2), 1e-6);
+    let f0 = mix(vec3<f32>(0.04), base, metal);
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vh, 5.0);
+    let specular = fresnel * distribution * visibility;
+    let reflected = (vec3<f32>(1.0) - fresnel) * diffuse / 3.14159265359 + specular;
+    result += reflected * srgb_to_linear(params.light.rgb) * params.light.a * nl;
+    return result;
+}
+
 @fragment
 fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let base = base_color(input);
     var illumination = vec3<f32>(1.0);
     if (params.flags.y < 0.5) {
+        if (params.pbr.z > 0.5) {
+            let normal = unit_vector(input.normal) * select(-1.0, 1.0, front);
+            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, input.world), vec3<f32>(0.0), vec3<f32>(65504.0)), 1.0);
+        }
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front);
         let light = params.direction.xyz / max(length(params.direction.xyz), 0.00001);
         illumination = vec3<f32>(params.direction.w) + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);

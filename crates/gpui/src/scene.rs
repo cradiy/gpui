@@ -1435,6 +1435,8 @@ mod tests {
         let frame = Arc::new(crate::Scene3dFrame {
             ui_texture: None,
             view_projection: [[0.; 4]; 4],
+            camera_position: [0., 0., 3.],
+            orthographic_view_direction: None,
             light_direction: [0., 0., 1.],
             light: [1.; 4],
             ambient: 0.3,

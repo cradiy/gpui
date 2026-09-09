@@ -5,6 +5,68 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn pbr_reflection_and_emission_preserve_object_ids() -> anyhow::Result<()> {
+    use gpui_3d::{Light, Object, PbrMaterial, Projection, Scene};
+    let mut renderer = HeadlessRenderer::new()?;
+    let mut reference_ids = None;
+    for (metallic, roughness, emissive, unlit, expected) in [
+        (0., 0.5, [0.; 3], false, [64_u8; 3]),
+        (0., 1., [0.; 3], false, [10; 3]),
+        (1., 0.5, [0.; 3], false, [0; 3]),
+        (1., 0.5, [0., 0., 0.25], false, [0, 0, 137]),
+        (1., 0.5, [0., 0., 0.25], true, [0; 3]),
+    ] {
+        let scene = Scene::new()
+            .camera(Camera {
+                projection: Projection::Orthographic { vertical_size: 2. },
+                ..Default::default()
+            })
+            .light(Light {
+                direction: [0., 0., 1.],
+                color: rgb(0xffffff),
+                intensity: 1.,
+                ambient: 0.,
+            })
+            .object(
+                Object::new(
+                    Mesh::plane(),
+                    Material::color(rgb(0))
+                        .pbr(PbrMaterial {
+                            metallic,
+                            roughness,
+                            emissive,
+                        })
+                        .unlit(unlit),
+                )
+                .id("surface"),
+            );
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(result) = read.try_read()? {
+                break result.pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let rgba = pixels.rgba.unwrap();
+        let offset = (32 * 65 + 32) * 4;
+        for (actual, expected) in rgba[offset..offset + 3].iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 2, "{actual} != {expected}");
+        }
+        assert_eq!(rgba[offset + 3], 255);
+        assert_eq!(&rgba[..4], &[0; 4]);
+        if let Some(previous) = &reference_ids {
+            assert_eq!(previous, &pixels.object_ids);
+        }
+        reference_ids = Some(pixels.object_ids);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn clipped_highlights_preserve_msaa_edges_against_opaque_surfaces() -> anyhow::Result<()> {
     use gpui_3d::{Light, Object, Projection, Scene};
     let mut renderer = HeadlessRenderer::new()?;

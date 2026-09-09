@@ -47,6 +47,7 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         texture,
         sampling: Default::default(),
         image_color_space: Default::default(),
+        pbr: None,
         unlit: true,
         alpha_cutoff: 0.5,
     }
@@ -62,6 +63,8 @@ fn layer(
         scene3d: Some(Arc::new(Scene3dFrame {
             ui_texture: None,
             view_projection: IDENTITY,
+            camera_position: [0., 0., 3.],
+            orthographic_view_direction: None,
             light_direction: [0., 0., 1.],
             light: [1.; 4],
             ambient: 0.3,

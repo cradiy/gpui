@@ -27,6 +27,9 @@ struct Params {
     uv_u: [f32; 4],
     uv_v: [f32; 4],
     sampling: [u32; 4],
+    view: [f32; 4],
+    pbr: [f32; 4],
+    emissive: [f32; 4],
 }
 
 struct Geometry {
@@ -374,6 +377,10 @@ impl Scene3dRenderer {
                 }
             };
             let rows = object.sampling.transform.rows();
+            let pbr = object.pbr.unwrap_or_default();
+            let view = frame
+                .orthographic_view_direction
+                .unwrap_or(frame.camera_position);
             let params = Params {
                 model: object.model,
                 normal: object.normal,
@@ -409,6 +416,19 @@ impl Scene3dRenderer {
                     object.sampling.filter as u32,
                     object.image_color_space as u32,
                 ],
+                view: [
+                    view[0],
+                    view[1],
+                    view[2],
+                    f32::from(frame.orthographic_view_direction.is_none()),
+                ],
+                pbr: [
+                    pbr.metallic,
+                    pbr.roughness,
+                    f32::from(object.pbr.is_some()),
+                    0.,
+                ],
+                emissive: [pbr.emissive[0], pbr.emissive[1], pbr.emissive[2], 0.],
             };
             let buffer = &self.slots[start + index];
             queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
@@ -564,6 +584,9 @@ mod tests {
             ("uv_u", std::mem::offset_of!(Params, uv_u)),
             ("uv_v", std::mem::offset_of!(Params, uv_v)),
             ("sampling", std::mem::offset_of!(Params, sampling)),
+            ("view", std::mem::offset_of!(Params, view)),
+            ("pbr", std::mem::offset_of!(Params, pbr)),
+            ("emissive", std::mem::offset_of!(Params, emissive)),
         ] {
             let member = members
                 .iter()

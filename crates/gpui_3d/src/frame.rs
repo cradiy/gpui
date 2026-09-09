@@ -35,6 +35,10 @@ impl Scene {
         );
         let mut objects = Vec::with_capacity(self.objects.len());
         for (index, object) in self.objects.iter().enumerate() {
+            ensure!(
+                object.material.pbr.is_none_or(|pbr| pbr.is_valid()),
+                "object {index} has invalid PBR parameters"
+            );
             let transform = object.transform;
             ensure!(
                 object.world.is_some()
@@ -76,6 +80,7 @@ impl Scene {
                 texture,
                 sampling: object.material.sampling,
                 image_color_space: object.material.image_color_space,
+                pbr: object.material.pbr,
                 alpha_cutoff: object.material.alpha_cutoff,
                 unlit: object.material.unlit,
             });
@@ -83,6 +88,14 @@ impl Scene {
         Ok(Scene3dFrame {
             ui_texture,
             view_projection,
+            camera_position: self.camera.eye,
+            orthographic_view_direction: match self.camera.projection {
+                crate::Projection::Perspective { .. } => None,
+                crate::Projection::Orthographic { .. } => {
+                    let view = self.camera.view_matrix()?;
+                    Some([view[0][2], view[1][2], view[2][2]])
+                }
+            },
             light_direction: light.direction,
             light: [
                 light.color.r,
@@ -187,6 +200,83 @@ mod tests {
                         exposure,
                         ..Default::default()
                     })
+                    .prepare_frame(1., None, |_, _| unreachable!())
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn pbr_frames_keep_view_geometry_and_reject_invalid_materials() {
+        use crate::{PbrMaterial, Projection};
+        let material = PbrMaterial {
+            metallic: 0.7,
+            roughness: 0.2,
+            emissive: [0.1, 2., 0.3],
+        };
+        let scene = Scene::new().object(Object::new(
+            Mesh::plane(),
+            Material::color(rgb(0x806040)).pbr(material),
+        ));
+        let camera = Camera::orbit(0.6, 0.3, 5.);
+        let prepare = |camera| {
+            scene
+                .clone()
+                .camera(camera)
+                .prepare_frame(1., None, |_, _| Ok(Some(MeshTexture3d::None)))
+                .unwrap()
+        };
+        let perspective = prepare(camera);
+        assert_eq!(perspective.camera_position, camera.eye);
+        assert!(perspective.orthographic_view_direction.is_none());
+        assert_eq!(perspective.objects[0].pbr, Some(material));
+        let ortho = Camera {
+            projection: Projection::Orthographic { vertical_size: 3. },
+            ..camera
+        };
+        let direction = prepare(ortho).orthographic_view_direction.unwrap();
+        let displacement = [1., 2., -3.];
+        let translated = Camera {
+            eye: std::array::from_fn(|i| ortho.eye[i] + displacement[i]),
+            target: std::array::from_fn(|i| ortho.target[i] + displacement[i]),
+            ..ortho
+        };
+        let translated_direction = prepare(translated).orthographic_view_direction.unwrap();
+        for (a, b) in direction.into_iter().zip(translated_direction) {
+            assert!((a - b).abs() < 1e-6);
+        }
+        for invalid in [
+            PbrMaterial {
+                metallic: -0.1,
+                ..material
+            },
+            PbrMaterial {
+                metallic: 1.1,
+                ..material
+            },
+            PbrMaterial {
+                roughness: f32::NAN,
+                ..material
+            },
+            PbrMaterial {
+                roughness: 1.1,
+                ..material
+            },
+            PbrMaterial {
+                emissive: [-1., 0., 0.],
+                ..material
+            },
+            PbrMaterial {
+                emissive: [f32::INFINITY; 3],
+                ..material
+            },
+        ] {
+            let scene = Scene::new().object(Object::new(
+                Mesh::plane(),
+                Material::color(rgb(0xffffff)).pbr(invalid),
+            ));
+            assert!(
+                scene
                     .prepare_frame(1., None, |_, _| unreachable!())
                     .is_err()
             );

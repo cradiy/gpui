@@ -438,10 +438,47 @@ capabilities. The viewport still resolves image resources during rendering.
   and write depth; fractional material transparency is not blended.
 
 `Light` supplies a world-space direction toward the light, color, intensity and
-ambient strength. Lighting is a basic diffuse model, without shadows, reflections
-or physically based material parameters. Distinct opaque surfaces occlude each
+ambient strength. Materials use basic diffuse shading unless `.pbr(parameters)`
+is selected. Distinct opaque surfaces occlude each
 other independently of object submission order. Coplanar surfaces should be
 separated to avoid depth conflicts.
+
+### Metallic-roughness materials
+
+```rust
+use gpui::rgb;
+use gpui_3d::{Material, PbrMaterial};
+
+let material = Material::color(rgb(0xdca773)).pbr(PbrMaterial {
+    metallic: 1.,
+    roughness: 0.35,
+    emissive: [0.; 3],
+});
+```
+
+`PbrMaterial` enables a GGX microfacet distribution, height-correlated Smith
+visibility, Schlick Fresnel, and Fresnel-weighted Lambert diffuse response.
+Dielectrics use normal-incidence reflectance 0.04. Increasing metallic blends
+that reflectance toward the linear base color and removes diffuse reflection.
+The base color comes from the material's solid color or sampled image and tint.
+
+Metallic and perceptual roughness must be finite and in `[0, 1]`. Defaults are
+metallic 0 and roughness 0.5. Shading limits perceptual roughness to at least
+0.045 for finite highlights. Emissive is additive linear RGB radiance, defaults
+to zero, and accepts finite components in `[0, 65504]`. It is independent of base
+color, tint and scene lighting, but receives scene exposure and tone mapping.
+Invalid parameters cause rendering to fail. `.unlit(true)` bypasses all PBR
+terms, including emissive, and displays the sampled base color.
+
+Specular response follows the world-space viewing direction. Perspective cameras
+use the eye-to-surface vector; orthographic cameras use a constant direction.
+Both viewport and headless rendering use these conventions. PBR does not alter
+alpha cutout, depth writes, object IDs, or picking.
+
+The light model contains one directional light and diffuse ambient illumination.
+Pure metals receive no ambient diffuse light. Environment reflections, shadows,
+normal/occlusion maps, metallic-roughness maps and emissive maps are not provided.
+Emission does not illuminate other objects or add a glow outside the surface.
 
 ### Color and exposure
 
@@ -714,6 +751,14 @@ nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
 
 ## Example
+
+```sh
+cargo run -p gpui_3d --example pbr_materials
+```
+
+Compare dielectric, metal and emissive spheres. Adjust roughness and emission,
+right-drag to orbit, scroll to zoom, and switch between perspective and orthographic
+projection to inspect view-dependent highlights.
 
 ```sh
 cargo run -p gpui_3d --example color_pipeline

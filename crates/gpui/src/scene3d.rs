@@ -216,6 +216,8 @@ pub struct MeshDraw3d {
     pub sampling: crate::TextureSampling3d,
     /// Image RGB transfer function; does not affect solid colors or captured UI.
     pub image_color_space: crate::TextureColorSpace3d,
+    /// Optional metallic-roughness shading. Unlit materials ignore these parameters.
+    pub pbr: Option<crate::PbrMaterial3d>,
     /// Alpha below this threshold is discarded. Surviving pixels are opaque.
     pub alpha_cutoff: f32,
     /// Bypass directional lighting.
@@ -230,6 +232,10 @@ pub struct Scene3dFrame {
     pub ui_texture: Option<UiTexture3d>,
     /// Column-major world-to-clip matrix, with depth in 0 through 1.
     pub view_projection: [[f32; 4]; 4],
+    /// World-space camera eye for perspective view-dependent shading.
+    pub camera_position: [f32; 3],
+    /// Constant world-space direction toward an orthographic viewer; `None` uses the eye.
+    pub orthographic_view_direction: Option<[f32; 3]>,
     /// Direction toward the light in world space.
     pub light_direction: [f32; 3],
     /// sRGB light RGB and linear intensity multiplier.

@@ -29,6 +29,7 @@ mod particles;
 mod platform_scheduler;
 mod scene3d;
 mod color3d;
+mod pbr3d;
 mod texture_sampling3d;
 pub(crate) use platform_scheduler::PlatformScheduler;
 mod geometry;
@@ -122,6 +123,7 @@ pub use particle_transition::*;
 pub use particles::*;
 pub use scene3d::*;
 pub use color3d::*;
+pub use pbr3d::*;
 pub use texture_sampling3d::*;
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].

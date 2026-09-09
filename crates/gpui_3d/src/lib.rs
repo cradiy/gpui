@@ -23,6 +23,7 @@ pub use bounds::Aabb;
 pub use camera::{Camera, CameraError, Projection, Ray, RayError, ScreenPoint};
 pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
+pub use gpui::PbrMaterial3d as PbrMaterial;
 pub use gpui::{
     ColorOutput3d as ColorOutput, TextureColorSpace3d as TextureColorSpace,
     ToneMapping3d as ToneMapping,
@@ -150,6 +151,7 @@ pub struct Material {
     alpha_cutoff: f32,
     sampling: TextureSampling,
     image_color_space: TextureColorSpace,
+    pbr: Option<PbrMaterial>,
 }
 impl Material {
     /// Creates a lit solid material from an sRGB color.
@@ -161,6 +163,7 @@ impl Material {
             alpha_cutoff: 0.5,
             sampling: TextureSampling::default(),
             image_color_space: TextureColorSpace::default(),
+            pbr: None,
         }
     }
     /// Uses an image's first decoded frame, stretched over mesh UVs.
@@ -193,6 +196,12 @@ impl Material {
     /// use sRGB regardless of this setting.
     pub fn image_color_space(mut self, color_space: TextureColorSpace) -> Self {
         self.image_color_space = color_space;
+        self
+    }
+    /// Enables metallic-roughness shading, preserving the base color, texture and cutoff.
+    /// Rendering rejects invalid parameters. Unlit mode bypasses PBR, including emission.
+    pub fn pbr(mut self, parameters: PbrMaterial) -> Self {
+        self.pbr = Some(parameters);
         self
     }
     /// Bypasses directional and ambient lighting.

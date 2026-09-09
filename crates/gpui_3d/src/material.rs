@@ -8,12 +8,18 @@ pub(crate) enum Texture {
     Ui,
 }
 
+/// Semantic input slot used by a material's texture requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TextureSlot {
+pub enum TextureSlot {
+    /// Solid tint, image color, or captured UI input.
     BaseColor,
+    /// Linear G roughness and B metallic multipliers.
     MetallicRoughness,
+    /// sRGB emission multiplier.
     Emissive,
+    /// Linear tangent-space normal input.
     Normal,
+    /// Linear R indirect-light attenuation.
     Occlusion,
 }
 

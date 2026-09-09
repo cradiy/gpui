@@ -26,6 +26,7 @@ pub use geometry::{
     Aabb, AffineTransform, Mesh, MorphAttribute, MorphError, MorphTarget, MorphTargets, Skin,
     SkinError, SkinInfluence, Transform, TransformError,
 };
+pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use headless::*;
 pub use lighting::{
@@ -33,11 +34,14 @@ pub use lighting::{
     Light, LightError, PunctualLight, SpecularEnvironment, SpecularEnvironmentMap,
     SpecularPrefilter,
 };
-pub use material::{Material, MaterialTexture};
-pub(crate) use material::{Texture, TextureSlot};
+pub(crate) use material::Texture;
+pub use material::{Material, MaterialTexture, TextureSlot};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use render::headless;
-pub use render::{Viewport3d, viewport3d};
+pub use render::{
+    PendingTexture, PrepareError, PreparedScene, RenderObject, TextureRequest, TextureSource,
+    TextureState, Viewport3d, viewport3d,
+};
 pub use scene::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ReparentMode, Scene, SceneError,
     SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode,

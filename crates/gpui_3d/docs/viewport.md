@@ -1534,6 +1534,76 @@ coordinates; the caller supplies the viewport bounds and handles UI clipping
 and input routing. Queries scan the scene's triangles on the CPU, so use modest
 meshes for interactive picking.
 
+## Resource preparation
+
+`Scene::prepare(aspect, ui_texture, resolver)` produces a `PreparedScene` without
+opening a window or requiring a GPU. It shares validation, culling, transforms,
+material selection, and output IDs with viewport and headless rendering.
+
+The resolver receives a `TextureRequest` containing the original object index,
+output ID, application ID, node handle, material slot, and borrowed source.
+Return `TextureState::Ready` with a matching `ResolvedTexture`, or
+`TextureState::Pending` while the input is unavailable. Solid sources use
+`ResolvedTexture::None`, images use `ResolvedTexture::Image(tile)`, and UI
+captures use `ResolvedTexture::Subtree`.
+
+```rust
+use gpui_3d::{Material, Mesh, Object, ResolvedTexture, Scene, TextureSource, TextureState};
+
+let scene = Scene::new().object(
+    Object::new(Mesh::plane(), Material::image("cover.png")).id("cover"),
+);
+let prepared = scene.prepare(16. / 9., None, |request| {
+    Ok(match request.source {
+        TextureSource::Solid => TextureState::Ready(ResolvedTexture::None),
+        TextureSource::Image(_) | TextureSource::Ui => TextureState::Pending,
+    })
+})?;
+assert!(!prepared.is_ready());
+let pending = &prepared.pending_textures()[0];
+assert_eq!(prepared.object(pending.output_id).unwrap().id, Some("cover".into()));
+# Ok::<(), gpui_3d::PrepareError>(())
+```
+
+All active inputs of an eligible object are requested even when another input
+is pending. An object enters `frame().objects` only when every active input is
+ready. Other objects can render while it waits. Disabled maps and meshes outside
+both camera and shadow coverage make no requests. Readiness applies to the
+current view, not every resource in the scene. Call `prepare` again after resource
+completion or scene changes; preparation does not start tasks or schedule redraws.
+
+Resolver errors return `PrepareError::Resource` with the object index, slot, and
+underlying error. Incompatible ready texture kinds return `InvalidResolution`;
+invalid scene inputs return `InvalidScene`. Errors return no prepared frame, but
+uploads or other resolver side effects are not rolled back. There is no implicit
+fallback material or retry policy.
+
+`objects()` and `identities()` retain the complete original object mapping,
+including pending and culled objects. `object(id)` returns `None` for zero or an
+unknown ID. A later preparation does not mutate an earlier frame or its mapping.
+
+Atlas tiles are renderer-local references. Upload decoded images with
+`Window::prepare_effect_image` or the atlas exposed by
+`WgpuScene3dRenderer::sprite_atlas`, and retain those allocations through render
+submission. `PreparedScene` does not own atlas residency and must not be submitted
+to a different renderer. Pass `frame()` to `WgpuScene3dRenderer::render`, or use
+`into_frame()` with `Window::with_scene3d` and the corresponding UI capture.
+Retain `identities()` with custom outputs before consuming the prepared scene.
+File resolution, decoding, cache eviction, cancellation, and retries belong to
+the resource manager.
+
+### CPU preparation benchmarks
+
+```sh
+cargo bench -p gpui_3d --bench scene
+```
+
+The workloads prepare 1,024 and 16,384 objects with shared geometry, mixed PBR
+factors, mostly off-camera placement, and pending image inputs. Measurements
+include scene validation, culling, resource callbacks, output construction, and
+identity mapping. Scene construction is outside the timed region. These CPU-only
+measurements do not include GPU uploads, draw encoding, shading, or readback.
+
 ## Rendering and support
 
 Linux WGPU supports these viewports. Check `window.supports_scene3d()` before

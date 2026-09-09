@@ -6,21 +6,12 @@ use anyhow::{Context as _, Result, bail, ensure};
 use gpui::{ImageId, ImageSource, MeshTexture3d, PlatformAtlas, RenderImageParams};
 use gpui_wgpu::{Scene3dGpuOutput, Scene3dReadback, WgpuScene3dRenderer};
 
-use crate::{NodeHandle, ObjectId, Scene, Texture};
+pub use crate::RenderObject;
+use crate::{Scene, TextureSource, TextureState};
 
 pub use gpui_wgpu::{
     Scene3dCapabilities, Scene3dChannels, Scene3dOutputConfig, Scene3dPixels, WgpuContext,
 };
-
-/// Identity of a rendered mesh. Numeric IDs are frame-local; retain this mapping
-/// to recover stable graph handles or application IDs, including unnamed meshes.
-#[derive(Clone, Debug)]
-pub struct RenderObject {
-    pub output_id: u32,
-    pub object_index: usize,
-    pub id: Option<ObjectId>,
-    pub node: Option<NodeHandle>,
-}
 
 /// Window-free renderer for solid and decoded-image materials. Does not load
 /// resources, execute custom image callbacks, or capture UI subtrees.
@@ -56,25 +47,43 @@ impl HeadlessRenderer {
         let max_dimension = self.capabilities().max_dimension;
         let atlas = self.renderer.sprite_atlas();
         let mut used = HashSet::new();
-        let prepared = scene.prepare_frame(config.size[0] as f32 / config.size[1] as f32, None, |index, _, texture| {
-            let texture = match texture {
-                Texture::None => MeshTexture3d::None,
-                Texture::Ui => bail!("object {index}: UI textures require a viewport capture"),
-                Texture::Image(ImageSource::Render(image)) => {
-                    let bytes = image.as_bytes(0).with_context(|| format!("object {index}: decoded image has no frame"))?;
-                    let size = image.size(0);
-                    ensure!(size.width.0 > 0 && size.height.0 > 0 && size.width.0 as u32 <= max_dimension && size.height.0 as u32 <= max_dimension,
-                        "object {index}: decoded image has invalid or unsupported dimensions");
-                    let key = RenderImageParams { image_id: image.id, frame_index: 0 }.into();
-                    let tile = atlas.get_or_insert_with(&key, &mut || Ok(Some((size, Cow::Borrowed(bytes)))))?
-                        .with_context(|| format!("object {index}: image allocation failed"))?;
-                    used.insert(image.id);
-                    MeshTexture3d::Image(tile)
-                }
-                Texture::Image(_) => bail!("object {index}: direct rendering requires an ImageSource::Render with decoded pixels"),
-            };
-            Ok(Some(texture))
-        });
+        let prepared = scene.prepare(
+            config.size[0] as f32 / config.size[1] as f32,
+            None,
+            |request| {
+                let texture = match request.source {
+                    TextureSource::Solid => MeshTexture3d::None,
+                    TextureSource::Ui => bail!("UI textures require a viewport capture"),
+                    TextureSource::Image(ImageSource::Render(image)) => {
+                        let bytes = image.as_bytes(0).context("decoded image has no frame")?;
+                        let size = image.size(0);
+                        ensure!(
+                            size.width.0 > 0
+                                && size.height.0 > 0
+                                && size.width.0 as u32 <= max_dimension
+                                && size.height.0 as u32 <= max_dimension,
+                            "decoded image has invalid or unsupported dimensions"
+                        );
+                        let key = RenderImageParams {
+                            image_id: image.id,
+                            frame_index: 0,
+                        }
+                        .into();
+                        let tile = atlas
+                            .get_or_insert_with(&key, &mut || {
+                                Ok(Some((size, Cow::Borrowed(bytes))))
+                            })?
+                            .context("image allocation failed")?;
+                        used.insert(image.id);
+                        MeshTexture3d::Image(tile)
+                    }
+                    TextureSource::Image(_) => bail!(
+                        "direct rendering requires an ImageSource::Render with decoded pixels"
+                    ),
+                };
+                Ok(TextureState::Ready(texture))
+            },
+        );
         for image_id in self.images.difference(&used) {
             atlas.remove(
                 &RenderImageParams {
@@ -85,18 +94,9 @@ impl HeadlessRenderer {
             );
         }
         self.images = used;
-        let output = self.renderer.render(&prepared?, config)?;
-        let objects = scene
-            .objects
-            .iter()
-            .enumerate()
-            .map(|(index, object)| RenderObject {
-                output_id: index as u32 + 1,
-                object_index: index,
-                id: object.id.clone(),
-                node: object.node,
-            })
-            .collect::<Arc<[_]>>();
+        let prepared = prepared?;
+        let output = self.renderer.render(prepared.frame(), config)?;
+        let objects = prepared.identities();
         Ok(RenderedFrame { output, objects })
     }
 }

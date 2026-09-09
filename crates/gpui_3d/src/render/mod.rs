@@ -1,4 +1,9 @@
 mod frame;
+mod preparation;
+pub use preparation::{
+    PendingTexture, PrepareError, PreparedScene, RenderObject, TextureRequest, TextureSource,
+    TextureState,
+};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub mod headless;
 mod ui_input;

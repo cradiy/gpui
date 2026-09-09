@@ -16,6 +16,7 @@ gpui_wgpu = { workspace = true, optional = true }
 slotmap.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 image.workspace = true
 uic = { path = "../../uic" }
@@ -23,6 +24,10 @@ uic = { path = "../../uic" }
 [[example]]
 name = "headless"
 required-features = ["wgpu"]
+
+[[bench]]
+name = "scene"
+harness = false
 
 [lints]
 workspace = true

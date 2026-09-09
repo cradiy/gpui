@@ -179,13 +179,13 @@ impl Scene {
                     _ => anyhow::bail!("object {index}: material maps require atlas images"),
                 }
             }
-            if !ready {
-                continue;
-            }
             let Some(texture) = resolve(index, TextureSlot::BaseColor, &object.material.texture)?
             else {
                 continue;
             };
+            if !ready {
+                continue;
+            }
             objects.push(MeshDraw3d {
                 cast_shadows: object.cast_shadows,
                 receive_shadows: object.receive_shadows,
@@ -552,7 +552,7 @@ mod tests {
                 assert_eq!(frame.objects[0].emissive_texture.unwrap().tile, tile);
             } else {
                 assert_eq!(ids, [2]);
-                assert_eq!(base_objects, [1]);
+                assert_eq!(base_objects, [0, 1]);
             }
         }
         let mut diffuse = material.clone();

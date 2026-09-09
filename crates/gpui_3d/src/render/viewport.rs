@@ -1,6 +1,9 @@
 use super::ui_input::UiInput;
 use crate::spatial::picking::{PickSnapshot, PickSurface};
-use crate::{Hit, ObjectId, PickBehavior, Scene, Texture, TextureSlot};
+use crate::{
+    Hit, ObjectId, PickBehavior, PreparedScene, Scene, Texture, TextureSlot, TextureSource,
+    TextureState,
+};
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, MeshTexture3d, Pixels, PointerTransform, Size, Style, StyleRefinement,
@@ -300,53 +303,50 @@ impl Element for Content {
         let scene = &self.0.scene;
         let mut surfaces: Vec<_> = scene.objects.iter().map(|_| PickSurface::Absent).collect();
         let has_ui = self.0.texture.is_some();
-        let frame = scene
-            .prepare_frame(
+        let prepared = scene
+            .prepare(
                 f32::from(bounds.size.width) / f32::from(bounds.size.height),
                 texture_state.as_ref().map(|state| state.config),
-                |index, slot, source| {
+                |request| {
                     let mut surface = PickSurface::Absent;
-                    let texture = match source {
-                        Texture::None => {
+                    let texture = match request.source {
+                        TextureSource::Solid => {
                             surface = PickSurface::Solid;
                             MeshTexture3d::None
                         }
-                        Texture::Ui => {
+                        TextureSource::Ui => {
                             if has_ui {
                                 surface = PickSurface::Solid;
                             }
                             MeshTexture3d::Subtree
                         }
-                        Texture::Image(source) => {
+                        TextureSource::Image(source) => {
                             let Some(Ok(image)) = source.use_data(None, window, cx) else {
-                                return Ok(None);
+                                return Ok(TextureState::Pending);
                             };
                             let Ok(tile) = window.prepare_effect_image(&image, 0) else {
-                                return Ok(None);
+                                return Ok(TextureState::Pending);
                             };
                             surface = PickSurface::Image(image);
                             MeshTexture3d::Image(tile)
                         }
                     };
-                    if slot == TextureSlot::BaseColor {
-                        surfaces[index] = surface;
+                    if request.slot == TextureSlot::BaseColor {
+                        surfaces[request.object_index] = surface;
                     }
-                    Ok(Some(texture))
+                    Ok(TextureState::Ready(texture))
                 },
             )
             .expect("invalid 3D scene");
-        *self.0.pick_snapshot.borrow_mut() = Some(PickSnapshot {
-            scene: scene.clone(),
-            bounds,
-            surfaces,
-        });
+        *self.0.pick_snapshot.borrow_mut() =
+            Some(pick_snapshot(scene, bounds, surfaces, &prepared));
         if let Some(state) = texture_state
             && let Some(input) = &state.input
         {
             input.read(cx).set_snapshot(self.0.pick_snapshot.clone());
             input.read(cx).paint(&state.hitbox, window);
         }
-        let frame = Arc::new(frame);
+        let frame = Arc::new(prepared.into_frame());
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.with_scene3d(bounds, frame, |window| {
                 if let Some(state) = texture_state {
@@ -358,5 +358,80 @@ impl Element for Content {
                 }
             });
         });
+    }
+}
+
+fn pick_snapshot(
+    scene: &Scene,
+    bounds: Bounds<Pixels>,
+    mut surfaces: Vec<PickSurface>,
+    prepared: &PreparedScene,
+) -> PickSnapshot {
+    for pending in prepared.pending_textures() {
+        surfaces[pending.object_index] = PickSurface::Absent;
+    }
+    PickSnapshot {
+        scene: scene.clone(),
+        bounds,
+        surfaces,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Material, MaterialTexture, Mesh, Object, PbrMaterial};
+    use gpui::{DevicePixels, point, px, rgb, size};
+
+    #[test]
+    fn pending_lighting_maps_do_not_leave_invisible_pick_surfaces() {
+        let material = Material::color(rgb(0xffffff))
+            .pbr(PbrMaterial::default())
+            .normal_texture(MaterialTexture::new("normal.png"));
+        let scene = Scene::new()
+            .object(
+                Object::new(Mesh::plane(), material)
+                    .position([0., 0., 1.])
+                    .id("front"),
+            )
+            .object(Object::new(Mesh::plane(), Material::color(rgb(0x80a0c0))).id("back"));
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        for ready in [false, true, false] {
+            let prepared = scene
+                .prepare(1., None, |request| {
+                    Ok(if request.slot == TextureSlot::Normal {
+                        if ready {
+                            TextureState::Ready(MeshTexture3d::Image(gpui::AtlasTile {
+                                texture_id: gpui::AtlasTextureId {
+                                    index: 0,
+                                    kind: gpui::AtlasTextureKind::Polychrome,
+                                },
+                                tile_id: gpui::TileId(0),
+                                padding: 0,
+                                bounds: Bounds::new(
+                                    point(DevicePixels(0), DevicePixels(0)),
+                                    size(DevicePixels(1), DevicePixels(1)),
+                                ),
+                            }))
+                        } else {
+                            TextureState::Pending
+                        }
+                    } else {
+                        TextureState::Ready(MeshTexture3d::None)
+                    })
+                })
+                .unwrap();
+            let snapshot = pick_snapshot(
+                &scene,
+                bounds,
+                vec![PickSurface::Solid, PickSurface::Solid],
+                &prepared,
+            );
+            let hit = snapshot.pick(point(px(50.), px(50.))).unwrap();
+            assert_eq!(
+                hit.object_id,
+                Some(if ready { "front" } else { "back" }.into())
+            );
+        }
     }
 }

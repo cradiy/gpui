@@ -45,6 +45,7 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         normal: IDENTITY,
         color: rgba(color),
         texture,
+        sampling: Default::default(),
         unlit: true,
         alpha_cutoff: 0.5,
     }

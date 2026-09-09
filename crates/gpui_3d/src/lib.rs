@@ -25,6 +25,11 @@ pub use gpui::ElementId as ObjectId;
 pub use gpui::MeshVertex3d as Vertex;
 use gpui::{ImageSource, Mesh3d, Rgba};
 pub use gpui::{MeshError3d as MeshError, MeshVertexAttribute3d as VertexAttribute};
+pub use gpui::{
+    TextureAddressMode3d as TextureAddressMode, TextureFilter3d as TextureFilter,
+    TextureSampling3d as TextureSampling, UvTransform3d as UvTransform,
+    UvTransformError3d as UvTransformError,
+};
 pub use graph::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
     SceneSubtree, SubtreeInstance, SubtreeNode,
@@ -139,6 +144,7 @@ pub struct Material {
     texture: Texture,
     unlit: bool,
     alpha_cutoff: f32,
+    sampling: TextureSampling,
 }
 impl Material {
     /// Creates a lit solid material.
@@ -148,6 +154,7 @@ impl Material {
             texture: Texture::None,
             unlit: false,
             alpha_cutoff: 0.5,
+            sampling: TextureSampling::default(),
         }
     }
     /// Uses an image's first decoded frame, stretched over mesh UVs.
@@ -168,6 +175,12 @@ impl Material {
     /// Sets the color multiplier for sampled RGBA, including alpha cutout.
     pub fn tint(mut self, color: impl Into<Rgba>) -> Self {
         self.color = color.into();
+        self
+    }
+    /// Configures image textures. Captured UI textures retain their original
+    /// UV mapping and linear edge-clamped sampling.
+    pub fn image_sampling(mut self, sampling: TextureSampling) -> Self {
+        self.sampling = sampling;
         self
     }
     /// Bypasses directional and ambient lighting.

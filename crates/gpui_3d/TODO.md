@@ -49,7 +49,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Spatial index refitting**: Incremental object-bound updates for changed transforms and visibility without full index reconstruction.
 - [ ] **Camera optics**: Focal-length/sensor-size conversion and explicit off-center projection support.
 - [ ] **Geometry primitives**: Spheres, cylinders, cones, and subdivided planes with segment configuration, bounds, and normal and tangent generation.
-- [ ] **Texture sampling**: UV transforms, addressing and filtering modes, mipmaps, anisotropic filtering, and distinct handling of color and data textures.
+- [x] **Image sampling**: Affine UV transforms, independent Clamp/Repeat/Mirror addressing, Nearest/Linear filtering, atlas-local interpolation, and matching alpha-aware picking.
+- [ ] **Texture sampling extensions**: Mipmaps, anisotropic filtering, and distinct handling of color and data textures.
 
 ## Phase 3: Materials and Lighting
 

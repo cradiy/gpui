@@ -70,6 +70,7 @@ impl Scene {
                 normal,
                 color,
                 texture,
+                sampling: object.material.sampling,
                 alpha_cutoff: object.material.alpha_cutoff,
                 unlit: object.material.unlit,
             });

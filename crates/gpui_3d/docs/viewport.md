@@ -443,6 +443,46 @@ or physically based material parameters. Distinct opaque surfaces occlude each
 other independently of object submission order. Coplanar surfaces should be
 separated to avoid depth conflicts.
 
+### Image sampling
+
+```rust
+use gpui_3d::{Material, TextureSampling, TextureAddressMode, TextureFilter, UvTransform};
+
+# fn main() -> Result<(), gpui_3d::UvTransformError> {
+let sampling = TextureSampling {
+    transform: UvTransform::from_scale_rotation_translation([2., 2.], 0.2, [-0.25, 0.])?,
+    address_u: TextureAddressMode::Repeat,
+    address_v: TextureAddressMode::Mirror,
+    filter: TextureFilter::Linear,
+};
+let material = Material::image("tile.png").image_sampling(sampling);
+# Ok(())
+# }
+```
+
+`TextureSampling` defaults to identity UVs, Clamp on both axes and Linear filtering.
+`UvTransform` applies scale, rotation about UV origin, then translation. Rotation
+is in radians, positive clockwise in top-left-origin coordinates. `from_rows`
+accepts two affine rows `[u, v, offset]`, including shear, reflection and zero
+scale. Constructors reject non-finite coefficients. `transform(uv)` returns the
+unaddressed coordinates, or `None` for non-finite input or overflow.
+
+Clamp extends edge texels. Repeat tiles every unit interval, with linear
+interpolation across the first/last texel seam. Mirror alternates forward and
+reflected copies; negative coordinates follow the same period. U and V modes
+are independent. Image UVs describe texel edges: texel `i` is centered at
+`(i + 0.5) / extent`. Nearest selects one texel and Linear interpolates four
+neighbors. Sampling remains inside the image's atlas rectangle.
+
+These settings apply only to image materials. Captured UI textures retain their
+identity UV mapping and linear edge-clamped sampling, including pointer routing.
+`Hit::uv` always contains the original mesh UVs. Viewport image-alpha picking
+applies the material's image sampling before testing the alpha cutoff. Color and
+object-ID outputs use the same material sampling and cutoff. Interpolation near
+a cutoff can differ at floating-point precision boundaries between CPU and GPU.
+Mipmaps and anisotropic filtering are not provided; both magnification and
+minification use mip level zero.
+
 ## UI texture
 
 ```rust
@@ -587,8 +627,8 @@ mesh and at most four logical pixels apart. When sharing the button with camera
 gestures, ignore clicks after a drag, including drags returning to their starting
 position. Application state changes should notify the view as usual.
 
-Viewport callbacks sample the first image frame's alpha with clamped UVs and
-bilinear filtering, matching the material shader's sampling convention. Sampled
+Viewport callbacks sample the first image frame's alpha using the material's UV
+transform, addressing and filter, matching the material shader. Sampled
 alpha is multiplied by material alpha and compared with `alpha_cutoff`; discarded
 regions allow hits on surfaces behind them. This also applies to occluders.
 Images that are loading, failed, empty, or unavailable to the renderer do not
@@ -635,6 +675,14 @@ nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
 
 ## Example
+
+```sh
+cargo run -p gpui_3d --example texture_sampling
+```
+
+Compare Clamp, Repeat and Mirror side by side. Toggle filtering and adjust UV
+scale, rotation and offset. Click opaque texels or transparent openings to inspect
+image and background hits while retaining the original mesh UV coordinates.
 
 ```sh
 cargo run -p gpui_3d --example instances

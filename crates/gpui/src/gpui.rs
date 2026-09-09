@@ -28,6 +28,7 @@ mod particle_transition;
 mod particles;
 mod platform_scheduler;
 mod scene3d;
+mod texture_sampling3d;
 pub(crate) use platform_scheduler::PlatformScheduler;
 mod geometry;
 mod gestures;
@@ -119,6 +120,7 @@ pub use gpui_macros::{
 pub use particle_transition::*;
 pub use particles::*;
 pub use scene3d::*;
+pub use texture_sampling3d::*;
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].
 ///

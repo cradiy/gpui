@@ -36,13 +36,15 @@ impl PickSnapshot {
                 match &self.surfaces[index] {
                     PickSurface::Absent => 0.,
                     PickSurface::Solid => 1.,
-                    PickSurface::Image(image) => image_alpha(image, uv),
+                    PickSurface::Image(image) => {
+                        image_alpha(image, uv, self.scene.objects[index].material.sampling)
+                    }
                 }
             })
     }
 }
 
-fn image_alpha(image: &RenderImage, uv: [f32; 2]) -> f32 {
+fn image_alpha(image: &RenderImage, uv: [f32; 2], sampling: crate::TextureSampling) -> f32 {
     let size = image.size(0);
     let Some(bytes) = image.as_bytes(0) else {
         return 0.;
@@ -50,20 +52,43 @@ fn image_alpha(image: &RenderImage, uv: [f32; 2]) -> f32 {
     if size.width.0 <= 0 || size.height.0 <= 0 || !uv.iter().all(|v| v.is_finite()) {
         return 0.;
     }
-    let width = size.width.0 as usize;
-    let height = size.height.0 as usize;
-    let x = uv[0].clamp(0., 1.) * (width - 1) as f32;
-    let y = uv[1].clamp(0., 1.) * (height - 1) as f32;
-    let x0 = x.floor() as usize;
-    let y0 = y.floor() as usize;
-    let x1 = (x0 + 1).min(width - 1);
-    let y1 = (y0 + 1).min(height - 1);
-    let alpha = |x, y| f32::from(bytes[(y * width + x) * 4 + 3]) / 255.;
+    let Some(uv) = sampling.transform.transform(uv) else {
+        return 0.;
+    };
+    use crate::{TextureAddressMode as Address, TextureFilter};
+    let address = |value: f32, mode| match mode {
+        Address::Clamp => value.clamp(0., 1.),
+        Address::Repeat => value - value.floor(),
+        Address::Mirror => {
+            let period = value - (value * 0.5).floor() * 2.;
+            period.min(2. - period)
+        }
+    };
+    let width = size.width.0;
+    let height = size.height.0;
+    let x = address(uv[0], sampling.address_u) * width as f32 - 0.5;
+    let y = address(uv[1], sampling.address_v) * height as f32 - 0.5;
+    let texel = |value: i32, extent: i32, mode| match mode {
+        Address::Repeat => value.rem_euclid(extent),
+        _ => value.clamp(0, extent - 1),
+    };
+    let alpha = |x, y| {
+        let x = texel(x, width, sampling.address_u) as usize;
+        let y = texel(y, height, sampling.address_v) as usize;
+        f32::from(bytes[(y * width as usize + x) * 4 + 3]) / 255.
+    };
+    if sampling.filter == TextureFilter::Nearest {
+        return alpha((x + 0.5).floor() as i32, (y + 0.5).floor() as i32);
+    }
+    let x0 = x.floor() as i32;
+    let y0 = y.floor() as i32;
+    let x1 = x0 + 1;
+    let y1 = y0 + 1;
     let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
     mix(
-        mix(alpha(x0, y0), alpha(x1, y0), x.fract()),
-        mix(alpha(x0, y1), alpha(x1, y1), x.fract()),
-        y.fract(),
+        mix(alpha(x0, y0), alpha(x1, y0), x - x.floor()),
+        mix(alpha(x0, y1), alpha(x1, y1), x - x.floor()),
+        y - y.floor(),
     )
 }
 
@@ -719,12 +744,12 @@ mod tests {
         );
         snapshot.scene.objects[1].material.color.a = 0.6;
         assert_eq!(
-            snapshot.pick(at(-0.5, 0.)).unwrap().object_id,
+            snapshot.pick(at(-0.25, 0.)).unwrap().object_id,
             Some("rear".into())
         );
         snapshot.scene.objects[1].material.alpha_cutoff = 0.4;
         assert_eq!(
-            snapshot.pick(at(-0.5, 0.)).unwrap().object_id,
+            snapshot.pick(at(-0.25, 0.)).unwrap().object_id,
             Some("front".into())
         );
         snapshot.scene.objects[1].pick_behavior = PickBehavior::Occlude;
@@ -764,9 +789,127 @@ mod tests {
     #[test]
     fn alpha_sampling_clamps_uvs_and_handles_single_pixel_axes() {
         let image = alpha_image(1, 2, &[0, 255]);
-        assert_eq!(image_alpha(&image, [-3., -2.]), 0.);
-        assert_eq!(image_alpha(&image, [5., 2.]), 1.);
-        assert!((image_alpha(&image, [0.7, 0.25]) - 0.25).abs() < 1e-6);
+        assert_eq!(image_alpha(&image, [-3., -2.], Default::default()), 0.);
+        assert_eq!(image_alpha(&image, [5., 2.], Default::default()), 1.);
+        assert!((image_alpha(&image, [0.7, 0.375], Default::default()) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn image_sampling_wraps_texel_neighbors_and_applies_uv_transforms() {
+        use crate::{TextureAddressMode as Address, TextureFilter, TextureSampling, UvTransform};
+        let image = alpha_image(2, 1, &[0, 255]);
+        for (mode, u, expected) in [
+            (Address::Clamp, 0., 0.),
+            (Address::Clamp, 1., 1.),
+            (Address::Repeat, 0., 0.5),
+            (Address::Repeat, 1., 0.5),
+            (Address::Repeat, -0.25, 1.),
+            (Address::Repeat, 1.25, 0.),
+            (Address::Mirror, -0.25, 0.),
+            (Address::Mirror, 1.25, 1.),
+            (Address::Mirror, 2., 0.),
+        ] {
+            let sampling = TextureSampling {
+                address_u: mode,
+                ..Default::default()
+            };
+            assert_eq!(image_alpha(&image, [u, 0.5], sampling), expected);
+            let vertical = alpha_image(1, 2, &[0, 255]);
+            assert_eq!(
+                image_alpha(
+                    &vertical,
+                    [0.5, u],
+                    TextureSampling {
+                        address_v: mode,
+                        ..Default::default()
+                    }
+                ),
+                expected
+            );
+        }
+        for (filter, expected) in [(TextureFilter::Nearest, 1.), (TextureFilter::Linear, 0.75)] {
+            assert_eq!(
+                image_alpha(
+                    &image,
+                    [0.625, 0.5],
+                    TextureSampling {
+                        filter,
+                        ..Default::default()
+                    }
+                ),
+                expected
+            );
+        }
+        let transform = UvTransform::from_scale_rotation_translation(
+            [2., -1.],
+            std::f32::consts::FRAC_PI_2,
+            [0.1, 0.2],
+        )
+        .unwrap();
+        let uv = transform.transform([0.2, 0.3]).unwrap();
+        assert!((uv[0] - 0.4).abs() < 1e-6 && (uv[1] - 0.6).abs() < 1e-6);
+        let collapsed = UvTransform::from_rows([[0., 0., 0.75], [0., 0., 0.5]]).unwrap();
+        assert_eq!(
+            image_alpha(
+                &image,
+                [8., -4.],
+                TextureSampling {
+                    transform: collapsed,
+                    ..Default::default()
+                }
+            ),
+            1.
+        );
+        assert!(UvTransform::from_rows([[1., 0., f32::NAN], [0., 1., 0.]]).is_err());
+        assert!(
+            UvTransform::from_scale_rotation_translation([1.; 2], f32::INFINITY, [0.; 2]).is_err()
+        );
+        let overflow = UvTransform::from_rows([[f32::MAX, 0., 0.], [0., 1., 0.]]).unwrap();
+        assert_eq!(
+            image_alpha(
+                &image,
+                [2., 0.],
+                TextureSampling {
+                    transform: overflow,
+                    ..Default::default()
+                }
+            ),
+            0.
+        );
+    }
+
+    #[test]
+    fn image_sampling_changes_cutout_hits_without_changing_mesh_uvs() {
+        use crate::{TextureFilter, TextureSampling, UvTransform};
+        let image = alpha_image(2, 1, &[0, 255]);
+        let point = project(Camera::default(), bounds(), [0.; 3]);
+        let scene = Scene::new()
+            .object(plane().id("rear").position([0., 0., -1.]))
+            .object(
+                Object::new(
+                    Mesh::plane(),
+                    Material::image(image.clone()).alpha_cutoff(0.9),
+                )
+                .id("front"),
+            );
+        let mut snapshot = PickSnapshot {
+            scene,
+            bounds: bounds(),
+            surfaces: vec![PickSurface::Solid, PickSurface::Image(image)],
+        };
+        let sampling = TextureSampling {
+            transform: UvTransform::from_rows([[0., 0., 0.625], [0., 0., 0.5]]).unwrap(),
+            ..Default::default()
+        };
+        snapshot.scene.objects[1].material = snapshot.scene.objects[1]
+            .material
+            .clone()
+            .image_sampling(sampling);
+        assert_eq!(snapshot.pick(point).unwrap().object_id, Some("rear".into()));
+        snapshot.scene.objects[1].material.sampling.filter = TextureFilter::Nearest;
+        let hit = snapshot.pick(point).unwrap();
+        assert_eq!(hit.object_id, Some("front".into()));
+        assert_eq!(hit.uv, [0.5, 0.5]);
     }
 
     #[test]

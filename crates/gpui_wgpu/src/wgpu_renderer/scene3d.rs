@@ -24,6 +24,9 @@ struct Params {
     texture_rect: [f32; 4],
     flags: [f32; 4],
     ids: [u32; 4],
+    uv_u: [f32; 4],
+    uv_v: [f32; 4],
+    sampling: [u32; 4],
 }
 
 struct Geometry {
@@ -310,6 +313,7 @@ impl Scene3dRenderer {
                     )
                 }
             };
+            let rows = object.sampling.transform.rows();
             let params = Params {
                 model: object.model,
                 normal: object.normal,
@@ -334,9 +338,17 @@ impl Scene3dRenderer {
                     object.alpha_cutoff.clamp(0.001, 1.),
                     f32::from(object.unlit),
                     premultiplied,
-                    0.,
+                    f32::from(matches!(object.texture, MeshTexture3d::Image(_))),
                 ],
                 ids: [object.output_id, 0, 0, 0],
+                uv_u: [rows[0][0], rows[0][1], rows[0][2], 0.],
+                uv_v: [rows[1][0], rows[1][1], rows[1][2], 0.],
+                sampling: [
+                    object.sampling.address_u as u32,
+                    object.sampling.address_v as u32,
+                    object.sampling.filter as u32,
+                    0,
+                ],
             };
             let buffer = &self.slots[start + index];
             queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
@@ -433,10 +445,17 @@ mod tests {
             })
             .unwrap();
         assert_eq!(span as usize, std::mem::size_of::<Params>());
-        let ids = members
-            .iter()
-            .find(|member| member.name.as_deref() == Some("ids"))
-            .unwrap();
-        assert_eq!(ids.offset as usize, std::mem::offset_of!(Params, ids));
+        for (name, offset) in [
+            ("ids", std::mem::offset_of!(Params, ids)),
+            ("uv_u", std::mem::offset_of!(Params, uv_u)),
+            ("uv_v", std::mem::offset_of!(Params, uv_v)),
+            ("sampling", std::mem::offset_of!(Params, sampling)),
+        ] {
+            let member = members
+                .iter()
+                .find(|member| member.name.as_deref() == Some(name))
+                .unwrap();
+            assert_eq!(member.offset as usize, offset, "{name}");
+        }
     }
 }

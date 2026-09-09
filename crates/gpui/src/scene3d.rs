@@ -212,6 +212,8 @@ pub struct MeshDraw3d {
     pub color: Rgba,
     /// Material texture.
     pub texture: MeshTexture3d,
+    /// Image sampling; solid materials and captured UI textures ignore this.
+    pub sampling: crate::TextureSampling3d,
     /// Alpha below this threshold is discarded. Surviving pixels are opaque.
     pub alpha_cutoff: f32,
     /// Bypass directional lighting.

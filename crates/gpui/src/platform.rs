@@ -839,6 +839,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
 
+    /// Whether depth-tested mesh viewports are supported.
+    fn supports_scene3d(&self) -> bool {
+        false
+    }
+
     // macOS specific methods
     fn get_title(&self) -> String {
         String::new()

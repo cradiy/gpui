@@ -66,6 +66,7 @@ fn quad(bounds: Bounds<ScaledPixels>, color: u32) -> Quad {
 fn layer(mut scene: Scene, bounds: Bounds<ScaledPixels>, opacity: f32) -> Primitive {
     scene.finish();
     Primitive::SubtreeLayer(SubtreeLayer {
+        scene3d: None,
         second_scene: None,
         intermediate_effects: Arc::default(),
         composite: EffectQuad {

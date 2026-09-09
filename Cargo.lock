@@ -2947,6 +2947,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_3d"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui_platform",
+]
+
+[[package]]
 name = "gpui_effects"
 version = "0.1.0"
 dependencies = [

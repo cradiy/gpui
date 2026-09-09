@@ -28,6 +28,7 @@ mod distance_field;
 mod fluid;
 mod particle_transition;
 mod particles;
+mod scene3d;
 
 #[derive(Clone, Copy)]
 struct FeedbackSnapshot {
@@ -435,6 +436,7 @@ struct WgpuResources {
     particles: Option<particles::ParticleRenderer>,
     particle_transition: Option<particle_transition::ParticleTransitionRenderer>,
     fluid: Option<fluid::FluidRenderer>,
+    scene3d: Option<scene3d::Scene3dRenderer>,
     failed_effect_pipelines: HashSet<u64>,
     backdrop_effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     failed_backdrop_effect_pipelines: HashSet<u64>,
@@ -474,6 +476,7 @@ impl WgpuResources {
         self.particles = None;
         self.particle_transition = None;
         self.fluid = None;
+        self.scene3d = None;
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
@@ -957,6 +960,7 @@ impl WgpuRenderer {
             particles: None,
             particle_transition: None,
             fluid: None,
+            scene3d: None,
             failed_effect_pipelines: HashSet::default(),
             backdrop_effect_pipelines: HashMap::default(),
             failed_backdrop_effect_pipelines: HashSet::default(),
@@ -2845,8 +2849,31 @@ impl WgpuRenderer {
             });
         });
         scene.visit(&mut |scene| has_fluid |= !scene.fluids.is_empty());
+        let mut has_scene3d = false;
+        scene.visit(&mut |scene| {
+            has_scene3d |= scene
+                .subtree_layers
+                .iter()
+                .any(|layer| layer.scene3d.is_some())
+        });
         {
             let resources = self.resources_mut();
+            if has_scene3d && resources.scene3d.is_none() {
+                resources.scene3d = Some(scene3d::Scene3dRenderer::new(
+                    &resources.device,
+                    &resources.queue,
+                    format,
+                    4,
+                ));
+            }
+            if let Some(renderer) = &mut resources.scene3d {
+                renderer.prepare(
+                    &resources.device,
+                    scene,
+                    viewport[0] as u32,
+                    viewport[1] as u32,
+                );
+            }
             if has_particle_transition && resources.particle_transition.is_none() {
                 resources.particle_transition = Some(
                     particle_transition::ParticleTransitionRenderer::new(&resources.device, format),
@@ -3277,6 +3304,21 @@ impl WgpuRenderer {
                             }
                             if !did_draw {
                                 break;
+                            }
+                            if layer.scene3d.is_some() {
+                                let destination = self.resources().subtree_textures[depth + 1]
+                                    .create_view(&Default::default());
+                                let resources = self.resources();
+                                resources.scene3d.as_ref().unwrap().encode(
+                                    &resources.device,
+                                    &resources.queue,
+                                    &self.atlas,
+                                    layer,
+                                    &source_view,
+                                    &destination,
+                                    encoder,
+                                );
+                                source_view = destination;
                             }
                             let mut composite_pass =
                                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -1870,6 +1870,10 @@ impl PlatformWindow for WaylandWindow {
         true
     }
 
+    fn supports_scene3d(&self) -> bool {
+        true
+    }
+
     fn minimize(&self) {
         if let Some(toplevel) = self.borrow().surface_state.toplevel() {
             toplevel.set_minimized();

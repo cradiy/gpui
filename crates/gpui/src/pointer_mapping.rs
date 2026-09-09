@@ -9,11 +9,16 @@ type MapPosition = dyn Fn(Point<Pixels>, Bounds<Pixels>, f32) -> Point<Pixels>;
 
 #[derive(Clone)]
 enum TransformKind {
+    Noninteractive,
     Function(Rc<MapPosition>),
     Chain(Rc<[PointerTransform]>),
 }
 
 impl PointerTransform {
+    /// Rejects pointer hits inside a decorative captured subtree without occluding its ancestors.
+    pub fn noninteractive() -> Self {
+        Self(TransformKind::Noninteractive)
+    }
     /// The callback receives window-relative coordinates, snapped capture bounds,
     /// and the logical-to-device scale factor.
     pub fn new(
@@ -41,6 +46,7 @@ impl PointerTransform {
         scale_factor: f32,
     ) -> Point<Pixels> {
         match &self.0 {
+            TransformKind::Noninteractive => position,
             TransformKind::Function(map) => map(position, bounds, scale_factor),
             TransformKind::Chain(transforms) => {
                 transforms.iter().rev().fold(position, |p, transform| {
@@ -57,6 +63,7 @@ impl PointerTransform {
         scale_factor: f32,
     ) -> Option<Point<Pixels>> {
         match &self.0 {
+            TransformKind::Noninteractive => None,
             TransformKind::Function(map) => {
                 let source = map(position, bounds, scale_factor);
                 bounds.contains(&source).then_some(source)
@@ -74,6 +81,17 @@ impl PointerTransform {
 mod tests {
     use super::*;
     use crate::{point, px, size};
+
+    #[test]
+    fn decorative_capture_rejects_hits_without_changing_parent_mapping() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let parent = PointerMapping::default();
+        let child = parent.then(bounds, bounds, 1., PointerTransform::noninteractive());
+        let p = point(px(50.), px(50.));
+        assert_eq!(parent.hit_position(p), Some(p));
+        assert_eq!(child.hit_position(p), None);
+        assert_eq!(child.map(p), p);
+    }
 
     #[test]
     fn nested_mapping_orders_transforms_and_clips_before_sampling() {

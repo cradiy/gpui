@@ -1,0 +1,15 @@
+[package]
+name = "gpui_3d"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "MIT"
+
+[dependencies]
+gpui.workspace = true
+
+[dev-dependencies]
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+
+[lints]
+workspace = true

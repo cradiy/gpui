@@ -67,6 +67,7 @@ struct PendingSubtree {
     passes: Arc<[SubtreeEffectPass]>,
     scene: Scene,
     first_scene: Option<Rc<Scene>>,
+    scene3d: Option<Arc<crate::Scene3dFrame>>,
 }
 
 #[expect(missing_docs)]
@@ -209,6 +210,7 @@ impl Scene {
                 }
                 PaintOperation::EndSubtree => self.end_subtree(),
                 PaintOperation::NextSubtreeInput => self.next_subtree_input(),
+                PaintOperation::SetScene3d(frame) => self.set_subtree_scene3d(frame.clone()),
             }
         }
     }
@@ -251,7 +253,21 @@ impl Scene {
             passes,
             scene: Scene::default(),
             first_scene: None,
+            scene3d: None,
         });
+    }
+
+    pub(crate) fn set_subtree_scene3d(&mut self, frame: Arc<crate::Scene3dFrame>) {
+        let pending = self
+            .pending_subtrees
+            .last_mut()
+            .expect("missing scene capture");
+        assert!(
+            pending.first_scene.is_none() && pending.passes.is_empty() && pending.scene3d.is_none()
+        );
+        pending.scene3d = Some(frame.clone());
+        self.paint_operations
+            .push(PaintOperation::SetScene3d(frame));
     }
 
     pub(crate) fn next_subtree_input(&mut self) {
@@ -260,7 +276,7 @@ impl Scene {
             .last_mut()
             .expect("missing subtree capture");
         assert!(
-            pending.first_scene.is_none() && pending.passes.is_empty(),
+            pending.first_scene.is_none() && pending.passes.is_empty() && pending.scene3d.is_none(),
             "two-input captures require exactly two scenes and no intermediate passes"
         );
         let mut scene = std::mem::take(&mut pending.scene);
@@ -275,6 +291,7 @@ impl Scene {
             passes: intermediate_effects,
             mut scene,
             first_scene,
+            scene3d,
         } = self
             .pending_subtrees
             .pop()
@@ -290,6 +307,7 @@ impl Scene {
             intermediate_effects,
             scene,
             second_scene,
+            scene3d,
         });
         if let Some(parent) = self.pending_subtrees.last_mut() {
             parent.scene.insert_primitive(layer);
@@ -336,11 +354,13 @@ impl Scene {
                             .as_ref()
                             .map_or(0, |scene| 2 + scene.subtree_target_count()),
                     )
-                    .max(if layer.intermediate_effects.is_empty() {
-                        1
-                    } else {
-                        2
-                    })
+                    .max(
+                        if layer.intermediate_effects.is_empty() && layer.scene3d.is_none() {
+                            1
+                        } else {
+                            2
+                        },
+                    )
             })
             .max()
             .unwrap_or(0)
@@ -417,6 +437,7 @@ pub(crate) enum PaintOperation {
     StartSubtree(EffectQuad, Arc<[SubtreeEffectPass]>),
     EndSubtree,
     NextSubtreeInput,
+    SetScene3d(Arc<crate::Scene3dFrame>),
 }
 
 #[derive(Clone)]
@@ -844,6 +865,8 @@ impl From<Quad> for Primitive {
 /// A captured child scene composited through an image effect.
 #[derive(Clone)]
 pub struct SubtreeLayer {
+    /// Optional depth-tested mesh scene using the capture as a material texture.
+    pub scene3d: Option<Arc<crate::Scene3dFrame>>,
     /// Geometry and shader used to composite the captured texture.
     pub composite: EffectQuad,
     /// Ordered image passes applied before the final composite.
@@ -1405,6 +1428,38 @@ mod tests {
             },
             ..Default::default()
         });
+    }
+
+    #[test]
+    fn scene3d_capture_replay_keeps_frame_and_nested_texture_reservations() {
+        let frame = Arc::new(crate::Scene3dFrame {
+            view_projection: [[0.; 4]; 4],
+            light_direction: [0., 0., 1.],
+            light: [1.; 4],
+            ambient: 0.3,
+            objects: Arc::default(),
+        });
+        let mut original = Scene::default();
+        original.start_subtree(subtree_composite());
+        original.set_subtree_scene3d(frame.clone());
+        original.start_subtree(subtree_composite());
+        original.set_subtree_scene3d(frame.clone());
+        insert_test_quad(&mut original);
+        original.end_subtree();
+        original.end_subtree();
+        insert_test_quad(&mut original);
+        original.finish();
+        let mut replayed = Scene::default();
+        replayed.replay(0..original.len(), &original);
+        replayed.finish();
+        let outer = &replayed.subtree_layers[0];
+        assert!(Arc::ptr_eq(outer.scene3d.as_ref().unwrap(), &frame));
+        let inner = &outer.scene.subtree_layers[0];
+        assert!(Arc::ptr_eq(inner.scene3d.as_ref().unwrap(), &frame));
+        assert_eq!(inner.scene.quads.len(), 1);
+        assert_eq!(replayed.quads.len(), 1);
+        assert_eq!(replayed.subtree_target_count(), 3);
+        assert!(!replayed.is_capturing_subtree());
     }
 
     #[test]

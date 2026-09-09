@@ -3595,6 +3595,35 @@ impl Window {
         self.platform_window.supports_gpu_fluid()
     }
 
+    /// Whether depth-tested mesh viewports are available on this window.
+    pub fn supports_scene3d(&self) -> bool {
+        self.platform_window.supports_scene3d()
+    }
+
+    /// Captures a decorative UI texture and renders a depth-tested mesh scene.
+    /// Prepaint the texture with `prepaint_subtree_effect`. Unsupported platforms
+    /// draw nothing. The caller owns input routing and animation scheduling.
+    pub fn with_scene3d(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        frame: Arc<crate::Scene3dFrame>,
+        paint_texture: impl FnOnce(&mut Self),
+    ) {
+        self.invalidator.debug_assert_paint();
+        if !self.supports_scene3d() || bounds.is_empty() || self.element_opacity <= 0. {
+            return;
+        }
+        self.with_subtree_effect(
+            bounds,
+            EffectShader::wgsl_image("fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return sample_effect_image(input, input.uv); }"),
+            EffectUniforms::default(), 0., 1.,
+            |window| {
+                window.next_frame.scene.set_subtree_scene3d(frame);
+                paint_texture(window);
+            },
+        );
+    }
+
     /// Paints a fluid surface. Unsupported renderers do not draw the surface.
     pub fn paint_fluid(&mut self, bounds: Bounds<Pixels>, frame: Arc<crate::FluidFrame>) {
         self.invalidator.debug_assert_paint();

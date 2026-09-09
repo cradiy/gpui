@@ -11,6 +11,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
   reveal, grouped lift/scale emphasis, and playback-clock integration.
 - [Color flow](docs/color_flow.md): image-derived flowing light and brightness configuration.
 - [Subtree effects](docs/subtree_effect.md): blur, wave, color adjustment and Bloom for element subtrees.
+- [Subtree transitions](docs/subtree_transition.md): blur fades, crossfades and soft wipes between two UI subtrees.
 - [History feedback](docs/feedback.md): persistent trails, time-based decay and playback controls.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
@@ -67,6 +68,12 @@ Run the Bloom text and artwork comparison:
 
 ```sh
 cargo run -p gpui_effects --example bloom
+```
+
+Run the two-content transition example:
+
+```sh
+cargo run -p gpui_effects --example subtree_transition
 ```
 
 Run the history-feedback example:

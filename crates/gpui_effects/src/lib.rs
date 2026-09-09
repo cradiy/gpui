@@ -52,6 +52,7 @@ mod subtree_builtins;
 mod subtree_effect;
 mod text_blur;
 mod timed_text;
+mod transition;
 
 pub use backdrop::*;
 pub use bloom::{
@@ -114,3 +115,4 @@ pub use subtree_builtins::{
 pub use subtree_effect::{SubtreeEffect, subtree_effect, subtree_effect_chain};
 pub use text_blur::TextBlur;
 pub use timed_text::{TimedText, TimedTextEmphasis, TimedTextRevealWave, TimedTextUnit};
+pub use transition::{SubtreeTransition, TransitionKind, subtree_transition, transition_shader};

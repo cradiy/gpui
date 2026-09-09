@@ -155,6 +155,9 @@ mod tests {
             crate::contour_glow_shader(),
             crate::contour_relief_shader(),
             crate::contour_shadow_shader(),
+            crate::transition_shader(crate::TransitionKind::BlurFade),
+            crate::transition_shader(crate::TransitionKind::CrossFade),
+            crate::transition_shader(crate::TransitionKind::WipeRight),
         ] {
             let source = gpui::compose_subtree_effect_wgsl(&shader);
             let module = naga::front::wgsl::parse_str(&source)

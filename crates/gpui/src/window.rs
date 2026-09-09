@@ -3800,6 +3800,57 @@ impl Window {
         result
     }
 
+    /// Captures two subtrees independently and composites them with a two-image shader.
+    /// Both inputs share snapped capture bounds. Opacity applies once to the final output.
+    /// Prepaint each input inside [`Self::prepaint_subtree_effect`]. Backends without
+    /// subtree support paint only the second input. Input routing is controlled by the caller.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_subtree_pair(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        shader: EffectShader,
+        uniforms: EffectUniforms,
+        time: f32,
+        opacity: f32,
+        mut paint: impl FnMut(crate::SubtreeInput, &mut Self),
+    ) {
+        self.invalidator.debug_assert_paint();
+        assert!(
+            shader.image_count() == 2 && !shader.is_mask(),
+            "subtree pairs require a two-image shader"
+        );
+        if !self.supports_subtree_effects() {
+            self.with_element_opacity(Some(opacity.clamp(0., 1.)), |window| {
+                paint(crate::SubtreeInput::Second, window)
+            });
+            return;
+        }
+        let bounds = self.snap_bounds(bounds);
+        let previous_opacity = self.element_opacity;
+        self.element_opacity = 1.;
+        self.next_frame.scene.start_subtree(EffectQuad {
+            order: 0,
+            bounds,
+            effect_bounds: bounds,
+            transformation: TransformationMatrix::default(),
+            content_mask: self.snapped_content_mask(),
+            shader,
+            uniforms,
+            time,
+            corner_radii: Corners::default(),
+            opacity: previous_opacity * opacity.clamp(0., 1.),
+            image_tile: None,
+            second_image_tile: None,
+            third_image_tile: None,
+            fourth_image_tile: None,
+        });
+        paint(crate::SubtreeInput::First, self);
+        self.next_frame.scene.next_subtree_input();
+        paint(crate::SubtreeInput::Second, self);
+        self.next_frame.scene.end_subtree();
+        self.element_opacity = previous_opacity;
+    }
+
     /// Updates the cursor style at the platform level. This method should only be called
     /// during the paint phase of element drawing.
     pub fn set_cursor_style(&mut self, style: CursorStyle, hitbox: &Hitbox) {

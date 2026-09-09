@@ -1318,7 +1318,9 @@ impl WgpuRenderer {
     fn ensure_effect_pipelines(&mut self, scene: &Scene) {
         let surface_format = self.surface_config.format;
         for layer in &scene.subtree_layers {
-            self.ensure_effect_pipelines(&layer.scene);
+            for input in layer.inputs() {
+                self.ensure_effect_pipelines(input);
+            }
             for effect in layer
                 .intermediate_effects
                 .iter()
@@ -1496,7 +1498,9 @@ impl WgpuRenderer {
 
     fn ensure_backdrop_effect_pipelines(&mut self, scene: &Scene) {
         for layer in &scene.subtree_layers {
-            self.ensure_backdrop_effect_pipelines(&layer.scene);
+            for input in layer.inputs() {
+                self.ensure_backdrop_effect_pipelines(input);
+            }
         }
         let shaders = scene
             .backdrop_blurs
@@ -2377,7 +2381,9 @@ impl WgpuRenderer {
                         divisors.insert(bloom.downsample.clamp(1, 8));
                     }
                 }
-                collect(&layer.scene, divisors);
+                for input in layer.inputs() {
+                    collect(input, divisors);
+                }
             }
         }
         let mut divisors = HashSet::new();
@@ -3002,6 +3008,30 @@ impl WgpuRenderer {
                             }
                             let mut source_view =
                                 texture.create_view(&wgpu::TextureViewDescriptor::default());
+                            let second_view = if let Some(second) = &layer.second_scene {
+                                assert!(
+                                    layer.intermediate_effects.is_empty(),
+                                    "two-input captures cannot have intermediate passes"
+                                );
+                                let second_texture = &self.resources().subtree_textures[depth + 1];
+                                let view = second_texture
+                                    .create_view(&wgpu::TextureViewDescriptor::default());
+                                if !self.encode_scene_batches(
+                                    second,
+                                    second_texture,
+                                    &view,
+                                    encoder,
+                                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    instance_offset,
+                                    depth + 2,
+                                ) {
+                                    did_draw = false;
+                                    break;
+                                }
+                                Some(view)
+                            } else {
+                                None
+                            };
                             let mut source_index = depth;
                             for effect in layer.intermediate_effects.iter() {
                                 let pipelines = if effect.images.is_empty() {
@@ -3264,14 +3294,27 @@ impl WgpuRenderer {
                                 });
                             let mut instance = EffectInstance::from(&layer.composite);
                             instance.image_bounds = layer.composite.bounds.into();
-                            did_draw &= self.draw_instances_with_texture(
-                                bytemuck::bytes_of(&instance),
-                                1,
-                                &source_view,
-                                pipeline,
-                                instance_offset,
-                                &mut composite_pass,
-                            );
+                            did_draw &= if let Some(second_view) = &second_view {
+                                instance.second_image_bounds = layer.composite.bounds.into();
+                                self.draw_instances_with_two_textures(
+                                    bytemuck::bytes_of(&instance),
+                                    1,
+                                    &source_view,
+                                    second_view,
+                                    pipeline,
+                                    instance_offset,
+                                    &mut composite_pass,
+                                )
+                            } else {
+                                self.draw_instances_with_texture(
+                                    bytemuck::bytes_of(&instance),
+                                    1,
+                                    &source_view,
+                                    pipeline,
+                                    instance_offset,
+                                    &mut composite_pass,
+                                )
+                            };
                         }
                         pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("main_pass_after_subtree"),

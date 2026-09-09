@@ -40,6 +40,8 @@ mod path_morph;
 mod path_motion;
 #[path = "support/sdf.rs"]
 mod sdf;
+#[path = "support/subtree_transition.rs"]
+mod subtree_transition;
 
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<ScaledPixels> {
     Bounds::new(
@@ -60,6 +62,7 @@ fn quad(bounds: Bounds<ScaledPixels>, color: u32) -> Quad {
 fn layer(mut scene: Scene, bounds: Bounds<ScaledPixels>, opacity: f32) -> Primitive {
     scene.finish();
     Primitive::SubtreeLayer(SubtreeLayer {
+        second_scene: None,
         intermediate_effects: Arc::default(),
         composite: EffectQuad {
             order: 0,
@@ -156,6 +159,7 @@ fn subtree_gpu_compositing_preserves_pixels_and_reuses_targets() -> anyhow::Resu
     path_morph::check(&mut renderer)?;
     deformation::check(&mut renderer)?;
     interaction_mapping::check(&mut renderer)?;
+    subtree_transition::check(&mut renderer)?;
     displacement_map::check(&mut renderer)?;
     contour_glow::check(&mut renderer)?;
     contour_relief::check(&mut renderer)?;

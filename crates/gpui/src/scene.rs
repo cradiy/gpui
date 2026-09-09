@@ -53,13 +53,20 @@ pub struct Scene {
     pub particles: Vec<crate::ParticleDraw>,
     pub fluids: Vec<crate::FluidDraw>,
     pub subtree_layers: Vec<SubtreeLayer>,
-    pending_subtrees: Vec<(EffectQuad, Arc<[SubtreeEffectPass]>, Scene)>,
+    pending_subtrees: Vec<PendingSubtree>,
     pub paths: Vec<Path<ScaledPixels>>,
     pub underlines: Vec<Underline>,
     pub monochrome_sprites: Vec<MonochromeSprite>,
     pub subpixel_sprites: Vec<SubpixelSprite>,
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
+}
+
+struct PendingSubtree {
+    composite: EffectQuad,
+    passes: Arc<[SubtreeEffectPass]>,
+    scene: Scene,
+    first_scene: Option<Rc<Scene>>,
 }
 
 #[expect(missing_docs)]
@@ -89,8 +96,8 @@ impl Scene {
     }
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
-        if let Some((_, _, scene)) = self.pending_subtrees.last_mut() {
-            scene.push_layer(bounds);
+        if let Some(pending) = self.pending_subtrees.last_mut() {
+            pending.scene.push_layer(bounds);
             self.paint_operations
                 .push(PaintOperation::StartLayer(bounds));
             return;
@@ -102,8 +109,8 @@ impl Scene {
     }
 
     pub fn pop_layer(&mut self) {
-        if let Some((_, _, scene)) = self.pending_subtrees.last_mut() {
-            scene.pop_layer();
+        if let Some(pending) = self.pending_subtrees.last_mut() {
+            pending.scene.pop_layer();
             self.paint_operations.push(PaintOperation::EndLayer);
             return;
         }
@@ -113,8 +120,8 @@ impl Scene {
 
     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
         let mut primitive = primitive.into();
-        if let Some((_, _, scene)) = self.pending_subtrees.last_mut() {
-            scene.insert_primitive(primitive.clone());
+        if let Some(pending) = self.pending_subtrees.last_mut() {
+            pending.scene.insert_primitive(primitive.clone());
             self.paint_operations
                 .push(PaintOperation::Primitive(primitive));
             return;
@@ -201,6 +208,7 @@ impl Scene {
                     self.start_subtree_chain(composite.clone(), passes.clone())
                 }
                 PaintOperation::EndSubtree => self.end_subtree(),
+                PaintOperation::NextSubtreeInput => self.next_subtree_input(),
             }
         }
     }
@@ -238,23 +246,53 @@ impl Scene {
             composite.clone(),
             passes.clone(),
         ));
-        self.pending_subtrees
-            .push((composite, passes, Scene::default()));
+        self.pending_subtrees.push(PendingSubtree {
+            composite,
+            passes,
+            scene: Scene::default(),
+            first_scene: None,
+        });
+    }
+
+    pub(crate) fn next_subtree_input(&mut self) {
+        let pending = self
+            .pending_subtrees
+            .last_mut()
+            .expect("missing subtree capture");
+        assert!(
+            pending.first_scene.is_none() && pending.passes.is_empty(),
+            "two-input captures require exactly two scenes and no intermediate passes"
+        );
+        let mut scene = std::mem::take(&mut pending.scene);
+        scene.finish();
+        pending.first_scene = Some(Rc::new(scene));
+        self.paint_operations.push(PaintOperation::NextSubtreeInput);
     }
 
     pub(crate) fn end_subtree(&mut self) {
-        let (composite, intermediate_effects, mut scene) = self
+        let PendingSubtree {
+            composite,
+            passes: intermediate_effects,
+            mut scene,
+            first_scene,
+        } = self
             .pending_subtrees
             .pop()
             .expect("unbalanced subtree capture");
         scene.finish();
+        let (scene, second_scene) = if let Some(first) = first_scene {
+            (first, Some(Rc::new(scene)))
+        } else {
+            (Rc::new(scene), None)
+        };
         let layer = Primitive::SubtreeLayer(SubtreeLayer {
             composite,
             intermediate_effects,
-            scene: Rc::new(scene),
+            scene,
+            second_scene,
         });
-        if let Some((_, _, parent)) = self.pending_subtrees.last_mut() {
-            parent.insert_primitive(layer);
+        if let Some(parent) = self.pending_subtrees.last_mut() {
+            parent.scene.insert_primitive(layer);
         } else {
             let operation_count = self.paint_operations.len();
             self.insert_primitive(layer);
@@ -271,7 +309,9 @@ impl Scene {
     pub fn visit(&self, visitor: &mut impl FnMut(&Scene)) {
         visitor(self);
         for layer in &self.subtree_layers {
-            layer.scene.visit(visitor);
+            for scene in layer.inputs() {
+                scene.visit(visitor);
+            }
         }
     }
 
@@ -279,7 +319,7 @@ impl Scene {
     pub fn subtree_depth(&self) -> usize {
         self.subtree_layers
             .iter()
-            .map(|layer| 1 + layer.scene.subtree_depth())
+            .map(|layer| 1 + layer.inputs().map(Scene::subtree_depth).max().unwrap_or(0))
             .max()
             .unwrap_or(0)
     }
@@ -289,13 +329,18 @@ impl Scene {
         self.subtree_layers
             .iter()
             .map(|layer| {
-                (1 + layer.scene.subtree_target_count()).max(
-                    if layer.intermediate_effects.is_empty() {
+                (1 + layer.scene.subtree_target_count())
+                    .max(
+                        layer
+                            .second_scene
+                            .as_ref()
+                            .map_or(0, |scene| 2 + scene.subtree_target_count()),
+                    )
+                    .max(if layer.intermediate_effects.is_empty() {
                         1
                     } else {
                         2
-                    },
-                )
+                    })
             })
             .max()
             .unwrap_or(0)
@@ -371,6 +416,7 @@ pub(crate) enum PaintOperation {
     EndLayer,
     StartSubtree(EffectQuad, Arc<[SubtreeEffectPass]>),
     EndSubtree,
+    NextSubtreeInput,
 }
 
 #[derive(Clone)]
@@ -804,6 +850,24 @@ pub struct SubtreeLayer {
     pub intermediate_effects: Arc<[SubtreeEffectPass]>,
     /// Content drawn against transparent black before compositing.
     pub scene: Rc<Scene>,
+    /// Optional independently captured second input. Intermediate passes must be empty.
+    pub second_scene: Option<Rc<Scene>>,
+}
+
+impl SubtreeLayer {
+    /// Captured inputs in shader binding order.
+    pub fn inputs(&self) -> impl Iterator<Item = &Scene> {
+        std::iter::once(self.scene.as_ref()).chain(self.second_scene.as_deref())
+    }
+}
+
+/// Input selected while capturing two element subtrees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubtreeInput {
+    /// First shader image.
+    First,
+    /// Second shader image.
+    Second,
 }
 
 /// An image-processing pass over an isolated subtree texture.
@@ -1409,6 +1473,31 @@ mod tests {
         let mut replayed = Scene::default();
         replayed.replay(0..scene.len(), &scene);
         assert_eq!(replayed.quads.len(), 1);
+        assert!(!replayed.is_capturing_subtree());
+    }
+
+    #[test]
+    fn subtree_pair_replay_retains_both_inputs_and_nested_target_reservations() {
+        let mut scene = Scene::default();
+        scene.start_subtree(subtree_composite());
+        insert_test_quad(&mut scene);
+        scene.next_subtree_input();
+        scene.start_subtree(subtree_composite());
+        insert_test_quad(&mut scene);
+        scene.next_subtree_input();
+        insert_test_quad(&mut scene);
+        insert_test_quad(&mut scene);
+        scene.end_subtree();
+        scene.end_subtree();
+        scene.finish();
+        let mut replayed = Scene::default();
+        replayed.replay(0..scene.len(), &scene);
+        replayed.finish();
+        let mut counts = Vec::new();
+        replayed.visit(&mut |input| counts.push(input.quads.len()));
+        assert_eq!(counts, [0, 1, 0, 1, 2]);
+        assert_eq!(replayed.subtree_target_count(), 4);
+        assert_eq!(replayed.subtree_depth(), 2);
         assert!(!replayed.is_capturing_subtree());
     }
 

@@ -461,10 +461,48 @@ with current transforms and inherited visibility. Earlier evaluated states and
 their queries remain unchanged, including after node deletion.
 
 Index preparation is synchronous and CPU-only. Reusing an evaluated state across
-camera updates avoids rebuilding the object hierarchy. New evaluations rebuild
-their object index lazily; incremental refitting is not provided. Heavily
+camera updates avoids rebuilding the object hierarchy. Before querying a new
+evaluation, `prepare_spatial_index_from(&previous)` can reuse a prepared snapshot's
+partition and update the bounds of changed leaves and their ancestors:
+
+```rust
+use gpui_3d::{AffineTransform, Material, Mesh, Node, SceneGraph};
+
+let mut graph = SceneGraph::new();
+let object = graph.insert(None, Node::new().mesh(
+    Mesh::cube(), Material::color(gpui::rgb(0x80a0c0)),
+))?;
+let previous = graph.evaluate()?;
+previous.prepare_spatial_index();
+
+graph.set_transform(object, AffineTransform::from_translation([2., 0., 0.])?)?;
+let current = graph.evaluate()?;
+current.prepare_spatial_index_from(&previous);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Graph indices retain slots for hidden mesh nodes. Motion, mesh replacement,
+visibility changes, and reparenting preserve the partition when the mesh-node
+set is unchanged; query indices follow the current visible scene order. Adding
+or removing mesh nodes, using another graph, or changing whether a bound is
+representable rebuilds the index. Group-only edits do not require new slots.
+`Scene::prepare_spatial_index_from` offers the same operation for flat scenes,
+whose slots are object positions in the list rather than graph identities.
+
+An unprepared previous snapshot causes a fresh build. A current index already
+prepared by a query or explicit preparation is unchanged. Each evaluation still
+computes its full transforms and bounds; refitting only changes index preparation.
+The partition is shared, while changed index bounds use independent storage.
+Old snapshots retain their queries without retaining the graph or its edit history.
+
+Refitting does not rebalance the partition. After large movements, preparing a
+fresh evaluation without a previous index can improve query pruning. Heavily
 overlapping object or triangle bounds can still require broad traversal. These
 indices accelerate queries, not render submission or GPU draw batching.
+
+`cargo bench -p gpui_3d --bench scene -- spatial_index` compares full builds and
+refits for unchanged, one-percent-motion, and all-motion scenes. Graph evaluation
+is outside the timed routine; the routine includes preparation and snapshot release.
 
 Invalid camera, viewport, and point inputs return `CameraError` from the public
 matrix/projection/query methods. Invalid rays return `RayError`.

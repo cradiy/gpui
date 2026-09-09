@@ -435,9 +435,12 @@ mod tests {
             AffineTransform::from_trs([0.; 3], [0.2, 0.3, 0.1, 0.9], [0.01, 0.02, 0.03]).unwrap(),
         ];
         let mut hits = 0;
+        let mut previous = graph.evaluate().unwrap();
+        previous.prepare_spatial_index();
         for pose in poses {
             graph.set_transform(group, pose).unwrap();
             let evaluated = graph.evaluate().unwrap();
+            evaluated.prepare_spatial_index_from(&previous);
             let mut scene = evaluated.scene(Camera::default());
             for mode in [
                 PickBehavior::Target,
@@ -478,6 +481,7 @@ mod tests {
                 }
             }
             assert_eq!(evaluated.node(node).unwrap().world, pose);
+            previous = evaluated;
         }
         assert!(hits > 100);
     }

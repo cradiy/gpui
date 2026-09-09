@@ -46,7 +46,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **World-ray queries**: Normalized arbitrary rays with camera-independent geometric intersection and stable node identities.
 - [x] **Mesh query acceleration**: Shared lazy CPU BVHs, explicit preparation, conservative transformed bounds, and original triangle identities for picking and world rays.
 - [x] **Scene query acceleration**: Lazy object BVHs shared by scene clones and camera views of evaluated states, fresh indices after graph evaluation or object insertion, and preserved snapshot queries.
-- [ ] **Spatial index refitting**: Incremental object-bound updates for changed transforms and visibility without full index reconstruction.
+- [x] **Spatial index refitting**: Explicit previous-snapshot preparation, shared partitions with independent changed bounds, stable hidden-node slots, current-order query identities, topology-change rebuilds, and CPU build/refit benchmarks.
 - [x] **Camera optics**: Focal-length/sensor-height conversion and explicit perspective/orthographic lens shift, with consistent matrices, rays, culling, background directions, framing, and camera controls.
 - [x] **Geometry primitives**: Configurable UV spheres, capped/open cylinders and cones, and subdivided XY planes; bounded generation, outward winding, split seams/tips/caps, analytic normal/tangent frames, mesh bounds, and shared query/render storage.
 - [x] **Image sampling**: Affine UV transforms, independent Clamp/Repeat/Mirror addressing, Nearest/Linear filtering, atlas-local interpolation, and matching alpha-aware picking.

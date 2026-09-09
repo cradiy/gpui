@@ -318,8 +318,8 @@ impl IndexObject {
 pub(crate) struct ObjectIndex {
     tree: Bvh,
     entries: Vec<IndexObject>,
-    objects: Vec<usize>,
-    unbounded: Vec<usize>,
+    objects: Arc<[usize]>,
+    unbounded: Arc<[usize]>,
 }
 
 impl ObjectIndex {
@@ -344,24 +344,43 @@ impl ObjectIndex {
         Self {
             tree: tree.refit(&hidden, |item| entries[indexed[item]].active_bounds()),
             entries: entries.to_vec(),
-            objects: indexed,
-            unbounded,
+            objects: indexed.into(),
+            unbounded: unbounded.into(),
         }
     }
 
     pub(crate) fn refit(&self, entries: &[IndexObject]) -> Self {
-        let by_key: HashMap<_, _> = entries.iter().map(|entry| (entry.key, *entry)).collect();
-        if entries.len() != self.entries.len()
-            || by_key.len() != entries.len()
-            || self.entries.iter().any(|old| {
-                by_key
-                    .get(&old.key)
-                    .is_none_or(|new| old.bounds.is_some() != new.bounds.is_some())
-            })
-        {
+        if entries.len() != self.entries.len() {
             return Self::build_from(entries);
         }
-        let entries: Vec<_> = self.entries.iter().map(|old| by_key[&old.key]).collect();
+        let ordered = self
+            .entries
+            .iter()
+            .zip(entries)
+            .all(|(old, new)| old.key == new.key);
+        let entries: Vec<_> = if ordered {
+            if self
+                .entries
+                .iter()
+                .zip(entries)
+                .any(|(old, new)| old.bounds.is_some() != new.bounds.is_some())
+            {
+                return Self::build_from(entries);
+            }
+            entries.to_vec()
+        } else {
+            let by_key: HashMap<_, _> = entries.iter().map(|entry| (entry.key, *entry)).collect();
+            if by_key.len() != entries.len()
+                || self.entries.iter().any(|old| {
+                    by_key
+                        .get(&old.key)
+                        .is_none_or(|new| old.bounds.is_some() != new.bounds.is_some())
+                })
+            {
+                return Self::build_from(entries);
+            }
+            self.entries.iter().map(|old| by_key[&old.key]).collect()
+        };
         let changed: Vec<_> = self
             .objects
             .iter()
@@ -388,7 +407,7 @@ impl ObjectIndex {
                     visit(object);
                 }
             });
-        for &index in &self.unbounded {
+        for &index in self.unbounded.iter() {
             if let Some(object) = self.entries[index].object {
                 visit(object);
             }
@@ -408,5 +427,241 @@ impl Mesh {
         self.1
             .get_or_init(|| Bvh::build(self))
             .visit(model, ray, visit);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Camera, Material, Node, ReparentMode, Scene, SceneGraph};
+
+    fn plane() -> Object {
+        Object::new(Mesh::plane(), Material::color(gpui::rgb(0xffffff)))
+    }
+
+    fn ray(x: f32) -> Ray {
+        Ray::new([x, 0.1, 5.], [0., 0., -1.]).unwrap()
+    }
+
+    #[test]
+    fn refitted_graph_preserves_hidden_slots_and_remaps_reordered_objects() {
+        let mut graph = SceneGraph::new();
+        let parent = graph.insert(None, Node::new()).unwrap();
+        let nodes: Vec<_> = (0..32)
+            .map(|i| {
+                graph
+                    .insert(
+                        Some(parent),
+                        Node::new()
+                            .mesh(Mesh::plane(), Material::color(gpui::rgb(0xffffff)))
+                            .transform(
+                                AffineTransform::from_translation([i as f32 * 2., 0., 0.]).unwrap(),
+                            )
+                            .visible(i != 0),
+                    )
+                    .unwrap()
+            })
+            .collect();
+        let initial = graph.evaluate().unwrap();
+        initial.prepare_spatial_index();
+        let old = initial.scene(Camera::default());
+        let old_index = old.spatial_index.get().unwrap();
+        assert!(old_index.tree.topology.branches.len() > 1);
+        assert!(old.raycast(ray(0.1)).is_none());
+        assert_eq!(old.raycast(ray(2.1)).unwrap().object_index, 0);
+
+        graph.set_visible(nodes[0], true).unwrap();
+        let shown = graph.evaluate().unwrap();
+        shown.prepare_spatial_index_from(&initial);
+        let shown_scene = shown.scene(Camera::default());
+        let shown_index = shown_scene.spatial_index.get().unwrap();
+        assert!(Arc::ptr_eq(
+            &old_index.tree.topology,
+            &shown_index.tree.topology
+        ));
+        assert!(!Arc::ptr_eq(
+            &old_index.tree.bounds,
+            &shown_index.tree.bounds
+        ));
+        assert_eq!(shown_scene.raycast(ray(0.1)).unwrap().node, Some(nodes[0]));
+        assert_eq!(shown_scene.raycast(ray(2.1)).unwrap().object_index, 1);
+
+        graph
+            .reparent(nodes[0], None, ReparentMode::KeepWorld)
+            .unwrap();
+        let reordered = graph.evaluate().unwrap();
+        reordered.prepare_spatial_index_from(&shown);
+        let reordered_scene = reordered.scene(Camera::default());
+        let reordered_index = reordered_scene.spatial_index.get().unwrap();
+        assert!(Arc::ptr_eq(
+            &shown_index.tree.bounds,
+            &reordered_index.tree.bounds
+        ));
+        let hit = reordered_scene.raycast(ray(0.1)).unwrap();
+        assert_eq!(hit.node, Some(nodes[0]));
+        assert_eq!(hit.object_index, 31);
+        assert_eq!(reordered_scene.raycast(ray(2.1)).unwrap().object_index, 0);
+
+        graph.set_visible(parent, false).unwrap();
+        graph.set_visible(nodes[0], false).unwrap();
+        let hidden = graph.evaluate().unwrap();
+        hidden.prepare_spatial_index_from(&reordered);
+        let hidden_scene = hidden.scene(Camera::default());
+        let hidden_index = hidden_scene.spatial_index.get().unwrap();
+        assert!(Arc::ptr_eq(
+            &old_index.tree.topology,
+            &hidden_index.tree.topology
+        ));
+        assert!(hidden_index.tree.bounds[0].is_none());
+        hidden_scene.visit_objects(ray(2.1), |_| panic!("hidden object visited"));
+
+        graph.set_visible(parent, true).unwrap();
+        graph
+            .set_transform(
+                parent,
+                AffineTransform::from_translation([100., 0., 0.]).unwrap(),
+            )
+            .unwrap();
+        let moved = graph.evaluate().unwrap();
+        moved.prepare_spatial_index_from(&hidden);
+        let moved_scene = moved.scene(Camera::default());
+        assert!(Arc::ptr_eq(
+            &old_index.tree.topology,
+            &moved_scene.spatial_index.get().unwrap().tree.topology
+        ));
+        for (i, node) in nodes.iter().enumerate().skip(1) {
+            let hit = moved_scene.raycast(ray(100.1 + i as f32 * 2.)).unwrap();
+            assert_eq!(hit.node, Some(*node));
+            assert_eq!(hit.object_index, i - 1);
+        }
+        let mut candidates = 0;
+        moved_scene.visit_objects(ray(102.1), |_| candidates += 1);
+        assert!(candidates <= LEAF_SIZE);
+        assert!(moved_scene.raycast(ray(2.1)).is_none());
+        assert_eq!(old.raycast(ray(2.1)).unwrap().node, Some(nodes[1]));
+        assert!(old.raycast(ray(0.1)).is_none());
+    }
+
+    #[test]
+    fn refit_rebuilds_for_changed_node_sets_and_updates_replaced_geometry() {
+        let mut graph = SceneGraph::new();
+        let node = graph
+            .insert(
+                None,
+                Node::new().mesh(Mesh::plane(), Material::color(gpui::rgb(0xffffff))),
+            )
+            .unwrap();
+        let previous = graph.evaluate().unwrap().scene(Camera::default());
+        previous.prepare_spatial_index();
+        let old_index = previous.spatial_index.get().unwrap();
+        let source = Mesh::plane();
+        let mut vertices = source.vertices().to_vec();
+        for vertex in &mut vertices {
+            vertex.position[0] += 10.;
+        }
+        graph
+            .set_mesh(node, Mesh::new(vertices, source.indices().to_vec()))
+            .unwrap();
+        let deformed = graph.evaluate().unwrap().scene(Camera::default());
+        deformed.prepare_spatial_index_from(&previous);
+        assert!(Arc::ptr_eq(
+            &old_index.tree.topology,
+            &deformed.spatial_index.get().unwrap().tree.topology
+        ));
+        assert!(deformed.raycast(ray(0.1)).is_none());
+        assert_eq!(deformed.raycast(ray(10.1)).unwrap().node, Some(node));
+
+        graph.remove_subtree(node).unwrap();
+        let replacement = graph
+            .insert(
+                None,
+                Node::new().mesh(Mesh::plane(), Material::color(gpui::rgb(0xffffff))),
+            )
+            .unwrap();
+        let replaced = graph.evaluate().unwrap().scene(Camera::default());
+        replaced.prepare_spatial_index_from(&deformed);
+        assert!(!Arc::ptr_eq(
+            &old_index.tree.topology,
+            &replaced.spatial_index.get().unwrap().tree.topology
+        ));
+        assert_eq!(replaced.raycast(ray(0.1)).unwrap().node, Some(replacement));
+        assert_ne!(replacement, node);
+        assert_eq!(previous.raycast(ray(0.1)).unwrap().node, Some(node));
+
+        let mut other = SceneGraph::new();
+        let other_node = other
+            .insert(
+                None,
+                Node::new().mesh(Mesh::plane(), Material::color(gpui::rgb(0xffffff))),
+            )
+            .unwrap();
+        let foreign = other.evaluate().unwrap().scene(Camera::default());
+        foreign.prepare_spatial_index_from(&previous);
+        assert!(!Arc::ptr_eq(
+            &old_index.tree.topology,
+            &foreign.spatial_index.get().unwrap().tree.topology
+        ));
+        assert_eq!(foreign.raycast(ray(0.1)).unwrap().node, Some(other_node));
+
+        let appended = previous.clone().object(plane().position([0., 0., 1.]));
+        appended.prepare_spatial_index_from(&previous);
+        assert_eq!(appended.raycast(ray(0.1)).unwrap().object_index, 1);
+        assert!(!Arc::ptr_eq(
+            &old_index.tree.topology,
+            &appended.spatial_index.get().unwrap().tree.topology
+        ));
+    }
+
+    #[test]
+    fn flat_refits_handle_empty_and_unprepared_sources() {
+        let previous = Scene::new().object(plane());
+        let moved = Scene::new().object(plane().position([10., 0., 0.]));
+        moved.prepare_spatial_index_from(&previous);
+        assert!(previous.spatial_index.get().is_none());
+        assert!(moved.raycast(ray(0.1)).is_none());
+        assert_eq!(moved.raycast(ray(10.1)).unwrap().object_index, 0);
+        previous.prepare_spatial_index_from(&moved);
+        let original_index = previous.spatial_index.get().unwrap();
+        assert!(Arc::ptr_eq(
+            &original_index.tree.topology,
+            &moved.spatial_index.get().unwrap().tree.topology
+        ));
+        previous.prepare_spatial_index_from(&Scene::new());
+        assert!(std::ptr::eq(
+            original_index,
+            previous.spatial_index.get().unwrap()
+        ));
+        assert!(previous.raycast(ray(0.1)).is_some());
+        assert!(moved.raycast(ray(0.1)).is_none());
+
+        let empty = Scene::new();
+        empty.prepare_spatial_index_from(&previous);
+        assert!(empty.raycast(ray(0.1)).is_none());
+        assert!(previous.raycast(ray(0.1)).is_some());
+    }
+
+    #[test]
+    fn boundedness_changes_rebuild_conservative_candidate_storage() {
+        let mut entries = IndexObject::flat(&[plane()]);
+        let finite = ObjectIndex::build_from(&entries);
+        entries[0].bounds = None;
+        let unbounded = finite.refit(&entries);
+        assert!(!Arc::ptr_eq(
+            &finite.tree.topology,
+            &unbounded.tree.topology
+        ));
+        let mut candidates = Vec::new();
+        unbounded.visit(ray(100.), |i| candidates.push(i));
+        assert_eq!(candidates, [0]);
+        finite.visit(ray(100.), |_| panic!("distant finite object visited"));
+
+        entries[0].object = None;
+        let hidden = unbounded.refit(&entries);
+        hidden.visit(ray(0.1), |_| panic!("hidden unbounded object visited"));
+        let restored = hidden.refit(&IndexObject::flat(&[plane()]));
+        let mut candidates = Vec::new();
+        restored.visit(ray(0.1), |i| candidates.push(i));
+        assert_eq!(candidates, [0]);
+        restored.visit(ray(100.), |_| panic!("distant restored object visited"));
     }
 }

@@ -1,6 +1,6 @@
 use std::{hint::black_box, time::Duration};
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use gpui_3d::{
     Camera, Material, Mesh, Object, PbrMaterial, PreparationCache, Projection, ResolvedTexture,
     Scene, TextureRequest, TextureSource, TextureState,
@@ -91,7 +91,74 @@ fn preparation(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, preparation);
+fn spatial_index(c: &mut Criterion) {
+    use gpui_3d::{AffineTransform, Node, SceneGraph};
+    let mut group = c.benchmark_group("spatial_index");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_millis(500));
+    for count in [1024, 16384] {
+        let mut graph = SceneGraph::new();
+        let mesh = Mesh::cube();
+        let columns = (count as f32).sqrt().ceil() as usize;
+        let nodes: Vec<_> = (0..count)
+            .map(|i| {
+                let position = [(i % columns) as f32 * 2., (i / columns) as f32 * 2., 0.];
+                let handle = graph
+                    .insert(
+                        None,
+                        Node::new()
+                            .mesh(mesh.clone(), Material::color(gpui::rgb(0x80a0c0)))
+                            .transform(AffineTransform::from_translation(position).unwrap()),
+                    )
+                    .unwrap();
+                (handle, position)
+            })
+            .collect();
+        group.throughput(Throughput::Elements(count as u64));
+        for (workload, stride) in [
+            ("unchanged", None),
+            ("sparse_motion", Some(100)),
+            ("all_motion", Some(1)),
+        ] {
+            let previous = graph.evaluate().unwrap();
+            previous.prepare_spatial_index();
+            for (i, &(node, mut position)) in nodes.iter().enumerate() {
+                if stride.is_some_and(|stride| i.is_multiple_of(stride)) {
+                    position[2] = 0.25;
+                    graph
+                        .set_transform(node, AffineTransform::from_translation(position).unwrap())
+                        .unwrap();
+                }
+            }
+            for refit in [false, true] {
+                let mode = if refit { "refit" } else { "rebuild" };
+                group.bench_function(BenchmarkId::new(format!("{workload}/{mode}"), count), |b| {
+                    b.iter_batched(
+                        || graph.evaluate().unwrap(),
+                        |current| {
+                            if refit {
+                                current.prepare_spatial_index_from(black_box(&previous));
+                            } else {
+                                current.prepare_spatial_index();
+                            }
+                            black_box(current);
+                        },
+                        BatchSize::PerIteration,
+                    );
+                });
+            }
+            for &(node, position) in &nodes {
+                graph
+                    .set_transform(node, AffineTransform::from_translation(position).unwrap())
+                    .unwrap();
+            }
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, preparation, spatial_index);
 
 #[cfg(feature = "wgpu")]
 fn draw_planning(c: &mut Criterion) {

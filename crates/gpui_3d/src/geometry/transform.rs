@@ -215,3 +215,64 @@ mod tests {
         assert!(huge.compose(huge).is_err());
     }
 }
+
+/// Translation, XYZ Euler rotation and nonzero scale in right-handed world space.
+#[derive(Clone, Copy, Debug)]
+pub struct Transform {
+    /// World position.
+    pub position: [f32; 3],
+    /// Euler angles in radians, applied X, then Y, then Z.
+    pub rotation: [f32; 3],
+    /// Per-axis scale. Negative values reflect the mesh.
+    pub scale: [f32; 3],
+}
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            position: [0.; 3],
+            rotation: [0.; 3],
+            scale: [1.; 3],
+        }
+    }
+}
+impl Transform {
+    pub(crate) fn matrices(self) -> (Matrix, Matrix) {
+        assert!(
+            self.position
+                .iter()
+                .chain(&self.rotation)
+                .chain(&self.scale)
+                .all(|x| x.is_finite())
+        );
+        assert!(self.scale.iter().all(|x| x.abs() >= 0.0001));
+        let [x, y, z] = self.rotation;
+        let rx = [
+            [1., 0., 0., 0.],
+            [0., x.cos(), x.sin(), 0.],
+            [0., -x.sin(), x.cos(), 0.],
+            [0., 0., 0., 1.],
+        ];
+        let ry = [
+            [y.cos(), 0., -y.sin(), 0.],
+            [0., 1., 0., 0.],
+            [y.sin(), 0., y.cos(), 0.],
+            [0., 0., 0., 1.],
+        ];
+        let rz = [
+            [z.cos(), z.sin(), 0., 0.],
+            [-z.sin(), z.cos(), 0., 0.],
+            [0., 0., 1., 0.],
+            [0., 0., 0., 1.],
+        ];
+        let mut model = multiply(rz, multiply(ry, rx));
+        let mut normal = model;
+        for c in 0..3 {
+            for r in 0..3 {
+                model[c][r] *= self.scale[c];
+                normal[c][r] /= self.scale[c];
+            }
+        }
+        model[3] = [self.position[0], self.position[1], self.position[2], 1.];
+        (model, normal)
+    }
+}

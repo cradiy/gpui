@@ -1,0 +1,213 @@
+use crate::{AlphaMode, PbrMaterial, TextureColorSpace, TextureSampling};
+use gpui::{ImageSource, Rgba};
+
+#[derive(Clone)]
+pub(crate) enum Texture {
+    None,
+    Image(ImageSource),
+    Ui,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextureSlot {
+    BaseColor,
+    MetallicRoughness,
+    Emissive,
+    Normal,
+    Occlusion,
+}
+
+/// An image and its independent mesh-UV sampling configuration.
+#[derive(Clone)]
+pub struct MaterialTexture {
+    pub(crate) image: ImageSource,
+    pub(crate) sampling: TextureSampling,
+}
+
+impl MaterialTexture {
+    /// Uses the first decoded frame with linear filtering and clamped coordinates.
+    pub fn new(image: impl Into<ImageSource>) -> Self {
+        Self {
+            image: image.into(),
+            sampling: TextureSampling::default(),
+        }
+    }
+
+    /// Sets the UV transform, per-axis addressing and mip-zero filtering.
+    pub fn sampling(mut self, sampling: TextureSampling) -> Self {
+        self.sampling = sampling;
+        self
+    }
+}
+
+/// Solid or textured material with explicit alpha interpretation.
+#[derive(Clone)]
+pub struct Material {
+    pub(crate) color: Rgba,
+    pub(crate) texture: Texture,
+    pub(crate) unlit: bool,
+    pub(crate) alpha_cutoff: f32,
+    pub(crate) alpha_mode: AlphaMode,
+    pub(crate) sampling: TextureSampling,
+    pub(crate) image_color_space: TextureColorSpace,
+    pub(crate) pbr: Option<PbrMaterial>,
+    pub(crate) metallic_roughness_texture: Option<MaterialTexture>,
+    pub(crate) emissive_texture: Option<MaterialTexture>,
+    pub(crate) normal_texture: Option<MaterialTexture>,
+    pub(crate) normal_scale: f32,
+    pub(crate) occlusion_texture: Option<MaterialTexture>,
+    pub(crate) occlusion_strength: f32,
+}
+impl Material {
+    /// Creates a lit solid material from an sRGB color.
+    pub fn color(color: impl Into<Rgba>) -> Self {
+        Self {
+            color: color.into(),
+            texture: Texture::None,
+            unlit: false,
+            alpha_cutoff: 0.5,
+            alpha_mode: AlphaMode::Mask,
+            sampling: TextureSampling::default(),
+            image_color_space: TextureColorSpace::default(),
+            pbr: None,
+            metallic_roughness_texture: None,
+            emissive_texture: None,
+            normal_texture: None,
+            normal_scale: 1.,
+            occlusion_texture: None,
+            occlusion_strength: 1.,
+        }
+    }
+    /// Uses an image's first decoded frame, stretched over mesh UVs.
+    pub fn image(image: impl Into<ImageSource>) -> Self {
+        Self {
+            texture: Texture::Image(image.into()),
+            ..Self::color(gpui::white())
+        }
+    }
+    /// Uses the viewport's decorative UI capture without lighting.
+    pub fn ui() -> Self {
+        Self {
+            texture: Texture::Ui,
+            unlit: true,
+            ..Self::color(gpui::white())
+        }
+    }
+    /// Sets an sRGB tint, decoded before multiplication; alpha follows the alpha mode.
+    pub fn tint(mut self, color: impl Into<Rgba>) -> Self {
+        self.color = color.into();
+        self
+    }
+    /// Configures image textures. Captured UI textures retain their original
+    /// UV mapping and linear edge-clamped sampling.
+    pub fn image_sampling(mut self, sampling: TextureSampling) -> Self {
+        self.sampling = sampling;
+        self
+    }
+    /// Sets image RGB encoding. Alpha remains linear; solid tint and UI captures
+    /// use sRGB regardless of this setting.
+    pub fn image_color_space(mut self, color_space: TextureColorSpace) -> Self {
+        self.image_color_space = color_space;
+        self
+    }
+    /// Enables metallic-roughness shading, preserving the base color, texture and cutoff.
+    /// Rendering rejects invalid parameters. Unlit mode bypasses PBR, including emission.
+    pub fn pbr(mut self, parameters: PbrMaterial) -> Self {
+        self.pbr = Some(parameters);
+        self
+    }
+    /// Multiplies PBR roughness by linear G and metallic by linear B; R and alpha
+    /// are ignored. Only used when PBR is enabled and the material is lit.
+    pub fn metallic_roughness_texture(mut self, texture: MaterialTexture) -> Self {
+        self.metallic_roughness_texture = Some(texture);
+        self
+    }
+    /// Multiplies PBR emission by sRGB RGB decoded before filtering. Alpha is
+    /// ignored. Only used when PBR is enabled and the material is lit.
+    pub fn emissive_texture(mut self, texture: MaterialTexture) -> Self {
+        self.emissive_texture = Some(texture);
+        self
+    }
+    /// Uses linear RGB tangent-space normals decoded from [0, 1] to [-1, 1].
+    /// Alpha is ignored. Requires mesh tangents when lit PBR and nonzero scale
+    /// are enabled. Does not change geometry, silhouettes or picking normals.
+    pub fn normal_texture(mut self, texture: MaterialTexture) -> Self {
+        self.normal_texture = Some(texture);
+        self
+    }
+    /// Scales normal-map XY before normalization. Defaults to 1; zero disables
+    /// the map and its resource requests. Rendering rejects negative/non-finite values.
+    pub fn normal_scale(mut self, scale: f32) -> Self {
+        self.normal_scale = scale;
+        self
+    }
+
+    /// Attenuates diffuse ambient and environment light using linear R.
+    /// G, B and alpha are ignored. Works with basic and PBR lit materials.
+    pub fn occlusion_texture(mut self, texture: MaterialTexture) -> Self {
+        self.occlusion_texture = Some(texture);
+        self
+    }
+    /// Blends from no occlusion at 0 to the full map at 1. Defaults to 1.
+    /// Zero disables resource requests. Rendering rejects values outside [0, 1].
+    pub fn occlusion_strength(mut self, strength: f32) -> Self {
+        self.occlusion_strength = strength;
+        self
+    }
+
+    pub(crate) fn lighting_textures(
+        &self,
+    ) -> impl Iterator<Item = (TextureSlot, &MaterialTexture)> {
+        [
+            (
+                TextureSlot::MetallicRoughness,
+                self.metallic_roughness_texture.as_ref(),
+            ),
+            (TextureSlot::Emissive, self.emissive_texture.as_ref()),
+            (
+                TextureSlot::Normal,
+                self.normal_texture
+                    .as_ref()
+                    .filter(|_| self.normal_scale != 0.),
+            ),
+            (
+                TextureSlot::Occlusion,
+                self.occlusion_texture
+                    .as_ref()
+                    .filter(|_| self.occlusion_strength != 0.),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(slot, texture)| {
+            texture
+                .filter(|_| !self.unlit && (slot == TextureSlot::Occlusion || self.pbr.is_some()))
+                .map(|texture| (slot, texture))
+        })
+    }
+    /// Bypasses lighting, occlusion, and emission.
+    pub fn unlit(mut self, unlit: bool) -> Self {
+        self.unlit = unlit;
+        self
+    }
+    /// Selects Opaque, Mask or Blend alpha interpretation. Defaults to Mask.
+    pub fn alpha_mode(mut self, mode: AlphaMode) -> Self {
+        self.alpha_mode = mode;
+        self
+    }
+    /// Sets the Mask threshold in [0.001, 1] and selects Mask mode.
+    pub fn alpha_cutoff(mut self, cutoff: f32) -> Self {
+        assert!(cutoff.is_finite());
+        self.alpha_cutoff = cutoff.clamp(0.001, 1.);
+        self.alpha_mode = AlphaMode::Mask;
+        self
+    }
+
+    pub(crate) fn alpha_visible(&self, alpha: f32) -> bool {
+        let alpha = alpha.clamp(0., 1.);
+        match self.alpha_mode {
+            AlphaMode::Opaque => true,
+            AlphaMode::Mask => alpha >= self.alpha_cutoff,
+            AlphaMode::Blend => alpha > 0.,
+        }
+    }
+}

@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_3d::{
     AffineTransform, Camera, EvaluatedScene, Material, Mesh, Node, NodeHandle, OrbitController,
-    SceneGraph, SubtreeInstance, viewport3d,
+    Projection, SceneGraph, SubtreeInstance, viewport3d,
 };
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc};
@@ -13,12 +13,13 @@ fn local(position: [f32; 3], scale: [f32; 3]) -> AffineTransform {
     AffineTransform::from_trs(position, [0., 0., 0., 1.], scale).unwrap()
 }
 
-struct Instances {
+struct SceneDemo {
     graph: SceneGraph,
     evaluated: EvaluatedScene,
     instances: Vec<SubtreeInstance>,
     body: NodeHandle,
     selected: usize,
+    hovered: Option<usize>,
     raised: [bool; 3],
     tinted: [bool; 3],
     hidden: [bool; 3],
@@ -26,7 +27,7 @@ struct Instances {
     bounds: Rc<Cell<Bounds<Pixels>>>,
     _activation: gpui::Subscription,
 }
-impl Instances {
+impl SceneDemo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let geometry = Mesh::cube();
         let mut source = SceneGraph::new();
@@ -82,6 +83,7 @@ impl Instances {
             instances,
             body,
             selected: 1,
+            hovered: None,
             raised: [false; 3],
             tinted: [false; 3],
             hidden: [false; 3],
@@ -115,7 +117,7 @@ impl Instances {
             .child(label)
     }
 }
-impl Render for Instances {
+impl Render for SceneDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bounds = self.bounds.clone();
         let view_id = cx.entity_id();
@@ -186,8 +188,19 @@ impl Render for Instances {
                 }
             }))
             .child(
-                viewport3d("instances", self.evaluated.scene(self.controls.camera()))
+                viewport3d("scene", self.evaluated.scene(self.controls.camera()))
                     .size_full()
+                    .on_object_hover(cx.listener(|this, hit: &Option<gpui_3d::Hit>, _, cx| {
+                        let hovered = hit.as_ref().and_then(|hit| {
+                            this.instances.iter().position(|instance| {
+                                instance.mappings().any(|(_, node)| Some(node) == hit.node)
+                            })
+                        });
+                        if this.hovered != hovered {
+                            this.hovered = hovered;
+                            cx.notify();
+                        }
+                    }))
                     .on_object_click(cx.listener(|this, hit: &gpui_3d::Hit, _, cx| {
                         if let Some(selected) = this.instances.iter().position(|instance| {
                             instance.mappings().any(|(_, node)| Some(node) == hit.node)
@@ -215,7 +228,7 @@ impl Render for Instances {
             .child(div().text_color(rgb(0x9eb1cb)).child("Click an assembly to select · Right-drag to orbit · Middle-drag to pan · Scroll to zoom"))
             .child(div().flex().flex_wrap().gap_3()
                 .children([("one", "Instance 1"), ("two", "Instance 2"), ("three", "Instance 3")].into_iter().enumerate().map(|(index, (id, label))| {
-                    self.button(id, label, self.selected == index).on_click(cx.listener(move |this, _, _, cx| { this.selected = index; cx.notify(); }))
+                    self.button(id, label, self.selected == index || self.hovered == Some(index)).on_click(cx.listener(move |this, _, _, cx| { this.selected = index; cx.notify(); }))
                 }))
                 .child(self.button("move", "Move body", self.raised[self.selected]).on_click(cx.listener(|this, _, _, cx| {
                     let index = this.selected;
@@ -237,6 +250,30 @@ impl Render for Instances {
                     this.graph.set_visible(this.instances[index].root(), !this.hidden[index]).unwrap();
                     this.refresh(cx);
                 })))
+                .child(self.button("projection", "Projection", false).on_click(cx.listener(|this, _, _, cx| {
+                    let mut camera = this.controls.camera();
+                    let distance = camera.eye.iter().zip(camera.target).map(|(a,b)| (a-b).powi(2)).sum::<f32>().sqrt();
+                    camera.projection = match camera.projection {
+                        Projection::Perspective { vertical_fov } => Projection::Orthographic { vertical_size: 2. * distance * (vertical_fov * 0.5).tan() },
+                        Projection::Orthographic { vertical_size } => Projection::Perspective { vertical_fov: 2. * (vertical_size / (2. * distance)).atan() },
+                    };
+                    this.controls.set_camera(camera).unwrap(); cx.notify();
+                })))
+                .child(self.button("frame", "Frame selected", false).on_click(cx.listener(|this, _, _, cx| {
+                    let rect = this.bounds.get();
+                    let aspect = if rect.size.height > px(0.) { rect.size.width / rect.size.height } else { 1.5 };
+                    if let Some(bounds) = this.evaluated.node(this.instances[this.selected].root()).and_then(|node| node.subtree_bounds) {
+                        let camera = this.controls.camera().frame_bounds(bounds, aspect, 1.3).unwrap();
+                        this.controls.set_camera(camera).unwrap(); cx.notify();
+                    }
+                })))
+                .child(self.button("rotate", "Rotate assembly", false).on_click(cx.listener(|this, _, _, cx| {
+                    let root = this.instances[this.selected].root();
+                    let local = this.graph.node(root).unwrap().local_transform();
+                    let rotation = AffineTransform::from_trs([0.; 3], [0., (0.15_f32).sin(), 0., (0.15_f32).cos()], [1.; 3]).unwrap();
+                    this.graph.set_transform(root, local.compose(rotation).unwrap()).unwrap();
+                    this.refresh(cx);
+                })))
                 .child(self.button("reset", "Reset", false).on_click(cx.listener(|this, _, window, cx| { *this = Self::new(window, cx); cx.notify(); }))))
             .child(stage)
             .child(div().text_sm().text_color(rgb(0xa4bad2)).child(format!("Instance {} selected · 3 editable subtrees · 1 shared mesh allocation", self.selected + 1)))
@@ -254,8 +291,8 @@ fn main() {
                 ))),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| Instances::new(window, cx)),
+            |window, cx| cx.new(|cx| SceneDemo::new(window, cx)),
         )
-        .expect("failed to open instances example");
+        .expect("failed to open scene example");
     });
 }

@@ -159,10 +159,10 @@ outputs remain subject to dimension/pixel budgets and the per-buffer
 requires 16 bytes per pixel, while the other channels require four.
 
 ```sh
-cargo run -p gpui_3d --features wgpu --example geometry_outputs -- /tmp/gpui-3d-outputs
+cargo run -p gpui_3d --features wgpu --example headless -- /tmp/gpui-3d-outputs
 ```
 
-The example writes aligned `color.png`, `depth.png`, and `normals.png` previews.
+The example writes aligned `color.png`, `ids.png`, `depth.png`, and `normals.png` previews.
 Depth is mapped from the visible range to grayscale with nearer surfaces brighter;
 normal XYZ is mapped from `[-1, 1]` to RGB `[0, 1]`. Preview mappings do not change
 the raw floating-point outputs. The translucent plane contributes blended color
@@ -211,9 +211,10 @@ validation failures remain subject to WGPU's device error handling.
 ## Example
 
 ```sh
-cargo run -p gpui_3d --features wgpu --example headless -- /tmp/scene.png
+cargo run -p gpui_3d --features wgpu --example headless -- /tmp/gpui-3d-outputs
 ```
 
-Creates a scene, writes its color image, and prints the visible pixel count for
-each object ID without opening a window. The output path defaults to `scene.png`.
-The example uses a bounded polling loop for readback.
+Creates a scene and writes color, object-ID, depth and normal previews without
+opening a window. It prints each object's identity and visible pixel count.
+The output directory defaults to `render-output`. ID colors are a display mapping,
+not the exact integer channel. The example uses a bounded polling loop for readback.

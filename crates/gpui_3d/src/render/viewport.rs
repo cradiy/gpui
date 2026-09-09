@@ -1,5 +1,6 @@
-use crate::picking::{PickSnapshot, PickSurface};
-use crate::{Hit, ObjectId, PickBehavior, Scene, Texture, TextureSlot, ui_input::UiInput};
+use super::ui_input::UiInput;
+use crate::spatial::picking::{PickSnapshot, PickSurface};
+use crate::{Hit, ObjectId, PickBehavior, Scene, Texture, TextureSlot};
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, MeshTexture3d, Pixels, PointerTransform, Size, Style, StyleRefinement,

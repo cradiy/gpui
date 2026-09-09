@@ -1,4 +1,4 @@
-#![doc = include_str!("../docs/headless.md")]
+#![doc = include_str!("../../docs/headless.md")]
 
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
 

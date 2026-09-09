@@ -574,10 +574,9 @@ materials bypass every light. Lights do not change emission, alpha, picking,
 object IDs, depth, or geometric normals. Point and spot lights do not compute
 shadows. Viewport and headless rendering share the same light list.
 
-Run `cargo run -p gpui_3d --example lights` to compare point and spot sources.
-Move the pointer to move both sources, adjust source distance and cone width,
-or add a directional and colored point fill light. Right-drag or scroll in either
-view to control the synchronized cameras.
+The `lighting` example switches directional, point, and spot sources in the same
+scene. Move the pointer to move the light, adjust its range and cone, or add a
+directional fill. Right-drag to orbit and scroll to zoom.
 
 ### Directional shadows
 
@@ -635,7 +634,7 @@ Maps are reused by resolution within a renderer; disabled shadows allocate no
 full-size map. There is one shadowed directional source per scene, without
 cascades, contact shadows, or colored transparent shadows.
 
-Run `cargo run -p gpui_3d --example shadows`. Move the pointer to steer sunlight,
+Run `cargo run -p gpui_3d --example lighting`. Move the pointer to steer sunlight,
 right-drag to orbit, and scroll to zoom. Controls toggle shadows and soft edges,
 cycle map resolution, and lift the objects above the ground.
 
@@ -707,9 +706,8 @@ Uniform ambient and direct lighting remain additive. Unlit materials bypass
 environment lighting. Alpha, picking, object IDs, depth, and geometric normal
 outputs are unchanged. Viewport and headless color rendering share the same path.
 
-Run `cargo run -p gpui_3d --example diffuse_environment` to compare uniform ambient
-light with a colored HDR environment. Rotate the light with the toolbar or orbit
-either view with the right mouse button; both cameras stay synchronized.
+The `lighting` example toggles a colored HDR environment independently of direct
+sources. Rotate the environment with the toolbar to inspect the illumination.
 
 ### Material textures
 
@@ -779,9 +777,8 @@ filtering. An ORM image can be shared between `occlusion_texture` (R) and
 Disabled maps request no resources. Active maps use the same readiness and
 decoded-image requirements as other material maps in viewport/headless rendering.
 
-Run `cargo run -p gpui_3d --example ambient_occlusion` for a comparison of raised
-panels with and without authored contact occlusion. Adjust AO strength or switch
-to direct-only illumination to isolate the contribution.
+The `materials` example toggles occlusion independently of normal, metallic-roughness,
+and emission maps. Occlusion uses the R channel of the shared ORM image.
 
 ### Normal maps and tangents
 
@@ -1097,114 +1094,44 @@ textures with a frame-local identity map and bounded
 nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
 
-## Example
+## Examples
+
+Each example is an independent executable.
+
+| Example | Controls and content |
+| --- | --- |
+| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, perspective/orthographic projection, framing, orbit and pan. |
+| `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
+| `lighting` | Directional/point/spot sources, fill light, environment rotation, directional shadows, map resolution and soft edges. |
+| `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |
+| `headless` | Window-free color/ID/depth/normal readback, PNG previews and object identity inspection. |
 
 ```sh
-cargo run -p gpui_3d --example transparency
+cargo run -p gpui_3d --example scene
+cargo run -p gpui_3d --example materials
+cargo run -p gpui_3d --example lighting
+cargo run -p gpui_3d --example ui
+cargo run -p gpui_3d --features wgpu --example headless -- /tmp/gpui-3d-outputs
 ```
 
-Compare Opaque, Mask, and Blend using the same alpha-gradient image and overlapping
-colored planes over a checkerboard. Change tint opacity or reverse object submission
-order. The center opening has zero alpha; only Opaque fills it.
+In `scene`, hover an assembly to highlight its toolbar control, or click it to
+select it. The numbered controls also select assemblies. Move or
+tint its body, rotate the assembly, or hide its subtree. Other instances retain
+their own properties. Right-drag to orbit, middle-drag to pan, and scroll to zoom.
+Projection preserves the apparent size at the target; Frame selected fits the
+selected assembly's bounds.
 
-```sh
-cargo run -p gpui_3d --example normal_mapping
-```
+In `materials`, the spheres share geometry and expose different material responses.
+Normal and occlusion maps toggle independently of metallic-roughness and emissive
+maps. The strip below the spheres shows image alpha over an opaque background.
+Cycle Opaque/Mask/Blend, Clamp/Repeat/Mirror, and Nearest/Linear; density and offset
+also affect the strip. Exposure and tone mapping apply to the complete 3D scene.
 
-Compare smooth and normal-mapped planes with identical geometry. Adjust normal
-strength and texture density, mirror the mapped plane, right-drag to orbit, and
-scroll to zoom. Strength zero displays the unperturbed surface.
+In `lighting`, move the pointer to steer the source. Shadow controls apply only
+to the directional source. Lift the objects to inspect detached shadows, or toggle
+the environment and fill light to inspect illumination inside shadowed areas.
 
-```sh
-cargo run -p gpui_3d --example pbr_materials
-```
-
-Compare dielectric, metal and emissive spheres. Adjust roughness and emission,
-right-drag to orbit, scroll to zoom, and switch between perspective and orthographic
-projection to inspect view-dependent highlights. Toggle material maps, cycle map
-density, and shift the emission map independently of the metallic-roughness map.
-
-```sh
-cargo run -p gpui_3d --example color_pipeline
-```
-
-Compare clipped and Reinhard-compressed highlights on the same textured models.
-Adjust exposure, light intensity, and image encoding. GPUI reference swatches
-remain independent of scene lighting and display settings.
-
-```sh
-cargo run -p gpui_3d --example texture_sampling
-```
-
-Compare Clamp, Repeat and Mirror side by side. Toggle filtering and adjust UV
-scale, rotation and offset. Click opaque texels or transparent openings to inspect
-image and background hits while retaining the original mesh UV coordinates.
-
-```sh
-cargo run -p gpui_3d --example instances
-```
-
-Three assemblies share one mesh allocation. Select an instance by clicking its
-geometry or toolbar button, then move or tint its body, or hide the whole subtree.
-Other instances retain their own node properties. Right-drag to orbit,
-middle-drag to pan, and scroll to zoom.
-
-```sh
-cargo run -p gpui_3d --example camera
-```
-
-Compare six equal cubes at different depths with perspective and orthographic
-projection. Click a cube to select it, frame the selection or the whole scene,
-and switch between front, top, and oblique views. Right-drag to orbit and
-middle-drag to pan. Scrolling moves a perspective camera or changes the
-orthographic span; `Lens + / −` changes FOV or span without moving the eye.
-Drags end when the pointer leaves the viewport. The footer reports
-the selected node's projected position and linear forward depth.
-
-```sh
-cargo run -p gpui_3d --example hierarchy
-```
-
-Rotate groups A and B, toggle group A's visibility, and reparent the coral cube
-with either keep-world or keep-local behavior. Remove and restore coral to create
-a new handle. Click geometry to inspect its node identity. Right-drag to orbit
-and scroll to zoom. The graph is reevaluated after edits, not camera movement.
-
-```sh
-cargo run -p gpui_3d --example ui_interaction
-```
-
-Click the panel buttons, drag the level slider beyond the panel, and scroll the
-notes. Toggle the occluder to block part of the panel. Right-drag to orbit; left
-dragging empty space also orbits. Scroll outside the panel to zoom the camera.
-
-```sh
-cargo run -p gpui_3d --example ui_texture
-```
-
-Change density to compare fine-line and text detail without reflowing the panel.
-The layout button switches between 640 × 400 and 960 × 400 logical pixels, with
-a matching mesh aspect ratio. Resize the window, drag to orbit, or scroll to zoom.
-The toolbar shows the allocated texture dimensions in physical pixels.
-
-```sh
-cargo run -p gpui_3d --example orbit
-```
-
-Drag to orbit the scene and scroll to change distance. Toggle the UI plane to
-inspect the image plane and textured cube behind it. `Reset` restores the camera.
-
-```sh
-cargo run -p gpui_3d --example picking
-```
-
-Hover to highlight a cube, click to select it, left- or right-drag to orbit, and
-scroll to zoom. Movement beyond four logical pixels starts an orbit gesture and
-suppresses selection on release. Hover and selection change colors without
-changing geometry.
-
-The halo uses an image with a transparent center, with a selectable backplate
-behind the scene. Compare the three mode buttons while pointing at the solid rim:
-selectable highlights the halo, occluder yields no target, and pass-through
-highlights an object behind the halo. The pointer target and selected object are
-shown below the viewport. The transparent center passes through in all modes.
+In `ui`, drag the slider beyond the panel and scroll the notes. Toggle the occluder
+to block part of the panel. Density changes raster quality without reflow; canvas
+width changes layout and the mesh aspect ratio. Right-drag to orbit, or left-drag
+empty space. Scroll outside the panel to zoom.

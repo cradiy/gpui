@@ -65,3 +65,26 @@ impl PunctualLight {
         self
     }
 }
+
+/// One directional light plus uniform ambient illumination.
+#[derive(Clone, Copy, Debug)]
+pub struct Light {
+    /// Direction toward the light in world space.
+    pub direction: [f32; 3],
+    /// sRGB light color; alpha is ignored.
+    pub color: Rgba,
+    /// Direct light multiplier.
+    pub intensity: f32,
+    /// Ambient light multiplier.
+    pub ambient: f32,
+}
+impl Default for Light {
+    fn default() -> Self {
+        Self {
+            direction: [-0.5, 0.8, 0.7],
+            color: gpui::rgb(0xe7efff),
+            intensity: 0.75,
+            ambient: 0.3,
+        }
+    }
+}

@@ -1,50 +1,113 @@
 use anyhow::{Result, ensure};
-use gpui::rgb;
+use gpui::{rgb, rgba};
 use gpui_3d::{
-    AffineTransform, Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfig,
-    SceneGraph,
+    AlphaMode, Camera, HeadlessRenderer, Material, Mesh, Object, Scene, Scene3dChannels,
+    Scene3dOutputConfig,
 };
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 fn main() -> Result<()> {
-    let path = std::env::args_os()
+    let directory = std::env::args_os()
         .nth(1)
-        .unwrap_or_else(|| "scene.png".into());
-    let mut graph = SceneGraph::new();
-    let cube = Mesh::cube();
-    for (id, position, color) in [
-        ("coral", [-0.8, 0., 0.4], 0xf09e8e),
-        ("ice", [0.8, 0., -0.4], 0x8dd8e8),
-        ("gold", [0., -1., -0.8], 0xf4cf89),
-    ] {
-        graph.insert(
-            None,
-            Node::new()
-                .id(id)
-                .mesh(cube.clone(), Material::color(rgb(color)))
-                .transform(AffineTransform::from_translation(position)?),
-        )?;
-    }
-    let evaluated = graph.evaluate()?;
-    let camera =
-        Camera::orbit(0.5, 0.35, 8.).frame_bounds(evaluated.bounds().unwrap(), 4. / 3., 1.3)?;
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("render-output"));
+    let scene = Scene::new()
+        .camera(Camera::orbit(0.35, 0.25, 6.))
+        .object(
+            Object::new(Mesh::cube(), Material::color(rgb(0xe4b183)))
+                .id("warm cube")
+                .position([-0.7, 0., 0.2])
+                .rotation([0.2, 0.4, 0.]),
+        )
+        .object(
+            Object::new(Mesh::cube(), Material::color(rgb(0x71c2d9)))
+                .id("cool cube")
+                .position([0.7, -0.2, -0.5])
+                .rotation([0., -0.4, 0.2]),
+        )
+        .object(
+            Object::new(
+                Mesh::plane(),
+                Material::color(rgba(0xc1a0f760)).alpha_mode(AlphaMode::Blend),
+            )
+            .position([0.4, 0.1, 1.])
+            .scale([0.7, 1.8, 1.]),
+        )
+        .object(
+            Object::new(Mesh::plane(), Material::color(rgb(0x506475)))
+                .position([0., -1.1, 0.])
+                .rotation([-std::f32::consts::FRAC_PI_2, 0., 0.])
+                .scale([4., 4., 1.]),
+        );
     let mut renderer = HeadlessRenderer::new()?;
     let frame = renderer.render(
-        &evaluated.scene(camera),
-        Scene3dOutputConfig::new([800, 600]),
+        &scene,
+        Scene3dOutputConfig {
+            size: [800, 600],
+            channels: Scene3dChannels::all(),
+            color_samples: 1,
+        },
     )?;
     let mut readback = frame.readback()?;
     let deadline = Instant::now() + Duration::from_secs(15);
-    let mut pixels = loop {
-        if let Some(frame) = readback.try_read()? {
-            break frame;
+    let mut result = loop {
+        if let Some(result) = readback.try_read()? {
+            break result;
         }
         ensure!(Instant::now() < deadline, "GPU readback timed out");
         std::thread::sleep(Duration::from_millis(2));
     };
-    let mut rgba = pixels.pixels.rgba.take().unwrap();
-    // PNG stores straight alpha.
-    for pixel in rgba.chunks_exact_mut(4) {
+    let ids = result.pixels.object_ids.as_ref().unwrap();
+    for object in result.objects() {
+        let count = ids.iter().filter(|id| **id == object.output_id).count();
+        println!(
+            "ID {}: {:?}, {} visible pixels",
+            object.output_id, object.id, count
+        );
+    }
+    let id_preview = image::RgbaImage::from_fn(800, 600, |x, y| {
+        let id = ids[(y * 800 + x) as usize];
+        image::Rgba([
+            id.wrapping_mul(71) as u8,
+            id.wrapping_mul(137) as u8,
+            id.wrapping_mul(213) as u8,
+            if id == 0 { 0 } else { 255 },
+        ])
+    });
+    let depth = result.pixels.linear_depth.as_ref().unwrap();
+    let normals = result.pixels.world_normals.as_ref().unwrap();
+    let (near, far) = depth
+        .iter()
+        .zip(normals)
+        .filter(|(_, n)| n[3] > 0.)
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), (&z, _)| {
+            (min.min(z), max.max(z))
+        });
+    let depth_preview = image::RgbaImage::from_fn(800, 600, |x, y| {
+        let index = (y * 800 + x) as usize;
+        let value = ((1. - (depth[index] - near) / (far - near).max(0.001)).clamp(0., 1.) * 255.)
+            .round() as u8;
+        image::Rgba([
+            value,
+            value,
+            value,
+            if normals[index][3] > 0. { 255 } else { 0 },
+        ])
+    });
+    let normal_preview = image::RgbaImage::from_fn(800, 600, |x, y| {
+        let n = normals[(y * 800 + x) as usize];
+        image::Rgba([
+            ((n[0] * 0.5 + 0.5) * 255.).round() as u8,
+            ((n[1] * 0.5 + 0.5) * 255.).round() as u8,
+            ((n[2] * 0.5 + 0.5) * 255.).round() as u8,
+            if n[3] > 0. { 255 } else { 0 },
+        ])
+    });
+    let mut color = result.pixels.rgba.take().unwrap();
+    for pixel in color.chunks_exact_mut(4) {
         let alpha = u32::from(pixel[3]);
         if alpha > 0 && alpha < 255 {
             for channel in &mut pixel[..3] {
@@ -52,15 +115,21 @@ fn main() -> Result<()> {
             }
         }
     }
-    image::save_buffer(&path, &rgba, 800, 600, image::ColorType::Rgba8)?;
-    println!("Saved {}", std::path::Path::new(&path).display());
-    let ids = pixels.pixels.object_ids.as_ref().unwrap();
-    for object in pixels.objects() {
-        let count = ids.iter().filter(|id| **id == object.output_id).count();
-        println!(
-            "ID {}: {:?}, {} visible pixels",
-            object.output_id, object.id, count
-        );
-    }
+    std::fs::create_dir_all(&directory)?;
+    image::save_buffer(
+        directory.join("color.png"),
+        &color,
+        800,
+        600,
+        image::ColorType::Rgba8,
+    )?;
+    id_preview.save(directory.join("ids.png"))?;
+    depth_preview.save(directory.join("depth.png"))?;
+    normal_preview.save(directory.join("normals.png"))?;
+    println!(
+        "Saved color, ID, depth, and normal previews to {}",
+        directory.display()
+    );
+    println!("Depth range: {near:.3}–{far:.3} scene units; near is brighter");
     Ok(())
 }

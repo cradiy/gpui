@@ -6,11 +6,13 @@ use gpui_3d::{Camera, Material, Mesh, Object, PickBehavior, Scene, viewport3d};
 use gpui_platform::application;
 use uic::components::slider::{Slider, SliderState};
 
-struct UiInteraction {
+struct UiDemo {
     level: Entity<SliderState>,
     left: usize,
     right: usize,
     covered: bool,
+    density: f32,
+    width: f32,
     yaw: f32,
     pitch: f32,
     distance: f32,
@@ -19,7 +21,7 @@ struct UiInteraction {
     _subscriptions: Vec<Subscription>,
 }
 
-impl UiInteraction {
+impl UiDemo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let level = cx.new(|cx| SliderState::new(35., 0. ..=100., cx));
         let changed = cx.subscribe(&level, |_, _, _, cx| cx.notify());
@@ -33,6 +35,8 @@ impl UiInteraction {
             left: 0,
             right: 0,
             covered: false,
+            density: 1.,
+            width: 640.,
             yaw: 0.25,
             pitch: 0.12,
             distance: 4.8,
@@ -138,14 +142,14 @@ impl UiInteraction {
     }
 }
 
-impl Render for UiInteraction {
+impl Render for UiDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut scene = Scene::new()
             .camera(Camera::orbit(self.yaw, self.pitch, self.distance))
             .object(
                 Object::new(Mesh::plane(), Material::ui())
                     .id("panel")
-                    .scale([4., 3.25, 1.]),
+                    .scale([4., 4. * 520. / self.width, 1.]),
             );
         if self.covered {
             scene = scene.object(
@@ -200,6 +204,15 @@ impl Render for UiInteraction {
                             })),
                     ),
             )
+            .child(div().flex().flex_wrap().gap_3().children([
+                ("density", "Raster density"), ("width", "Canvas width")
+            ].into_iter().map(|(id, label)| div().id(id).px_4().py_2().rounded_full()
+                .bg(rgb(0x29415d)).cursor_pointer().child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if id == "density" { this.density = if this.density < 2. { this.density * 2. } else { 0.5 }; }
+                    else { this.width = if this.width == 640. { 800. } else { 640. }; }
+                    cx.notify();
+                })))))
             .child(
                 div()
                     .id("camera")
@@ -266,7 +279,8 @@ impl Render for UiInteraction {
                     .child(
                         viewport3d("world", scene)
                             .size_full()
-                            .ui_texture_size(size(px(640.), px(520.)))
+                            .ui_texture_size(size(px(self.width), px(520.)))
+                            .ui_texture_scale(self.density)
                             .ui_texture(self.panel(cx))
                             .interactive_ui("panel"),
                     ),
@@ -275,7 +289,7 @@ impl Render for UiInteraction {
                 div()
                     .text_sm()
                     .text_color(rgb(0x92a9c3))
-                    .child("Left-drag empty space to orbit · Scroll outside the panel to zoom"),
+                    .child(format!("Canvas {:.0} × 520 · Raster {:.1}× · Left-drag empty space to orbit · Scroll outside the panel to zoom", self.width, self.density)),
             )
             .when(!window.supports_scene3d(), |root| {
                 root.child("3D viewports are unavailable on this renderer.")
@@ -294,8 +308,8 @@ fn main() {
                 ))),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| UiInteraction::new(window, cx)),
+            |window, cx| cx.new(|cx| UiDemo::new(window, cx)),
         )
-        .expect("failed to open UI interaction example");
+        .expect("failed to open UI example");
     });
 }

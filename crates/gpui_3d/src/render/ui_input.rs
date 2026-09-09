@@ -1,6 +1,6 @@
 use crate::{
     Hit, ObjectId, Texture,
-    picking::{DragProjection, PickSnapshot},
+    spatial::picking::{DragProjection, PickSnapshot},
 };
 use gpui::{
     Context, DispatchPhase, Hitbox, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -170,7 +170,8 @@ impl UiInput {
 mod tests {
     use super::*;
     use crate::{
-        Camera, Material, Mesh, Object, PickBehavior, Scene, math::transform, picking::PickSurface,
+        Camera, Material, Mesh, Object, PickBehavior, Scene, math::transform,
+        spatial::picking::PickSurface,
     };
     use gpui::{
         AppContext as _, Bounds, Entity, IntoElement, PlatformInput, Render, ScrollDelta,

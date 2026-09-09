@@ -3,9 +3,9 @@ use gpui::{
     div, prelude::*, px, rgb, size,
 };
 use gpui_3d::{
-    Camera, ColorOutput, Light, Material, MaterialTexture, Mesh, Object, OrbitController,
-    PbrMaterial, Projection, Scene, TextureAddressMode, TextureSampling, ToneMapping, UvTransform,
-    Vertex, viewport3d,
+    AlphaMode, Camera, ColorOutput, Light, Material, MaterialTexture, Mesh, Object,
+    OrbitController, PbrMaterial, Projection, Scene, TextureAddressMode, TextureFilter,
+    TextureSampling, ToneMapping, UvTransform, Vertex, viewport3d,
 };
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc, sync::Arc};
@@ -14,6 +14,7 @@ fn sphere() -> Mesh {
     let (rings, segments) = (48, 96);
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
+    let mut tangents = Vec::new();
     for y in 0..=rings {
         let v = y as f32 / rings as f32;
         let theta = v * std::f32::consts::PI;
@@ -25,6 +26,7 @@ fn sphere() -> Mesh {
                 theta.cos(),
                 theta.sin() * phi.sin(),
             ];
+            tangents.push([-phi.sin(), 0., phi.cos(), 1.]);
             vertices.push(Vertex {
                 position: normal.map(|c| c * 0.7),
                 normal,
@@ -45,6 +47,8 @@ fn sphere() -> Mesh {
         }
     }
     Mesh::new(vertices, indices)
+        .with_tangents(tangents)
+        .unwrap()
 }
 
 struct Materials {
@@ -54,6 +58,15 @@ struct Materials {
     roughness: f32,
     emission: f32,
     maps: bool,
+    normal: bool,
+    ao: bool,
+    exposure: f32,
+    tone_mapping: ToneMapping,
+    address: TextureAddressMode,
+    filter: TextureFilter,
+    alpha: AlphaMode,
+    normal_image: Arc<gpui::RenderImage>,
+    pattern: Arc<gpui::RenderImage>,
     density: f32,
     emission_offset: f32,
     metallic_roughness: Arc<gpui::RenderImage>,
@@ -70,13 +83,40 @@ impl Materials {
             roughness: 0.4,
             emission: 1.,
             maps: true,
+            normal: false,
+            ao: false,
+            exposure: 0.,
+            tone_mapping: ToneMapping::Reinhard,
+            address: TextureAddressMode::Repeat,
+            filter: TextureFilter::Linear,
+            alpha: AlphaMode::Mask,
+            normal_image: Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+                image::RgbaImage::from_fn(128, 128, |x, y| {
+                    let u = x as f32 / 128. * std::f32::consts::TAU;
+                    let v = y as f32 / 128. * std::f32::consts::TAU;
+                    let n = [-0.7 * u.cos() * v.sin(), -0.7 * u.sin() * v.cos(), 1.];
+                    let length = n.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    let n = n.map(|v| ((v / length * 0.5 + 0.5) * 255.).round() as u8);
+                    image::Rgba([n[0], n[1], n[2], 255])
+                }),
+            )])),
+            pattern: Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+                image::RgbaImage::from_fn(64, 64, |x, y| {
+                    let alpha = match (x / 16 + y / 16) % 3 {
+                        0 => 0,
+                        1 => 120,
+                        _ => 255,
+                    };
+                    image::Rgba([100, 220, 230, alpha])
+                }),
+            )])),
             density: 1.,
             emission_offset: 0.,
             metallic_roughness: Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
                 image::RgbaImage::from_fn(128, 128, |x, y| {
                     let roughness = if (x / 32 + y / 32) % 2 == 0 { 64 } else { 255 };
                     let metallic = if x < 64 { 255 } else { 0 };
-                    image::Rgba([0, roughness, metallic, 255])
+                    image::Rgba([roughness, roughness, metallic, 255])
                 }),
             )])),
             emissive: Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
@@ -101,8 +141,8 @@ impl Materials {
         let mut scene = Scene::new()
             .camera(self.controls.camera())
             .color_output(ColorOutput {
-                exposure: 0.,
-                tone_mapping: ToneMapping::Reinhard,
+                exposure: self.exposure,
+                tone_mapping: self.tone_mapping,
             })
             .light(Light {
                 direction: [-0.4, 0.6, 1.],
@@ -126,18 +166,28 @@ impl Materials {
                 roughness: self.roughness,
                 emissive,
             });
+            let sampling = TextureSampling {
+                transform: UvTransform::from_scale_rotation_translation(
+                    [self.density; 2],
+                    0.,
+                    [0.; 2],
+                )
+                .unwrap(),
+                address_u: self.address,
+                address_v: self.address,
+                filter: self.filter,
+            };
+            if self.normal {
+                material = material.normal_texture(
+                    MaterialTexture::new(self.normal_image.clone()).sampling(sampling),
+                );
+            }
+            if self.ao {
+                material = material.occlusion_texture(
+                    MaterialTexture::new(self.metallic_roughness.clone()).sampling(sampling),
+                );
+            }
             if self.maps {
-                let sampling = TextureSampling {
-                    transform: UvTransform::from_scale_rotation_translation(
-                        [self.density; 2],
-                        0.,
-                        [0.; 2],
-                    )
-                    .unwrap(),
-                    address_u: TextureAddressMode::Repeat,
-                    address_v: TextureAddressMode::Repeat,
-                    ..Default::default()
-                };
                 material = material
                     .metallic_roughness_texture(
                         MaterialTexture::new(self.metallic_roughness.clone()).sampling(sampling),
@@ -160,7 +210,35 @@ impl Materials {
                     .id(name),
             );
         }
+        let sampling = TextureSampling {
+            transform: UvTransform::from_scale_rotation_translation(
+                [self.density; 2],
+                0.2,
+                [self.emission_offset; 2],
+            )
+            .unwrap(),
+            address_u: self.address,
+            address_v: self.address,
+            filter: self.filter,
+        };
         scene
+            .object(
+                Object::new(Mesh::plane(), Material::color(rgb(0xe1b27d)).unlit(true))
+                    .position([0., -1.3, -0.1])
+                    .scale([4.6, 0.7, 1.]),
+            )
+            .object(
+                Object::new(
+                    Mesh::plane(),
+                    Material::image(self.pattern.clone())
+                        .image_sampling(sampling)
+                        .alpha_mode(self.alpha)
+                        .unlit(true),
+                )
+                .position([0., -1.3, 0.])
+                .scale([4.6, 0.7, 1.])
+                .id("Alpha / UV"),
+            )
     }
 }
 
@@ -192,6 +270,13 @@ impl Render for Materials {
                         ("maps", "Toggle maps"),
                         ("density", "Map density"),
                         ("shift", "Shift emission"),
+                        ("normal", "Normal map"),
+                        ("ao", "Occlusion"),
+                        ("alpha", "Alpha mode"),
+                        ("address", "UV address"),
+                        ("filter", "Texture filter"),
+                        ("exposure", "Exposure"),
+                        ("tone", "Tone mapping"),
                         ("projection", "Switch projection"),
                         ("reset", "Reset view"),
                     ]
@@ -215,6 +300,13 @@ impl Render for Materials {
                                     "maps" => this.maps = !this.maps,
                                     "density" => this.density = if this.density < 4. { this.density * 2. } else { 1. },
                                     "shift" => this.emission_offset = (this.emission_offset + 0.0625) % 1.,
+                                    "normal" => this.normal = !this.normal,
+                                    "ao" => this.ao = !this.ao,
+                                    "alpha" => this.alpha = match this.alpha { AlphaMode::Opaque => AlphaMode::Mask, AlphaMode::Mask => AlphaMode::Blend, AlphaMode::Blend => AlphaMode::Opaque },
+                                    "address" => this.address = match this.address { TextureAddressMode::Clamp => TextureAddressMode::Repeat, TextureAddressMode::Repeat => TextureAddressMode::Mirror, TextureAddressMode::Mirror => TextureAddressMode::Clamp },
+                                    "filter" => this.filter = if this.filter == TextureFilter::Linear { TextureFilter::Nearest } else { TextureFilter::Linear },
+                                    "exposure" => this.exposure = if this.exposure < 2. { this.exposure+1. } else { -2. },
+                                    "tone" => this.tone_mapping = if this.tone_mapping == ToneMapping::Reinhard { ToneMapping::None } else { ToneMapping::Reinhard },
                                     "projection" => {
                                         let mut camera = this.controls.camera();
                                         let distance = camera
@@ -334,6 +426,7 @@ impl Render for Materials {
                     .justify_between()
                     .children(["Dielectric", "Metal", "Emission"]),
             )
+            .child(div().text_color(rgb(0xa8bdd6)).child(format!("Normal {} · AO {} · {:?} · {:?} / {:?} · Exposure {:+.0} · {:?}", self.normal, self.ao, self.alpha, self.address, self.filter, self.exposure, self.tone_mapping)))
             .child(div().text_color(rgb(0xa8bdd6)).child(format!(
                 "Roughness {:.2} · Emission {:.1}× · Maps {} · Density {:.0}× · Emission offset {:.3} · {:?}",
                 self.roughness,
@@ -352,13 +445,13 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(1200.), px(760.)),
+                    size(px(1200.), px(900.)),
                     cx,
                 ))),
                 ..Default::default()
             },
             |window, cx| cx.new(|cx| Materials::new(window, cx)),
         )
-        .expect("failed to open PBR materials example");
+        .expect("failed to open materials example");
     });
 }

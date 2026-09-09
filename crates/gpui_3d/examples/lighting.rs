@@ -3,13 +3,45 @@ use gpui::{
     div, prelude::*, px, rgb, size,
 };
 use gpui_3d::{
-    Camera, DirectionalShadow, Light, Material, Mesh, Object, OrbitController, PbrMaterial, Scene,
-    viewport3d,
+    Camera, DiffuseEnvironment, DirectionalShadow, Light, Material, Mesh, Object, OrbitController,
+    PbrMaterial, PunctualLight, Scene, viewport3d,
 };
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc};
 
-struct ShadowsDemo {
+fn environment() -> DiffuseEnvironment {
+    let pixels: Vec<_> = (0..64)
+        .flat_map(|y| {
+            (0..128).map(move |x| {
+                let theta = (y as f32 + 0.5) * std::f32::consts::PI / 64.;
+                let phi = (x as f32 + 0.5) * std::f32::consts::TAU / 128. - std::f32::consts::PI;
+                let direction = [
+                    theta.sin() * phi.cos(),
+                    theta.cos(),
+                    theta.sin() * phi.sin(),
+                ];
+                let sky = direction[1].max(0.);
+                let ground = (-direction[1]).max(0.);
+                let warm = (direction[0] * 0.8 + direction[2] * 0.6).max(0.).powi(6) * 5.;
+                [
+                    0.08 + 0.1 * sky + 0.4 * ground + warm,
+                    0.08 + 0.5 * sky + 0.15 * ground + warm * 0.4,
+                    0.08 + 1.5 * sky + 0.05 * ground + warm * 0.08,
+                ]
+            })
+        })
+        .collect();
+    DiffuseEnvironment::from_equirectangular([128, 64], &pixels).unwrap()
+}
+
+struct Lighting {
+    kind: usize,
+    fill: bool,
+    environment: DiffuseEnvironment,
+    environment_on: bool,
+    environment_rotation: f32,
+    cone: f32,
+    range: f32,
     enabled: bool,
     soft: bool,
     resolution: u32,
@@ -20,9 +52,16 @@ struct ShadowsDemo {
     _activation: gpui::Subscription,
 }
 
-impl ShadowsDemo {
+impl Lighting {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
+            kind: 0,
+            fill: false,
+            environment: environment(),
+            environment_on: false,
+            environment_rotation: 0.,
+            cone: 0.6,
+            range: 6.,
             enabled: true,
             soft: true,
             resolution: 2048,
@@ -46,6 +85,26 @@ impl ShadowsDemo {
                 ..Default::default()
             })
         };
+        let position = [self.sun[0], 2.8, self.sun[2]];
+        let source = match self.kind {
+            0 => PunctualLight::directional(self.sun).intensity(2.4),
+            1 => PunctualLight::point(position)
+                .intensity(18.)
+                .range(Some(self.range)),
+            _ => PunctualLight::spot(position, position.map(|v| -v))
+                .cone_angles(self.cone * 0.5, self.cone)
+                .intensity(18.)
+                .range(Some(self.range)),
+        }
+        .color(rgb(0xfff2dc));
+        let mut lights = vec![source];
+        if self.fill {
+            lights.push(
+                PunctualLight::directional([1., 0.5, -1.])
+                    .color(rgb(0x719eff))
+                    .intensity(0.7),
+            );
+        }
         Scene::new()
             .camera(self.controls.camera())
             .light(Light {
@@ -54,11 +113,19 @@ impl ShadowsDemo {
                 intensity: 2.4,
                 ambient: 0.12,
             })
-            .directional_shadow(self.enabled.then_some(DirectionalShadow {
-                resolution: self.resolution,
-                softness: if self.soft { 1.5 } else { 0. },
-                ..DirectionalShadow::new([0., 0.3, 0.], [3.6, 3.6, 5.])
-            }))
+            .lights(lights)
+            .diffuse_environment(
+                self.environment
+                    .rotation_y(self.environment_rotation)
+                    .intensity(if self.environment_on { 0.35 } else { 0. }),
+            )
+            .directional_shadow(
+                (self.enabled && self.kind == 0).then_some(DirectionalShadow {
+                    resolution: self.resolution,
+                    softness: if self.soft { 1.5 } else { 0. },
+                    ..DirectionalShadow::new([0., 0.3, 0.], [3.6, 3.6, 5.])
+                }),
+            )
             .object(
                 Object::new(Mesh::plane(), material(0xbdc8d5))
                     .rotation([-std::f32::consts::FRAC_PI_2, 0., 0.])
@@ -84,7 +151,7 @@ impl ShadowsDemo {
     }
 }
 
-impl Render for ShadowsDemo {
+impl Render for Lighting {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bounds = self.bounds.clone();
         let view_id = cx.entity_id();
@@ -100,7 +167,7 @@ impl Render for ShadowsDemo {
             .child(
                 div()
                     .text_color(rgb(0x95aac5))
-                    .child("Move pointer to steer sunlight · Right-drag to orbit · Scroll to zoom"),
+                    .child("Move pointer to move the light · Right-drag to orbit · Scroll to zoom"),
             )
             .child(
                 div().flex().flex_wrap().gap_3().children(
@@ -130,6 +197,12 @@ impl Render for ShadowsDemo {
                                 "Lower objects"
                             },
                         ),
+                        ("source", "Light type"),
+                        ("fill", "Fill light"),
+                        ("environment", "Environment"),
+                        ("rotate", "Rotate environment"),
+                        ("cone", "Spot cone"),
+                        ("range", "Light range"),
                         ("reset", "Reset view"),
                     ]
                     .into_iter()
@@ -145,6 +218,12 @@ impl Render for ShadowsDemo {
                             .child(label)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 match id {
+                                    "source" => this.kind = (this.kind+1)%3,
+                                    "fill" => this.fill = !this.fill,
+                                    "environment" => this.environment_on = !this.environment_on,
+                                    "rotate" => this.environment_rotation += 0.4,
+                                    "cone" => this.cone = if this.cone < 1. { this.cone+0.2 } else { 0.3 },
+                                    "range" => this.range = if this.range < 8. { this.range+2. } else { 4. },
                                     "shadow" => this.enabled = !this.enabled,
                                     "soft" => this.soft = !this.soft,
                                     "resolution" => {
@@ -252,6 +331,8 @@ impl Render for ShadowsDemo {
                         .size_full(),
                     ),
             )
+            .child(div().text_color(rgb(0xa8bdd6)).child(format!("{} · Fill {} · Environment {} · Cone {:.0}° · Range {:.0} · Shadows available for directional light",
+                ["Directional", "Point", "Spot"][self.kind], self.fill, self.environment_on, self.cone.to_degrees(), self.range)))
             .child(div().text_color(rgb(0xa8bdd6)).child(format!(
                 "Shadow map {} × {} · {} · Ambient light stays visible in shadow",
                 self.resolution,
@@ -276,8 +357,8 @@ fn main() {
                 ))),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| ShadowsDemo::new(window, cx)),
+            |window, cx| cx.new(|cx| Lighting::new(window, cx)),
         )
-        .expect("failed to open shadows example");
+        .expect("failed to open lighting example");
     });
 }

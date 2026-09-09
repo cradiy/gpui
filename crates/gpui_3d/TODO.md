@@ -21,7 +21,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 ## Phase 1: Objects and Interaction
 
 - [x] **Geometric object picking**: Stable object IDs, screen rays, and nearest mesh hits returning world position, normal, triangle, and UV; expose hover and click callbacks.
-- [x] **Picking example**: Hover highlighting, click selection, and drag-to-orbit with click/drag disambiguation, without changing object geometry.
+- [x] **Scene interaction example**: Hover feedback, click selection, subtree edits, projection and framing controls, with separate orbit/pan gestures and unchanged geometry during selection.
 - [x] **Image picking visibility**: Sample image alpha with material cutoffs, preserve depth order through cutouts, and skip images unavailable to the renderer.
 - [x] **Picking behavior**: Selectable, occluder-only, and pass-through objects without changing rendering.
 - [ ] **Captured UI picking visibility**: Sample capture alpha and keep hit results synchronized with captured content.
@@ -37,7 +37,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 - [x] **Scene hierarchy**: Group and mesh nodes, graph-scoped generational handles, unique application IDs, inherited visibility, atomic reparenting, and subtree removal.
 - [x] **Affine transforms**: Quaternion TRS and full affine matrices, including shear and negative scale, with keep-local/keep-world reparenting and inverse-transpose normals.
-- [x] **Static scene evaluation**: Camera-independent owned results, world and aggregate bounds, node identities in picking, and a hierarchy example.
+- [x] **Static scene evaluation**: Camera-independent owned results, world and aggregate bounds, node identities in picking, and hierarchy editing in the scene example.
 - [ ] **Camera and light nodes**: Attach cameras and lights to hierarchy nodes and derive their world-space state during evaluation.
 - [x] **Subtree reuse**: Immutable local snapshots, atomic cross-graph instantiation, explicit application-ID remapping, source-to-instance handles, shared geometry/images, and independent node properties.
 - [x] **Mesh resource interfaces**: Fallible geometry construction with structured errors, borrowed vertex/index inspection, counts, local bounds, and shared immutable storage.
@@ -60,11 +60,11 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **PBR factor textures**: Linear G/B metallic-roughness and sRGB emissive maps, factor multiplication, independent UV sampling, and shared viewport/headless resource resolution.
 - [x] **Normal textures and tangent inputs**: Validated optional tangent data, built-in plane/cube tangents, linear RGB normal maps with independent sampling and XY strength, and reflection-aware world-space tangent frames.
 - [ ] **Tangent generation**: MikkTSpace-compatible tangent generation with UV seam splitting and explicit handling of degenerate inputs.
-- [x] **Occlusion textures**: Linear R ambient occlusion maps, independent UV sampling and strength, indirect-only attenuation for basic and PBR materials, shared viewport/headless resource handling, and a side-by-side example.
-- [x] **Light types**: Up to eight world-space directional, point, and spot lights; intensity, finite range, inverse-square distance clamping, soft cone controls, shared viewport/headless shading, and a pointer-driven comparison example.
+- [x] **Occlusion textures**: Linear R ambient occlusion maps, independent UV sampling and strength, indirect-only attenuation for basic and PBR materials, shared viewport/headless resource handling, and material controls.
+- [x] **Light types**: Up to eight world-space directional, point, and spot lights; intensity, finite range, inverse-square distance clamping, soft cone controls, shared viewport/headless shading, and pointer-driven lighting controls.
 - [x] **Directional shadows**: One selected directional source, explicit camera-independent coverage, 256–4096 shadow maps, PCF filtering, depth/normal bias, opaque/masked casting, per-mesh cast/receive controls, and shared viewport/headless shading.
 - [ ] **Environment lighting**: HDR environment maps and diffuse and specular IBL, with independent background and lighting controls.
-  - [x] **Diffuse irradiance**: Decoded linear HDR equirectangular inputs, L2 spherical-harmonic projection, precomputed coefficient inputs, intensity and world-Y rotation, shared viewport/headless shading, and an ambient/IBL comparison example.
+  - [x] **Diffuse irradiance**: Decoded linear HDR equirectangular inputs, L2 spherical-harmonic projection, precomputed coefficient inputs, intensity and world-Y rotation, shared viewport/headless shading, and environment controls in the lighting example.
   - [ ] **Specular IBL**: Prefiltered environment radiance, BRDF integration, and roughness-dependent reflections.
   - [ ] **Environment background**: Independent background visibility, intensity, and orientation.
 - [ ] **Effect integration**: Compose Bloom and color grading through `gpui_effects`; define depth texture access and coordinate conventions for depth-dependent effects.

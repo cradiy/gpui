@@ -607,7 +607,7 @@ pub struct EvaluatedScene {
     indices: HashMap<NodeHandle, usize>,
     objects: Vec<Object>,
     bounds: Option<Aabb>,
-    spatial_index: Arc<std::sync::OnceLock<crate::bvh::ObjectIndex>>,
+    spatial_index: Arc<std::sync::OnceLock<crate::spatial::bvh::ObjectIndex>>,
 }
 impl EvaluatedScene {
     pub fn revision(&self) -> u64 {
@@ -637,7 +637,7 @@ impl EvaluatedScene {
     /// Prepares the camera-independent object index shared by derived scenes.
     pub fn prepare_spatial_index(&self) {
         self.spatial_index
-            .get_or_init(|| crate::bvh::ObjectIndex::build(&self.objects));
+            .get_or_init(|| crate::spatial::bvh::ObjectIndex::build(&self.objects));
     }
 }
 

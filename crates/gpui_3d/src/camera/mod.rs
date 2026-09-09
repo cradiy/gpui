@@ -1,3 +1,6 @@
+mod orbit;
+pub use orbit::{OrbitController, OrbitError, OrbitSettings};
+
 use crate::{
     Aabb,
     math::{Matrix, cross, dot, multiply, sub, transform},

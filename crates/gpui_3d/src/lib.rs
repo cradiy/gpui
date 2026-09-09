@@ -64,6 +64,6 @@ pub use gpui::{
 pub use gpui::{MeshError3d as MeshError, MeshVertexAttribute3d as VertexAttribute};
 pub use gpui::{
     TextureAddressMode3d as TextureAddressMode, TextureFilter3d as TextureFilter,
-    TextureSampling3d as TextureSampling, UvTransform3d as UvTransform,
-    UvTransformError3d as UvTransformError,
+    TextureMipFilter3d as TextureMipFilter, TextureSampling3d as TextureSampling,
+    UvTransform3d as UvTransform, UvTransformError3d as UvTransformError,
 };

@@ -32,6 +32,78 @@ fn layered_material() -> Material {
 }
 
 #[test]
+fn sampling_validation_precedes_resource_resolution_and_preserves_active_configuration() {
+    use gpui_3d::{TextureFilter, TextureMipFilter, TextureSampling};
+    let scene = |material| Scene::new().object(Object::new(Mesh::plane(), material));
+    for sampling in [
+        TextureSampling {
+            max_anisotropy: 0,
+            ..Default::default()
+        },
+        TextureSampling {
+            max_anisotropy: 17,
+            mip_filter: TextureMipFilter::Linear,
+            ..Default::default()
+        },
+        TextureSampling {
+            max_anisotropy: 4,
+            ..Default::default()
+        },
+        TextureSampling {
+            max_anisotropy: 4,
+            mip_filter: TextureMipFilter::Nearest,
+            ..Default::default()
+        },
+        TextureSampling {
+            max_anisotropy: 4,
+            mip_filter: TextureMipFilter::Linear,
+            filter: TextureFilter::Nearest,
+            ..Default::default()
+        },
+    ] {
+        for material in [
+            Material::image("base.png").image_sampling(sampling),
+            Material::color(rgb(0xffffff))
+                .pbr(PbrMaterial::default())
+                .normal_texture(MaterialTexture::new("normal.png").sampling(sampling)),
+            Material::color(rgb(0xffffff))
+                .occlusion_texture(MaterialTexture::new("ao.png").sampling(sampling)),
+        ] {
+            assert!(matches!(
+                scene(material).prepare(1., None, |_| panic!(
+                    "invalid sampling reached the resolver"
+                )),
+                Err(PrepareError::InvalidScene(_))
+            ));
+        }
+    }
+    let sampling = TextureSampling {
+        mip_filter: TextureMipFilter::Linear,
+        max_anisotropy: 16,
+        ..Default::default()
+    };
+    let prepared = scene(Material::image("base.png").image_sampling(sampling))
+        .prepare(1., None, |_| {
+            Ok(TextureState::Ready(ResolvedTexture::Image(tile())))
+        })
+        .unwrap();
+    assert_eq!(prepared.frame().objects[0].sampling, sampling);
+    let invalid = TextureSampling {
+        max_anisotropy: 0,
+        ..Default::default()
+    };
+    let material = Material::color(rgb(0xffffff))
+        .normal_texture(MaterialTexture::new("normal.png").sampling(invalid));
+    let prepared = scene(material)
+        .prepare(1., None, |request| {
+            assert_eq!(request.slot, TextureSlot::BaseColor);
+            Ok(TextureState::Ready(ResolvedTexture::None))
+        })
+        .unwrap();
+    assert!(prepared.is_ready());
+}
+
+#[test]
 fn pending_inputs_are_all_requested_and_do_not_shift_ready_object_ids() {
     let mut graph = SceneGraph::new();
     let node = graph

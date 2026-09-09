@@ -119,6 +119,128 @@ fn scene(layer: SubtreeLayer) -> Scene {
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn image_mips_preserve_linear_energy_crop_and_reallocated_atlas_content() -> anyhow::Result<()> {
+    use gpui::{PlatformAtlas, TextureColorSpace3d, TextureMipFilter3d};
+    use gpui_wgpu::{Scene3dChannels, Scene3dOutputConfig, WgpuScene3dRenderer};
+    let mut renderer = WgpuScene3dRenderer::new_headless()?;
+    let atlas = renderer.sprite_atlas().clone();
+    let key = gpui::AtlasKey::Image(gpui::RenderImageParams {
+        image_id: gpui::ImageId(99000),
+        frame_index: 0,
+    });
+    // A neighboring allocation keeps the backing texture alive during tile reuse.
+    atlas.get_or_insert_with(
+        &gpui::RenderImageParams {
+            image_id: gpui::ImageId(99001),
+            frame_index: 0,
+        }
+        .into(),
+        &mut || {
+            Ok(Some((
+                size(DevicePixels(64), DevicePixels(64)),
+                std::borrow::Cow::Owned([255, 0, 0, 255].repeat(64 * 64)),
+            )))
+        },
+    )?;
+    for replacement in [false, true] {
+        let bytes: Vec<u8> = (0..15)
+            .flat_map(|i| {
+                if replacement {
+                    [255, 0, 255, 255]
+                } else {
+                    let channel = [0, 64, 128, 192, 255][i % 5];
+                    [channel, channel, channel, 255]
+                }
+            })
+            .collect();
+        let tile = atlas
+            .get_or_insert_with(&key, &mut || {
+                Ok(Some((
+                    size(DevicePixels(5), DevicePixels(3)),
+                    std::borrow::Cow::Borrowed(&bytes),
+                )))
+            })?
+            .unwrap();
+        for color_space in [TextureColorSpace3d::Srgb, TextureColorSpace3d::Linear] {
+            for (mip_filter, anisotropy) in [
+                (TextureMipFilter3d::Nearest, 1),
+                (TextureMipFilter3d::Linear, 1),
+                (TextureMipFilter3d::Linear, 16),
+            ] {
+                let mut object = mesh(0.2, 0xffffffff, MeshTexture3d::Image(tile));
+                object.alpha_mode = gpui::AlphaMode3d::Opaque;
+                object.image_color_space = color_space;
+                object.sampling = gpui::TextureSampling3d {
+                    transform: gpui::UvTransform3d::from_scale_rotation_translation(
+                        [4096.; 2], 0.3, [0.; 2],
+                    )?,
+                    address_u: gpui::TextureAddressMode3d::Repeat,
+                    address_v: gpui::TextureAddressMode3d::Mirror,
+                    mip_filter,
+                    max_anisotropy: anisotropy,
+                    ..Default::default()
+                };
+                let input = layer(bounds(0., 0., 32., 32.), Scene::default(), vec![object], 1.)
+                    .scene3d
+                    .unwrap();
+                let output = renderer.render(
+                    &input,
+                    Scene3dOutputConfig {
+                        size: [32, 32],
+                        channels: Scene3dChannels::LINEAR_COLOR | Scene3dChannels::OBJECT_ID,
+                        color_samples: 1,
+                    },
+                )?;
+                let mut read = output.readback()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let pixels = loop {
+                    if let Some(pixels) = read.try_read()? {
+                        break pixels;
+                    }
+                    anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                };
+                let expected: [f32; 3] = std::array::from_fn(|channel| {
+                    bytes
+                        .chunks_exact(4)
+                        .map(|pixel| {
+                            let value = f32::from(pixel[channel]) / 255.;
+                            if color_space == TextureColorSpace3d::Linear || value <= 0.04045 {
+                                if color_space == TextureColorSpace3d::Linear {
+                                    value
+                                } else {
+                                    value / 12.92
+                                }
+                            } else {
+                                ((value + 0.055) / 1.055).powf(2.4)
+                            }
+                        })
+                        .sum::<f32>()
+                        / 15.
+                });
+                for y in 12..20 {
+                    for x in 12..20 {
+                        let index = y * 32 + x;
+                        assert_eq!(pixels.object_ids.as_ref().unwrap()[index], 1);
+                        let actual = pixels.linear_rgba.as_ref().unwrap()[index];
+                        for channel in 0..3 {
+                            assert!(
+                                (actual[channel] - expected[channel]).abs() < 0.002,
+                                "{actual:?} != {expected:?}"
+                            );
+                        }
+                        assert_eq!(actual[3], 1.);
+                    }
+                }
+            }
+        }
+        atlas.remove(&key);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn instance_updates_preserve_owned_color_and_geometry_outputs() -> anyhow::Result<()> {
     use gpui_wgpu::{Scene3dChannels, Scene3dOutputConfig, WgpuScene3dRenderer};
     let mut renderer = WgpuScene3dRenderer::new_headless()?;

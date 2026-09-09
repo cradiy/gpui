@@ -50,7 +50,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Camera optics**: Focal-length/sensor-height conversion and explicit perspective/orthographic lens shift, with consistent matrices, rays, culling, background directions, framing, and camera controls.
 - [x] **Geometry primitives**: Configurable UV spheres, capped/open cylinders and cones, and subdivided XY planes; bounded generation, outward winding, split seams/tips/caps, analytic normal/tangent frames, mesh bounds, and shared query/render storage.
 - [x] **Image sampling**: Affine UV transforms, independent Clamp/Repeat/Mirror addressing, Nearest/Linear filtering, atlas-local interpolation, and matching alpha-aware picking.
-- [ ] **Texture sampling extensions**: Mipmaps and anisotropic filtering.
+- [x] **Texture sampling extensions**: Independent linear-space image mip chains, area-weighted odd-size reduction, per-map nearest/trilinear level selection, 1–16× anisotropy, UV-gradient sampling, allocation-aware cache invalidation, and shared color/geometry-output alpha sampling. CPU ray alpha queries use level zero.
 
 ## Phase 3: Materials and Lighting
 

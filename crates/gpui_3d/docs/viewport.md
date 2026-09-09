@@ -1462,7 +1462,7 @@ before exposure and tone mapping.
 ### Image sampling
 
 ```rust
-use gpui_3d::{Material, TextureSampling, TextureAddressMode, TextureFilter, UvTransform};
+use gpui_3d::{Material, TextureSampling, TextureAddressMode, TextureFilter, TextureMipFilter, UvTransform};
 
 # fn main() -> Result<(), gpui_3d::UvTransformError> {
 let sampling = TextureSampling {
@@ -1470,13 +1470,16 @@ let sampling = TextureSampling {
     address_u: TextureAddressMode::Repeat,
     address_v: TextureAddressMode::Mirror,
     filter: TextureFilter::Linear,
+    mip_filter: TextureMipFilter::Linear,
+    max_anisotropy: 8,
 };
 let material = Material::image("tile.png").image_sampling(sampling);
 # Ok(())
 # }
 ```
 
-`TextureSampling` defaults to identity UVs, Clamp on both axes and Linear filtering.
+`TextureSampling` defaults to identity UVs, Clamp on both axes, Linear texel filtering,
+no mipmaps, and isotropic sampling (`max_anisotropy: 1`).
 `UvTransform` applies scale, rotation about UV origin, then translation. Rotation
 is in radians, positive clockwise in top-left-origin coordinates. `from_rows`
 accepts two affine rows `[u, v, offset]`, including shear, reflection and zero
@@ -1488,16 +1491,40 @@ interpolation across the first/last texel seam. Mirror alternates forward and
 reflected copies; negative coordinates follow the same period. U and V modes
 are independent. Image UVs describe texel edges: texel `i` is centered at
 `(i + 0.5) / extent`. Nearest selects one texel and Linear interpolates four
-neighbors. Sampling remains inside the image's atlas rectangle.
+neighbors. Sampling remains inside the image, without accessing neighboring atlas tiles.
+
+`mip_filter` selects `None`, `Nearest`, or `Linear`: the original image only,
+the nearest mip level, or interpolation between adjacent levels. With mipmaps
+enabled, `max_anisotropy` controls the maximum sampling ratio for oblique surfaces,
+from 1 through 16. Values above 1 require both `filter` and `mip_filter` to be
+`Linear`. Invalid combinations return a scene-preparation error before resource
+resolution. Each material-map slot has its own sampling configuration.
+Actual anisotropic filtering is backend-dependent; WGPU uses isotropic sampling
+on devices without anisotropic-filtering support.
+
+The WGPU renderer generates independent RGBA16Float mip chains on first use and
+reuses them while referenced by prepared scenes. Images are decoded to linear
+RGB before reduction; normal, metallic-roughness, and occlusion maps retain their
+linear channel values. Alpha is averaged independently. Area-weighted reduction
+includes odd image edges and supports one-pixel axes. Image identity, atlas
+allocation generation, and color interpretation distinguish cached chains;
+sampling changes reuse a chain while mipmapping remains enabled. Chain storage
+uses eight bytes per texel summed across all levels, in addition to atlas storage.
+
+GPU level selection uses derivatives of transformed, unwrapped UVs. Color,
+object-ID, depth, and normal outputs share the same image-alpha sampling at a
+given output resolution. Shadow maps select levels using their own projected
+footprint. Mip generation does not preserve alpha-test coverage or sharpen normal
+maps; use an appropriate cutoff and texture content for distant masked surfaces.
 
 These settings apply only to image materials. Captured UI textures retain their
 identity UV mapping and linear edge-clamped sampling, including pointer routing.
 `Hit::uv` always contains the original mesh UVs. Viewport image-alpha picking
-applies the material's image sampling before evaluating its alpha mode. Color and
-object-ID outputs use the same sampling and discard rules. Interpolation near
-a cutoff can differ at floating-point precision boundaries between CPU and GPU.
-Mipmaps and anisotropic filtering are not provided; both magnification and
-minification use mip level zero.
+applies the material's UV transform, addressing, and texel filter at level zero
+before evaluating its alpha mode. CPU ray queries do not have a screen-space
+sampling footprint, so mipmapped alpha masks can differ from GPU visibility
+during minification. Interpolation near a cutoff can also differ at floating-point
+precision boundaries between CPU and GPU.
 
 ## UI texture
 
@@ -1814,7 +1841,7 @@ Each example is an independent executable.
 | Example | Controls and content |
 | --- | --- |
 | `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, free/rig cameras, attached spot lights, transform tracks, vertex tapering, two-target morph blending, and two-joint skin bending with independent weights and playback controls. |
-| `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
+| `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing, mipmaps, anisotropy, and alpha modes. |
 | `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |
 | `headless` | Window-free display/HDR/ID/depth/normal readback, PNG previews and object identity inspection. |

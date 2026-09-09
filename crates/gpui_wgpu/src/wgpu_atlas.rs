@@ -37,6 +37,8 @@ struct WgpuAtlasState {
     storage: WgpuAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
     pending_uploads: Vec<PendingUpload>,
+    tile_generations: FxHashMap<(AtlasTextureId, u32), u64>,
+    next_generation: u64,
 }
 
 pub struct WgpuTextureInfo {
@@ -58,6 +60,8 @@ impl WgpuAtlas {
             storage: WgpuAtlasStorage::default(),
             tiles_by_key: Default::default(),
             pending_uploads: Vec::new(),
+            tile_generations: FxHashMap::default(),
+            next_generation: 0,
         }))
     }
 
@@ -82,6 +86,14 @@ impl WgpuAtlas {
         }
     }
 
+    pub(crate) fn get_tile_info(&self, tile: AtlasTile) -> (wgpu::TextureView, u64) {
+        let lock = self.0.lock();
+        (
+            lock.storage[tile.texture_id].view.clone(),
+            lock.tile_generations[&(tile.texture_id, tile.tile_id.0)],
+        )
+    }
+
     /// Clears all cached textures and tiles, forcing them to be recreated.
     /// Use this for incremental recovery when the device is still valid.
     pub fn clear(&self) {
@@ -89,6 +101,7 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
+        lock.tile_generations.clear();
     }
 
     /// Handles device lost by clearing all textures and cached tiles.
@@ -101,6 +114,7 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
+        lock.tile_generations.clear();
     }
 }
 
@@ -122,6 +136,12 @@ impl PlatformAtlas for WgpuAtlas {
                 .allocate(size, key.texture_kind())
                 .context("failed to allocate")?;
             lock.upload_texture(tile.texture_id, tile.bounds, &bytes);
+            let generation = lock.next_generation;
+            lock.next_generation = generation
+                .checked_add(1)
+                .expect("atlas generation overflow");
+            lock.tile_generations
+                .insert((tile.texture_id, tile.tile_id.0), generation);
             lock.tiles_by_key.insert(key.clone(), tile);
             Ok(Some(tile))
         }
@@ -134,6 +154,8 @@ impl PlatformAtlas for WgpuAtlas {
             return;
         };
         let id = tile.texture_id;
+        lock.tile_generations
+            .remove(&(tile.texture_id, tile.tile_id.0));
 
         let Some(texture_slot) = lock.storage[id.kind].textures.get_mut(id.index as usize) else {
             return;

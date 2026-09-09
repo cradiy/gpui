@@ -72,6 +72,17 @@ impl Scene {
         let mut objects = Vec::with_capacity(self.objects.len());
         for (index, object) in self.objects.iter().enumerate() {
             ensure!(
+                !matches!(object.material.texture, crate::Texture::Image(_))
+                    || object.material.sampling.is_valid(),
+                "object {index} has invalid image sampling"
+            );
+            for (slot, texture) in object.material.lighting_textures() {
+                ensure!(
+                    texture.sampling.is_valid(),
+                    "object {index} has invalid {slot:?} sampling"
+                );
+            }
+            ensure!(
                 object.material.pbr.is_none_or(|pbr| pbr.is_valid()),
                 "object {index} has invalid PBR parameters"
             );

@@ -39,7 +39,7 @@ impl MaterialTexture {
         }
     }
 
-    /// Sets the UV transform, per-axis addressing and mip-zero filtering.
+    /// Sets the UV transform, per-axis addressing, mip filtering and anisotropy.
     pub fn sampling(mut self, sampling: TextureSampling) -> Self {
         self.sampling = sampling;
         self

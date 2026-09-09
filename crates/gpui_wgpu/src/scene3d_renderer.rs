@@ -320,6 +320,36 @@ impl WgpuScene3dRenderer {
         );
         for object in frame.objects.iter() {
             ensure!(
+                !matches!(object.texture, gpui::MeshTexture3d::Image(_))
+                    || object.sampling.is_valid(),
+                "3D object {} has invalid image sampling",
+                object.output_id
+            );
+            for (map, active) in [
+                (
+                    object.metallic_roughness_texture,
+                    object.pbr.is_some() && !object.unlit,
+                ),
+                (
+                    object.emissive_texture,
+                    object.pbr.is_some() && !object.unlit,
+                ),
+                (
+                    object.normal_texture,
+                    object.pbr.is_some() && !object.unlit && object.normal_scale > 0.,
+                ),
+                (
+                    object.occlusion_texture,
+                    !object.unlit && object.occlusion_strength > 0.,
+                ),
+            ] {
+                ensure!(
+                    !active || map.is_none_or(|map| map.sampling.is_valid()),
+                    "3D object {} has invalid material-map sampling",
+                    object.output_id
+                );
+            }
+            ensure!(
                 object.sort_depth.is_finite(),
                 "3D object {} has invalid sort depth",
                 object.output_id
@@ -456,7 +486,7 @@ impl WgpuScene3dRenderer {
             None
         };
         let (mut ids, mut depth, mut normals) = (None, None, None);
-        let mut geometry_source = self.color.as_ref().map(|(_, renderer)| renderer);
+        let mut resource_source = self.color.as_ref().map(|(_, renderer)| renderer);
         for (kind, cache, output) in [
             (OutputKind::ObjectId, &mut self.ids, &mut ids),
             (OutputKind::LinearDepth, &mut self.depth, &mut depth),
@@ -468,8 +498,8 @@ impl WgpuScene3dRenderer {
             }
             let renderer =
                 cache.get_or_insert_with(|| Scene3dRenderer::new(device, queue, kind.format(), 1));
-            if let Some(source) = geometry_source {
-                renderer.reuse_geometry_from(source);
+            if let Some(source) = resource_source {
+                renderer.reuse_resources_from(source);
             }
             renderer.prepare_frames(device, queue, [frame], width, height);
             draw_statistics += renderer.draw_statistics(frame);
@@ -486,7 +516,7 @@ impl WgpuScene3dRenderer {
                 &mut encoder,
             );
             *output = Some(texture);
-            geometry_source = Some(renderer);
+            resource_source = Some(renderer);
         }
         self.context.queue.submit([encoder.finish()]);
         Ok(Scene3dGpuOutput {

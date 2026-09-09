@@ -4,6 +4,7 @@ use wgpu::util::DeviceExt;
 
 mod background;
 mod geometry;
+mod images;
 mod instances;
 mod specular;
 
@@ -100,7 +101,12 @@ impl ImageParams {
         let rows = sampling.transform.rows();
         Self {
             rect,
-            uv_u: [rows[0][0], rows[0][1], rows[0][2], 0.],
+            uv_u: [
+                rows[0][0],
+                rows[0][1],
+                rows[0][2],
+                f32::from(sampling.mip_filter != gpui::TextureMipFilter3d::None),
+            ],
             uv_v: [rows[1][0], rows[1][1], rows[1][2], 0.],
             sampling: [
                 sampling.address_u as u32,
@@ -267,6 +273,7 @@ pub(crate) struct Scene3dRenderer {
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
     geometry: geometry::GeometryCache<Geometry>,
+    images: Arc<parking_lot::Mutex<images::ImageCache>>,
     slots: Vec<BatchSlot>,
     offsets: HashMap<usize, usize>,
     plans: HashMap<usize, instances::BatchPlan>,
@@ -509,6 +516,7 @@ impl Scene3dRenderer {
             }),
             white: white.create_view(&Default::default()),
             geometry: geometry::GeometryCache::default(),
+            images: Default::default(),
             slots: Vec::new(),
             offsets: HashMap::new(),
             plans: HashMap::new(),
@@ -580,6 +588,9 @@ impl Scene3dRenderer {
         height: u32,
     ) {
         let frames: Vec<_> = frames.into_iter().collect();
+        self.images
+            .lock()
+            .retain(frames.iter().flat_map(|frame| frame.objects.iter()));
         self.plans.clear();
         for frame in &frames {
             self.plans
@@ -714,8 +725,9 @@ impl Scene3dRenderer {
         }
     }
 
-    pub(crate) fn reuse_geometry_from(&mut self, other: &Self) {
+    pub(crate) fn reuse_resources_from(&mut self, other: &Self) {
         self.geometry.reuse_from(&other.geometry);
+        self.images = other.images.clone();
     }
 
     pub(crate) fn retain_geometry_for(&mut self, frame: Option<&gpui::Scene3dFrame>) {
@@ -766,7 +778,7 @@ impl Scene3dRenderer {
     pub(crate) fn encode_frame(
         &self,
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         atlas: &WgpuAtlas,
         frame: &gpui::Scene3dFrame,
         rect: [f32; 4],
@@ -827,8 +839,19 @@ impl Scene3dRenderer {
         };
         for (index, batch) in plan.batches.iter().enumerate() {
             let object = &frame.objects[plan.order[batch.start]];
+            let resolve_image = |map: gpui::MaterialTexture3d, color_space| {
+                self.images
+                    .lock()
+                    .get(device, queue, atlas, map.tile, color_space, map.sampling)
+            };
             let atlas_texture = match object.texture {
-                MeshTexture3d::Image(tile) => Some(atlas.get_texture_info(tile.texture_id)),
+                MeshTexture3d::Image(tile) => Some(resolve_image(
+                    gpui::MaterialTexture3d {
+                        tile,
+                        sampling: object.sampling,
+                    },
+                    object.image_color_space,
+                )),
                 _ => None,
             };
             let (texture, texture_rect, premultiplied) = match object.texture {
@@ -859,22 +882,24 @@ impl Scene3dRenderer {
                 }
             };
             let rows = object.sampling.transform.rows();
-            let maps_enabled = object.pbr.is_some() && !object.unlit;
+            let maps_enabled =
+                object.pbr.is_some() && !object.unlit && self.display_pipeline.is_some();
             let metallic_roughness_map = object.metallic_roughness_texture.filter(|_| maps_enabled);
             let emissive_map = object.emissive_texture.filter(|_| maps_enabled);
             let normal_map = object
                 .normal_texture
                 .filter(|_| maps_enabled && object.normal_scale > 0.);
-            let normal_image = normal_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
-            let occlusion_map = object
-                .occlusion_texture
-                .filter(|_| !object.unlit && object.occlusion_strength > 0.);
+            let normal_image =
+                normal_map.map(|map| resolve_image(map, gpui::TextureColorSpace3d::Linear));
+            let occlusion_map = object.occlusion_texture.filter(|_| {
+                !object.unlit && object.occlusion_strength > 0. && self.display_pipeline.is_some()
+            });
             let occlusion_image =
-                occlusion_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
-            let metallic_roughness_image =
-                metallic_roughness_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
+                occlusion_map.map(|map| resolve_image(map, gpui::TextureColorSpace3d::Linear));
+            let metallic_roughness_image = metallic_roughness_map
+                .map(|map| resolve_image(map, gpui::TextureColorSpace3d::Linear));
             let emissive_image =
-                emissive_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
+                emissive_map.map(|map| resolve_image(map, gpui::TextureColorSpace3d::Srgb));
             let pbr = object.pbr.unwrap_or_default();
             let view = frame
                 .orthographic_view_direction
@@ -911,7 +936,12 @@ impl Scene3dRenderer {
                     f32::from(matches!(object.texture, MeshTexture3d::Image(_))),
                 ],
                 ids: [0, object.alpha_mode as u32, 0, 0],
-                uv_u: [rows[0][0], rows[0][1], rows[0][2], 0.],
+                uv_u: [
+                    rows[0][0],
+                    rows[0][1],
+                    rows[0][2],
+                    f32::from(object.sampling.mip_filter != gpui::TextureMipFilter3d::None),
+                ],
                 uv_v: [rows[1][0], rows[1][1], rows[1][2], 0.],
                 sampling: [
                     object.sampling.address_u as u32,
@@ -997,7 +1027,11 @@ impl Scene3dRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(
+                        atlas_texture
+                            .as_ref()
+                            .map_or(&self.sampler, |image| &image.sampler),
+                    ),
                 },
             ];
             if let Some(layout) = &shadow_layout
@@ -1010,6 +1044,19 @@ impl Scene3dRenderer {
                 }));
             }
             if self.display_pipeline.is_some() {
+                for (binding, image) in [
+                    (12, &metallic_roughness_image),
+                    (13, &emissive_image),
+                    (14, &normal_image),
+                    (15, &occlusion_image),
+                ] {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding,
+                        resource: wgpu::BindingResource::Sampler(
+                            image.as_ref().map_or(&self.sampler, |image| &image.sampler),
+                        ),
+                    });
+                }
                 let specular = self.specular.as_ref().unwrap();
                 entries.extend([
                     wgpu::BindGroupEntry {
@@ -1651,6 +1698,11 @@ mod tests {
         variants.push(changed);
         let mut changed = source.clone();
         changed.sampling.filter = gpui::TextureFilter3d::Nearest;
+        variants.push(changed);
+        let mut changed = source.clone();
+        changed.sampling.mip_filter = gpui::TextureMipFilter3d::Linear;
+        variants.push(changed.clone());
+        changed.sampling.max_anisotropy = 8;
         variants.push(changed);
         let mut changed = source.clone();
         changed.image_color_space = gpui::TextureColorSpace3d::Linear;

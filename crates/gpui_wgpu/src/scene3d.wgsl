@@ -32,6 +32,10 @@ struct Params {
 @group(0) @binding(9) var specular_image: texture_cube<f32>;
 @group(0) @binding(10) var specular_brdf: texture_2d<f32>;
 @group(0) @binding(11) var specular_sampler: sampler;
+@group(0) @binding(12) var metallic_roughness_sampler: sampler;
+@group(0) @binding(13) var emissive_sampler: sampler;
+@group(0) @binding(14) var normal_sampler: sampler;
+@group(0) @binding(15) var occlusion_sampler: sampler;
 struct InstanceInput {
     @location(4) model_0: vec4<f32>, @location(5) model_1: vec4<f32>,
     @location(6) model_2: vec4<f32>, @location(7) model_3: vec4<f32>,
@@ -79,10 +83,16 @@ fn image_texel(source: texture_2d<f32>, config: ImageParams, pixel: vec2<i32>, e
     if (config.sampling.w == 0u) { return vec4<f32>(srgb_to_linear(texel.rgb), texel.a); }
     return texel;
 }
-fn sample_image(source: texture_2d<f32>, config: ImageParams, uv: vec2<f32>) -> vec4<f32> {
+fn sample_image(source: texture_2d<f32>, source_sampler: sampler, config: ImageParams, uv: vec2<f32>, gradients: mat2x2<f32>) -> vec4<f32> {
     let mapped = vec2<f32>(dot(config.uv_u.xyz, vec3<f32>(uv, 1.0)),
         dot(config.uv_v.xyz, vec3<f32>(uv, 1.0)));
     if (!all(abs(mapped) <= vec2<f32>(3.402823466e+38))) { return vec4<f32>(0.0); }
+    if (config.uv_u.w > 0.5) {
+        let dx = vec2<f32>(dot(config.uv_u.xy, gradients[0]), dot(config.uv_v.xy, gradients[0]));
+        let dy = vec2<f32>(dot(config.uv_u.xy, gradients[1]), dot(config.uv_v.xy, gradients[1]));
+        if (!all(abs(dx) <= vec2<f32>(3.402823466e+38)) || !all(abs(dy) <= vec2<f32>(3.402823466e+38))) { return vec4<f32>(0.0); }
+        return textureSampleGrad(source, source_sampler, mapped, dx, dy);
+    }
     let addressed = vec2<f32>(address_coordinate(mapped.x, config.sampling.x),
         address_coordinate(mapped.y, config.sampling.y));
     let extent = max(vec2<i32>(config.rect.zw), vec2<i32>(1));
@@ -95,10 +105,10 @@ fn sample_image(source: texture_2d<f32>, config: ImageParams, uv: vec2<f32>) -> 
     return mix(mix(image_texel(source, config, low, extent), image_texel(source, config, low + vec2<i32>(1, 0), extent), weight.x),
         mix(image_texel(source, config, low + vec2<i32>(0, 1), extent), image_texel(source, config, low + vec2<i32>(1, 1), extent), weight.x), weight.y);
 }
-fn base_color(input: Output) -> vec4<f32> {
+fn base_color(input: Output, gradients: mat2x2<f32>) -> vec4<f32> {
     var sampled: vec4<f32>;
     if (params.flags.w > 0.5) {
-        sampled = sample_image(image, ImageParams(params.texture_rect, params.uv_u, params.uv_v, params.sampling), input.uv);
+        sampled = sample_image(image, image_sampler, ImageParams(params.texture_rect, params.uv_u, params.uv_v, params.sampling), input.uv, gradients);
     } else {
         let uv = (params.texture_rect.xy + vec2<f32>(0.5) + clamp(input.uv, vec2<f32>(0.0), vec2<f32>(1.0)) * max(params.texture_rect.zw - 1.0, vec2<f32>(0.0))) / vec2<f32>(textureDimensions(image));
         sampled = textureSampleLevel(image, image_sampler, uv, 0.0);
@@ -120,7 +130,8 @@ fn shadow_vertex(@location(0) position: vec3<f32>, @location(2) uv: vec2<f32>, i
 }
 @fragment
 fn shadow_fragment(input: Output) {
-    let base = base_color(input);
+    let gradients = mat2x2<f32>(dpdx(input.uv), dpdy(input.uv));
+    let base = base_color(input, gradients);
 }
 
 fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>) -> f32 {
@@ -153,19 +164,22 @@ fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>) 
 }
 @fragment
 fn object_id(input: Output) -> @location(0) u32 {
-    let base = base_color(input);
+    let gradients = mat2x2<f32>(dpdx(input.uv), dpdy(input.uv));
+    let base = base_color(input, gradients);
     return input.output_id;
 }
 
 @fragment
 fn linear_depth(input: Output) -> @location(0) f32 {
-    let base = base_color(input);
+    let gradients = mat2x2<f32>(dpdx(input.uv), dpdy(input.uv));
+    let base = base_color(input, gradients);
     return dot(params.depth_plane, vec4<f32>(input.world, 1.0));
 }
 
 @fragment
 fn world_normal(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let base = base_color(input);
+    let gradients = mat2x2<f32>(dpdx(input.uv), dpdy(input.uv));
+    let base = base_color(input, gradients);
     let normal = unit_vector(input.normal) * select(-1.0, 1.0, front) * input.orientation;
     return vec4<f32>(normal, 1.0);
 }
@@ -177,14 +191,14 @@ fn unit_vector(value: vec3<f32>) -> vec3<f32> {
     return scaled / length(scaled);
 }
 
-fn surface_normal(input: Output) -> vec3<f32> {
+fn surface_normal(input: Output, gradients: mat2x2<f32>) -> vec3<f32> {
     let n = unit_vector(input.normal);
     if (params.normal_settings.y < 0.5) { return n; }
     let t0 = unit_vector(input.tangent.xyz);
     let t = unit_vector(t0 - n * dot(n, t0));
     if (dot(t, t) < 0.5 || abs(input.tangent.w) < 0.5) { return n; }
     let b = cross(n, t) * sign(input.tangent.w);
-    let decoded = sample_image(normal_image, params.normal_map, input.uv).xyz * 2.0 - 1.0;
+    let decoded = sample_image(normal_image, normal_sampler, params.normal_map, input.uv, gradients).xyz * 2.0 - 1.0;
     let mapped = unit_vector(decoded * vec3<f32>(params.normal_settings.x, params.normal_settings.x, 1.0));
     if (dot(mapped, mapped) < 0.5) { return n; }
     return unit_vector(t * mapped.x + b * mapped.y + n * mapped.z);
@@ -204,9 +218,9 @@ fn diffuse_environment(normal: vec3<f32>) -> vec3<f32> {
     return max(value, vec3<f32>(0.0)) * params.environment.z;
 }
 
-fn occlusion(uv: vec2<f32>) -> f32 {
+fn occlusion(uv: vec2<f32>, gradients: mat2x2<f32>) -> f32 {
     if (params.occlusion_settings.x == 0.0) { return 1.0; }
-    return mix(1.0, sample_image(occlusion_image, params.occlusion_map, uv).r, params.occlusion_settings.x);
+    return mix(1.0, sample_image(occlusion_image, occlusion_sampler, params.occlusion_map, uv, gradients).r, params.occlusion_settings.x);
 }
 
 struct LightSample { direction: vec3<f32>, energy: vec3<f32> };
@@ -252,15 +266,15 @@ fn pbr_direct(diffuse: vec3<f32>, f0: vec3<f32>, roughness: f32, normal: vec3<f3
     return reflected * light.energy * nl;
 }
 
-fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
-    let factors = sample_image(metallic_roughness_image, params.metallic_roughness_map, uv);
+fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>, gradients: mat2x2<f32>) -> vec3<f32> {
+    let factors = sample_image(metallic_roughness_image, metallic_roughness_sampler, params.metallic_roughness_map, uv, gradients);
     let metal = params.pbr.x * factors.b;
     let roughness = max(params.pbr.y * factors.g, 0.045);
-    let emission = params.emissive.rgb * sample_image(emissive_image, params.emissive_map, uv).rgb;
+    let emission = params.emissive.rgb * sample_image(emissive_image, emissive_sampler, params.emissive_map, uv, gradients).rgb;
     let view = unit_vector(params.view.xyz - world * params.view.w);
     let diffuse = base * (1.0 - metal);
     let f0 = mix(vec3<f32>(0.04), base, metal);
-    var result = diffuse * (vec3<f32>(params.ambient.x) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * occlusion(uv) + emission;
+    var result = diffuse * (vec3<f32>(params.ambient.x) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * occlusion(uv, gradients) + emission;
     let nv = clamp(dot(normal, view), 0.0, 1.0);
     if (params.specular_environment.z > 0.0 && nv > 0.0) {
         let direction = reflect(-view, normal);
@@ -269,7 +283,7 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>,
             settings.y * direction.x + settings.x * direction.z);
         let radiance = textureSampleLevel(specular_image, specular_sampler, rotated, roughness * settings.w).rgb;
         let brdf = textureSampleLevel(specular_brdf, specular_sampler, vec2<f32>(nv, roughness), 0.0).rg;
-        result += radiance * settings.z * (f0 * brdf.x + vec3<f32>(brdf.y)) * occlusion(uv);
+        result += radiance * settings.z * (f0 * brdf.x + vec3<f32>(brdf.y)) * occlusion(uv, gradients);
     }
     for (var i = 0u; i < params.light_count.x; i += 1u) {
         result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world)) * shadow_visibility(i, world, geometric_normal);
@@ -279,16 +293,17 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>,
 
 @fragment
 fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let base = base_color(input);
+    let gradients = mat2x2<f32>(dpdx(input.uv), dpdy(input.uv));
+    let base = base_color(input, gradients);
     var illumination = vec3<f32>(1.0);
     if (params.flags.y < 0.5) {
         if (params.pbr.z > 0.5) {
-            let normal = surface_normal(input) * select(-1.0, 1.0, front) * input.orientation;
+            let normal = surface_normal(input, gradients) * select(-1.0, 1.0, front) * input.orientation;
             let geometric_normal = unit_vector(input.normal) * select(-1.0, 1.0, front) * input.orientation;
-            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, geometric_normal, input.world, input.uv), vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
+            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, geometric_normal, input.world, input.uv, gradients), vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
         }
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front) * input.orientation;
-        illumination = (vec3<f32>(params.ambient.x) + diffuse_environment(normal)) * occlusion(input.uv);
+        illumination = (vec3<f32>(params.ambient.x) + diffuse_environment(normal)) * occlusion(input.uv, gradients);
         for (var i = 0u; i < params.light_count.x; i += 1u) {
             let light = sample_light(params.lights[i], input.world);
             illumination += light.energy * max(dot(normal, light.direction), 0.0) * shadow_visibility(i, input.world, normal);

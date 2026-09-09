@@ -11,7 +11,7 @@ pub enum TextureAddressMode3d {
     Mirror = 2,
 }
 
-/// Image filtering at mip level zero.
+/// Image filtering within a mip level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u32)]
 pub enum TextureFilter3d {
@@ -20,6 +20,18 @@ pub enum TextureFilter3d {
     /// Interpolate the four neighboring texels.
     #[default]
     Linear = 1,
+}
+
+/// Selection and interpolation of image mip levels during minification.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextureMipFilter3d {
+    /// Use only the original image.
+    #[default]
+    None,
+    /// Select the nearest mip level.
+    Nearest,
+    /// Interpolate adjacent mip levels.
+    Linear,
 }
 
 /// A non-finite image-coordinate transform.
@@ -75,8 +87,8 @@ impl UvTransform3d {
     }
 }
 
-/// Image-coordinate transform, per-axis addressing and mip-zero filtering.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Image-coordinate transform, per-axis addressing and filtering.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextureSampling3d {
     /// Applied to mesh UVs before addressing and filtering.
     pub transform: UvTransform3d,
@@ -84,6 +96,35 @@ pub struct TextureSampling3d {
     pub address_u: TextureAddressMode3d,
     /// Vertical addressing.
     pub address_v: TextureAddressMode3d,
-    /// Used for both magnification and minification, without mipmaps.
+    /// Used for magnification and filtering within each mip level.
     pub filter: TextureFilter3d,
+    /// Defaults to `None`; other modes generate an independent image mip chain.
+    pub mip_filter: TextureMipFilter3d,
+    /// Maximum anisotropic sample ratio, from 1 through 16. Values above 1
+    /// require linear texel and mip filtering. Defaults to 1 (isotropic).
+    /// Backends without anisotropic filtering use isotropic sampling.
+    pub max_anisotropy: u16,
+}
+
+impl Default for TextureSampling3d {
+    fn default() -> Self {
+        Self {
+            transform: Default::default(),
+            address_u: Default::default(),
+            address_v: Default::default(),
+            filter: Default::default(),
+            mip_filter: Default::default(),
+            max_anisotropy: 1,
+        }
+    }
+}
+
+impl TextureSampling3d {
+    /// Whether anisotropy and the selected filtering modes form a supported configuration.
+    pub fn is_valid(self) -> bool {
+        (1..=16).contains(&self.max_anisotropy)
+            && (self.max_anisotropy == 1
+                || self.filter == TextureFilter3d::Linear
+                    && self.mip_filter == TextureMipFilter3d::Linear)
+    }
 }

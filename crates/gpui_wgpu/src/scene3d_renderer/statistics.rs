@@ -6,7 +6,7 @@ use crate::wgpu_renderer::scene3d::Scene3dRenderer;
 
 /// Mesh work after frustum culling and adjacent material batching, summed across
 /// selected output passes. Counts describe submissions, not rasterized fragments
-/// or GPU timings. Fullscreen background and display draws are excluded.
+/// or GPU timings. Texture preparation and fullscreen passes are excluded.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Scene3dDrawStatistics {
     pub camera_draws: u64,

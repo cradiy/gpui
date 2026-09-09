@@ -5,7 +5,7 @@ use gpui::{
 use gpui_3d::{
     AlphaMode, Camera, ColorOutput, Light, Material, MaterialTexture, Mesh, Object,
     OrbitController, PbrMaterial, Projection, Scene, SphereOptions, TextureAddressMode,
-    TextureFilter, TextureSampling, ToneMapping, UvTransform, viewport3d,
+    TextureFilter, TextureMipFilter, TextureSampling, ToneMapping, UvTransform, viewport3d,
 };
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc, sync::Arc};
@@ -23,6 +23,8 @@ struct Materials {
     tone_mapping: ToneMapping,
     address: TextureAddressMode,
     filter: TextureFilter,
+    mip_filter: TextureMipFilter,
+    max_anisotropy: u16,
     alpha: AlphaMode,
     normal_image: Arc<gpui::RenderImage>,
     pattern: Arc<gpui::RenderImage>,
@@ -56,6 +58,8 @@ impl Materials {
             tone_mapping: ToneMapping::Reinhard,
             address: TextureAddressMode::Repeat,
             filter: TextureFilter::Linear,
+            mip_filter: TextureMipFilter::Linear,
+            max_anisotropy: 4,
             alpha: AlphaMode::Mask,
             normal_image: Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
                 image::RgbaImage::from_fn(128, 128, |x, y| {
@@ -143,6 +147,8 @@ impl Materials {
                 address_u: self.address,
                 address_v: self.address,
                 filter: self.filter,
+                mip_filter: self.mip_filter,
+                max_anisotropy: self.max_anisotropy,
             };
             if self.normal {
                 material = material.normal_texture(
@@ -187,6 +193,8 @@ impl Materials {
             address_u: self.address,
             address_v: self.address,
             filter: self.filter,
+            mip_filter: self.mip_filter,
+            max_anisotropy: self.max_anisotropy,
         };
         scene
             .object(
@@ -242,6 +250,8 @@ impl Render for Materials {
                         ("alpha", "Alpha mode"),
                         ("address", "UV address"),
                         ("filter", "Texture filter"),
+                        ("mips", "Mip filter"),
+                        ("anisotropy", "Anisotropy"),
                         ("exposure", "Exposure"),
                         ("tone", "Tone mapping"),
                         ("projection", "Switch projection"),
@@ -273,7 +283,18 @@ impl Render for Materials {
                                     "ao" => this.ao = !this.ao,
                                     "alpha" => this.alpha = match this.alpha { AlphaMode::Opaque => AlphaMode::Mask, AlphaMode::Mask => AlphaMode::Blend, AlphaMode::Blend => AlphaMode::Opaque },
                                     "address" => this.address = match this.address { TextureAddressMode::Clamp => TextureAddressMode::Repeat, TextureAddressMode::Repeat => TextureAddressMode::Mirror, TextureAddressMode::Mirror => TextureAddressMode::Clamp },
-                                    "filter" => this.filter = if this.filter == TextureFilter::Linear { TextureFilter::Nearest } else { TextureFilter::Linear },
+                                    "filter" => {
+                                        this.filter = if this.filter == TextureFilter::Linear { TextureFilter::Nearest } else { TextureFilter::Linear };
+                                        if this.filter == TextureFilter::Nearest { this.max_anisotropy = 1; }
+                                    },
+                                    "mips" => {
+                                        this.mip_filter = match this.mip_filter { TextureMipFilter::None => TextureMipFilter::Nearest, TextureMipFilter::Nearest => TextureMipFilter::Linear, TextureMipFilter::Linear => TextureMipFilter::None };
+                                        if this.mip_filter != TextureMipFilter::Linear { this.max_anisotropy = 1; }
+                                    },
+                                    "anisotropy" => {
+                                        this.max_anisotropy = if this.max_anisotropy < 16 { this.max_anisotropy * 2 } else { 1 };
+                                        if this.max_anisotropy > 1 { this.filter = TextureFilter::Linear; this.mip_filter = TextureMipFilter::Linear; }
+                                    },
                                     "exposure" => this.exposure = if this.exposure < 2. { this.exposure+1. } else { -2. },
                                     "tone" => this.tone_mapping = if this.tone_mapping == ToneMapping::Reinhard { ToneMapping::None } else { ToneMapping::Reinhard },
                                     "focal" => {
@@ -409,6 +430,7 @@ impl Render for Materials {
                     .children(["Dielectric", "Metal", "Emission"]),
             )
             .child(div().text_color(rgb(0xa8bdd6)).child(format!("Normal {} · AO {} · {:?} · {:?} / {:?} · Exposure {:+.0} · {:?}", self.normal, self.ao, self.alpha, self.address, self.filter, self.exposure, self.tone_mapping)))
+            .child(div().text_color(rgb(0xa8bdd6)).child(format!("Mip {:?} · Anisotropy {}×", self.mip_filter, self.max_anisotropy)))
             .child(div().text_color(rgb(0xa8bdd6)).child(format!(
                 "Roughness {:.2} · Emission {:.1}× · Maps {} · Density {:.0}× · Emission offset {:.3} · {:?} · Lens shift {:?}",
                 self.roughness,

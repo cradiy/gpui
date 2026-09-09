@@ -203,6 +203,7 @@ struct SceneDemo {
     tinted: [bool; 3],
     hidden: [bool; 3],
     controls: OrbitController,
+    camera_frame: Instant,
     bounds: Rc<Cell<Bounds<Pixels>>>,
     tracks: [TransformTrack; 3],
     position: Duration,
@@ -309,6 +310,7 @@ impl SceneDemo {
             tinted: [false; 3],
             hidden: [false; 3],
             controls: OrbitController::new(camera).unwrap(),
+            camera_frame: Instant::now(),
             bounds: Rc::new(Cell::new(Bounds::default())),
             tracks: [
                 Interpolation::Step,
@@ -329,6 +331,14 @@ impl SceneDemo {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.evaluate_pose();
         cx.notify();
+    }
+    fn advance_camera(&mut self, now: Instant) -> bool {
+        let changed = self
+            .controls
+            .advance(now.duration_since(self.camera_frame))
+            .unwrap_or(false);
+        self.camera_frame = now;
+        changed
     }
     fn evaluate_pose(&mut self) {
         let position = if self.deformation != 0 || self.skinning {
@@ -413,6 +423,10 @@ impl SceneDemo {
 impl Render for SceneDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
+        self.advance_camera(now);
+        if self.controls.is_animating() {
+            window.request_animation_frame();
+        }
         if self.playing {
             self.position =
                 (self.position + now.duration_since(self.last_frame)).min(ANIMATION_LENGTH);
@@ -441,6 +455,9 @@ impl Render for SceneDemo {
                     cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                         if this.rig_camera {
                             return;
+                        }
+                        if this.advance_camera(Instant::now()) {
+                            cx.notify();
                         }
                         if this
                             .controls
@@ -471,6 +488,9 @@ impl Render for SceneDemo {
                 if this.rig_camera {
                     return;
                 }
+                if this.advance_camera(Instant::now()) {
+                    cx.notify();
+                }
                 if this
                     .controls
                     .update_drag(event.position, event.pressed_button, this.bounds.get())
@@ -490,6 +510,9 @@ impl Render for SceneDemo {
             .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, cx| {
                 if this.rig_camera {
                     return;
+                }
+                if this.advance_camera(Instant::now()) {
+                    cx.notify();
                 }
                 if this
                     .controls
@@ -592,6 +615,12 @@ impl Render for SceneDemo {
                 .child(self.button("rig-camera", "Rig camera", self.rig_camera).on_click(cx.listener(|this, _, _, cx| {
                     this.rig_camera = !this.rig_camera;
                     this.controls.cancel_drag(); cx.notify();
+                })))
+                .child(self.button("damping", "Camera damping", self.controls.damping().is_some()).on_click(cx.listener(|this, _, _, cx| {
+                    let half_life = this.controls.damping().is_none().then(|| Duration::from_millis(80));
+                    this.controls.set_damping(half_life).unwrap();
+                    this.camera_frame = Instant::now();
+                    cx.notify();
                 })))
                 .child(self.button("rig-lights", "Rig lights", self.rig_lights).on_click(cx.listener(|this, _, _, cx| {
                     this.rig_lights = !this.rig_lights;

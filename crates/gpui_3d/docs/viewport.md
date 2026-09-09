@@ -508,9 +508,9 @@ Invalid inputs or coordinates that lose a representable view return `CameraError
 
 ## Camera controls
 
-`OrbitController` owns a camera and applies input immediately, without a window,
-animation clock, or continuous redraw. Read `camera()` when building a scene and
-notify the view when an operation returns `true`.
+`OrbitController` owns a camera and applies input immediately by default, without
+a window or animation clock. Read `camera()` when building a scene and notify the
+view when an operation returns `true`.
 
 ```rust
 use gpui::{Bounds, MouseButton, point, px, size};
@@ -558,6 +558,56 @@ value toward its range but cannot move it farther away. Clipping planes are not
 changed by controls; choose them for the navigable scene or frame bounds before
 calling `set_camera`. Invalid settings, cameras, or direct-operation inputs return
 `OrbitError` without changing the camera.
+
+### Damping
+
+`set_damping(Some(half_life))` enables exponential target following for orbit,
+pan, dolly, and optical zoom. The half-life must be nonzero. `None` selects
+immediate input. `camera()` is the displayed pose; `target_camera()` is the
+destination accumulated by input operations. With damping enabled, an input
+operation returning `true` means the destination changed, not that the displayed
+camera has already moved.
+
+```rust
+use gpui_3d::{Camera, OrbitController};
+use std::time::Duration;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut controls = OrbitController::new(Camera::default())?;
+controls.set_damping(Some(Duration::from_millis(80)))?;
+controls.orbit_by([30., 10.])?;
+
+// Supply elapsed time from the application's frame clock.
+let changed = controls.advance(Duration::from_millis(16))?;
+let camera = controls.camera();
+let needs_next_frame = controls.is_animating();
+# Ok(())
+# }
+```
+
+Advance to an input event's time before applying that input, then advance by the
+time since the previous update when rendering. Do not count idle time before the
+first input as animation time. Notify after accepted input and request another
+animation frame only while `is_animating()` is true. A held, stationary gesture
+does not keep requesting frames. The controller does not create tasks or timers;
+callers choose whether hidden or paused views advance their clocks.
+
+The response halves the remaining displacement each half-life and settles
+exactly after sixteen half-lives without further input. Zero elapsed time does
+nothing; a long time step can finish the response in one call. Sampling the same
+input history at different frame intervals produces the same response. Orbit
+uses the shortest azimuth path and interpolates pitch around the camera's up
+axis; target translation is linear, while distance and optical scale are
+logarithmic. Orbit retains its radius, optical zoom retains eye and target, and
+all operations preserve lens shift and clipping planes. This is a finite
+target-following response, not velocity extrapolation beyond the input target.
+
+`end_drag` releases ownership without discarding pending motion. `cancel_drag`,
+a successful `set_settings` or `set_damping`, and a newly claimed gesture freeze
+at the displayed pose and discard the destination. `set_camera` cancels movement
+and uses the supplied pose immediately. If an intermediate pose cannot be
+represented, `advance` returns `OrbitError` and cancels motion at the last valid
+displayed pose.
 
 ### Input ownership
 
@@ -1860,6 +1910,7 @@ tint its body, rotate the assembly, or hide its subtree. Other instances retain
 their own properties. Right-drag to orbit, middle-drag to pan, and scroll to zoom.
 Projection preserves the apparent size at the target; Frame selected fits the
 selected assembly's bounds.
+Camera damping toggles an 80 ms response half-life for manual camera controls.
 
 In `materials`, the spheres share geometry and expose different material responses.
 Normal and occlusion maps toggle independently of metallic-roughness and emissive

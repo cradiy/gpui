@@ -3,9 +3,12 @@ use crate::{
     math::{cross, dot, sub},
 };
 use gpui::{Bounds, MouseButton, Pixels, Point};
-use std::{fmt, ops::RangeInclusive};
+use std::{fmt, ops::RangeInclusive, time::Duration};
 
-/// Immediate camera interaction settings. Angles are in radians and distances
+mod damping;
+use damping::Motion;
+
+/// Camera interaction settings. Angles are in radians and distances
 /// are in scene units. `None` disables a drag binding.
 #[derive(Clone, Debug)]
 pub struct OrbitSettings {
@@ -49,7 +52,7 @@ impl fmt::Display for OrbitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Camera(error) => error.fmt(f),
-            Self::InvalidSettings => f.write_str("camera controls require finite valid limits, nonnegative speeds, and distinct drag bindings"),
+            Self::InvalidSettings => f.write_str("camera controls require valid limits, nonnegative speeds, distinct drag bindings, and a nonzero damping half-life"),
             Self::InvalidInput => f.write_str("camera control input must be finite; scale factors must be positive"),
         }
     }
@@ -88,6 +91,8 @@ pub struct OrbitController {
     camera: Camera,
     settings: OrbitSettings,
     drag: Option<Drag>,
+    damping: Option<Duration>,
+    motion: Option<Motion>,
 }
 
 impl OrbitController {
@@ -97,10 +102,68 @@ impl OrbitController {
             camera,
             settings: OrbitSettings::default(),
             drag: None,
+            damping: None,
+            motion: None,
         })
     }
     pub fn camera(&self) -> Camera {
+        self.motion.map_or(self.camera, |motion| motion.current)
+    }
+    /// Input destination, which may lead the displayed camera while damping.
+    pub fn target_camera(&self) -> Camera {
         self.camera
+    }
+    /// Exponential response half-life. `None` applies input immediately.
+    pub fn damping(&self) -> Option<Duration> {
+        self.damping
+    }
+    /// Sets a nonzero response half-life and freezes any pending movement at the
+    /// displayed pose. Active gestures are canceled. The default is `None`.
+    pub fn set_damping(&mut self, half_life: Option<Duration>) -> Result<(), OrbitError> {
+        if half_life.is_some_and(|duration| duration.is_zero()) {
+            return Err(OrbitError::InvalidSettings);
+        }
+        self.cancel_drag();
+        self.damping = half_life;
+        Ok(())
+    }
+    /// Whether another time step is needed. A stationary held drag is not animation.
+    pub fn is_animating(&self) -> bool {
+        self.motion.is_some()
+    }
+    /// Advances the response by caller-owned elapsed time. Returns whether the
+    /// displayed camera changed. Zero time is a no-op; after sixteen half-lives
+    /// the destination is exact and `is_animating()` is false. An unrepresentable
+    /// intermediate pose stops movement at the last valid displayed camera.
+    pub fn advance(&mut self, elapsed: Duration) -> Result<bool, OrbitError> {
+        let Some(mut motion) = self.motion else {
+            return Ok(false);
+        };
+        if elapsed.is_zero() {
+            return Ok(false);
+        }
+        let before = motion.current;
+        let half_life = self.damping.expect("motion requires damping");
+        motion.elapsed_nanos += elapsed.as_nanos();
+        if motion.elapsed_nanos >= half_life.as_nanos() * 16 {
+            self.motion = None;
+            return Ok(before != self.camera);
+        }
+        let half_lives = motion.elapsed_nanos as f64 / half_life.as_nanos() as f64;
+        match motion.sample(
+            self.camera,
+            -(-half_lives * std::f64::consts::LN_2).exp_m1(),
+        ) {
+            Ok(next) => {
+                motion.current = next;
+                self.motion = (next != self.camera).then_some(motion);
+                Ok(before != next)
+            }
+            Err(error) => {
+                self.cancel_drag();
+                Err(error)
+            }
+        }
     }
     pub fn settings(&self) -> &OrbitSettings {
         &self.settings
@@ -116,8 +179,8 @@ impl OrbitController {
     /// Limits constrain subsequent input; they do not snap an externally supplied pose.
     pub fn set_camera(&mut self, camera: Camera) -> Result<(), OrbitError> {
         validate_camera(camera)?;
-        self.camera = camera;
         self.cancel_drag();
+        self.camera = camera;
         Ok(())
     }
     /// Validates settings atomically and cancels an active gesture on success.
@@ -189,6 +252,7 @@ impl OrbitController {
         {
             return Ok(false);
         }
+        self.stop_motion();
         self.drag = Some(Drag {
             button,
             gesture,
@@ -236,16 +300,23 @@ impl OrbitController {
         }
         result
     }
-    /// An unrelated button release does not end the owned gesture.
+    /// Releases the owned gesture without stopping pending motion. An unrelated
+    /// button release does not end the gesture.
     pub fn end_drag(&mut self, button: MouseButton) -> bool {
         if self.drag_button() != Some(button) {
             return false;
         }
-        self.cancel_drag();
+        self.drag = None;
         true
     }
+    /// Cancels gesture ownership and freezes pending motion at the displayed pose.
     pub fn cancel_drag(&mut self) {
         self.drag = None;
+        self.stop_motion();
+    }
+    fn stop_motion(&mut self) {
+        self.camera = self.camera();
+        self.motion = None;
     }
 
     /// Applies logical pointer displacement around the current target and up axis.
@@ -393,6 +464,10 @@ impl OrbitController {
     fn apply(&mut self, camera: Camera) -> Result<bool, OrbitError> {
         validate_camera(camera)?;
         let changed = self.camera != camera;
+        if changed && self.damping.is_some() {
+            let displayed = self.camera();
+            self.motion = (displayed != camera).then(|| Motion::new(displayed));
+        }
         self.camera = camera;
         Ok(changed)
     }

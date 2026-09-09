@@ -30,7 +30,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **UI pointer mapping**: Route a named UI object's UVs into existing button, hover, scroll, and slider handlers, with gesture continuity outside the mesh and camera-input separation.
 - [ ] **Focus and overlays**: Define ownership, positioning, and dismissal for keyboard focus, input methods, tooltips, and menus; specify unsupported interactions.
 - [x] **Camera controllers**: Immediate orbit, target-plane pan, dolly, and optical zoom with configurable bindings, speeds, distance/pitch/optical limits, and gesture ownership.
-- [ ] **Camera damping**: Optional inertia and damping with explicit time advancement and on-demand redraw scheduling.
+- [x] **Camera damping**: Optional exponential target following for orbit, pan, dolly, and zoom, with explicit time advancement, release settling, cancellation, and an on-demand animation signal.
 - [ ] **Interaction example**: Object selection, highlighting, and interactive 3D UI panels covering occlusion, device scales, and viewport sizes.
 
 ## Phase 2: Scenes and Resource Primitives

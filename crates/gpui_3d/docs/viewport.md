@@ -1379,9 +1379,40 @@ data with `mesh.tangents()`.
 
 Invalid counts, non-finite or undefined bases, zero vertex normals, and mixed W
 signs within a triangle return `TangentError`. Split vertices at tangent-space
-seams before supplying data. Tangents are explicit inputs: the core does not
-generate MikkTSpace tangents or reconstruct missing bases from derivatives.
+seams before supplying data. Rendering does not generate missing tangent bases.
 Rendering an active normal map without mesh tangents returns an error.
+
+`Mesh::generate_tangents()` generates MikkTSpace frames synchronously and returns
+`GeneratedTangents`. It uses normalized copies of indexed normals and preserves
+the stored positions, normals, and UVs. Shared vertices split when face-corner
+tangent frames differ, including mirrored UV seams. Triangle order and winding
+are unchanged, preserving triangle IDs for queries and per-triangle metadata.
+Existing tangents are replaced without modifying the source mesh.
+
+```rust
+use gpui_3d::Mesh;
+
+let source = Mesh::new(Mesh::plane().vertices().to_vec(), Mesh::plane().indices().to_vec());
+let generated = source.generate_tangents()?;
+let source_weights = vec![0.5_f32; source.vertex_count()];
+let weights: Vec<_> = generated.source_vertices().iter()
+    .map(|&source| source_weights[source as usize])
+    .collect();
+let (mesh, source_vertices) = generated.into_parts();
+# Ok::<(), gpui_3d::TangentGenerationError>(())
+```
+
+Output vertices follow first use and omit unreferenced vertices; output bounds
+therefore exclude unused positions. `source_vertices()[output_index]` identifies
+the original vertex. Use this mapping for external vertex attributes, morph
+deltas, and skin influences before constructing deformation inputs. Distinct
+source vertices are not merged even when all their mesh attributes match.
+
+`TangentGenerationError` identifies zero indexed normals, zero geometric or UV
+area, unrepresentable f32 intermediates, and undefined output frames. Degenerate
+triangles are rejected, not removed or assigned arbitrary tangents. Finite UVs
+outside `[0, 1]` are supported. Generate during asset preparation and share the
+result across objects; generation is not part of per-frame rendering.
 
 Tangents follow the model transform; normals use the inverse transpose. Shading
 reorthogonalizes the world-space frame, adjusts handedness for reflected transforms,

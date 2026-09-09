@@ -35,12 +35,16 @@ struct Materials {
 
 impl Materials {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (mesh, _) = Mesh::sphere(SphereOptions {
+            radius: 0.7,
+            segments: [96, 48],
+        })
+        .unwrap()
+        .generate_tangents()
+        .unwrap()
+        .into_parts();
         Self {
-            mesh: Mesh::sphere(SphereOptions {
-                radius: 0.7,
-                segments: [96, 48],
-            })
-            .unwrap(),
+            mesh,
             controls: OrbitController::new(Camera::orbit(0., 0.12, 7.5)).unwrap(),
             bounds: Rc::new(Cell::new(Bounds::default())),
             roughness: 0.4,

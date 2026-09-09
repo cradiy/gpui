@@ -182,7 +182,7 @@ impl Element for Content {
             if let Texture::Image(image) = &object.material.texture {
                 let _ = image.use_data(None, window, cx);
             }
-            for (_, map) in object.material.pbr_textures() {
+            for (_, map) in object.material.lighting_textures() {
                 let _ = map.image.use_data(None, window, cx);
             }
         }

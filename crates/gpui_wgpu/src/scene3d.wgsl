@@ -12,6 +12,7 @@ struct Params {
     normal_map: ImageParams, normal_settings: vec4<f32>,
     depth_plane: vec4<f32>,
     environment_sh: array<vec4<f32>, 9>, environment: vec4<f32>,
+    occlusion_map: ImageParams, occlusion_settings: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
@@ -19,6 +20,7 @@ struct Params {
 @group(0) @binding(3) var metallic_roughness_image: texture_2d<f32>;
 @group(0) @binding(4) var emissive_image: texture_2d<f32>;
 @group(0) @binding(5) var normal_image: texture_2d<f32>;
+@group(0) @binding(6) var occlusion_image: texture_2d<f32>;
 struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32 };
 @vertex
 fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) tangent: vec4<f32>) -> Output {
@@ -143,6 +145,11 @@ fn diffuse_environment(normal: vec3<f32>) -> vec3<f32> {
     return max(value, vec3<f32>(0.0)) * params.environment.z;
 }
 
+fn occlusion(uv: vec2<f32>) -> f32 {
+    if (params.occlusion_settings.x == 0.0) { return 1.0; }
+    return mix(1.0, sample_image(occlusion_image, params.occlusion_map, uv).r, params.occlusion_settings.x);
+}
+
 fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     let factors = sample_image(metallic_roughness_image, params.metallic_roughness_map, uv);
     let metal = params.pbr.x * factors.b;
@@ -154,7 +161,7 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f
     let nl = clamp(dot(normal, light), 0.0, 1.0);
     let diffuse = base * (1.0 - metal);
     let f0 = mix(vec3<f32>(0.04), base, metal);
-    var result = diffuse * (vec3<f32>(params.direction.w) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) + emission;
+    var result = diffuse * (vec3<f32>(params.direction.w) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * occlusion(uv) + emission;
     if (nv <= 0.0 || nl <= 0.0) { return result; }
     let half_vector = unit_vector(view + light);
     let nh = clamp(dot(normal, half_vector), 0.0, 1.0);
@@ -183,7 +190,8 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
         }
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front) * input.orientation;
         let light = params.direction.xyz / max(length(params.direction.xyz), 0.00001);
-        illumination = vec3<f32>(params.direction.w) + diffuse_environment(normal) + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);
+        illumination = (vec3<f32>(params.direction.w) + diffuse_environment(normal)) * occlusion(input.uv)
+            + srgb_to_linear(params.light.rgb) * params.light.a * max(dot(normal, light), 0.0);
     }
     return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
 }

@@ -45,9 +45,14 @@ impl Scene {
                 "object {index} has invalid normal scale"
             );
             ensure!(
+                object.material.occlusion_strength.is_finite()
+                    && (0. ..=1.).contains(&object.material.occlusion_strength),
+                "object {index} has invalid occlusion strength"
+            );
+            ensure!(
                 !object
                     .material
-                    .pbr_textures()
+                    .lighting_textures()
                     .any(|(slot, _)| slot == TextureSlot::Normal)
                     || object.mesh.tangents().is_some(),
                 "object {index}: normal maps require mesh tangents"
@@ -106,8 +111,9 @@ impl Scene {
             let mut metallic_roughness_texture = None;
             let mut emissive_texture = None;
             let mut normal_texture = None;
+            let mut occlusion_texture = None;
             let mut ready = true;
-            for (slot, map) in object.material.pbr_textures() {
+            for (slot, map) in object.material.lighting_textures() {
                 match resolve(index, slot, &Texture::Image(map.image.clone()))? {
                     Some(MeshTexture3d::Image(tile)) => {
                         let resolved = Some(gpui::MaterialTexture3d {
@@ -118,6 +124,7 @@ impl Scene {
                             TextureSlot::MetallicRoughness => metallic_roughness_texture = resolved,
                             TextureSlot::Emissive => emissive_texture = resolved,
                             TextureSlot::Normal => normal_texture = resolved,
+                            TextureSlot::Occlusion => occlusion_texture = resolved,
                             TextureSlot::BaseColor => unreachable!(),
                         }
                     }
@@ -146,6 +153,8 @@ impl Scene {
                 emissive_texture,
                 normal_texture,
                 normal_scale: object.material.normal_scale,
+                occlusion_texture,
+                occlusion_strength: object.material.occlusion_strength,
                 alpha_cutoff: object.material.alpha_cutoff,
                 alpha_mode: object.material.alpha_mode,
                 sort_depth,
@@ -323,6 +332,92 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn occlusion_resources_follow_lit_state_and_preserve_object_identity() {
+        use crate::{MaterialTexture, PbrMaterial, TextureSampling, UvTransform};
+        let sampling = TextureSampling {
+            transform: UvTransform::from_rows([[2., 0., 0.25], [0., 3., -0.5]]).unwrap(),
+            ..Default::default()
+        };
+        let material = Material::color(rgb(0xffffff))
+            .occlusion_texture(MaterialTexture::new("occlusion.png").sampling(sampling));
+        let tile = gpui::AtlasTile {
+            texture_id: gpui::AtlasTextureId {
+                index: 1,
+                kind: gpui::AtlasTextureKind::Polychrome,
+            },
+            tile_id: gpui::TileId(2),
+            padding: 0,
+            bounds: gpui::Bounds::new(
+                gpui::point(gpui::DevicePixels(4), gpui::DevicePixels(8)),
+                gpui::size(gpui::DevicePixels(16), gpui::DevicePixels(16)),
+            ),
+        };
+        for material in [
+            material.clone(),
+            material.clone().pbr(PbrMaterial::default()),
+        ] {
+            for (strength, unlit, ready) in [
+                (1., false, false),
+                (0.4, false, true),
+                (0., false, false),
+                (1., true, false),
+            ] {
+                let active = strength > 0. && !unlit;
+                let scene = Scene::new()
+                    .object(Object::new(
+                        Mesh::plane(),
+                        material.clone().occlusion_strength(strength).unlit(unlit),
+                    ))
+                    .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))));
+                let mut requests = Vec::new();
+                let frame = scene
+                    .prepare_frame(1., None, |index, slot, _| {
+                        requests.push((index, slot));
+                        Ok(if slot == TextureSlot::Occlusion {
+                            ready.then_some(MeshTexture3d::Image(tile))
+                        } else {
+                            Some(MeshTexture3d::None)
+                        })
+                    })
+                    .unwrap();
+                assert_eq!(requests.contains(&(0, TextureSlot::Occlusion)), active);
+                let ids: Vec<_> = frame
+                    .objects
+                    .iter()
+                    .map(|object| object.output_id)
+                    .collect();
+                assert_eq!(
+                    ids,
+                    if active && !ready {
+                        vec![2]
+                    } else {
+                        vec![1, 2]
+                    }
+                );
+                if active && ready {
+                    let map = frame.objects[0].occlusion_texture.unwrap();
+                    assert_eq!(map.tile, tile);
+                    assert_eq!(map.sampling, sampling);
+                    assert_eq!(frame.objects[0].occlusion_strength, strength);
+                }
+            }
+        }
+        for strength in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+            let scene = Scene::new().object(Object::new(
+                Mesh::plane(),
+                material.clone().occlusion_strength(strength),
+            ));
+            assert!(
+                scene
+                    .prepare_frame(1., None, |_, _, _| unreachable!(
+                        "invalid strength must fail before resource resolution"
+                    ))
+                    .is_err()
+            );
+        }
     }
 
     #[test]

@@ -514,8 +514,7 @@ alpha cutout, depth writes, object IDs, or picking.
 
 The light model contains one directional light, uniform ambient illumination,
 and optional diffuse environment illumination. Pure metals receive no diffuse
-ambient or environment light. Environment reflections, shadows, and occlusion
-maps are not provided.
+ambient or environment light. Environment reflections and shadows are not provided.
 Emission does not illuminate other objects or add a glow outside the surface.
 
 ### Diffuse environment lighting
@@ -581,7 +580,7 @@ Basic lit materials add `base * irradiance/pi` to existing lighting. PBR materia
 add `base * (1 - metallic) * (1 - F0) * irradiance/pi`, where
 `F0 = mix(0.04, base, metallic)`, evaluated with the shading normal, including an
 active normal map. This diffuse approximation is view-independent; it does not
-provide specular IBL, roughness-dependent reflections, or visibility occlusion.
+provide specular IBL, roughness-dependent reflections, or geometry-derived occlusion.
 Uniform ambient and directional lighting remain additive. Unlit materials bypass
 environment lighting. Alpha, picking, object IDs, depth, and geometric normal
 outputs are unchanged. Viewport and headless color rendering share the same path.
@@ -621,11 +620,46 @@ map uses a multiplier of one. R in the metallic-roughness map and alpha in both
 maps are ignored. Alpha cutout and picking visibility depend only on base-color
 alpha and tint. These maps do not add occlusion, surface displacement, or normals.
 
-Maps are loaded only for lit PBR materials. Until all required images are ready,
-the viewport omits the object from rendering and visible picking. Direct
+Metallic-roughness and emissive maps are loaded only for lit PBR materials.
+Until all required images are ready, the viewport omits the object from rendering
+and visible picking. Direct
 headless rendering requires decoded `ImageSource::Render` inputs for every map
 and returns an error for unresolved inputs. `.unlit(true)` and diffuse materials
-ignore material maps without requesting their resources.
+ignore these maps without requesting their resources.
+
+### Ambient occlusion maps
+
+```rust,no_run
+use gpui::rgb;
+use gpui_3d::{Material, MaterialTexture};
+
+let material = Material::color(rgb(0xd6c3a5))
+    .occlusion_texture(MaterialTexture::new("occlusion.png"))
+    .occlusion_strength(0.8);
+```
+
+Occlusion maps use linear R, where zero blocks indirect light and one leaves it
+unchanged. G, B and alpha are ignored. `occlusion_strength` defaults to one and
+must be finite and in `[0, 1]`; rendering rejects invalid values. The multiplier
+is `1 + strength * (R - 1)`, following the
+[glTF occlusion convention](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#materialocclusiontextureinfo).
+An absent map or zero strength leaves indirect lighting unchanged.
+
+Both basic lit and PBR materials apply this multiplier to uniform ambient and
+diffuse environment illumination. Directional diffuse/specular light and PBR
+emission are unaffected. Unlit materials bypass occlusion. The texture does not
+alter base color, transparency, geometry, picking, depth or geometric normals.
+It represents authored or baked occlusion, not dynamic shadows or screen-space AO.
+
+Use `MaterialTexture::sampling` for independent UV transforms, addressing and
+filtering. An ORM image can be shared between `occlusion_texture` (R) and
+`metallic_roughness_texture` (G/B). No mesh tangents are required for occlusion.
+Disabled maps request no resources. Active maps use the same readiness and
+decoded-image requirements as other material maps in viewport/headless rendering.
+
+Run `cargo run -p gpui_3d --example ambient_occlusion` for a comparison of raised
+panels with and without authored contact occlusion. Adjust AO strength or switch
+to direct-only illumination to isolate the contribution.
 
 ### Normal maps and tangents
 

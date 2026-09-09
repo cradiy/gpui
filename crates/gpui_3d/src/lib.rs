@@ -168,6 +168,7 @@ pub(crate) enum TextureSlot {
     MetallicRoughness,
     Emissive,
     Normal,
+    Occlusion,
 }
 
 /// An image and its independent mesh-UV sampling configuration.
@@ -208,6 +209,8 @@ pub struct Material {
     emissive_texture: Option<MaterialTexture>,
     normal_texture: Option<MaterialTexture>,
     normal_scale: f32,
+    occlusion_texture: Option<MaterialTexture>,
+    occlusion_strength: f32,
 }
 impl Material {
     /// Creates a lit solid material from an sRGB color.
@@ -225,6 +228,8 @@ impl Material {
             emissive_texture: None,
             normal_texture: None,
             normal_scale: 1.,
+            occlusion_texture: None,
+            occlusion_strength: 1.,
         }
     }
     /// Uses an image's first decoded frame, stretched over mesh UVs.
@@ -291,7 +296,22 @@ impl Material {
         self
     }
 
-    pub(crate) fn pbr_textures(&self) -> impl Iterator<Item = (TextureSlot, &MaterialTexture)> {
+    /// Attenuates diffuse ambient and environment light using linear R.
+    /// G, B and alpha are ignored. Works with basic and PBR lit materials.
+    pub fn occlusion_texture(mut self, texture: MaterialTexture) -> Self {
+        self.occlusion_texture = Some(texture);
+        self
+    }
+    /// Blends from no occlusion at 0 to the full map at 1. Defaults to 1.
+    /// Zero disables resource requests. Rendering rejects values outside [0, 1].
+    pub fn occlusion_strength(mut self, strength: f32) -> Self {
+        self.occlusion_strength = strength;
+        self
+    }
+
+    pub(crate) fn lighting_textures(
+        &self,
+    ) -> impl Iterator<Item = (TextureSlot, &MaterialTexture)> {
         [
             (
                 TextureSlot::MetallicRoughness,
@@ -304,15 +324,21 @@ impl Material {
                     .as_ref()
                     .filter(|_| self.normal_scale != 0.),
             ),
+            (
+                TextureSlot::Occlusion,
+                self.occlusion_texture
+                    .as_ref()
+                    .filter(|_| self.occlusion_strength != 0.),
+            ),
         ]
         .into_iter()
         .filter_map(|(slot, texture)| {
             texture
-                .filter(|_| self.pbr.is_some() && !self.unlit)
+                .filter(|_| !self.unlit && (slot == TextureSlot::Occlusion || self.pbr.is_some()))
                 .map(|texture| (slot, texture))
         })
     }
-    /// Bypasses directional and ambient lighting.
+    /// Bypasses lighting, occlusion, and emission.
     pub fn unlit(mut self, unlit: bool) -> Self {
         self.unlit = unlit;
         self

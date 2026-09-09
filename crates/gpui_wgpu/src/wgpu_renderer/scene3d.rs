@@ -76,6 +76,8 @@ struct Params {
     depth_plane: [f32; 4],
     environment_sh: [[f32; 4]; 9],
     environment: [f32; 4],
+    occlusion_map: ImageParams,
+    occlusion_settings: [f32; 4],
 }
 
 struct Geometry {
@@ -153,7 +155,7 @@ impl Scene3dRenderer {
         for binding in if data_output {
             &[1][..]
         } else {
-            &[1, 3, 4, 5][..]
+            &[1, 3, 4, 5, 6][..]
         } {
             bindings.push(wgpu::BindGroupLayoutEntry {
                 binding: *binding,
@@ -492,6 +494,11 @@ impl Scene3dRenderer {
                 .normal_texture
                 .filter(|_| maps_enabled && object.normal_scale > 0.);
             let normal_image = normal_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
+            let occlusion_map = object
+                .occlusion_texture
+                .filter(|_| !object.unlit && object.occlusion_strength > 0.);
+            let occlusion_image =
+                occlusion_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
             let metallic_roughness_image =
                 metallic_roughness_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
             let emissive_image =
@@ -555,6 +562,17 @@ impl Scene3dRenderer {
                 emissive_map: ImageParams::new(emissive_map, gpui::TextureColorSpace3d::Srgb),
                 normal_map: ImageParams::new(normal_map, gpui::TextureColorSpace3d::Linear),
                 normal_settings: [object.normal_scale, f32::from(normal_map.is_some()), 0., 0.],
+                occlusion_map: ImageParams::new(occlusion_map, gpui::TextureColorSpace3d::Linear),
+                occlusion_settings: [
+                    if occlusion_map.is_some() {
+                        object.occlusion_strength
+                    } else {
+                        0.
+                    },
+                    0.,
+                    0.,
+                    0.,
+                ],
                 depth_plane: frame.world_to_view.map(|column| -column[2]),
                 environment_sh: frame
                     .diffuse_environment
@@ -588,6 +606,14 @@ impl Scene3dRenderer {
             ];
             if self.display_pipeline.is_some() {
                 entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(
+                            occlusion_image
+                                .as_ref()
+                                .map_or(&self.white, |image| &image.view),
+                        ),
+                    },
                     wgpu::BindGroupEntry {
                         binding: 5,
                         resource: wgpu::BindingResource::TextureView(
@@ -775,6 +801,8 @@ mod tests {
             emissive_texture: None,
             normal_texture: None,
             normal_scale: 1.,
+            occlusion_texture: None,
+            occlusion_strength: 1.,
             unlit: true,
             alpha_cutoff: 0.5,
             alpha_mode,
@@ -831,6 +859,11 @@ mod tests {
                 std::mem::offset_of!(Params, environment_sh),
             ),
             ("environment", std::mem::offset_of!(Params, environment)),
+            ("occlusion_map", std::mem::offset_of!(Params, occlusion_map)),
+            (
+                "occlusion_settings",
+                std::mem::offset_of!(Params, occlusion_settings),
+            ),
             ("pbr", std::mem::offset_of!(Params, pbr)),
             ("emissive", std::mem::offset_of!(Params, emissive)),
             (

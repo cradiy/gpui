@@ -351,6 +351,10 @@ pub struct MeshDraw3d {
     pub normal_texture: Option<MaterialTexture3d>,
     /// Finite nonnegative scale of normal-map XY. Zero disables the map.
     pub normal_scale: f32,
+    /// Linear R attenuation of indirect light. Ignored for unlit materials.
+    pub occlusion_texture: Option<MaterialTexture3d>,
+    /// Finite occlusion blend in [0, 1]. Zero disables the map.
+    pub occlusion_strength: f32,
     /// Base-color alpha interpretation.
     pub alpha_mode: AlphaMode3d,
     /// Finite camera-space forward depth for back-to-front Blend sorting.

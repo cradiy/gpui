@@ -52,6 +52,8 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         emissive_texture: None,
         normal_texture: None,
         normal_scale: 1.,
+        occlusion_texture: None,
+        occlusion_strength: 1.,
         unlit: true,
         alpha_cutoff: 0.5,
         alpha_mode: gpui::AlphaMode3d::Mask,

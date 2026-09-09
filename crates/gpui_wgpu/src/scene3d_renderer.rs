@@ -245,6 +245,12 @@ impl WgpuScene3dRenderer {
                 object.output_id
             );
             ensure!(
+                object.occlusion_strength.is_finite()
+                    && (0. ..=1.).contains(&object.occlusion_strength),
+                "object {} has invalid occlusion strength",
+                object.output_id
+            );
+            ensure!(
                 object.normal_scale.is_finite() && object.normal_scale >= 0.,
                 "3D object {} has invalid normal scale",
                 object.output_id

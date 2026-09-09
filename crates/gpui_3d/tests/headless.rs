@@ -5,6 +5,104 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn occlusion_attenuates_only_indirect_light_with_independent_linear_sampling() -> anyhow::Result<()>
+{
+    use gpui_3d::{
+        DiffuseEnvironment, Light, MaterialTexture, Object, PbrMaterial, Projection, Scene,
+        Scene3dChannels, TextureAddressMode, TextureSampling, UvTransform,
+    };
+    use std::sync::Arc;
+    let image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_fn(2, 1, |x, _| {
+            image::Rgba(if x == 0 {
+                [0, 255, 255, 255]
+            } else {
+                [128, 17, 243, 0]
+            })
+        }),
+    )]));
+    let map = MaterialTexture::new(image).sampling(TextureSampling {
+        transform: UvTransform::from_rows([[0., 0., 1.75], [0., 0., 0.5]])?,
+        address_u: TextureAddressMode::Repeat,
+        ..Default::default()
+    });
+    let environment = DiffuseEnvironment::from_equirectangular([1, 1], &[[0.4, 0.8, 0.2]])?;
+    let mut renderer = HeadlessRenderer::new()?;
+    for (pbr, unlit, strength) in [
+        (false, false, 1.),
+        (true, false, 0.65),
+        (true, false, 0.),
+        (true, true, 1.),
+    ] {
+        let visibility = 1. + strength * (128. / 255. - 1.);
+        let mut outputs = Vec::new();
+        for mapped in [false, true] {
+            let mut material = Material::color(rgb(0x806040));
+            if pbr {
+                material = material.pbr(PbrMaterial {
+                    metallic: 0.25,
+                    roughness: 0.6,
+                    emissive: [0.05, 0.01, 0.03],
+                });
+            }
+            if mapped {
+                material = material
+                    .occlusion_texture(map.clone())
+                    .occlusion_strength(strength);
+            }
+            let indirect = if mapped { 1. } else { visibility };
+            let scene = Scene::new()
+                .camera(Camera {
+                    projection: Projection::Orthographic { vertical_size: 2. },
+                    ..Default::default()
+                })
+                .light(Light {
+                    direction: [0.3, 0.4, 1.],
+                    intensity: 1.,
+                    ambient: 0.3 * indirect,
+                    ..Default::default()
+                })
+                .diffuse_environment(environment.intensity(indirect))
+                .object(Object::new(Mesh::plane(), material.unlit(unlit)).id("surface"));
+            let frame = renderer.render(
+                &scene,
+                Scene3dOutputConfig {
+                    channels: Scene3dChannels::COLOR
+                        | Scene3dChannels::OBJECT_ID
+                        | Scene3dChannels::LINEAR_DEPTH
+                        | Scene3dChannels::WORLD_NORMAL,
+                    ..Scene3dOutputConfig::new([33, 33])
+                },
+            )?;
+            let mut read = frame.readback()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(result) = read.try_read()? {
+                    outputs.push(result.pixels);
+                    break;
+                }
+                anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+        assert_eq!(outputs[0].linear_depth, outputs[1].linear_depth);
+        assert_eq!(outputs[0].world_normals, outputs[1].world_normals);
+        let expected = outputs[0].rgba.as_ref().unwrap();
+        let actual = outputs[1].rgba.as_ref().unwrap();
+        assert_eq!(actual[(16 * 33 + 16) * 4 + 3], 255);
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!(
+                actual.abs_diff(*expected) <= 2,
+                "PBR {pbr}, unlit {unlit}, strength {strength}: {actual} != {expected}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow::Result<()> {
     use gpui::{Bounds, RenderImage, point, px, rgba, size};
     use gpui_3d::{

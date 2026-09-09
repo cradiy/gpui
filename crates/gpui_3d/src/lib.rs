@@ -142,6 +142,36 @@ enum Texture {
     Ui,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextureSlot {
+    BaseColor,
+    MetallicRoughness,
+    Emissive,
+}
+
+/// An image and its independent mesh-UV sampling configuration.
+#[derive(Clone)]
+pub struct MaterialTexture {
+    image: ImageSource,
+    sampling: TextureSampling,
+}
+
+impl MaterialTexture {
+    /// Uses the first decoded frame with linear filtering and clamped coordinates.
+    pub fn new(image: impl Into<ImageSource>) -> Self {
+        Self {
+            image: image.into(),
+            sampling: TextureSampling::default(),
+        }
+    }
+
+    /// Sets the UV transform, per-axis addressing and mip-zero filtering.
+    pub fn sampling(mut self, sampling: TextureSampling) -> Self {
+        self.sampling = sampling;
+        self
+    }
+}
+
 /// Solid or textured material with optional alpha cutout.
 #[derive(Clone)]
 pub struct Material {
@@ -152,6 +182,8 @@ pub struct Material {
     sampling: TextureSampling,
     image_color_space: TextureColorSpace,
     pbr: Option<PbrMaterial>,
+    metallic_roughness_texture: Option<MaterialTexture>,
+    emissive_texture: Option<MaterialTexture>,
 }
 impl Material {
     /// Creates a lit solid material from an sRGB color.
@@ -164,6 +196,8 @@ impl Material {
             sampling: TextureSampling::default(),
             image_color_space: TextureColorSpace::default(),
             pbr: None,
+            metallic_roughness_texture: None,
+            emissive_texture: None,
         }
     }
     /// Uses an image's first decoded frame, stretched over mesh UVs.
@@ -203,6 +237,34 @@ impl Material {
     pub fn pbr(mut self, parameters: PbrMaterial) -> Self {
         self.pbr = Some(parameters);
         self
+    }
+    /// Multiplies PBR roughness by linear G and metallic by linear B; R and alpha
+    /// are ignored. Only used when PBR is enabled and the material is lit.
+    pub fn metallic_roughness_texture(mut self, texture: MaterialTexture) -> Self {
+        self.metallic_roughness_texture = Some(texture);
+        self
+    }
+    /// Multiplies PBR emission by sRGB RGB decoded before filtering. Alpha is
+    /// ignored. Only used when PBR is enabled and the material is lit.
+    pub fn emissive_texture(mut self, texture: MaterialTexture) -> Self {
+        self.emissive_texture = Some(texture);
+        self
+    }
+
+    pub(crate) fn pbr_textures(&self) -> impl Iterator<Item = (TextureSlot, &MaterialTexture)> {
+        [
+            (
+                TextureSlot::MetallicRoughness,
+                self.metallic_roughness_texture.as_ref(),
+            ),
+            (TextureSlot::Emissive, self.emissive_texture.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(slot, texture)| {
+            texture
+                .filter(|_| self.pbr.is_some() && !self.unlit)
+                .map(|texture| (slot, texture))
+        })
     }
     /// Bypasses directional and ambient lighting.
     pub fn unlit(mut self, unlit: bool) -> Self {

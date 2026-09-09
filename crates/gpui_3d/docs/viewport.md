@@ -477,8 +477,45 @@ alpha cutout, depth writes, object IDs, or picking.
 
 The light model contains one directional light and diffuse ambient illumination.
 Pure metals receive no ambient diffuse light. Environment reflections, shadows,
-normal/occlusion maps, metallic-roughness maps and emissive maps are not provided.
+and normal/occlusion maps are not provided.
 Emission does not illuminate other objects or add a glow outside the surface.
+
+### Material textures
+
+```rust,no_run
+use gpui::rgb;
+use gpui_3d::{Material, MaterialTexture, PbrMaterial, TextureAddressMode, TextureSampling};
+
+let material = Material::color(rgb(0xdca773))
+    .pbr(PbrMaterial { metallic: 1., roughness: 1., emissive: [2.; 3] })
+    .metallic_roughness_texture(MaterialTexture::new("surface.png").sampling(TextureSampling {
+        address_u: TextureAddressMode::Repeat,
+        address_v: TextureAddressMode::Repeat,
+        ..Default::default()
+    }))
+    .emissive_texture(MaterialTexture::new("emission.png"));
+```
+
+`MaterialTexture` accepts the same image sources as `Material::image` and uses
+the first decoded frame. Each map has its own `TextureSampling`, including UV
+transform, addressing and filtering. All maps use mesh UVs; base-color sampling
+does not affect other maps.
+
+| Input | Channels | Color interpretation | Applied to |
+| --- | --- | --- | --- |
+| Metallic-roughness | G: roughness, B: metallic | Linear data | Corresponding PBR factors |
+| Emissive | RGB | sRGB decoded before filtering | Linear emissive factor |
+
+Map values multiply the material factors. A zero factor remains zero; an absent
+map uses a multiplier of one. R in the metallic-roughness map and alpha in both
+maps are ignored. Alpha cutout and picking visibility depend only on base-color
+alpha and tint. These maps do not add occlusion, surface displacement, or normals.
+
+Maps are loaded only for lit PBR materials. Until all required images are ready,
+the viewport omits the object from rendering and visible picking. Direct
+headless rendering requires decoded `ImageSource::Render` inputs for every map
+and returns an error for unresolved inputs. `.unlit(true)` and diffuse materials
+ignore material maps without requesting their resources.
 
 ### Color and exposure
 
@@ -758,7 +795,8 @@ cargo run -p gpui_3d --example pbr_materials
 
 Compare dielectric, metal and emissive spheres. Adjust roughness and emission,
 right-drag to orbit, scroll to zoom, and switch between perspective and orthographic
-projection to inspect view-dependent highlights.
+projection to inspect view-dependent highlights. Toggle material maps, cycle map
+density, and shift the emission map independently of the metallic-roughness map.
 
 ```sh
 cargo run -p gpui_3d --example color_pipeline

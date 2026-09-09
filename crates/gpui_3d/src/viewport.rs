@@ -1,5 +1,5 @@
 use crate::picking::{PickSnapshot, PickSurface};
-use crate::{Hit, ObjectId, PickBehavior, Scene, Texture, ui_input::UiInput};
+use crate::{Hit, ObjectId, PickBehavior, Scene, Texture, TextureSlot, ui_input::UiInput};
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, MeshTexture3d, Pixels, PointerTransform, Size, Style, StyleRefinement,
@@ -182,6 +182,9 @@ impl Element for Content {
             if let Texture::Image(image) = &object.material.texture {
                 let _ = image.use_data(None, window, cx);
             }
+            for (_, map) in object.material.pbr_textures() {
+                let _ = map.image.use_data(None, window, cx);
+            }
         }
         (
             window.request_layout(
@@ -294,23 +297,22 @@ impl Element for Content {
             return;
         }
         let scene = &self.0.scene;
-        let mut surfaces = Vec::with_capacity(scene.objects.len());
+        let mut surfaces: Vec<_> = scene.objects.iter().map(|_| PickSurface::Absent).collect();
         let has_ui = self.0.texture.is_some();
         let frame = scene
             .prepare_frame(
                 f32::from(bounds.size.width) / f32::from(bounds.size.height),
                 texture_state.as_ref().map(|state| state.config),
-                |_, source| {
-                    surfaces.push(PickSurface::Absent);
-                    let surface = surfaces.last_mut().unwrap();
+                |index, slot, source| {
+                    let mut surface = PickSurface::Absent;
                     let texture = match source {
                         Texture::None => {
-                            *surface = PickSurface::Solid;
+                            surface = PickSurface::Solid;
                             MeshTexture3d::None
                         }
                         Texture::Ui => {
                             if has_ui {
-                                *surface = PickSurface::Solid;
+                                surface = PickSurface::Solid;
                             }
                             MeshTexture3d::Subtree
                         }
@@ -321,10 +323,13 @@ impl Element for Content {
                             let Ok(tile) = window.prepare_effect_image(&image, 0) else {
                                 return Ok(None);
                             };
-                            *surface = PickSurface::Image(image);
+                            surface = PickSurface::Image(image);
                             MeshTexture3d::Image(tile)
                         }
                     };
+                    if slot == TextureSlot::BaseColor {
+                        surfaces[index] = surface;
+                    }
                     Ok(Some(texture))
                 },
             )

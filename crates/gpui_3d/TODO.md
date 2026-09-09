@@ -57,7 +57,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Transparent materials**: Separate Opaque, Mask, and Blend modes; define transparent object sorting, depth writes, and intersecting-surface limitations.
 - [x] **Color pipeline**: sRGB and linear image inputs, linear filtering and lighting, RGBA16Float intermediate results, exposure, None/Reinhard tone mapping, and premultiplied display composition shared by viewport and headless rendering.
 - [x] **PBR material factors**: Optional metallic-roughness shading, GGX/Smith/Schlick direct lighting, linear emissive radiance, and perspective/orthographic viewing directions shared by viewport and headless rendering.
-- [ ] **PBR material textures**: Metallic-roughness, tangent-space normals, ambient occlusion, and emissive maps with independent sampling and channel conventions.
+- [x] **PBR factor textures**: Linear G/B metallic-roughness and sRGB emissive maps, factor multiplication, independent UV sampling, and shared viewport/headless resource resolution.
+- [ ] **Normal and occlusion textures**: Tangent-space normal maps, tangent data and transforms, and ambient occlusion maps with independent sampling.
 - [ ] **Light types**: Multiple directional, point, and spot lights with intensity, range, and attenuation controls.
 - [ ] **Directional shadows**: Shadow maps, soft shadows, bias, and quality settings to control self-shadowing artifacts and resource costs.
 - [ ] **Environment lighting**: HDR environment maps and diffuse and specular IBL, with independent background and lighting controls.

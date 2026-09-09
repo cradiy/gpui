@@ -3,11 +3,12 @@ use gpui::{
     div, prelude::*, px, rgb, size,
 };
 use gpui_3d::{
-    Camera, ColorOutput, Light, Material, Mesh, Object, OrbitController, PbrMaterial, Projection,
-    Scene, ToneMapping, Vertex, viewport3d,
+    Camera, ColorOutput, Light, Material, MaterialTexture, Mesh, Object, OrbitController,
+    PbrMaterial, Projection, Scene, TextureAddressMode, TextureSampling, ToneMapping, UvTransform,
+    Vertex, viewport3d,
 };
 use gpui_platform::application;
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 fn sphere() -> Mesh {
     let (rings, segments) = (48, 96);
@@ -52,6 +53,11 @@ struct Materials {
     bounds: Rc<Cell<Bounds<Pixels>>>,
     roughness: f32,
     emission: f32,
+    maps: bool,
+    density: f32,
+    emission_offset: f32,
+    metallic_roughness: Arc<gpui::RenderImage>,
+    emissive: Arc<gpui::RenderImage>,
     _activation: gpui::Subscription,
 }
 
@@ -63,6 +69,26 @@ impl Materials {
             bounds: Rc::new(Cell::new(Bounds::default())),
             roughness: 0.4,
             emission: 1.,
+            maps: true,
+            density: 1.,
+            emission_offset: 0.,
+            metallic_roughness: Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+                image::RgbaImage::from_fn(128, 128, |x, y| {
+                    let roughness = if (x / 32 + y / 32) % 2 == 0 { 64 } else { 255 };
+                    let metallic = if x < 64 { 255 } else { 0 };
+                    image::Rgba([0, roughness, metallic, 255])
+                }),
+            )])),
+            emissive: Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+                image::RgbaImage::from_fn(128, 128, |x, y| {
+                    let lit = x % 32 < 4 || y % 32 < 4;
+                    image::Rgba(if lit {
+                        [110, 220, 255, 255]
+                    } else {
+                        [0, 0, 0, 255]
+                    })
+                }),
+            )])),
             _activation: cx.observe_window_activation(window, |this, window, _| {
                 if !window.is_window_active() {
                     this.controls.cancel_drag();
@@ -95,17 +121,43 @@ impl Materials {
                 [0.04 * self.emission, 0.5 * self.emission, self.emission],
             ),
         ] {
+            let mut material = Material::color(rgb(color)).pbr(PbrMaterial {
+                metallic,
+                roughness: self.roughness,
+                emissive,
+            });
+            if self.maps {
+                let sampling = TextureSampling {
+                    transform: UvTransform::from_scale_rotation_translation(
+                        [self.density; 2],
+                        0.,
+                        [0.; 2],
+                    )
+                    .unwrap(),
+                    address_u: TextureAddressMode::Repeat,
+                    address_v: TextureAddressMode::Repeat,
+                    ..Default::default()
+                };
+                material = material
+                    .metallic_roughness_texture(
+                        MaterialTexture::new(self.metallic_roughness.clone()).sampling(sampling),
+                    )
+                    .emissive_texture(
+                        MaterialTexture::new(self.emissive.clone()).sampling(TextureSampling {
+                            transform: UvTransform::from_scale_rotation_translation(
+                                [self.density; 2],
+                                0.,
+                                [self.emission_offset, 0.],
+                            )
+                            .unwrap(),
+                            ..sampling
+                        }),
+                    );
+            }
             scene = scene.object(
-                Object::new(
-                    self.mesh.clone(),
-                    Material::color(rgb(color)).pbr(PbrMaterial {
-                        metallic,
-                        roughness: self.roughness,
-                        emissive,
-                    }),
-                )
-                .position([x, 0., 0.])
-                .id(name),
+                Object::new(self.mesh.clone(), material)
+                    .position([x, 0., 0.])
+                    .id(name),
             );
         }
         scene
@@ -137,6 +189,9 @@ impl Render for Materials {
                         ("rough", "Roughness +"),
                         ("dim", "Emission −"),
                         ("glow", "Emission +"),
+                        ("maps", "Toggle maps"),
+                        ("density", "Map density"),
+                        ("shift", "Shift emission"),
                         ("projection", "Switch projection"),
                         ("reset", "Reset view"),
                     ]
@@ -157,6 +212,9 @@ impl Render for Materials {
                                     "rough" => this.roughness = (this.roughness + 0.1).min(1.),
                                     "dim" => this.emission = (this.emission - 0.5).max(0.),
                                     "glow" => this.emission = (this.emission + 0.5).min(8.),
+                                    "maps" => this.maps = !this.maps,
+                                    "density" => this.density = if this.density < 4. { this.density * 2. } else { 1. },
+                                    "shift" => this.emission_offset = (this.emission_offset + 0.0625) % 1.,
                                     "projection" => {
                                         let mut camera = this.controls.camera();
                                         let distance = camera
@@ -277,9 +335,12 @@ impl Render for Materials {
                     .children(["Dielectric", "Metal", "Emission"]),
             )
             .child(div().text_color(rgb(0xa8bdd6)).child(format!(
-                "Roughness {:.2} · Emission {:.1}× · {:?}",
+                "Roughness {:.2} · Emission {:.1}× · Maps {} · Density {:.0}× · Emission offset {:.3} · {:?}",
                 self.roughness,
                 self.emission,
+                if self.maps { "On" } else { "Off" },
+                self.density,
+                self.emission_offset,
                 self.controls.camera().projection
             )))
     }

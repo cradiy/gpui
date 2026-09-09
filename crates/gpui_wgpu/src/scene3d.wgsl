@@ -1,3 +1,6 @@
+struct ImageParams {
+    rect: vec4<f32>, uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
+};
 struct Params {
     model: mat4x4<f32>, normal: mat4x4<f32>, camera: mat4x4<f32>,
     bounds: vec4<f32>, viewport: vec4<f32>, direction: vec4<f32>, light: vec4<f32>,
@@ -5,10 +8,13 @@ struct Params {
     ids: vec4<u32>,
     uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
     view: vec4<f32>, pbr: vec4<f32>, emissive: vec4<f32>,
+    metallic_roughness_map: ImageParams, emissive_map: ImageParams,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var image: texture_2d<f32>;
 @group(0) @binding(2) var image_sampler: sampler;
+@group(0) @binding(3) var metallic_roughness_image: texture_2d<f32>;
+@group(0) @binding(4) var emissive_image: texture_2d<f32>;
 struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) world: vec3<f32> };
 @vertex
 fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>) -> Output {
@@ -38,33 +44,33 @@ fn srgb_to_linear(value: vec3<f32>) -> vec3<f32> {
 fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * c, c <= vec3<f32>(0.0031308));
 }
-fn image_texel(pixel: vec2<i32>, extent: vec2<i32>) -> vec4<f32> {
-    let addressed = vec2<i32>(address_texel(pixel.x, extent.x, params.sampling.x),
-        address_texel(pixel.y, extent.y, params.sampling.y));
-    let texel = textureLoad(image, vec2<i32>(params.texture_rect.xy) + addressed, 0);
-    if (params.sampling.w == 0u) { return vec4<f32>(srgb_to_linear(texel.rgb), texel.a); }
+fn image_texel(source: texture_2d<f32>, config: ImageParams, pixel: vec2<i32>, extent: vec2<i32>) -> vec4<f32> {
+    let addressed = vec2<i32>(address_texel(pixel.x, extent.x, config.sampling.x),
+        address_texel(pixel.y, extent.y, config.sampling.y));
+    let texel = textureLoad(source, vec2<i32>(config.rect.xy) + addressed, 0);
+    if (config.sampling.w == 0u) { return vec4<f32>(srgb_to_linear(texel.rgb), texel.a); }
     return texel;
 }
-fn sample_image(uv: vec2<f32>) -> vec4<f32> {
-    let mapped = vec2<f32>(dot(params.uv_u.xyz, vec3<f32>(uv, 1.0)),
-        dot(params.uv_v.xyz, vec3<f32>(uv, 1.0)));
+fn sample_image(source: texture_2d<f32>, config: ImageParams, uv: vec2<f32>) -> vec4<f32> {
+    let mapped = vec2<f32>(dot(config.uv_u.xyz, vec3<f32>(uv, 1.0)),
+        dot(config.uv_v.xyz, vec3<f32>(uv, 1.0)));
     if (!all(abs(mapped) <= vec2<f32>(3.402823466e+38))) { return vec4<f32>(0.0); }
-    let addressed = vec2<f32>(address_coordinate(mapped.x, params.sampling.x),
-        address_coordinate(mapped.y, params.sampling.y));
-    let extent = max(vec2<i32>(params.texture_rect.zw), vec2<i32>(1));
+    let addressed = vec2<f32>(address_coordinate(mapped.x, config.sampling.x),
+        address_coordinate(mapped.y, config.sampling.y));
+    let extent = max(vec2<i32>(config.rect.zw), vec2<i32>(1));
     let pixel = addressed * vec2<f32>(extent) - vec2<f32>(0.5);
-    if (params.sampling.z == 0u) {
-        return image_texel(vec2<i32>(floor(pixel + vec2<f32>(0.5))), extent);
+    if (config.sampling.z == 0u) {
+        return image_texel(source, config, vec2<i32>(floor(pixel + vec2<f32>(0.5))), extent);
     }
     let low = vec2<i32>(floor(pixel));
     let weight = fract(pixel);
-    return mix(mix(image_texel(low, extent), image_texel(low + vec2<i32>(1, 0), extent), weight.x),
-        mix(image_texel(low + vec2<i32>(0, 1), extent), image_texel(low + vec2<i32>(1, 1), extent), weight.x), weight.y);
+    return mix(mix(image_texel(source, config, low, extent), image_texel(source, config, low + vec2<i32>(1, 0), extent), weight.x),
+        mix(image_texel(source, config, low + vec2<i32>(0, 1), extent), image_texel(source, config, low + vec2<i32>(1, 1), extent), weight.x), weight.y);
 }
 fn base_color(input: Output) -> vec4<f32> {
     var sampled: vec4<f32>;
     if (params.flags.w > 0.5) {
-        sampled = sample_image(input.uv);
+        sampled = sample_image(image, ImageParams(params.texture_rect, params.uv_u, params.uv_v, params.sampling), input.uv);
     } else {
         let uv = (params.texture_rect.xy + vec2<f32>(0.5) + clamp(input.uv, vec2<f32>(0.0), vec2<f32>(1.0)) * max(params.texture_rect.zw - 1.0, vec2<f32>(0.0))) / vec2<f32>(textureDimensions(image));
         sampled = textureSampleLevel(image, image_sampler, uv, 0.0);
@@ -87,15 +93,17 @@ fn unit_vector(value: vec3<f32>) -> vec3<f32> {
     return scaled / max(length(scaled), 0.000001);
 }
 
-fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
-    let metal = params.pbr.x;
-    let roughness = max(params.pbr.y, 0.045);
+fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+    let factors = sample_image(metallic_roughness_image, params.metallic_roughness_map, uv);
+    let metal = params.pbr.x * factors.b;
+    let roughness = max(params.pbr.y * factors.g, 0.045);
+    let emission = params.emissive.rgb * sample_image(emissive_image, params.emissive_map, uv).rgb;
     let view = unit_vector(params.view.xyz - world * params.view.w);
     let light = unit_vector(params.direction.xyz);
     let nv = clamp(dot(normal, view), 0.0, 1.0);
     let nl = clamp(dot(normal, light), 0.0, 1.0);
     let diffuse = base * (1.0 - metal);
-    var result = diffuse * params.direction.w + params.emissive.rgb;
+    var result = diffuse * params.direction.w + emission;
     if (nv <= 0.0 || nl <= 0.0) { return result; }
     let half_vector = unit_vector(view + light);
     let nh = clamp(dot(normal, half_vector), 0.0, 1.0);
@@ -121,7 +129,7 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
     if (params.flags.y < 0.5) {
         if (params.pbr.z > 0.5) {
             let normal = unit_vector(input.normal) * select(-1.0, 1.0, front);
-            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, input.world), vec3<f32>(0.0), vec3<f32>(65504.0)), 1.0);
+            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, input.world, input.uv), vec3<f32>(0.0), vec3<f32>(65504.0)), 1.0);
         }
         let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front);
         let light = params.direction.xyz / max(length(params.direction.xyz), 0.00001);

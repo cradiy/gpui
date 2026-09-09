@@ -48,6 +48,8 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         sampling: Default::default(),
         image_color_space: Default::default(),
         pbr: None,
+        metallic_roughness_texture: None,
+        emissive_texture: None,
         unlit: true,
         alpha_cutoff: 0.5,
     }

@@ -196,6 +196,15 @@ pub enum MeshTexture3d {
     Subtree,
 }
 
+/// A material image in the renderer atlas with independent mesh-UV sampling.
+#[derive(Clone, Copy, Debug)]
+pub struct MaterialTexture3d {
+    /// Straight-alpha atlas image; material maps ignore alpha.
+    pub tile: AtlasTile,
+    /// Image-coordinate transform, addressing and filtering.
+    pub sampling: crate::TextureSampling3d,
+}
+
 /// One indexed mesh and its material parameters.
 #[derive(Clone, Debug)]
 pub struct MeshDraw3d {
@@ -218,6 +227,10 @@ pub struct MeshDraw3d {
     pub image_color_space: crate::TextureColorSpace3d,
     /// Optional metallic-roughness shading. Unlit materials ignore these parameters.
     pub pbr: Option<crate::PbrMaterial3d>,
+    /// Linear G roughness and B metallic multipliers. Ignored without lit PBR.
+    pub metallic_roughness_texture: Option<MaterialTexture3d>,
+    /// sRGB RGB emission multiplier, decoded before filtering. Ignored without lit PBR.
+    pub emissive_texture: Option<MaterialTexture3d>,
     /// Alpha below this threshold is discarded. Surviving pixels are opaque.
     pub alpha_cutoff: f32,
     /// Bypass directional lighting.

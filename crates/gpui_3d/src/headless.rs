@@ -56,7 +56,7 @@ impl HeadlessRenderer {
         let max_dimension = self.capabilities().max_dimension;
         let atlas = self.renderer.sprite_atlas();
         let mut used = HashSet::new();
-        let prepared = scene.prepare_frame(config.size[0] as f32 / config.size[1] as f32, None, |index, texture| {
+        let prepared = scene.prepare_frame(config.size[0] as f32 / config.size[1] as f32, None, |index, _, texture| {
             let texture = match texture {
                 Texture::None => MeshTexture3d::None,
                 Texture::Ui => bail!("object {index}: UI textures require a viewport capture"),

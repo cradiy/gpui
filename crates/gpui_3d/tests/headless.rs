@@ -5,6 +5,79 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn material_maps_match_factors_with_independent_sampling_and_zero_alpha() -> anyhow::Result<()> {
+    use gpui_3d::{
+        Light, MaterialTexture, Object, PbrMaterial, Projection, Scene, TextureSampling,
+        UvTransform,
+    };
+    use std::sync::Arc;
+    let image = |pixels: [[u8; 4]; 2]| {
+        Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::from_fn(2, 1, |x, _| image::Rgba(pixels[x as usize])),
+        )]))
+    };
+    let sampling = |u| TextureSampling {
+        transform: UvTransform::from_rows([[0., 0., u], [0., 0., 0.5]]).unwrap(),
+        ..Default::default()
+    };
+    let factors = PbrMaterial {
+        metallic: 0.8,
+        roughness: 0.9,
+        emissive: [0.4, 0.6, 0.8],
+    };
+    let mapped = Material::color(rgb(0x805030))
+        .pbr(factors)
+        .metallic_roughness_texture(
+            MaterialTexture::new(image([[255; 4], [17, 128, 64, 0]])).sampling(sampling(0.75)),
+        )
+        .emissive_texture(
+            MaterialTexture::new(image([[0; 4], [128, 200, 64, 0]])).sampling(sampling(0.5)),
+        );
+    let linear = |byte: u8| ((f32::from(byte) / 255. + 0.055) / 1.055).powf(2.4);
+    let expected = Material::color(rgb(0x805030)).pbr(PbrMaterial {
+        metallic: factors.metallic * 64. / 255.,
+        roughness: factors.roughness * 128. / 255.,
+        emissive: std::array::from_fn(|i| factors.emissive[i] * 0.5 * linear([128, 200, 64][i])),
+    });
+    let mut renderer = HeadlessRenderer::new()?;
+    let mut outputs = Vec::new();
+    for material in [expected, mapped] {
+        let scene = Scene::new()
+            .camera(Camera {
+                projection: Projection::Orthographic { vertical_size: 2. },
+                ..Default::default()
+            })
+            .light(Light {
+                direction: [0., 0., 1.],
+                color: rgb(0xffffff),
+                intensity: 1.,
+                ambient: 0.2,
+            })
+            .object(Object::new(Mesh::plane(), material).id("surface"));
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(result) = read.try_read()? {
+                outputs.push(result.pixels);
+                break;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+    let expected = outputs[0].rgba.as_ref().unwrap();
+    let actual = outputs[1].rgba.as_ref().unwrap();
+    assert_eq!(actual[(32 * 65 + 32) * 4 + 3], 255);
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!(actual.abs_diff(*expected) <= 2, "{actual} != {expected}");
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn pbr_reflection_and_emission_preserve_object_ids() -> anyhow::Result<()> {
     use gpui_3d::{Light, Object, PbrMaterial, Projection, Scene};
     let mut renderer = HeadlessRenderer::new()?;

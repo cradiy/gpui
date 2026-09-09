@@ -1,4 +1,4 @@
-use crate::{Scene, Texture};
+use crate::{Scene, Texture, TextureSlot};
 use anyhow::{Result, ensure};
 use gpui::{MeshDraw3d, MeshTexture3d, Scene3dFrame, UiTexture3d};
 
@@ -7,7 +7,7 @@ impl Scene {
         &self,
         aspect: f32,
         ui_texture: Option<UiTexture3d>,
-        mut resolve: impl FnMut(usize, &Texture) -> Result<Option<MeshTexture3d>>,
+        mut resolve: impl FnMut(usize, TextureSlot, &Texture) -> Result<Option<MeshTexture3d>>,
     ) -> Result<Scene3dFrame> {
         let view_projection = self.camera.view_projection(aspect)?;
         ensure!(
@@ -68,7 +68,31 @@ impl Scene {
                     .all(|value| value.is_finite()),
                 "object {index} has non-finite render parameters"
             );
-            let Some(texture) = resolve(index, &object.material.texture)? else {
+            let mut metallic_roughness_texture = None;
+            let mut emissive_texture = None;
+            let mut ready = true;
+            for (slot, map) in object.material.pbr_textures() {
+                match resolve(index, slot, &Texture::Image(map.image.clone()))? {
+                    Some(MeshTexture3d::Image(tile)) => {
+                        let resolved = Some(gpui::MaterialTexture3d {
+                            tile,
+                            sampling: map.sampling,
+                        });
+                        match slot {
+                            TextureSlot::MetallicRoughness => metallic_roughness_texture = resolved,
+                            TextureSlot::Emissive => emissive_texture = resolved,
+                            TextureSlot::BaseColor => unreachable!(),
+                        }
+                    }
+                    None => ready = false,
+                    _ => anyhow::bail!("object {index}: material maps require atlas images"),
+                }
+            }
+            if !ready {
+                continue;
+            }
+            let Some(texture) = resolve(index, TextureSlot::BaseColor, &object.material.texture)?
+            else {
                 continue;
             };
             objects.push(MeshDraw3d {
@@ -81,6 +105,8 @@ impl Scene {
                 sampling: object.material.sampling,
                 image_color_space: object.material.image_color_space,
                 pbr: object.material.pbr,
+                metallic_roughness_texture,
+                emissive_texture,
                 alpha_cutoff: object.material.alpha_cutoff,
                 unlit: object.material.unlit,
             });
@@ -117,6 +143,92 @@ mod tests {
     use gpui::rgb;
 
     #[test]
+    fn material_map_readiness_preserves_ids_and_resolves_only_active_inputs() {
+        use crate::{MaterialTexture, PbrMaterial, TextureSampling, UvTransform};
+        let sampling = TextureSampling {
+            transform: UvTransform::from_rows([[2., 0., 0.25], [0., 3., -0.5]]).unwrap(),
+            ..Default::default()
+        };
+        let material = Material::color(rgb(0xffffff))
+            .pbr(PbrMaterial::default())
+            .metallic_roughness_texture(MaterialTexture::new("surface.png").sampling(sampling))
+            .emissive_texture(MaterialTexture::new("emission.png"));
+        let tile = gpui::AtlasTile {
+            texture_id: gpui::AtlasTextureId {
+                index: 1,
+                kind: gpui::AtlasTextureKind::Polychrome,
+            },
+            tile_id: gpui::TileId(2),
+            padding: 0,
+            bounds: gpui::Bounds::new(
+                gpui::point(gpui::DevicePixels(4), gpui::DevicePixels(8)),
+                gpui::size(gpui::DevicePixels(16), gpui::DevicePixels(16)),
+            ),
+        };
+        let scene = Scene::new()
+            .object(Object::new(Mesh::plane(), material.clone()))
+            .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))));
+        for ready in [false, true] {
+            let mut base_objects = Vec::new();
+            let frame = scene
+                .prepare_frame(1., None, |index, slot, _| {
+                    Ok(match slot {
+                        TextureSlot::BaseColor => {
+                            base_objects.push(index);
+                            Some(MeshTexture3d::None)
+                        }
+                        TextureSlot::Emissive if !ready => None,
+                        _ => Some(MeshTexture3d::Image(tile)),
+                    })
+                })
+                .unwrap();
+            let ids: Vec<_> = frame
+                .objects
+                .iter()
+                .map(|object| object.output_id)
+                .collect();
+            if ready {
+                assert_eq!(ids, [1, 2]);
+                assert_eq!(base_objects, [0, 1]);
+                assert_eq!(
+                    frame.objects[0]
+                        .metallic_roughness_texture
+                        .unwrap()
+                        .sampling,
+                    sampling
+                );
+                assert_eq!(frame.objects[0].emissive_texture.unwrap().tile, tile);
+            } else {
+                assert_eq!(ids, [2]);
+                assert_eq!(base_objects, [1]);
+            }
+        }
+        let mut diffuse = material.clone();
+        diffuse.pbr = None;
+        for inactive in [material.unlit(true), diffuse] {
+            let frame = Scene::new()
+                .object(Object::new(Mesh::plane(), inactive))
+                .prepare_frame(1., None, |_, slot, _| {
+                    assert_eq!(slot, TextureSlot::BaseColor);
+                    Ok(Some(MeshTexture3d::None))
+                })
+                .unwrap();
+            assert!(frame.objects[0].metallic_roughness_texture.is_none());
+            assert!(frame.objects[0].emissive_texture.is_none());
+        }
+        assert!(
+            scene
+                .prepare_frame(1., None, |_, slot, _| {
+                    if slot == TextureSlot::Emissive {
+                        anyhow::bail!("decode failed");
+                    }
+                    Ok(Some(MeshTexture3d::Image(tile)))
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
     fn prepared_frames_share_geometry_and_preserve_evaluated_world_transforms() {
         let mut graph = SceneGraph::new();
         let parent = graph
@@ -137,10 +249,10 @@ mod tests {
         let evaluated = graph.evaluate().unwrap();
         let scene = evaluated.scene(Camera::default());
         let a = scene
-            .prepare_frame(1.5, None, |_, _| Ok(Some(MeshTexture3d::None)))
+            .prepare_frame(1.5, None, |_, _, _| Ok(Some(MeshTexture3d::None)))
             .unwrap();
         let b = scene
-            .prepare_frame(0.5, None, |_, _| Ok(Some(MeshTexture3d::None)))
+            .prepare_frame(0.5, None, |_, _, _| Ok(Some(MeshTexture3d::None)))
             .unwrap();
         assert_eq!(
             a.objects[0].model,
@@ -166,7 +278,7 @@ mod tests {
             .object(Object::new(Mesh::plane(), Material::image("pending.png")))
             .object(Object::new(Mesh::cube(), Material::color(rgb(0x808080))));
         let frame = scene
-            .prepare_frame(1., None, |_, texture| {
+            .prepare_frame(1., None, |_, _, texture| {
                 Ok(match texture {
                     Texture::Image(_) => None,
                     _ => Some(MeshTexture3d::None),
@@ -177,19 +289,19 @@ mod tests {
         assert_eq!(frame.objects[0].output_id, 2);
         assert!(
             scene
-                .prepare_frame(0., None, |_, _| unreachable!())
+                .prepare_frame(0., None, |_, _, _| unreachable!())
                 .is_err()
         );
         let invalid = Scene::new()
             .object(Object::new(Mesh::cube(), Material::color(rgb(0xffffff))).scale([0., 1., 1.]));
         assert!(
             invalid
-                .prepare_frame(1., None, |_, _| unreachable!())
+                .prepare_frame(1., None, |_, _, _| unreachable!())
                 .is_err()
         );
         assert!(
             scene
-                .prepare_frame(1., None, |_, _| anyhow::bail!("image unavailable"))
+                .prepare_frame(1., None, |_, _, _| anyhow::bail!("image unavailable"))
                 .is_err()
         );
         for exposure in [f32::NAN, f32::INFINITY, -17., 17.] {
@@ -200,7 +312,7 @@ mod tests {
                         exposure,
                         ..Default::default()
                     })
-                    .prepare_frame(1., None, |_, _| unreachable!())
+                    .prepare_frame(1., None, |_, _, _| unreachable!())
                     .is_err()
             );
         }
@@ -223,7 +335,7 @@ mod tests {
             scene
                 .clone()
                 .camera(camera)
-                .prepare_frame(1., None, |_, _| Ok(Some(MeshTexture3d::None)))
+                .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
                 .unwrap()
         };
         let perspective = prepare(camera);
@@ -277,7 +389,7 @@ mod tests {
             ));
             assert!(
                 scene
-                    .prepare_frame(1., None, |_, _| unreachable!())
+                    .prepare_frame(1., None, |_, _, _| unreachable!())
                     .is_err()
             );
         }

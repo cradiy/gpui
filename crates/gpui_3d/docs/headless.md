@@ -84,6 +84,9 @@ Color conversion preserves premultiplied coverage at MSAA edges. The returned
 using it in linear calculations. The internal HDR texture is not an exported
 channel. Materials support diffuse or metallic-roughness shading through
 `Material::pbr`, including linear emissive radiance and view-dependent highlights.
+Metallic-roughness and emissive maps accept decoded `ImageSource::Render` inputs
+with independent sampling. Their channels multiply the material factors; map
+alpha does not affect coverage or object IDs.
 
 Surviving alpha-cutout fragments are opaque. Both channels use the same mesh
 visibility, transforms, clip planes, texture sampling, and alpha threshold.

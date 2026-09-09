@@ -12,6 +12,44 @@ struct Vertex {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct ImageParams {
+    rect: [f32; 4],
+    uv_u: [f32; 4],
+    uv_v: [f32; 4],
+    sampling: [u32; 4],
+}
+
+impl ImageParams {
+    fn new(map: Option<gpui::MaterialTexture3d>, color_space: gpui::TextureColorSpace3d) -> Self {
+        let (rect, sampling) = map.map_or(([0., 0., 1., 1.], Default::default()), |map| {
+            let r = map.tile.bounds;
+            (
+                [
+                    r.origin.x.0 as f32,
+                    r.origin.y.0 as f32,
+                    r.size.width.0 as f32,
+                    r.size.height.0 as f32,
+                ],
+                map.sampling,
+            )
+        });
+        let rows = sampling.transform.rows();
+        Self {
+            rect,
+            uv_u: [rows[0][0], rows[0][1], rows[0][2], 0.],
+            uv_v: [rows[1][0], rows[1][1], rows[1][2], 0.],
+            sampling: [
+                sampling.address_u as u32,
+                sampling.address_v as u32,
+                sampling.filter as u32,
+                color_space as u32,
+            ],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct Params {
     model: [[f32; 4]; 4],
     normal: [[f32; 4]; 4],
@@ -30,6 +68,8 @@ struct Params {
     view: [f32; 4],
     pbr: [f32; 4],
     emissive: [f32; 4],
+    metallic_roughness_map: ImageParams,
+    emissive_map: ImageParams,
 }
 
 struct Geometry {
@@ -377,6 +417,13 @@ impl Scene3dRenderer {
                 }
             };
             let rows = object.sampling.transform.rows();
+            let maps_enabled = object.pbr.is_some() && !object.unlit;
+            let metallic_roughness_map = object.metallic_roughness_texture.filter(|_| maps_enabled);
+            let emissive_map = object.emissive_texture.filter(|_| maps_enabled);
+            let metallic_roughness_image =
+                metallic_roughness_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
+            let emissive_image =
+                emissive_map.map(|map| atlas.get_texture_info(map.tile.texture_id));
             let pbr = object.pbr.unwrap_or_default();
             let view = frame
                 .orthographic_view_direction
@@ -429,26 +476,52 @@ impl Scene3dRenderer {
                     0.,
                 ],
                 emissive: [pbr.emissive[0], pbr.emissive[1], pbr.emissive[2], 0.],
+                metallic_roughness_map: ImageParams::new(
+                    metallic_roughness_map,
+                    gpui::TextureColorSpace3d::Linear,
+                ),
+                emissive_map: ImageParams::new(emissive_map, gpui::TextureColorSpace3d::Srgb),
             };
             let buffer = &self.slots[start + index];
             queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
+            let mut entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(texture),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ];
+            if self.format != wgpu::TextureFormat::R32Uint {
+                entries.extend([
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(
+                            metallic_roughness_image
+                                .as_ref()
+                                .map_or(&self.white, |image| &image.view),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(
+                            emissive_image
+                                .as_ref()
+                                .map_or(&self.white, |image| &image.view),
+                        ),
+                    },
+                ]);
+            }
             groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("mesh_material"),
                 layout: &layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(texture),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
+                entries: &entries,
             }));
         }
         let depth_view = depth.create_view(&Default::default());
@@ -587,6 +660,11 @@ mod tests {
             ("view", std::mem::offset_of!(Params, view)),
             ("pbr", std::mem::offset_of!(Params, pbr)),
             ("emissive", std::mem::offset_of!(Params, emissive)),
+            (
+                "metallic_roughness_map",
+                std::mem::offset_of!(Params, metallic_roughness_map),
+            ),
+            ("emissive_map", std::mem::offset_of!(Params, emissive_map)),
         ] {
             let member = members
                 .iter()

@@ -107,7 +107,10 @@ impl ViewportRenderer {
                                 budget -= bytes;
                             }
                             Some(match matching {
-                                Some(output) if output.validity.reusable() => output,
+                                Some(mut output) if output.validity.reusable() => {
+                                    output.key = key;
+                                    output
+                                }
                                 Some(_) => Output::new(device, self.format, key, region, true),
                                 None => Output::new(device, self.format, key, region, false),
                             })

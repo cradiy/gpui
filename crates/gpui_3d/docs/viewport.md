@@ -2000,13 +2000,21 @@ WGPU window rendering reuses submitted mesh pixels when the immutable
 same raster quality. Camera, material, lighting, geometry, or quality changes
 produce a new frame and redraw the mesh.
 
-Meshes sampling UI also require the same captured `Scene` and image-pass
-snapshots. Replayed captures can reuse mesh output; newly painted captures
-invalidate it. Particle, fluid, feedback, particle-transition, and external-surface
-inputs bypass output reuse. UI layout, capture rendering, and interaction remain
-active independently of mesh output reuse.
+Meshes sampling UI also compare captured paint content and image-pass inputs.
+Equivalent freshly painted scenes can reuse mesh output. Changes to geometry,
+style, clipping, draw order, shader parameters, nested frames, or referenced atlas
+generations invalidate it. Particle, fluid, feedback, particle-transition, and
+external-surface inputs bypass output reuse.
 
-The cache holds only viewport-covered display pixels, with a 64 MiB retained-output
+Independent UI textures retain submitted pixels separately from mesh outputs.
+An unchanged capture does not redraw when the camera moves or unrelated UI
+repaints. Text, images, paths, background blur, and stateless subtree effects are
+eligible; animation time and effect parameters participate in content comparison.
+Capture-size changes replace the texture. Layout, paint callbacks, resource
+resolution, hit testing, and focus/event handling remain active; reuse skips only
+GPU capture rendering. No application-managed dirty flag is required.
+
+The mesh-output cache holds only viewport-covered display pixels, with a 64 MiB retained-output
 limit per WGPU renderer. Independent UI capture renderers have separate limits.
 Inputs must repeat before a pixel texture is allocated; continuously changing
 snapshots do not allocate output-cache textures. Surface-size, transparency-mode,
@@ -2019,14 +2027,17 @@ encodings never make an output reusable.
 `WgpuRenderer::draw_external` clears, renders, and submits an external target,
 enabling the same output reuse without a native window. `WgpuOffscreenRenderer`
 uses this path before readback. `encode_external` leaves submission to its caller
-and does not retain 3D output pixels. Direct `HeadlessRenderer` outputs are
+and does not reuse mesh or UI capture pixels. Subsequent captures use a different
+texture after caller-owned encoding, isolating cached pixels from late submission
+of older commands. Direct `HeadlessRenderer` outputs are
 independent per-call textures, not viewport pixel-cache entries.
 
 `Window::clear_scene3d_caches()` releases mesh buffers, intermediate mesh targets,
 shadow maps, environment uploads, image mip chains, retained mesh output pixels,
 and mesh pipelines for all viewports, including those inside UI captures.
 Shared 2D atlas entries, UI capture textures, and generic
-subtree-effect resources remain intact. The next mesh draw rebuilds its caches.
+subtree-effect resources remain intact. Capture contents are invalidated, and the
+next mesh draw rebuilds its caches.
 The call does not request a repaint or wait for GPU completion, and unsupported
 backends do nothing. In-flight commands retain the resources they use, so release
 does not guarantee an immediate reduction in physical GPU memory use.

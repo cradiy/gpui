@@ -29,6 +29,7 @@ mod fluid;
 mod particle_transition;
 mod particles;
 pub(crate) mod scene3d;
+mod scene_snapshot;
 mod ui_capture;
 
 #[derive(Clone, Copy)]
@@ -2211,7 +2212,8 @@ impl WgpuRenderer {
     }
 
     /// Releases mesh-rendering caches without clearing shared 2D atlas or UI
-    /// capture resources. The next mesh draw rebuilds them lazily.
+    /// capture resources. Capture contents are invalidated; the next mesh draw
+    /// rebuilds its caches lazily.
     pub fn clear_scene3d_caches(&mut self) {
         if let Some(resources) = self.resources.as_mut() {
             resources.scene3d = None;
@@ -2373,7 +2375,7 @@ impl WgpuRenderer {
         }
     }
 
-    /// Encodes into caller-owned commands without retaining 3D output pixels.
+    /// Encodes into caller-owned commands without reusing mesh or UI capture pixels.
     /// Use `draw_external` for renderer-owned submission and output reuse.
     pub fn encode_external(&mut self, scene: &Scene, target: WgpuExternalRenderTarget<'_>) -> bool {
         let encoded = self.encode_external_scene(scene, target, false);
@@ -2382,7 +2384,7 @@ impl WgpuRenderer {
     }
 
     /// Clears, encodes, and submits an external target on this renderer's queue.
-    /// Enables reuse of submitted 3D viewport outputs. A false result submits no
+    /// Enables reuse of submitted 3D viewport and UI capture pixels. A false result submits no
     /// frame commands; capacity growth may require a retry. The target must match this
     /// renderer's configured size/format and support render attachments.
     pub fn draw_external(

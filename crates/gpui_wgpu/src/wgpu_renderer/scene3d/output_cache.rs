@@ -1,16 +1,16 @@
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::sync::Arc;
 
-use gpui::{
-    AtlasTile, EffectQuad, MeshTexture3d, Scene, Scene3dFrame, SubtreeEffectPass, SubtreeLayer,
-};
+pub(super) use super::super::scene_snapshot::OutputValidity;
+use super::super::scene_snapshot::{SceneSnapshot, frame_tiles, pass_tiles, same_passes};
+use gpui::{AtlasTile, MeshTexture3d, Scene3dFrame, SubtreeEffectPass, SubtreeLayer};
 
 use super::RenderRegion;
 
 pub(super) struct OutputKey {
     frame: Arc<Scene3dFrame>,
     region: RenderRegion,
-    source: Option<Rc<Scene>>,
-    second: Option<Rc<Scene>>,
+    source: Option<SceneSnapshot>,
+    second: Option<SceneSnapshot>,
     passes: Option<Arc<[SubtreeEffectPass]>>,
     pass_quad: Option<Vec<u8>>,
     generations: Vec<u64>,
@@ -29,22 +29,25 @@ impl OutputKey {
             .any(|object| matches!(object.texture, MeshTexture3d::Subtree));
         let mut tiles = Vec::new();
         frame_tiles(frame, &mut tiles);
-        if uses_ui {
-            if !scene_tiles(&layer.scene, &mut tiles)
-                || layer
-                    .second_scene
-                    .as_ref()
-                    .is_some_and(|scene| !scene_tiles(scene, &mut tiles))
-                || !pass_tiles(&layer.intermediate_effects, &mut tiles)
-            {
-                return None;
-            }
+        if uses_ui && !pass_tiles(&layer.intermediate_effects, &mut tiles) {
+            return None;
         }
+        let (source, second) = if uses_ui {
+            (
+                Some(SceneSnapshot::new(&layer.scene, &mut generation)?),
+                match &layer.second_scene {
+                    Some(scene) => Some(SceneSnapshot::new(scene, &mut generation)?),
+                    None => None,
+                },
+            )
+        } else {
+            (None, None)
+        };
         Some(Self {
             frame: frame.clone(),
             region,
-            source: uses_ui.then(|| layer.scene.clone()),
-            second: uses_ui.then(|| layer.second_scene.clone()).flatten(),
+            source,
+            second,
             passes: (uses_ui && !layer.intermediate_effects.is_empty())
                 .then(|| layer.intermediate_effects.clone()),
             pass_quad: (uses_ui && !layer.intermediate_effects.is_empty()).then(|| {
@@ -61,107 +64,22 @@ impl OutputKey {
         Arc::ptr_eq(&self.frame, &other.frame)
             && self.region == other.region
             && match (&self.source, &other.source) {
-                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (Some(a), Some(b)) => a.matches(b),
                 (None, None) => true,
                 _ => false,
             }
             && match (&self.second, &other.second) {
-                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (Some(a), Some(b)) => a.matches(b),
                 (None, None) => true,
                 _ => false,
             }
             && match (&self.passes, &other.passes) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (Some(a), Some(b)) => same_passes(a, b),
                 (None, None) => true,
                 _ => false,
             }
             && self.generations == other.generations
             && self.pass_quad == other.pass_quad
-    }
-}
-
-fn frame_tiles(frame: &Scene3dFrame, tiles: &mut Vec<AtlasTile>) {
-    for object in frame.objects.iter() {
-        if let MeshTexture3d::Image(tile) = object.texture {
-            tiles.push(tile);
-        }
-        tiles.extend(
-            [
-                object.metallic_roughness_texture,
-                object.emissive_texture,
-                object.normal_texture,
-                object.occlusion_texture,
-            ]
-            .into_iter()
-            .flatten()
-            .map(|texture| texture.tile),
-        );
-    }
-}
-
-fn effect_tiles(effect: &EffectQuad, tiles: &mut Vec<AtlasTile>) {
-    tiles.extend(
-        [
-            effect.image_tile,
-            effect.second_image_tile,
-            effect.third_image_tile,
-            effect.fourth_image_tile,
-        ]
-        .into_iter()
-        .flatten(),
-    );
-}
-
-fn pass_tiles(passes: &[SubtreeEffectPass], tiles: &mut Vec<AtlasTile>) -> bool {
-    for pass in passes {
-        if pass.feedback.is_some() || pass.particles.is_some() || pass.particle_transition.is_some()
-        {
-            return false;
-        }
-        tiles.extend(pass.images.iter().copied());
-    }
-    true
-}
-
-fn scene_tiles(scene: &Scene, tiles: &mut Vec<AtlasTile>) -> bool {
-    let mut reusable = true;
-    scene.visit(&mut |scene| {
-        reusable &=
-            scene.particles.is_empty() && scene.fluids.is_empty() && scene.surfaces.is_empty();
-        tiles.extend(scene.monochrome_sprites.iter().map(|sprite| sprite.tile));
-        tiles.extend(scene.subpixel_sprites.iter().map(|sprite| sprite.tile));
-        tiles.extend(scene.polychrome_sprites.iter().map(|sprite| sprite.tile));
-        for effect in &scene.effects {
-            effect_tiles(effect, tiles);
-        }
-        for layer in &scene.subtree_layers {
-            effect_tiles(&layer.composite, tiles);
-            reusable &= pass_tiles(&layer.intermediate_effects, tiles);
-            if let Some(frame) = &layer.scene3d {
-                frame_tiles(frame, tiles);
-            }
-        }
-    });
-    reusable
-}
-
-#[derive(Default)]
-pub(super) struct OutputValidity {
-    submitted: Cell<bool>,
-    encoded: Cell<bool>,
-}
-
-impl OutputValidity {
-    pub(super) fn reusable(&self) -> bool {
-        self.submitted.get()
-    }
-    pub(super) fn encoded(&self) {
-        self.encoded.set(true);
-    }
-    pub(super) fn commit(&self, submitted: bool) {
-        if self.encoded.replace(false) {
-            self.submitted.set(submitted);
-        }
     }
 }
 

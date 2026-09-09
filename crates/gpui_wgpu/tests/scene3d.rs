@@ -43,6 +43,16 @@ fn submitted_viewports_restore_pixels_and_invalidate_changed_frames_and_ui() {
     let blue = renderer.render_rgba(&blue_scene).unwrap();
     assert_eq!(renderer.render_rgba(&blue_scene).unwrap(), blue);
     assert_eq!(renderer.render_rgba(&blue_scene).unwrap(), blue);
+    let mut repainted = Scene::default();
+    repainted.insert_primitive(quad(bounds(0., 0., 32., 32.), 0x0000ffff));
+    repainted.finish();
+    capture.scene = Rc::new(repainted);
+    assert_eq!(renderer.render_rgba(&scene(capture.clone())).unwrap(), blue);
+    let fixed_camera = capture.scene3d.clone();
+    Arc::make_mut(capture.scene3d.as_mut().unwrap()).view_projection[3][0] = 0.2;
+    assert_ne!(renderer.render_rgba(&scene(capture.clone())).unwrap(), blue);
+    capture.scene3d = fixed_camera;
+    assert_eq!(renderer.render_rgba(&scene(capture.clone())).unwrap(), blue);
     let mut source = Scene::default();
     source.insert_primitive(quad(bounds(0., 0., 32., 32.), 0xff0000ff));
     source.finish();

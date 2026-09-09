@@ -25,6 +25,7 @@ pub use gpui::MeshVertex3d as Vertex;
 use gpui::{ImageSource, Mesh3d, Rgba};
 pub use graph::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
+    SceneSubtree, SubtreeInstance, SubtreeNode,
 };
 pub use math::Transform;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

@@ -1,6 +1,8 @@
 # gpui_3d TODO
 
-General-purpose 3D scenes, assets, evaluation, queries, and rendering, with viewports composed through GPUI layout, input, and effects.
+Low-level 3D scene structures, resource references, evaluation, queries, and rendering, with viewports composed through GPUI layout, input, and effects.
+
+The core is format-independent. File importers, asset catalogs, model-management wrappers, and viewer applications build on its public APIs as separate extensions. Core APIs expose data and rendering mechanisms without owning project files, import workflows, or application policy.
 
 Checked items are implemented. Unchecked items are planned, grouped by implementation phase.
 
@@ -31,21 +33,19 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Camera damping**: Optional inertia and damping with explicit time advancement and on-demand redraw scheduling.
 - [ ] **Interaction example**: Object selection, highlighting, and interactive 3D UI panels covering occlusion, device scales, and viewport sizes.
 
-## Phase 2: Scenes and Assets
+## Phase 2: Scenes and Resource Primitives
 
 - [x] **Scene hierarchy**: Group and mesh nodes, graph-scoped generational handles, unique application IDs, inherited visibility, atomic reparenting, and subtree removal.
 - [x] **Affine transforms**: Quaternion TRS and full affine matrices, including shear and negative scale, with keep-local/keep-world reparenting and inverse-transpose normals.
 - [x] **Static scene evaluation**: Camera-independent owned results, world and aggregate bounds, node identities in picking, and a hierarchy example.
 - [ ] **Camera and light nodes**: Attach cameras and lights to hierarchy nodes and derive their world-space state during evaluation.
-- [ ] **Model instances**: Preserve asset, instance, node, and primitive ownership; share geometry/material resources with explicit instance overrides.
+- [x] **Subtree reuse**: Immutable local snapshots, atomic cross-graph instantiation, explicit application-ID remapping, source-to-instance handles, shared geometry/images, and independent node properties.
+- [ ] **Resource interfaces**: Fallible geometry construction, public resource inspection, and renderer upload/readiness interfaces usable by external importers and resource managers.
 - [x] **Camera extensions**: Orthographic projection, explicit up vectors, public view/projection matrices, viewport rays, world-to-screen projection, and framing from object bounds.
 - [x] **World-ray queries**: Normalized arbitrary rays with camera-independent geometric intersection and stable node identities.
 - [ ] **Camera optics**: Focal-length/sensor-size conversion and explicit off-center projection support.
 - [ ] **Geometry primitives**: Spheres, cylinders, cones, and subdivided planes with segment configuration, bounds, and normal and tangent generation.
 - [ ] **Texture sampling**: UV transforms, addressing and filtering modes, mipmaps, anisotropic filtering, and distinct handling of color and data textures.
-- [ ] **Static glTF / GLB models**: Load nodes, meshes, indices, UVs, normals, images, and basic materials; report unsupported extensions and asset errors.
-- [ ] **Asynchronous assets**: Background model and texture loading, shared caches, loading states, and release policies without blocking the UI thread.
-- [ ] **Model viewer example**: Local model loading, automatic framing, viewpoint switching, and node and material inspection.
 
 ## Phase 3: Materials and Lighting
 
@@ -55,15 +55,13 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Light types**: Multiple directional, point, and spot lights with intensity, range, and attenuation controls.
 - [ ] **Directional shadows**: Shadow maps, soft shadows, bias, and quality settings to control self-shadowing artifacts and resource costs.
 - [ ] **Environment lighting**: HDR environment maps and diffuse and specular IBL, with independent background and lighting controls.
-- [ ] **Material presets**: Matte, metal, plastic, and emissive presets using a consistent configuration API.
 - [ ] **Effect integration**: Compose Bloom and color grading through `gpui_effects`; define depth texture access and coordinate conventions for depth-dependent effects.
 
 ## Phase 4: Animation and Dynamic Content
 
-- [ ] **Node animation**: Translation, rotation, and scale tracks with interpolation, looping, pause, and seeking; support quaternion rotation.
-- [ ] **Model animation**: glTF animation clips, skeletal skinning, and morph targets with clip selection and playback.
+- [ ] **Transform evaluation**: Translation, quaternion rotation, and scale interpolation from explicit tracks and absolute-time inputs.
+- [ ] **Deformation**: Skeletal skinning and morph targets from explicit pose/weight inputs, shared by rendering and queries.
 - [ ] **Dynamic geometry**: Update vertex and instance data while reusing GPU buffers instead of rebuilding mesh resources each frame.
-- [ ] **3D annotations**: Anchor ordinary GPUI labels to scene positions with configurable depth occlusion and viewport edge behavior.
 
 ## Phase 5: Performance and Platforms
 
@@ -78,12 +76,22 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Platform coverage**: Add macOS and Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
 - [ ] **Cross-platform validation**: Cover depth, transparency, texture colors, nested composition, input mapping, and high DPI; distinguish automated checks from manual visual confirmation.
 
-## Near-Term Order
+## Extensions Built on the Core
 
-1. Static glTF / GLB assets, resource readiness, model instances, and accelerated spatial queries.
+- [ ] **glTF / GLB importer**: A separate `gpui_3d_gltf` crate translating file nodes, primitives, materials, and images into core data, with explicit unsupported-feature errors.
+- [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
+- [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
+- [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.
+- [ ] **Animation import and playback**: File-format clips, playback state, looping, pause, and seeking feeding core pose, transform, and deformation inputs.
+- [ ] **Material presets**: Matte, metal, plastic, and emissive configurations built on core material parameters.
+- [ ] **3D annotations**: GPUI label widgets built on projection and depth queries, with configurable visibility and edge behavior.
+
+## Near-Term Core Order
+
+1. Resource interfaces and accelerated spatial queries for external loaders and editors.
 2. Texture sampling, linear HDR color, PBR, and transparent materials.
 3. Depth/normal outputs, environment lighting, and directional shadows.
-4. Skeletal/morph animation with absolute-time evaluation, followed by attachments and constraints.
+4. Explicit pose/deformation inputs and absolute-time evaluation, followed by attachments and constraints.
 
 Keep multiple UI textures, capture-alpha picking, and focus/overlay support as independent GUI extensions.
 

@@ -257,8 +257,68 @@ graph.set_visible(group, false)?;
 `Mesh` clones share immutable geometry. A node owns its material value and local
 transform; editing either does not modify another node using the same mesh.
 Groups can organize several mesh nodes under one application-defined instance.
-Asset import, model-instance resources, and camera/light attachments are not
-provided by the graph.
+File importers and asset/instance managers belong to extensions built on these
+format-independent APIs. The graph does not load files or manage model catalogs.
+
+### Reusable subtrees
+
+`snapshot_subtree(root)` captures a local hierarchy as an immutable `SceneSubtree`.
+It includes the root and all descendants, including hidden nodes, in parent-first
+sibling order. Ancestor transforms and inherited visibility outside that subtree
+are excluded. The captured root retains its own local transform and has no parent
+inside the snapshot. Later edits or destruction of the source graph do not change
+the snapshot.
+
+```rust
+use gpui::rgb;
+use gpui_3d::{AffineTransform, Material, Mesh, Node, SceneGraph};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut source = SceneGraph::new();
+let root = source.insert(None, Node::new().id("assembly"))?;
+let body = source.insert(Some(root), Node::new().id("body")
+    .mesh(Mesh::cube(), Material::color(rgb(0x8dd8e8))))?;
+let subtree = source.snapshot_subtree(root)?;
+
+let mut scene = SceneGraph::new();
+let left = scene.instantiate(None, &subtree)?;
+let right = scene.instantiate(None, &subtree)?;
+scene.set_transform(right.root(), AffineTransform::from_translation([3., 0., 0.])?)?;
+scene.set_material(left.node(body).unwrap(), Material::color(rgb(0xf09e8e)))?;
+# Ok(())
+# }
+```
+
+`instantiate(parent, &subtree)` appends independent graph nodes under a parent,
+or creates a new root for `None`. Local transforms, local visibility, picking
+behavior, and material values are copied. Mesh allocations and image sources
+remain shared. Cloning a `SceneSubtree` also shares its snapshot storage.
+Edits do not propagate from the snapshot or one instance to another.
+
+Application IDs are cleared by default so the same subtree can be instantiated
+repeatedly in one graph. `instantiate_with_ids(parent, &subtree, map_id)` accepts
+a callback `(source_handle, Option<&ObjectId>) -> Option<ObjectId>` to assign,
+preserve, rename, or omit each ID. The callback visits every node, including
+unnamed nodes. Invalid parents and IDs colliding with the destination graph or
+another new node return `SceneError` before any insertion or revision change.
+One successful instantiation increments the destination revision once. World
+transform representability is checked during ordinary evaluation.
+
+`SubtreeInstance::root()` returns the new root. `node(source_handle)` resolves
+a snapshot handle to the corresponding destination node; `mappings()` exposes
+all pairs in unspecified order. Picking, evaluated nodes, and render output IDs
+use these ordinary destination handles. Extensions can retain the mapping to
+associate imported nodes or primitives with their instances.
+
+The returned instance is a non-owning handle map, not a live link or asset
+manager. Dropping it does not delete graph nodes. Ordinary graph edits can
+reparent or delete those nodes; mapping lookups do not validate their continued
+existence. `remove_subtree(instance.root())` removes the root's current subtree,
+not nodes that have since been reparented elsewhere. Snapshot handles remain
+valid lookup keys after source deletion, but are not persistent file IDs.
+
+Instantiation copies editable scene nodes while sharing resources; it does not
+batch them into an instanced GPU draw call.
 
 ### Transforms and bounds
 
@@ -508,6 +568,15 @@ nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
 coverage, resource readiness, and ownership.
 
 ## Example
+
+```sh
+cargo run -p gpui_3d --example instances
+```
+
+Three assemblies share one mesh allocation. Select an instance by clicking its
+geometry or toolbar button, then move or tint its body, or hide the whole subtree.
+Other instances retain their own node properties. Right-drag to orbit,
+middle-drag to pan, and scroll to zoom.
 
 ```sh
 cargo run -p gpui_3d --example camera

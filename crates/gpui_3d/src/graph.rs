@@ -4,9 +4,12 @@ use crate::{
 };
 use slotmap::{SlotMap, new_key_type};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 new_key_type! { struct NodeKey; }
@@ -116,6 +119,52 @@ struct Entry {
     children: Vec<NodeKey>,
 }
 
+/// A node captured in a reusable subtree. Parent handles refer only to other
+/// entries in the same snapshot; the captured root has no parent.
+#[derive(Clone)]
+pub struct SubtreeNode {
+    pub source: NodeHandle,
+    pub parent: Option<NodeHandle>,
+    pub node: Node,
+}
+
+/// Immutable local hierarchy, independent of its source graph's lifetime.
+/// Cloning the snapshot shares its storage and mesh/image allocations.
+#[derive(Clone)]
+pub struct SceneSubtree {
+    nodes: Arc<[SubtreeNode]>,
+}
+impl SceneSubtree {
+    pub fn root(&self) -> NodeHandle {
+        self.nodes[0].source
+    }
+    /// Parent-first order, preserving the source's sibling order.
+    pub fn nodes(&self) -> &[SubtreeNode] {
+        &self.nodes
+    }
+}
+
+/// Non-owning handles created by one instantiation. Dropping this value does
+/// not remove nodes. Handles expire through ordinary scene graph mutations.
+pub struct SubtreeInstance {
+    root: NodeHandle,
+    nodes: HashMap<NodeHandle, NodeHandle>,
+}
+impl SubtreeInstance {
+    pub fn root(&self) -> NodeHandle {
+        self.root
+    }
+    /// Looks up an instance node by its source-snapshot handle. This does not
+    /// check whether the destination node still exists in the graph.
+    pub fn node(&self, source: NodeHandle) -> Option<NodeHandle> {
+        self.nodes.get(&source).copied()
+    }
+    /// Source-to-instance pairs, in unspecified order.
+    pub fn mappings(&self) -> impl Iterator<Item = (NodeHandle, NodeHandle)> + '_ {
+        self.nodes.iter().map(|(source, node)| (*source, *node))
+    }
+}
+
 /// Editable hierarchy. Evaluation requires neither a window nor a GPU.
 pub struct SceneGraph {
     identity: u64,
@@ -201,6 +250,86 @@ impl SceneGraph {
             .children
             .iter()
             .map(|key| self.handle(*key)))
+    }
+
+    /// Captures a nonempty subtree with local transforms and local visibility.
+    /// The root's ancestors and their transforms/visibility are not captured.
+    /// Later source edits do not modify the snapshot.
+    pub fn snapshot_subtree(&self, root: NodeHandle) -> Result<SceneSubtree, SceneError> {
+        let root_key = self.key(root)?;
+        let mut nodes = Vec::new();
+        let mut pending = vec![root_key];
+        while let Some(key) = pending.pop() {
+            let entry = &self.nodes[key];
+            nodes.push(SubtreeNode {
+                source: self.handle(key),
+                parent: if key == root_key {
+                    None
+                } else {
+                    entry.parent.map(|key| self.handle(key))
+                },
+                node: entry.node.clone(),
+            });
+            pending.extend(entry.children.iter().rev().copied());
+        }
+        Ok(SceneSubtree {
+            nodes: nodes.into(),
+        })
+    }
+
+    /// Appends an editable copy beneath `parent`, or as a new root. Local
+    /// transforms, visibility, picking, and materials are copied; geometry and
+    /// image sources remain shared. Application IDs are cleared.
+    pub fn instantiate(
+        &mut self,
+        parent: Option<NodeHandle>,
+        subtree: &SceneSubtree,
+    ) -> Result<SubtreeInstance, SceneError> {
+        self.instantiate_with_ids(parent, subtree, |_, _| None)
+    }
+
+    /// Remaps application IDs before insertion, including unnamed nodes.
+    /// Duplicate IDs and invalid parents leave the graph and revision unchanged.
+    pub fn instantiate_with_ids(
+        &mut self,
+        parent: Option<NodeHandle>,
+        subtree: &SceneSubtree,
+        mut map_id: impl FnMut(NodeHandle, Option<&ObjectId>) -> Option<ObjectId>,
+    ) -> Result<SubtreeInstance, SceneError> {
+        let parent = parent.map(|handle| self.key(handle)).transpose()?;
+        let mut prepared = Vec::with_capacity(subtree.nodes.len());
+        let mut used = HashSet::new();
+        for entry in subtree.nodes.iter() {
+            let mut node = entry.node.clone();
+            node.id = map_id(entry.source, node.id.as_ref());
+            self.check_id(&node.id, None)?;
+            if let Some(id) = &node.id
+                && !used.insert(id.clone())
+            {
+                return Err(SceneError::DuplicateId(id.clone()));
+            }
+            prepared.push(node);
+        }
+        let mut nodes: HashMap<NodeHandle, NodeHandle> = HashMap::with_capacity(prepared.len());
+        for (entry, node) in subtree.nodes.iter().zip(prepared) {
+            let parent = entry.parent.map(|source| nodes[&source].key).or(parent);
+            let id = node.id.clone();
+            let key = self.nodes.insert(Entry {
+                node,
+                parent,
+                children: Vec::new(),
+            });
+            if let Some(id) = id {
+                self.ids.insert(id, key);
+            }
+            self.siblings_mut(parent).push(key);
+            nodes.insert(entry.source, self.handle(key));
+        }
+        self.revision += 1;
+        Ok(SubtreeInstance {
+            root: nodes[&subtree.root()],
+            nodes,
+        })
     }
 
     /// Adds a root when `parent` is `None`. Failed mutations leave the graph unchanged.
@@ -508,6 +637,205 @@ mod tests {
         for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
             assert!((a - b).abs() < 3e-5, "{a} != {b}");
         }
+    }
+
+    #[test]
+    fn subtree_instances_share_resources_and_keep_edits_independent() {
+        let image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])),
+        )]));
+        let mut source = SceneGraph::new();
+        let outside = source
+            .insert(
+                None,
+                Node::new().visible(false).transform(at([100., 0., 0.])),
+            )
+            .unwrap();
+        let root = source
+            .insert(
+                Some(outside),
+                Node::new().id("root").transform(at([1., 0., 0.])),
+            )
+            .unwrap();
+        let leaf = source
+            .insert(
+                Some(root),
+                Node::new()
+                    .id("leaf")
+                    .transform(at([0., 2., 0.]))
+                    .mesh(Mesh::cube(), Material::image(image.clone()))
+                    .pick_behavior(PickBehavior::Occlude),
+            )
+            .unwrap();
+        let snapshot = source.snapshot_subtree(root).unwrap();
+        source.set_transform(root, at([50., 0., 0.])).unwrap();
+        source.set_visible(root, false).unwrap();
+        source.remove_subtree(outside).unwrap();
+        drop(source);
+
+        let mut destination = SceneGraph::new();
+        let parent = destination
+            .insert(None, Node::new().transform(at([10., 0., 0.])))
+            .unwrap();
+        let a = destination.instantiate(Some(parent), &snapshot).unwrap();
+        let b = destination
+            .instantiate(Some(parent), &snapshot.clone())
+            .unwrap();
+        let a_leaf = a.node(leaf).unwrap();
+        let b_leaf = b.node(leaf).unwrap();
+        assert_ne!(a_leaf, b_leaf);
+        assert_eq!(destination.parent(a_leaf).unwrap(), Some(a.root()));
+        assert!(destination.node(a.root()).unwrap().object_id().is_none());
+        assert!(destination.node(a_leaf).unwrap().object_id().is_none());
+        assert_eq!(
+            destination.node(a_leaf).unwrap().picking,
+            PickBehavior::Occlude
+        );
+        assert_eq!(
+            destination
+                .world_transform(a_leaf)
+                .unwrap()
+                .transform_point([0.; 3]),
+            [11., 2., 0.]
+        );
+        assert!(
+            destination
+                .evaluate()
+                .unwrap()
+                .node(a_leaf)
+                .unwrap()
+                .visible
+        );
+        let (mesh_a, material_a) = destination.node(a_leaf).unwrap().surface.as_ref().unwrap();
+        let (mesh_b, material_b) = destination.node(b_leaf).unwrap().surface.as_ref().unwrap();
+        assert!(Arc::ptr_eq(&mesh_a.0, &mesh_b.0));
+        for material in [material_a, material_b] {
+            let crate::Texture::Image(gpui::ImageSource::Render(shared)) = &material.texture else {
+                panic!("decoded image expected")
+            };
+            assert!(Arc::ptr_eq(shared, &image));
+        }
+        let before = destination.evaluate().unwrap();
+        destination
+            .set_transform(a.root(), at([-3., 0., 0.]))
+            .unwrap();
+        destination
+            .set_material(a_leaf, Material::color(rgb(0xff0000)))
+            .unwrap();
+        destination.set_visible(a.root(), false).unwrap();
+        let after = destination.evaluate().unwrap();
+        assert!(!after.node(a_leaf).unwrap().visible);
+        assert!(after.node(b_leaf).unwrap().visible);
+        assert_eq!(
+            after.node(b_leaf).unwrap().world.transform_point([0.; 3]),
+            [11., 2., 0.]
+        );
+        assert_eq!(
+            before.node(a_leaf).unwrap().world.transform_point([0.; 3]),
+            [11., 2., 0.]
+        );
+        assert_eq!(after.scene(Camera::default()).objects.len(), 1);
+        assert!(matches!(
+            destination
+                .node(b_leaf)
+                .unwrap()
+                .surface
+                .as_ref()
+                .unwrap()
+                .1
+                .texture,
+            crate::Texture::Image(_)
+        ));
+        let b_root = b.root();
+        drop(b);
+        drop(snapshot);
+        assert!(destination.node(b_root).is_ok());
+        destination.remove_subtree(a.root()).unwrap();
+        assert_eq!(a.node(leaf), Some(a_leaf));
+        assert!(destination.node(a_leaf).is_err());
+        assert!(destination.node(b_leaf).is_ok());
+    }
+
+    #[test]
+    fn instantiation_remaps_ids_atomically_and_preserves_sibling_order() {
+        let mut graph = SceneGraph::new();
+        let root = graph.insert(None, Node::new().id("source")).unwrap();
+        let first = graph.insert(Some(root), Node::new().id("first")).unwrap();
+        let second = graph.insert(Some(root), Node::new()).unwrap();
+        let snapshot = graph.snapshot_subtree(root).unwrap();
+        let revision = graph.revision();
+        let roots = graph.roots().collect::<Vec<_>>();
+        assert!(matches!(
+            graph.instantiate_with_ids(None, &snapshot, |_, id| id.cloned()),
+            Err(SceneError::DuplicateId(_))
+        ));
+        assert!(matches!(
+            graph.instantiate_with_ids(None, &snapshot, |_, _| Some("duplicate".into())),
+            Err(SceneError::DuplicateId(_))
+        ));
+        let mut foreign = SceneGraph::new();
+        let parent = foreign.insert(None, Node::new()).unwrap();
+        assert!(matches!(
+            graph.instantiate(Some(parent), &snapshot),
+            Err(SceneError::InvalidHandle(_))
+        ));
+        assert_eq!(graph.revision(), revision);
+        assert_eq!(graph.len(), 3);
+        assert_eq!(graph.roots().collect::<Vec<_>>(), roots);
+        assert_eq!(graph.find(&"first".into()), Some(first));
+        let instance = graph
+            .instantiate_with_ids(None, &snapshot, |node, _| {
+                Some(
+                    if node == root {
+                        "copy"
+                    } else if node == first {
+                        "copy-first"
+                    } else {
+                        "copy-second"
+                    }
+                    .into(),
+                )
+            })
+            .unwrap();
+        assert_eq!(graph.revision(), revision + 1);
+        assert_eq!(graph.find(&"copy-first".into()), instance.node(first));
+        assert_eq!(graph.find(&"copy-second".into()), instance.node(second));
+        assert_eq!(
+            graph.children(instance.root()).unwrap().collect::<Vec<_>>(),
+            vec![
+                instance.node(first).unwrap(),
+                instance.node(second).unwrap()
+            ]
+        );
+        let child_copy = graph.instantiate(Some(first), &snapshot).unwrap();
+        assert_eq!(graph.parent(child_copy.root()).unwrap(), Some(first));
+        assert_eq!(graph.len(), 9);
+        assert!(instance.node(parent).is_none());
+        assert!(graph.snapshot_subtree(parent).is_err());
+        graph.remove_subtree(root).unwrap();
+        assert!(graph.node(child_copy.root()).is_err());
+        assert!(graph.node(instance.root()).is_ok());
+        let later = graph.instantiate(None, &snapshot).unwrap();
+        assert_ne!(later.root(), root);
+        assert!(later.node(first).is_some());
+    }
+
+    #[test]
+    fn deep_subtrees_capture_and_instantiate_without_recursion() {
+        let mut source = SceneGraph::new();
+        let root = source.insert(None, Node::new()).unwrap();
+        let mut leaf = root;
+        for _ in 1..10_000 {
+            leaf = source.insert(Some(leaf), Node::new()).unwrap();
+        }
+        let snapshot = source.snapshot_subtree(root).unwrap();
+        let mut destination = SceneGraph::new();
+        let instance = destination.instantiate(None, &snapshot).unwrap();
+        let copy_leaf = instance.node(leaf).unwrap();
+        assert_eq!(destination.len(), 10_000);
+        assert!(destination.evaluate().unwrap().node(copy_leaf).is_some());
+        destination.remove_subtree(instance.root()).unwrap();
+        assert!(destination.is_empty());
     }
 
     #[test]

@@ -709,6 +709,56 @@ outputs are unchanged. Viewport and headless color rendering share the same path
 The `lighting` example toggles a colored HDR environment independently of direct
 sources. Rotate the environment with the toolbar to inspect the illumination.
 
+### Environment background
+
+`EnvironmentMap` retains shared, immutable decoded linear RGB radiance. Its
+equirectangular orientation matches `DiffuseEnvironment`: the top is +Y,
+the middle column faces +X, and increasing U turns toward +Z. Texels must be
+finite and in `[0, 65504]`; dimensions and pixel count are validated at construction.
+Decoding and file/resource selection belong to the caller.
+
+```rust
+use gpui_3d::{DiffuseEnvironment, EnvironmentBackground, EnvironmentMap, Scene};
+
+let map = EnvironmentMap::from_equirectangular([2, 1], vec![
+    [0.2, 0.5, 1.5], [4.0, 1.5, 0.3],
+])?;
+let illumination = DiffuseEnvironment::from_map(&map)?.intensity(0.5);
+let background = EnvironmentBackground::new(map)
+    .intensity(0.25)
+    .rotation_y(0.4);
+let scene = Scene::new()
+    .diffuse_environment(illumination)
+    .background(Some(background));
+# Ok::<(), gpui_3d::EnvironmentError>(())
+```
+
+`Scene::background(None)` leaves uncovered pixels transparent. A visible
+background is opaque, including at zero intensity, which draws black. Background
+intensity and world-Y rotation do not change diffuse illumination, direct lights,
+shadow maps, or object picking. A single map can feed both background and diffuse
+projection, with independent settings.
+
+The background is infinitely distant: camera rotation and perspective field of
+view change the sampled directions, but translating the camera and target together
+does not introduce parallax. Orthographic rays are parallel, so the background is
+a constant direction across the viewport. Background color is linearly filtered,
+wraps across the horizontal seam, and clamps at the poles. Maps use RGBA16Float
+GPU storage with binary16 precision; dimensions must fit the device texture limit.
+Shared maps are uploaded once while in use and evicted from the background cache
+when absent from the prepared scenes. Brightness, orientation, and camera changes
+reuse the texture.
+
+The background is composited before scene geometry in linear HDR. Transparent
+objects blend over it; opaque surfaces cover it. Exposure and tone mapping apply
+to the combined display result. Headless `LINEAR_COLOR` includes the background
+before display mapping; object ID, linear depth, and world normal remain zero
+where no geometry survives. The background neither writes depth nor casts shadows.
+Viewport clipping, subtree effects, and group opacity apply to the combined output.
+
+Use the `lighting` example's background visibility, brightness, and rotation
+controls independently of the environment illumination controls.
+
 ### Material textures
 
 ```rust,no_run
@@ -1103,7 +1153,7 @@ Each example is an independent executable.
 | --- | --- |
 | `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, perspective/orthographic projection, framing, orbit and pan. |
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing/filtering, and alpha modes. |
-| `lighting` | Directional/point/spot sources, fill light, environment rotation, directional shadows, map resolution and soft edges. |
+| `lighting` | Directional/point/spot sources, fill light, independent HDR background and diffuse illumination, directional shadows, map resolution and soft edges. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |
 | `headless` | Window-free display/HDR/ID/depth/normal readback, PNG previews and object identity inspection. |
 

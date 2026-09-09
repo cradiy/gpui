@@ -20,7 +20,10 @@ pub use camera::{
 pub use geometry::{Aabb, AffineTransform, Mesh, Transform, TransformError};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use headless::*;
-pub use lighting::{DiffuseEnvironment, DirectionalShadow, EnvironmentError, Light, PunctualLight};
+pub use lighting::{
+    DiffuseEnvironment, DirectionalShadow, EnvironmentBackground, EnvironmentError, EnvironmentMap,
+    Light, PunctualLight,
+};
 pub use material::{Material, MaterialTexture};
 pub(crate) use material::{Texture, TextureSlot};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

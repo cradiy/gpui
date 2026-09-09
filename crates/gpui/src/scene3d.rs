@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use crate::{AtlasTile, DevicePixels, Pixels, Rgba, Size, size};
 
+mod environment;
+pub use environment::{EnvironmentBackground3d, EnvironmentError3d, EnvironmentMap3d};
+
 /// Logical dimensions and raster density of a decorative UI texture.
 #[derive(Clone, Copy, Debug)]
 pub struct UiTexture3d {
@@ -490,6 +493,8 @@ pub struct Scene3dFrame {
     pub ambient: f32,
     /// Optional distant diffuse illumination. It does not draw a background.
     pub diffuse_environment: Option<DiffuseEnvironment3d>,
+    /// Distant color background; does not contribute to lighting or geometry outputs.
+    pub background: Option<EnvironmentBackground3d>,
     /// HDR-to-display conversion. Does not affect depth or object IDs.
     pub color_output: crate::ColorOutput3d,
     /// Meshes; opaque visibility is independent of submission order.

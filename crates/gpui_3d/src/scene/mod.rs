@@ -95,6 +95,7 @@ pub struct Scene {
     pub(crate) lights: Option<Arc<[gpui::PunctualLight3d]>>,
     pub(crate) directional_shadow: Option<DirectionalShadow>,
     pub(crate) diffuse_environment: Option<DiffuseEnvironment>,
+    pub(crate) background: Option<crate::EnvironmentBackground>,
     pub(crate) color_output: ColorOutput,
     pub(crate) objects: Vec<Object>,
     pub(crate) spatial_index: Arc<OnceLock<bvh::ObjectIndex>>,
@@ -130,6 +131,12 @@ impl Scene {
     /// Adds distant diffuse illumination without changing the scene background.
     pub fn diffuse_environment(mut self, environment: DiffuseEnvironment) -> Self {
         self.diffuse_environment = Some(environment);
+        self
+    }
+    /// Displays a distant HDR environment independently of scene lighting and picking.
+    /// None preserves transparent background; zero intensity draws opaque black.
+    pub fn background(mut self, background: Option<crate::EnvironmentBackground>) -> Self {
+        self.background = background;
         self
     }
     /// Sets exposure and tone mapping for the scene's linear HDR result.

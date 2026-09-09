@@ -5,6 +5,103 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn environment_background_composes_in_linear_color_without_geometry_coverage() -> anyhow::Result<()>
+{
+    use gpui_3d::{
+        AlphaMode, EnvironmentBackground, EnvironmentMap, Object, Projection, Scene,
+        Scene3dChannels,
+    };
+    let mut renderer = HeadlessRenderer::new()?;
+    let map = EnvironmentMap::from_equirectangular(
+        [4, 1],
+        vec![[4., 0., 0.], [0., 2., 0.], [0., 0., 3.], [1.; 3]],
+    )?;
+    let scene = Scene::new()
+        .camera(Camera {
+            eye: [3., 0., 3.],
+            target: [0.; 3],
+            projection: Projection::Orthographic { vertical_size: 3. },
+            ..Default::default()
+        })
+        .object(
+            Object::new(
+                Mesh::plane(),
+                Material::color(gpui::Hsla {
+                    h: 2. / 3.,
+                    s: 1.,
+                    l: 0.5,
+                    a: 0.5,
+                })
+                .unlit(true)
+                .alpha_mode(AlphaMode::Blend),
+            )
+            .rotation([0., std::f32::consts::FRAC_PI_4, 0.]),
+        );
+    for color_samples in [1, 4] {
+        let mut outputs = Vec::new();
+        for (visible, intensity, rotation) in [
+            (false, 1., 0.),
+            (true, 1., 0.),
+            (true, 1., std::f32::consts::FRAC_PI_2),
+            (true, 0., 0.),
+            (true, 2., 0.),
+        ] {
+            let scene = scene.clone().background(visible.then(|| {
+                EnvironmentBackground::new(map.clone())
+                    .intensity(intensity)
+                    .rotation_y(rotation)
+            }));
+            let frame = renderer.render(
+                &scene,
+                Scene3dOutputConfig {
+                    size: [65, 65],
+                    channels: Scene3dChannels::all(),
+                    color_samples,
+                },
+            )?;
+            let mut pending = frame.readback()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(result) = pending.try_read()? {
+                    outputs.push(result.pixels);
+                    break;
+                }
+                anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        let expected_background = [
+            [0.; 4],
+            [4., 0., 0., 1.],
+            [0., 2., 0., 1.],
+            [0., 0., 0., 1.],
+            [8., 0., 0., 1.],
+        ];
+        for (output, expected) in outputs.iter().zip(expected_background) {
+            assert_eq!(output.object_ids, outputs[0].object_ids);
+            assert_eq!(output.linear_depth, outputs[0].linear_depth);
+            assert_eq!(output.world_normals, outputs[0].world_normals);
+            let hdr = output.linear_rgba.as_ref().unwrap();
+            for (actual, expected) in hdr[0].iter().zip(expected) {
+                assert!((actual - expected).abs() < 0.01);
+            }
+            let center = hdr[32 * 65 + 32];
+            let composed = [
+                expected[0] * 0.5,
+                expected[1] * 0.5,
+                0.5 + expected[2] * 0.5,
+                0.5 + expected[3] * 0.5,
+            ];
+            for (actual, expected) in center.into_iter().zip(composed) {
+                assert!((actual - expected).abs() < 0.01);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn linear_hdr_outputs_keep_radiance_coverage_and_owned_frames() -> anyhow::Result<()> {
     use gpui_3d::{
         AlphaMode, ColorOutput, Light, Object, PbrMaterial, Projection, RenderedFrame, Scene,

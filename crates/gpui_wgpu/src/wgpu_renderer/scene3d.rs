@@ -2,6 +2,8 @@ use super::*;
 use gpui::{Mesh3d, MeshTexture3d, SubtreeLayer};
 use wgpu::util::DeviceExt;
 
+mod background;
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Vertex {
@@ -145,6 +147,7 @@ struct Targets {
 }
 
 pub(crate) struct Scene3dRenderer {
+    background: Option<background::BackgroundRenderer>,
     pipeline: wgpu::RenderPipeline,
     blend_pipeline: Option<wgpu::RenderPipeline>,
     display_pipeline: Option<wgpu::RenderPipeline>,
@@ -353,6 +356,8 @@ impl Scene3dRenderer {
             white.size(),
         );
         Self {
+            background: (!data_output)
+                .then(|| background::BackgroundRenderer::new(device, samples)),
             shadow_pipeline,
             shadow_maps: HashMap::new(),
             shadow_fallback: shadow_texture(device, 1).create_view(&Default::default()),
@@ -383,6 +388,7 @@ impl Scene3dRenderer {
     pub(super) fn prepare(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         scene: &Scene,
         width: u32,
         height: u32,
@@ -400,16 +406,31 @@ impl Scene3dRenderer {
                 frames.push(frame.clone());
             }
         });
-        self.prepare_frames(device, frames.iter().map(AsRef::as_ref), width, height);
+        self.prepare_frames(
+            device,
+            queue,
+            frames.iter().map(AsRef::as_ref),
+            width,
+            height,
+        );
     }
 
     pub(crate) fn prepare_frames<'a>(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         frames: impl IntoIterator<Item = &'a gpui::Scene3dFrame>,
         width: u32,
         height: u32,
     ) {
+        let frames: Vec<_> = frames.into_iter().collect();
+        if let Some(background) = &mut self.background {
+            background.prepare(
+                device,
+                queue,
+                frames.iter().filter_map(|frame| frame.background.as_ref()),
+            );
+        }
         let mut used = HashSet::new();
         let mut shadow_sizes = HashSet::new();
         let mut slot_count = 0;
@@ -869,6 +890,11 @@ impl Scene3dRenderer {
             .as_ref()
             .or(destination)
             .expect("missing mesh output");
+        let background_group = self
+            .background
+            .as_ref()
+            .zip(frame.background.as_ref())
+            .map(|(renderer, background)| renderer.bind(device, background, rect));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("scene3d"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -896,6 +922,11 @@ impl Scene3dRenderer {
         let bottom = (rect[1] + rect[3]).min(height).ceil().max(0.) as u32;
         if right > x && bottom > y {
             pass.set_scissor_rect(x, y, right - x, bottom - y);
+            if let (Some(background), Some(group)) = (&self.background, &background_group) {
+                pass.set_pipeline(&background.pipeline);
+                pass.set_bind_group(0, group, &[]);
+                pass.draw(0..3, 0..1);
+            }
             let order = if self.blend_pipeline.is_some() {
                 color_draw_order(&frame.objects)
             } else {

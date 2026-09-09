@@ -75,8 +75,8 @@ or read back.
 
 | Channel | GPU format | CPU layout | Background and coverage |
 | --- | --- | --- | --- |
-| Color | `Rgba8Unorm` | RGBA bytes, width × 4 bytes per row | Transparent black; premultiplied alpha |
-| Linear color | `Rgba16Float` | `[f32; 4]` values in `linear_rgba`, width values per row | Transparent black; premultiplied linear HDR |
+| Color | `Rgba8Unorm` | RGBA bytes, width × 4 bytes per row | Transparent black or configured environment; premultiplied alpha |
+| Linear color | `Rgba16Float` | `[f32; 4]` values in `linear_rgba`, width values per row | Transparent black or configured environment; premultiplied linear HDR |
 | Object ID | `R32Uint` | `u32` values, width values per row | Zero background; nearest surviving surface at the pixel center |
 | Linear depth | `R32Float` | `f32` values, width values per row | Zero background; positive camera-forward depth in scene units |
 | World normal | `Rgba32Float` | `[f32; 4]` values, width values per row | Zero background; world XYZ normal and validity W |
@@ -148,6 +148,15 @@ Use `capabilities().linear_color_msaa4` to query four-sample HDR resolve support
 channel selection, and retained HDR frames survive later renders and resizing.
 
 ### Geometry channels
+
+`Scene::background` fills uncovered color pixels with a decoded HDR environment.
+The background is opaque, including at zero intensity. It participates in linear
+composition beneath transparent objects and appears in both color outputs;
+exposure and tone mapping apply only to `COLOR`. Background visibility, brightness,
+and rotation are independent of illumination. Geometry channels retain zero
+background values and nearest-surface coverage. See
+[Environment background](viewport.md#environment-background) for map orientation,
+camera projection, filtering, and cache ownership.
 
 ```no_run
 use gpui_3d::{HeadlessRenderer, Scene, Scene3dChannels, Scene3dOutputConfig};

@@ -66,7 +66,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Environment lighting**: HDR environment maps and diffuse and specular IBL, with independent background and lighting controls.
   - [x] **Diffuse irradiance**: Decoded linear HDR equirectangular inputs, L2 spherical-harmonic projection, precomputed coefficient inputs, intensity and world-Y rotation, shared viewport/headless shading, and environment controls in the lighting example.
   - [ ] **Specular IBL**: Prefiltered environment radiance, BRDF integration, and roughness-dependent reflections.
-  - [ ] **Environment background**: Independent background visibility, intensity, and orientation.
+  - [x] **Environment background**: Shared decoded HDR maps, independent visibility/intensity/world-Y rotation, camera-correct distant rays, linear composition, cached uploads, and shared viewport/headless rendering without geometry-channel coverage.
 - [ ] **Effect integration**: Compose Bloom and color grading through `gpui_effects`; define depth texture access and coordinate conventions for depth-dependent effects.
 
 ## Phase 4: Animation and Dynamic Content

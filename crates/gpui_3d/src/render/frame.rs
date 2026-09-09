@@ -199,6 +199,11 @@ impl Scene {
             });
         }
         Ok(Scene3dFrame {
+            background: self
+                .background
+                .as_ref()
+                .map(|background| background.prepare(self.camera, aspect))
+                .transpose()?,
             directional_shadow,
             diffuse_environment: self.diffuse_environment.map(|environment| environment.0),
             world_to_view: view,

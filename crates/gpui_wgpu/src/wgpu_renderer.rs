@@ -2897,6 +2897,7 @@ impl WgpuRenderer {
             if let Some(renderer) = &mut resources.scene3d {
                 renderer.prepare(
                     &resources.device,
+                    &resources.queue,
                     scene,
                     viewport[0] as u32,
                     viewport[1] as u32,

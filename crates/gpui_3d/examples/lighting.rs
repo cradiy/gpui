@@ -3,13 +3,13 @@ use gpui::{
     div, prelude::*, px, rgb, size,
 };
 use gpui_3d::{
-    Camera, DiffuseEnvironment, DirectionalShadow, Light, Material, Mesh, Object, OrbitController,
-    PbrMaterial, PunctualLight, Scene, viewport3d,
+    Camera, DiffuseEnvironment, DirectionalShadow, EnvironmentBackground, EnvironmentMap, Light,
+    Material, Mesh, Object, OrbitController, PbrMaterial, PunctualLight, Scene, viewport3d,
 };
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc};
 
-fn environment() -> DiffuseEnvironment {
+fn environment() -> EnvironmentMap {
     let pixels: Vec<_> = (0..64)
         .flat_map(|y| {
             (0..128).map(move |x| {
@@ -31,13 +31,17 @@ fn environment() -> DiffuseEnvironment {
             })
         })
         .collect();
-    DiffuseEnvironment::from_equirectangular([128, 64], &pixels).unwrap()
+    EnvironmentMap::from_equirectangular([128, 64], pixels).unwrap()
 }
 
 struct Lighting {
     kind: usize,
     fill: bool,
     environment: DiffuseEnvironment,
+    background: EnvironmentBackground,
+    background_on: bool,
+    background_rotation: f32,
+    background_intensity: f32,
     environment_on: bool,
     environment_rotation: f32,
     cone: f32,
@@ -54,10 +58,15 @@ struct Lighting {
 
 impl Lighting {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let map = environment();
         Self {
             kind: 0,
             fill: false,
-            environment: environment(),
+            environment: DiffuseEnvironment::from_map(&map).unwrap(),
+            background: EnvironmentBackground::new(map),
+            background_on: true,
+            background_rotation: 0.,
+            background_intensity: 0.35,
             environment_on: false,
             environment_rotation: 0.,
             cone: 0.6,
@@ -114,6 +123,12 @@ impl Lighting {
                 ambient: 0.12,
             })
             .lights(lights)
+            .background(self.background_on.then(|| {
+                self.background
+                    .clone()
+                    .intensity(self.background_intensity)
+                    .rotation_y(self.background_rotation)
+            }))
             .diffuse_environment(
                 self.environment
                     .rotation_y(self.environment_rotation)
@@ -201,6 +216,9 @@ impl Render for Lighting {
                         ("fill", "Fill light"),
                         ("environment", "Environment"),
                         ("rotate", "Rotate environment"),
+                        ("background", if self.background_on { "Hide background" } else { "Show background" }),
+                        ("background-rotate", "Rotate background"),
+                        ("background-brightness", "Background brightness"),
                         ("cone", "Spot cone"),
                         ("range", "Light range"),
                         ("reset", "Reset view"),
@@ -222,6 +240,9 @@ impl Render for Lighting {
                                     "fill" => this.fill = !this.fill,
                                     "environment" => this.environment_on = !this.environment_on,
                                     "rotate" => this.environment_rotation += 0.4,
+                                    "background" => this.background_on = !this.background_on,
+                                    "background-rotate" => this.background_rotation += 0.4,
+                                    "background-brightness" => this.background_intensity = if this.background_intensity < 0.8 { this.background_intensity + 0.2 } else { 0.15 },
                                     "cone" => this.cone = if this.cone < 1. { this.cone+0.2 } else { 0.3 },
                                     "range" => this.range = if this.range < 8. { this.range+2. } else { 4. },
                                     "shadow" => this.enabled = !this.enabled,

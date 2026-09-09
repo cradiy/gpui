@@ -37,8 +37,9 @@ impl Scene3dChannels {
     }
 }
 
-/// Physical output dimensions and color sampling. Background values are zero
-/// in all channels. COLOR uses display-encoded RGBA8 after exposure and tone
+/// Physical output dimensions and color sampling. Geometry background values are
+/// zero; color is transparent unless an environment background is configured.
+/// COLOR uses display-encoded RGBA8 after exposure and tone
 /// mapping; LINEAR_COLOR uses premultiplied RGBA16Float before display mapping.
 #[derive(Clone, Copy, Debug)]
 pub struct Scene3dOutputConfig {
@@ -250,6 +251,22 @@ impl WgpuScene3dRenderer {
             "invalid diffuse environment parameters"
         );
         ensure!(!self.context.device_lost(), "3D rendering device is lost");
+        if config.channels.shaded()
+            && let Some(background) = &frame.background
+        {
+            ensure!(
+                background.is_valid(),
+                "invalid environment background parameters"
+            );
+            ensure!(
+                background
+                    .map
+                    .size()
+                    .iter()
+                    .all(|v| *v <= self.capabilities.max_dimension),
+                "environment map exceeds device texture dimensions"
+            );
+        }
         ensure!(
             frame.color_output.is_valid(),
             "3D exposure must be finite and between -16 and 16 stops"
@@ -365,7 +382,7 @@ impl WgpuScene3dRenderer {
                 ));
             }
             let renderer = &mut self.color.as_mut().unwrap().1;
-            renderer.prepare_frames(device, [frame], width, height);
+            renderer.prepare_frames(device, queue, [frame], width, height);
             let texture = config
                 .channels
                 .color()
@@ -410,7 +427,7 @@ impl WgpuScene3dRenderer {
             if let Some(source) = geometry_source {
                 renderer.reuse_geometry_from(source);
             }
-            renderer.prepare_frames(device, [frame], width, height);
+            renderer.prepare_frames(device, queue, [frame], width, height);
             let texture = output_texture(device, config.size, kind.format());
             renderer.encode_frame(
                 device,

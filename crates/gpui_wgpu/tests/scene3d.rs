@@ -71,6 +71,7 @@ fn layer(
     source.finish();
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
+            background: None,
             directional_shadow: None,
             ui_texture: None,
             view_projection: IDENTITY,
@@ -113,6 +114,48 @@ fn scene(layer: SubtreeLayer) -> Scene {
     scene.insert_primitive(Primitive::SubtreeLayer(layer));
     scene.finish();
     scene
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn environment_backgrounds_preserve_viewport_clipping_opacity_and_shared_maps() -> anyhow::Result<()>
+{
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(96)))?;
+    let map = gpui::EnvironmentMap3d::from_equirectangular([1, 1], vec![[1., 0., 0.]])?;
+    let mut left = layer(bounds(8., 12., 48., 60.), Scene::default(), vec![], 1.);
+    Arc::make_mut(left.scene3d.as_mut().unwrap()).background =
+        Some(gpui::EnvironmentBackground3d {
+            map,
+            intensity: 1.,
+            rotation_y: 0.,
+            rays: [[0., 0., -1.], [1., 0., 0.], [0., 1., 0.]],
+        });
+    let mut right = left.clone();
+    right.composite.bounds = bounds(72., 12., 48., 60.);
+    right.composite.effect_bounds = right.composite.bounds;
+    right.composite.content_mask.bounds = bounds(72., 12., 24., 60.);
+    right.composite.opacity = 0.5;
+    let mut input = Scene::default();
+    input.insert_primitive(Primitive::SubtreeLayer(left.clone()));
+    input.insert_primitive(Primitive::SubtreeLayer(right));
+    input.finish();
+    let pixels = renderer.render_rgba(&input)?;
+    let at = |x: usize, y: usize| &pixels[(y * 128 + x) * 4..(y * 128 + x) * 4 + 4];
+    assert_eq!(at(30, 30), &[255, 0, 0, 255]);
+    assert!(at(80, 30)[0].abs_diff(128) <= 1);
+    assert!(at(80, 30)[3].abs_diff(128) <= 1);
+    assert_eq!(at(104, 30), &[0; 4]);
+    assert_eq!(at(64, 30), &[0; 4]);
+    assert_eq!(at(30, 80), &[0; 4]);
+    let original = renderer.render_rgba(&scene(left.clone()))?;
+    Arc::make_mut(left.scene3d.as_mut().unwrap()).background = None;
+    let cleared = renderer.render_rgba(&scene(left))?;
+    assert_eq!(
+        &original[(30 * 128 + 30) * 4..(30 * 128 + 30) * 4 + 4],
+        &[255, 0, 0, 255]
+    );
+    assert!(cleared.iter().all(|v| *v == 0));
+    Ok(())
 }
 
 #[test]

@@ -1,38 +1,65 @@
 use gpui::DiffuseEnvironment3d;
-use std::{
-    f64::consts::{PI, TAU},
-    fmt,
-};
+pub use gpui::{EnvironmentError3d as EnvironmentError, EnvironmentMap3d as EnvironmentMap};
+use std::f64::consts::{PI, TAU};
 
-/// Invalid environment dimensions, linear radiance, or precomputed coefficients.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EnvironmentError {
-    Dimensions,
-    PixelCount { expected: usize, actual: usize },
-    Radiance { pixel: usize },
-    Coefficients,
+/// Distant HDR background independent of scene illumination. None on Scene hides it.
+#[derive(Clone, Debug)]
+pub struct EnvironmentBackground {
+    map: EnvironmentMap,
+    intensity: f32,
+    rotation_y: f32,
 }
-impl fmt::Display for EnvironmentError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Dimensions => {
-                f.write_str("environment dimensions must be positive and fit addressable memory")
-            }
-            Self::PixelCount { expected, actual } => write!(
-                f,
-                "expected {expected} environment pixels, received {actual}"
-            ),
-            Self::Radiance { pixel } => write!(
-                f,
-                "environment pixel {pixel} requires finite linear RGB in [0, 65504]"
-            ),
-            Self::Coefficients => {
-                f.write_str("environment coefficients require finite RGB in [-262016, 262016]")
-            }
+impl EnvironmentBackground {
+    pub fn new(map: EnvironmentMap) -> Self {
+        Self {
+            map,
+            intensity: 1.,
+            rotation_y: 0.,
         }
     }
+    /// Linear brightness multiplier in [0, 65504]. Zero draws opaque black.
+    #[track_caller]
+    pub fn intensity(mut self, intensity: f32) -> Self {
+        assert!(intensity.is_finite() && (0. ..=65504.).contains(&intensity));
+        self.intensity = intensity;
+        self
+    }
+    /// Rotation around world +Y, in radians, independent of diffuse illumination.
+    #[track_caller]
+    pub fn rotation_y(mut self, radians: f32) -> Self {
+        assert!(radians.is_finite());
+        self.rotation_y = radians;
+        self
+    }
+    pub(crate) fn prepare(
+        &self,
+        camera: crate::Camera,
+        aspect: f32,
+    ) -> Result<gpui::EnvironmentBackground3d, crate::CameraError> {
+        let view = camera.view_matrix()?;
+        let (x, y) = match camera.projection {
+            crate::Projection::Perspective { vertical_fov } => {
+                let y = (vertical_fov * 0.5).tan();
+                (y * aspect, y)
+            }
+            crate::Projection::Orthographic { .. } => (0., 0.),
+        };
+        let rays = [
+            [-view[0][2], -view[1][2], -view[2][2]],
+            [view[0][0] * x, view[1][0] * x, view[2][0] * x],
+            [view[0][1] * y, view[1][1] * y, view[2][1] * y],
+        ];
+        if !rays.iter().flatten().all(|v| v.is_finite()) {
+            return Err(crate::CameraError::Unrepresentable);
+        }
+        Ok(gpui::EnvironmentBackground3d {
+            map: self.map.clone(),
+            intensity: self.intensity,
+            rotation_y: self.rotation_y,
+            rays,
+        })
+    }
 }
-impl std::error::Error for EnvironmentError {}
 
 /// Distant diffuse illumination represented by nine real spherical harmonics.
 /// Independent of image formats, GPU resources, and background rendering.
@@ -40,6 +67,10 @@ impl std::error::Error for EnvironmentError {}
 pub struct DiffuseEnvironment(pub(crate) DiffuseEnvironment3d);
 
 impl DiffuseEnvironment {
+    /// Projects a shared decoded radiance map into diffuse irradiance coefficients.
+    pub fn from_map(map: &EnvironmentMap) -> Result<Self, EnvironmentError> {
+        Self::from_equirectangular(map.size(), map.pixels())
+    }
     /// Accepts L2 coefficients of irradiance/pi, not unconvolved radiance.
     /// Order: Y00, Y1-1, Y10, Y11, Y2-2, Y2-1, Y20, Y21, Y22.
     /// The basis uses polynomials 1, y, z, x, xy, yz, 3z²-1, xz, x²-y².
@@ -172,6 +203,87 @@ const SH: [f64; 5] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_rays_match_camera_queries_without_translation_parallax() {
+        use crate::{Camera, Projection, Ray};
+        use gpui::{Bounds, point, px, size};
+        let map = EnvironmentMap::from_equirectangular([1, 1], vec![[2., 0.5, 1.]]).unwrap();
+        let background = EnvironmentBackground::new(map);
+        for projection in [
+            Projection::Perspective { vertical_fov: 1.2 },
+            Projection::Orthographic { vertical_size: 7. },
+        ] {
+            let camera = Camera {
+                eye: [2., 3., 5.],
+                target: [-1., 0.5, 1.],
+                up: [0.2, 1., 0.1],
+                projection,
+                ..Default::default()
+            };
+            for (width, height) in [(800., 300.), (250., 700.)] {
+                let viewport = Bounds::new(point(px(71.), px(43.)), size(px(width), px(height)));
+                let prepared = background.prepare(camera, width / height).unwrap();
+                for (u, v) in [(0., 0.), (0.5, 0.5), (1., 1.), (0.2, 0.75)] {
+                    let pixel = viewport.origin + point(px(u * width), px(v * height));
+                    let expected = camera.screen_to_ray(viewport, pixel).unwrap().direction();
+                    let direction = std::array::from_fn(|i| {
+                        prepared.rays[0][i]
+                            + (u * 2. - 1.) * prepared.rays[1][i]
+                            + (1. - v * 2.) * prepared.rays[2][i]
+                    });
+                    let actual = Ray::new([0.; 3], direction).unwrap().direction();
+                    for (actual, expected) in actual.into_iter().zip(expected) {
+                        assert!((actual - expected).abs() < 0.00001);
+                    }
+                }
+                let moved = Camera {
+                    eye: camera.eye.map(|v| v + 16.),
+                    target: camera.target.map(|v| v + 16.),
+                    ..camera
+                };
+                for (actual, expected) in background
+                    .prepare(moved, width / height)
+                    .unwrap()
+                    .rays
+                    .iter()
+                    .flatten()
+                    .zip(prepared.rays.iter().flatten())
+                {
+                    assert!((actual - expected).abs() < 0.00001);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_maps_validate_pixels_and_preserve_diffuse_projection() {
+        let pixels = vec![[4., 0.5, 0.2], [0.1, 2., 1.]];
+        let expected = DiffuseEnvironment::from_equirectangular([2, 1], &pixels).unwrap();
+        let map = EnvironmentMap::from_equirectangular([2, 1], pixels).unwrap();
+        assert_eq!(map.pixels().as_ptr(), map.clone().pixels().as_ptr());
+        assert_eq!(
+            DiffuseEnvironment::from_map(&map).unwrap().coefficients(),
+            expected.coefficients()
+        );
+        assert_eq!(
+            EnvironmentMap::from_equirectangular([0, 1], vec![]).unwrap_err(),
+            EnvironmentError::Dimensions
+        );
+        assert_eq!(
+            EnvironmentMap::from_equirectangular([2, 1], vec![[0.; 3]]).unwrap_err(),
+            EnvironmentError::PixelCount {
+                expected: 2,
+                actual: 1
+            }
+        );
+        for invalid in [-1., f32::NAN, f32::INFINITY, 65505.] {
+            assert_eq!(
+                EnvironmentMap::from_equirectangular([1, 1], vec![[0., invalid, 0.]]).unwrap_err(),
+                EnvironmentError::Radiance { pixel: 0 }
+            );
+        }
+    }
 
     #[test]
     fn uniform_radiance_preserves_hdr_energy_at_any_resolution() {

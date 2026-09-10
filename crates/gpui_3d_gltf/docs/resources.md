@@ -1,0 +1,81 @@
+# Document resources
+
+`Document::from_slice(bytes, limits)` accepts JSON glTF or GLB 2.0. Parsing owns
+the metadata and optional binary chunk without accessing external resources.
+`Document::prepare(load_uri)` resolves all declared buffers and encoded images,
+returning an immutable `PreparedDocument`. Both operations are synchronous and
+can run in caller-managed background work; neither needs a window or GPU.
+
+```rust
+use gpui_3d_gltf::{Document, Limits};
+
+let bytes = br#"{
+    "asset": {"version": "2.0"},
+    "buffers": [{"uri": "mesh.bin", "byteLength": 4}]
+}"#;
+let document = Document::from_slice(bytes, Limits::default())?;
+let prepared = document.prepare(|uri| {
+    anyhow::ensure!(uri == "mesh.bin", "unknown resource");
+    Ok(vec![0, 1, 2, 3])
+})?;
+let data = prepared.buffer(0).unwrap();
+# let _ = data;
+# Ok::<(), anyhow::Error>(())
+```
+
+## Resolution and ownership
+
+Non-data URIs reach the callback unchanged. The extension does not interpret
+relative paths, decode percent escapes, access the filesystem, or initiate
+network requests. The caller chooses allowed schemes and paths and handles
+loading failures. Base64 data URIs with explicit MIME types are decoded
+internally; other data-URI encodings or parameters return errors.
+
+Identical URI strings are resolved once per preparation, even across buffers and
+images. URI equality is textual; aliases are not canonicalized. A failed
+preparation does not return partial resources or modify the document. It can be
+retried with a new resolver. Resolver side effects are outside this transaction.
+
+`PreparedDocument::buffer(index)` returns the buffer's declared bytes, excluding
+GLB padding or extra resolver bytes. `image(index)` returns an `EncodedImage`
+with borrowed encoded bytes and an optional MIME type. Buffer-view images share
+their buffer storage; repeated URI images share the same payload. Document and
+prepared-resource clones share immutable data, and prepared resources remain
+valid after the parsed document is dropped.
+
+Image data is not decoded or validated as an image format. A decoder must enforce
+its own dimension, pixel-count, decoded-byte, and format limits. Conflicting
+declared and data-URI MIME types are rejected during preparation. A URI image
+without a declared type retains `None` for the caller's decoder to identify.
+
+## Admission and validation
+
+`Limits` controls total input bytes, total unique encoded resource bytes, and
+buffer/image/accessor/node counts. Defaults are 16 MiB of input, 256 MiB of
+resources, 4,096 buffers and images each, and 100,000 accessors and nodes each.
+The input-byte limit includes the entire GLB container, not only its JSON chunk.
+Count limits apply after bounded-input JSON parsing. Base64 sizes and declared
+individual buffer sizes are checked before resource allocation or resolution.
+Callback payload sizes are checked on return, so the callback must bound its own
+I/O allocation. `resource_bytes()` reports admitted encoded bytes, not total
+process or decoded-image memory.
+
+GLB padding counts toward resource admission. Buffer-view images do not count
+their shared bytes again; all extra bytes returned for a URI count even when a
+buffer exposes only its declared prefix. Budgets and URI caches are per
+preparation, not global limits across retained documents.
+
+Validation checks container/chunk lengths, declared buffer-view bounds, accessor
+component alignment, element strides and ranges, matrix-column padding, and
+sparse storage bounds. Sparse indices must be strictly increasing and within the
+accessor count. Byte-range arithmetic is checked for overflow. Errors include the
+relevant buffer, image, view, or accessor context. These checks follow the
+[glTF accessor layout](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessors)
+and do not replace semantic validation of mesh attributes, animation data,
+materials, or extensions.
+
+`gltf()` exposes parsed format metadata with the original array indices. Resource
+preparation does not create a `gpui_3d` scene, interpret materials, sample
+animation, or claim support for an extension merely because its resources were
+resolved. Scene conversion and decoded-image handling consume this prepared data
+separately.

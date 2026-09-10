@@ -1,0 +1,17 @@
+[package]
+name = "gpui_3d_gltf"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "MIT"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_texture_transform"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

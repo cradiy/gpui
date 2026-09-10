@@ -5,6 +5,7 @@ The built-in decoder accepts PNG and JPEG from retained encoded resources.
 - `EncodedImage::decode(limits)` returns one `Arc<gpui::RenderImage>`.
 - `MaterialDefinition::decode_images(limits)` resolves all active material maps.
 - `SceneDefinition::decode_images(limits)` resolves all active scene materials.
+- `SceneDefinition::decode_resources(limits)` returns a transferable `DecodedScene`.
 
 The material and scene methods share decoding by original image index. An image
 used by several slots or materials is decoded and charged once per call. Separate
@@ -69,3 +70,17 @@ images. Then use the existing material/scene `resolve_images` callback to supply
 those images when constructing core materials and subtrees on the owning thread.
 Custom formats, background queues and cross-asset caches also use `resolve_images`;
 they do not inherit the built-in decoder's limits automatically.
+
+For a complete scene, `decode_resources` performs the active-image decoding under
+one aggregate budget and returns a `Send + Sync` result. `definition()` exposes
+its source definition; `image(index)` returns an active decoded image by original
+glTF index. Clones share the definition and pixel storage. The definition retains
+encoded inputs as well as geometry; decoded output limits do not include those
+retained inputs.
+
+Call `DecodedScene::resolve()` on the destination thread to construct core materials
+and a subtree with authored initial deformation. It reuses the decoded pixels
+without decoding again. The resulting `SceneAsset` is not transferable between
+threads. `decode_images` combines these two operations on the calling thread.
+[`SceneLoadSlot::accept_with`](load_slots.md) can reject superseded worker results
+before resolution.

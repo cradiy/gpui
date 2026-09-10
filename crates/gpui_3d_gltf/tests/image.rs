@@ -243,6 +243,24 @@ fn embedded_glb_scene_decoding_charges_unique_images_across_materials() {
         definition.decode_images(limits).unwrap().primitives().len(),
         2
     );
+    let worker_definition = definition.clone();
+    let decoded = std::thread::spawn(move || worker_definition.decode_resources(limits))
+        .join()
+        .unwrap()
+        .unwrap();
+    assert_eq!(decoded.definition().index(), definition.index());
+    assert_eq!(
+        decoded.image(0).unwrap().as_bytes(0).unwrap(),
+        [30, 20, 10, 128, 60, 50, 40, 0]
+    );
+    assert!(decoded.image(1).is_none());
+    let retained = decoded.clone();
+    assert!(std::sync::Arc::ptr_eq(
+        decoded.image(0).unwrap(),
+        retained.image(0).unwrap()
+    ));
+    drop(decoded);
+    assert_eq!(retained.resolve().unwrap().primitives().len(), 2);
     assert!(
         document
             .material(Some(1))

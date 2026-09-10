@@ -1,4 +1,4 @@
-use std::{io::Cursor, sync::Arc};
+use std::{collections::HashMap, io::Cursor, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use gpui::RenderImage;
@@ -54,8 +54,68 @@ impl SceneDefinition {
     /// Resolves active PNG/JPEG images with one scene-wide output budget.
     /// An image used by multiple materials is decoded and charged only once.
     pub fn decode_images(&self, limits: ImageDecodeLimits) -> Result<SceneAsset> {
+        self.decode_resources(limits)?.resolve()
+    }
+
+    /// Decodes active images into transferable CPU resources under one scene-wide
+    /// output budget. No GPUI materials or scene graph are constructed.
+    pub fn decode_resources(&self, limits: ImageDecodeLimits) -> Result<DecodedScene> {
         let mut output_bytes = 0;
-        self.resolve_images(|_, encoded| decode(encoded, limits, &mut output_bytes))
+        let mut images = HashMap::new();
+        for material in self.materials() {
+            for texture in material.textures() {
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    images.entry(texture.image_index())
+                {
+                    let image =
+                        decode(texture.image(), limits, &mut output_bytes).with_context(|| {
+                            format!(
+                                "scene {} material {:?} {:?} image {}",
+                                self.index(),
+                                material.index(),
+                                texture.slot(),
+                                texture.image_index()
+                            )
+                        })?;
+                    entry.insert(image);
+                }
+            }
+        }
+        Ok(DecodedScene {
+            definition: self.clone(),
+            images: Arc::new(images),
+        })
+    }
+}
+
+/// Shared scene definition and decoded BGRA images, transferable between threads.
+/// Encoded inputs remain retained by the definition. Cloning shares both inputs
+/// and pixels; resolving constructs graph-local material and subtree values.
+#[derive(Clone)]
+pub struct DecodedScene {
+    definition: SceneDefinition,
+    images: Arc<HashMap<usize, Arc<RenderImage>>>,
+}
+
+impl DecodedScene {
+    pub fn definition(&self) -> &SceneDefinition {
+        &self.definition
+    }
+
+    /// Returns an active decoded image by its original glTF image index.
+    pub fn image(&self, index: usize) -> Option<&Arc<RenderImage>> {
+        self.images.get(&index)
+    }
+
+    /// Builds a scene asset on the calling thread without decoding again.
+    /// Shared pixels are reused; the result includes authored initial deformation.
+    pub fn resolve(&self) -> Result<SceneAsset> {
+        self.definition.resolve_images(|index, _| {
+            self.images
+                .get(&index)
+                .cloned()
+                .context("missing decoded scene image")
+        })
     }
 }
 

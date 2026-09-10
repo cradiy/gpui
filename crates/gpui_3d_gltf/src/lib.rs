@@ -9,6 +9,7 @@ mod camera;
 mod geometry;
 mod image;
 mod instance;
+mod loading;
 mod material;
 mod morph;
 mod resources;
@@ -18,8 +19,9 @@ mod validation;
 
 pub use animation::{AnimationClip, AnimationOptions, NodeAnimation};
 pub use geometry::{GeometryOptions, PrimitiveGeometry};
-pub use image::ImageDecodeLimits;
+pub use image::{DecodedScene, ImageDecodeLimits};
 pub use instance::SceneInstance;
+pub use loading::{SceneLoadCompletion, SceneLoadRequest, SceneLoadSlot, SceneLoadStatus};
 pub use material::{MaterialDefinition, TextureBinding};
 pub use morph::{MorphGeometry, SceneMorph};
 pub use resources::{Document, EncodedImage, Limits, PreparedDocument, ResourceRequest};

@@ -83,3 +83,5 @@ that has already completed. Before publishing into a view or asset slot, compare
 the request's identity with the caller's current request. Discard superseded
 results even if they completed successfully. Loading queues, cross-request caches,
 retry timing, decoded-image budgets and GPU uploads remain caller-owned policies.
+[`SceneLoadSlot`](load_slots.md) provides request identity, cancellation and
+latest-request-only publication for a destination holding a decoded scene asset.

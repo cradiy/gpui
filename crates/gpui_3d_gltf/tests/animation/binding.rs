@@ -36,6 +36,25 @@ fn bound_samples_retain_tracks_and_keep_instance_poses_and_weights_independent()
     drop(asset);
     let node_a = a.node(1).unwrap();
     let node_b = b.node(1).unwrap();
+    let start = bound_a.sample(Duration::ZERO).unwrap();
+    let end = bound_a.sample(Duration::from_secs(2)).unwrap();
+    let middle = bound_a.sample(Duration::from_secs(1)).unwrap();
+    let mixed = start
+        .weight_pose()
+        .blend(end.weight_pose(), 0.5, None)
+        .unwrap();
+    assert_eq!(mixed.weights(), middle.weights());
+    let poses = graph
+        .evaluate_with_transforms(middle.pose().transforms())
+        .unwrap();
+    let meshes = a.deform(&poses, mixed.weights()).unwrap();
+    let evaluated = graph
+        .evaluate_with_overrides(middle.pose().transforms(), meshes)
+        .unwrap();
+    assert_eq!(
+        evaluated.node(a.primitive(1, 0).unwrap()).unwrap().bounds,
+        Some(gpui_3d::Aabb::new([12., 1., 0.], [14.5, 4.75, 0.]).unwrap())
+    );
     let sample_b = std::thread::spawn(move || bound_b.sample(Duration::from_secs(2)).unwrap())
         .join()
         .unwrap();

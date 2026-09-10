@@ -87,6 +87,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 - [x] **Transform evaluation**: Immutable translation, XYZW quaternion rotation, and scale tracks; Step, Linear/shortest-arc SLERP, and cubic Hermite interpolation; absolute-time sampling, explicit base poses, nonmutating hierarchy overrides, and shared rendering/query snapshots.
 - [x] **Weight evaluation**: Runtime-sized signed weight tracks, absolute-time Step/Linear/CubicSpline sampling, per-second derivatives, immutable shared keys, allocation-free transactional output sampling, and explicit Morph/Skin composition.
+  - [x] **Weight layers**: Immutable node-indexed arrays, sparse masked overrides, reference-relative additive mixing, component-count validation, transactional overflow failures, and direct imported-sample deformation inputs.
 - [x] **Pose blending and masks**: Immutable stable-node local TRS collections, shortest-arc rotation blending, sparse ordered override layers, explicit per-node/default masks, validated affine outputs, transactional failures, and composition with absolute-time tracks and constraints.
 - [x] **Additive pose layers**: Explicit reference-relative translation, local shortest-arc rotation deltas, multiplicative signed scale, sparse node masks, retained base ordering, transactional validation, and absolute-time composition with hierarchy constraints.
 - [x] **Deformation**: CPU linear-blend skeletal skinning and morph targets from explicit pose/weight inputs, shared by rendering and queries.

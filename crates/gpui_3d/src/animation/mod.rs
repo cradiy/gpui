@@ -3,7 +3,7 @@
 mod weights;
 pub use weights::WeightTrack;
 mod pose;
-pub use pose::{Pose, PoseError, PoseMask};
+pub use pose::{Pose, PoseError, PoseMask, WeightPose, WeightPoseError};
 
 use crate::{AffineTransform, TransformError};
 use std::{fmt, sync::Arc, time::Duration};

@@ -1,3 +1,6 @@
+mod weights;
+pub use weights::{WeightPose, WeightPoseError};
+
 use super::{AnimationError, TransformPose, normalize, slerp};
 use crate::{AffineTransform, NodeHandle};
 use std::{collections::HashMap, fmt, sync::Arc};
@@ -325,8 +328,8 @@ impl Pose {
 }
 
 /// Immutable per-node blend weights with an explicit default. Weights are finite
-/// values in [0, 1]. A mask applies only to each node's local pose; parent motion
-/// still affects descendants. It does not expand through the scene hierarchy.
+/// values in [0, 1]. A mask applies only to each node's pose or weight array.
+/// Parent motion still affects descendants; masks do not expand through the hierarchy.
 #[derive(Clone, Debug)]
 pub struct PoseMask {
     default_weight: f32,

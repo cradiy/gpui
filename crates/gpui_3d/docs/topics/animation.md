@@ -310,6 +310,9 @@ The operations retain no playback history.
 
 ## Weight tracks
 
+Use [`WeightPose`](weight_layers.md) to combine sampled arrays with sparse
+override layers, reference-relative additive layers, and node masks.
+
 `WeightTrack` samples a runtime-sized array of weights from absolute timestamps.
 Keys use `Keyframe<Vec<f32>>`; every key has the same nonzero component count.
 Step holds the preceding value, Linear interpolates components, and CubicSpline

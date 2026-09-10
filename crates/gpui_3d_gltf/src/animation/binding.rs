@@ -1,7 +1,7 @@
 use super::AnimationClip;
 use crate::SceneInstance;
 use anyhow::{Context, Result, ensure};
-use gpui_3d::{NodeHandle, Pose};
+use gpui_3d::{NodeHandle, Pose, WeightPose};
 use std::{sync::Arc, time::Duration};
 
 /// Treatment of clip targets outside the selected scene instance.
@@ -24,12 +24,12 @@ pub struct BoundAnimation {
 #[derive(Clone, Debug, Default)]
 pub struct AnimationSample {
     pose: Pose,
-    weights: Vec<(NodeHandle, Vec<f32>)>,
+    weights: WeightPose,
 }
 
 impl AnimationSample {
     pub fn into_parts(self) -> (Pose, Vec<(NodeHandle, Vec<f32>)>) {
-        (self.pose, self.weights)
+        (self.pose, self.weights.into_weights())
     }
 
     pub fn pose(&self) -> &Pose {
@@ -39,6 +39,10 @@ impl AnimationSample {
     /// Destination glTF node groups, not renderable primitive children.
     /// Only animated weight targets are included; omitted weights use asset defaults.
     pub fn weights(&self) -> &[(NodeHandle, Vec<f32>)] {
+        self.weights.weights()
+    }
+
+    pub fn weight_pose(&self) -> &WeightPose {
         &self.weights
     }
 }
@@ -118,7 +122,7 @@ impl BoundAnimation {
         }
         Ok(AnimationSample {
             pose: Pose::new(locals)?,
-            weights,
+            weights: WeightPose::new(weights)?,
         })
     }
 }

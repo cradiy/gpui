@@ -42,6 +42,11 @@ defaults. `into_parts()` returns the owned pose and weight list for composition.
 The default sample is empty. Each call samples absolute time independently;
 failure returns no partial sample and leaves previous samples usable.
 
+`weight_pose()` exposes a core [`WeightPose`](../../gpui_3d/docs/topics/weight_layers.md)
+for masked override or reference-relative additive mixing. Supply a complete base
+for every layered target; sparse clip samples do not insert unanimated defaults.
+Pass the mixed collection's `weights()` into instance deformation.
+
 ```no_run
 use std::time::Duration;
 use gpui_3d::SceneGraph;

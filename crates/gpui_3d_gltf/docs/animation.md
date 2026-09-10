@@ -17,6 +17,9 @@ Sampling outside an individual channel retains its endpoint value. Looping,
 speed, offsets, blending, and clip selection belong to the caller. Distinct
 timestamps that collapse at nanosecond precision are rejected.
 
+[`AnimationPlayback`](playback.md) provides optional caller-advanced time controls
+for pause, seek, signed speed and looping without changing track data.
+
 ### Scene instances
 
 Match `NodeAnimation::node_index()` to `SceneNode::index` from the same document,

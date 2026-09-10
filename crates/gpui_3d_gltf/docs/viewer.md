@@ -5,10 +5,13 @@ The `viewer` example loads a local glTF or GLB asset into a GPUI viewport.
 ```sh
 cargo run -p gpui_3d_gltf --example viewer -- /path/to/model.glb
 cargo run -p gpui_3d_gltf --example viewer -- /path/to/model.gltf 1
+cargo run -p gpui_3d_gltf --example viewer -- /path/to/model.glb 0 2
 ```
 
 The optional second argument is a scene index. Without it, the file must declare
-a default scene. `--help` prints usage without opening a window.
+a default scene. A third argument selects one animation index. Without an animation
+index the viewer displays the authored initial pose. `--help` prints usage without
+opening a window.
 
 ## Navigation and inspection
 
@@ -27,10 +30,25 @@ geometry or continuously reset the camera.
 - Click a surface to see its original node, mesh, primitive and material indices,
   node/material names, base color, metallic/roughness factors and alpha settings.
 
-The example uses the renderer's default inspection lighting. It displays authored
-initial Morph/Skin deformation; it does not play animation clips or edit the asset.
+The example uses the renderer's default inspection lighting and does not edit the asset.
 Models use the same importer support and limits as [scene conversion](scenes.md).
 An unavailable 3D backend is reported in the window.
+
+## Animation
+
+A selected clip is converted on the loading worker and starts paused at its first
+authored key. **Play / Pause**, **Start**, **−0.25 s / +0.25 s**, **Once / Loop** and
+the rate button control [playback time](playback.md). Rates cycle through 0.5×, 1×,
+2× and reverse −1×. Seeking pauses playback. Losing window activation pauses it;
+resuming requires Play.
+
+The displayed position is clip-relative. Sampling adds the authored start time,
+evaluates all TRS and weight channels, applies Morph before Skin, and publishes one
+snapshot for meshes, bounds, cameras and picking. Node-track groups outside the
+selected scene are skipped and counted in the controls. Invalid sampling pauses
+playback, reports the error and retains the last successful frame and position.
+Animation frames are requested only while playing. Camera framing is explicit
+after initial loading; animation does not continuously reframe the model.
 
 ## Loading and resources
 

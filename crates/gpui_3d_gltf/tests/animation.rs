@@ -103,6 +103,113 @@ fn near<const N: usize>(actual: [f32; N], expected: [f32; N]) {
 }
 
 #[test]
+fn playback_maps_relative_controls_to_authored_times_in_both_directions() {
+    let mut fixture = Fixture::new();
+    let input = fixture.times(&[2., 4.]);
+    let output = fixture.floats("VEC3", &[0., 0., 0., 4., 0., 0.]);
+    fixture.channel(1, "translation", input, output, "LINEAR");
+    let clip = fixture
+        .prepare()
+        .unwrap()
+        .animation(0, AnimationOptions::default())
+        .unwrap();
+    let mut playback = gpui_3d_gltf::AnimationPlayback::new(&clip);
+    assert_eq!(playback.time(), Duration::from_secs(2));
+    assert!(!playback.advance(Duration::from_secs(9)).unwrap());
+    playback.play();
+    playback.advance(Duration::from_millis(500)).unwrap();
+    near(
+        clip.nodes()[0]
+            .transform()
+            .unwrap()
+            .sample(playback.time())
+            .unwrap()
+            .translation,
+        [1., 0., 0.],
+    );
+    playback.set_rate(2.).unwrap();
+    playback.advance(Duration::from_millis(250)).unwrap();
+    assert_eq!(playback.position(), Duration::from_secs(1));
+    let independent = playback.clone();
+    playback.seek(Duration::MAX);
+    assert_eq!(playback.time(), clip.end());
+    assert!(!playback.is_playing());
+    assert_eq!(independent.position(), Duration::from_secs(1));
+    playback.play();
+    assert_eq!(playback.position(), Duration::ZERO);
+    playback.advance(Duration::from_secs(5)).unwrap();
+    assert_eq!(playback.time(), clip.end());
+    assert!(!playback.is_playing());
+    playback.set_rate(-1.).unwrap();
+    playback.set_looping(true);
+    playback.play();
+    playback.advance(Duration::from_millis(2500)).unwrap();
+    assert_eq!(playback.position(), Duration::from_millis(1500));
+    playback.set_looping(false);
+    playback.advance(Duration::from_secs(2)).unwrap();
+    assert_eq!(playback.time(), clip.start());
+    assert!(!playback.is_playing());
+    playback.play();
+    assert_eq!(playback.time(), clip.end());
+    playback.set_rate(0.5).unwrap();
+    playback.seek(Duration::ZERO);
+    playback.set_looping(true);
+    playback.play();
+    playback.advance(Duration::from_secs(4)).unwrap();
+    assert_eq!(playback.time(), clip.start());
+    assert!(playback.is_playing());
+}
+
+#[test]
+fn playback_is_partition_independent_and_rejects_overflow_without_losing_position() {
+    let mut fixture = Fixture::new();
+    let input = fixture.times(&[2., 4.]);
+    let output = fixture.floats("VEC3", &[0., 0., 0., 4., 0., 0.]);
+    fixture.channel(1, "translation", input, output, "LINEAR");
+    let clip = fixture
+        .prepare()
+        .unwrap()
+        .animation(0, AnimationOptions::default())
+        .unwrap();
+    let mut split = gpui_3d_gltf::AnimationPlayback::new(&clip);
+    split.set_rate(0.3).unwrap();
+    split.play();
+    let mut whole = split.clone();
+    for _ in 0..10 {
+        split.advance(Duration::from_nanos(1)).unwrap();
+    }
+    whole.advance(Duration::from_nanos(10)).unwrap();
+    assert_eq!(split.position(), whole.position());
+    assert_eq!(split.position(), Duration::from_nanos(3));
+    for rate in [0., f64::NAN, f64::INFINITY] {
+        assert!(split.set_rate(rate).is_err());
+        assert_eq!(split.rate(), 0.3);
+    }
+    split.set_rate(f64::MAX).unwrap();
+    assert!(split.advance(Duration::from_secs(2)).is_err());
+    assert_eq!(split.position(), Duration::from_nanos(3));
+    assert!(split.is_playing());
+    split.pause();
+    assert!(!split.advance(Duration::MAX).unwrap());
+
+    let mut single = Fixture::new();
+    let input = single.times(&[7.]);
+    let output = single.floats("VEC3", &[1., 2., 3.]);
+    single.channel(1, "translation", input, output, "STEP");
+    let clip = single
+        .prepare()
+        .unwrap()
+        .animation(0, AnimationOptions::default())
+        .unwrap();
+    let mut playback = gpui_3d_gltf::AnimationPlayback::new(&clip);
+    playback.set_looping(true);
+    playback.play();
+    assert!(!playback.is_playing());
+    assert!(!playback.advance(Duration::MAX).unwrap());
+    assert_eq!(playback.time(), Duration::from_secs(7));
+}
+
+#[test]
 fn transform_clips_preserve_base_channels_and_independent_instance_random_access() {
     let mut fixture = Fixture::new();
     let input = fixture.times(&[1., 3.]);

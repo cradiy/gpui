@@ -7,6 +7,7 @@ use std::{collections::HashMap, fmt, sync::Arc};
 pub enum PoseError {
     DuplicateNode(NodeHandle),
     MissingNode(NodeHandle),
+    MissingReference(NodeHandle),
     /// `None` identifies a global or default weight; `Some` identifies a mask entry.
     InvalidWeight {
         node: Option<NodeHandle>,
@@ -21,6 +22,7 @@ impl fmt::Display for PoseError {
         match self {
             Self::DuplicateNode(node) => write!(f, "duplicate pose node {node:?}"),
             Self::MissingNode(node) => write!(f, "node {node:?} has no base pose"),
+            Self::MissingReference(node) => write!(f, "node {node:?} has no reference pose"),
             Self::InvalidWeight { node } => write!(
                 f,
                 "pose weight for {node:?} must be finite and between zero and one"
@@ -66,12 +68,97 @@ impl TransformPose {
         };
         let result = Self {
             translation: lerp(self.translation, target.translation),
-            rotation: normalize(slerp(self.rotation, target.rotation, weight)?)?.map(|v| v as f32),
+            rotation: normalize(slerp(
+                self.rotation.map(f64::from),
+                target.rotation.map(f64::from),
+                weight,
+            )?)?
+            .map(|v| v as f32),
             scale: lerp(self.scale, target.scale),
         };
         result.affine().map_err(AnimationError::InvalidTransform)?;
         Ok(result)
     }
+
+    /// Applies the change from `reference` to `sample` at a finite weight in [0, 1].
+    /// Translation differences use parent coordinates; the shortest-arc relative
+    /// rotation is right-multiplied onto this rotation. Scale multiplies by the
+    /// weighted componentwise sample/reference ratio. All inputs and the result
+    /// must be invertible, including at zero weight.
+    pub fn additive(
+        self,
+        sample: Self,
+        reference: Self,
+        weight: f32,
+    ) -> Result<Self, AnimationError> {
+        if !valid_weight(weight) {
+            return Err(AnimationError::InvalidBlendWeight);
+        }
+        self.additive_at(sample, reference, f64::from(weight))
+    }
+
+    fn additive_at(
+        self,
+        sample: Self,
+        reference: Self,
+        weight: f64,
+    ) -> Result<Self, AnimationError> {
+        for pose in [self, sample, reference] {
+            pose.affine().map_err(AnimationError::InvalidTransform)?;
+        }
+        if weight == 0. || sample == reference {
+            return Ok(self);
+        }
+        if weight == 1. && self == reference {
+            return Ok(sample);
+        }
+        let reference_rotation = normalize(reference.rotation.map(f64::from))?;
+        let inverse_reference = [
+            -reference_rotation[0],
+            -reference_rotation[1],
+            -reference_rotation[2],
+            reference_rotation[3],
+        ];
+        let delta = multiply_rotation(
+            inverse_reference,
+            normalize(sample.rotation.map(f64::from))?,
+        );
+        let rotation = multiply_rotation(
+            normalize(self.rotation.map(f64::from))?,
+            slerp([0., 0., 0., 1.], delta, weight)?,
+        );
+        let result = Self {
+            translation: std::array::from_fn(|i| {
+                let mut terms = [
+                    f64::from(self.translation[i]),
+                    -weight * f64::from(reference.translation[i]),
+                    weight * f64::from(sample.translation[i]),
+                ];
+                terms.sort_by(|a, b| b.abs().total_cmp(&a.abs()));
+                terms.into_iter().sum::<f64>() as f32
+            }),
+            rotation: normalize(rotation)?.map(|v| v as f32),
+            scale: std::array::from_fn(|i| {
+                (f64::from(self.scale[i])
+                    * ((1. - weight)
+                        + weight * (f64::from(sample.scale[i]) / f64::from(reference.scale[i]))))
+                    as f32
+            }),
+        };
+        result.affine().map_err(AnimationError::InvalidTransform)?;
+        Ok(result)
+    }
+}
+
+fn multiply_rotation(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    let [x, y, z, w] = a;
+    let [a, b, c, d] = b;
+    [
+        w * a + x * d + y * c - z * b,
+        w * b - x * c + y * d + z * a,
+        w * c + x * b - y * a + z * d,
+        w * d - x * a - y * b - z * c,
+    ]
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -145,6 +232,45 @@ impl Pose {
         weight: f32,
         mask: Option<&PoseMask>,
     ) -> Result<Self, PoseError> {
+        self.validate_layer(target, weight, mask)?;
+        self.apply_layer(target, weight, mask, |base, target, effective| {
+            base.blend_at(target.pose, effective)
+        })
+    }
+
+    /// Adds a sparse sample relative to explicit reference poses. Sample nodes
+    /// must exist in both this base and `reference`, even at zero weight. Extra
+    /// reference nodes are ignored. Masks use the same local-node rules as `blend`.
+    /// The output retains the base's nodes and order; failures leave all inputs
+    /// unchanged. See `TransformPose::additive` for the TRS composition convention.
+    pub fn additive(
+        &self,
+        sample: &Self,
+        reference: &Self,
+        weight: f32,
+        mask: Option<&PoseMask>,
+    ) -> Result<Self, PoseError> {
+        self.validate_layer(sample, weight, mask)?;
+        for entry in &sample.0.entries {
+            if !reference.0.index.contains_key(&entry.node) {
+                return Err(PoseError::MissingReference(entry.node));
+            }
+        }
+        self.apply_layer(sample, weight, mask, |base, sample, effective| {
+            base.additive_at(
+                sample.pose,
+                reference.0.entries[reference.0.index[&sample.node]].pose,
+                effective,
+            )
+        })
+    }
+
+    fn validate_layer(
+        &self,
+        target: &Self,
+        weight: f32,
+        mask: Option<&PoseMask>,
+    ) -> Result<(), PoseError> {
         if !valid_weight(weight) {
             return Err(PoseError::InvalidWeight { node: None });
         }
@@ -160,6 +286,16 @@ impl Pose {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn apply_layer(
+        &self,
+        target: &Self,
+        weight: f32,
+        mask: Option<&PoseMask>,
+        apply: impl Fn(TransformPose, &Entry, f64) -> Result<TransformPose, AnimationError>,
+    ) -> Result<Self, PoseError> {
         if weight == 0. || target.is_empty() {
             return Ok(self.clone());
         }
@@ -168,10 +304,8 @@ impl Pose {
             let entry = &mut entries[self.0.index[&target.node]];
             let effective =
                 f64::from(weight) * f64::from(mask.map_or(1., |mask| mask.weight(target.node)));
-            entry.pose = entry
-                .pose
-                .blend_at(target.pose, effective)
-                .map_err(|source| PoseError::InvalidPose {
+            entry.pose =
+                apply(entry.pose, target, effective).map_err(|source| PoseError::InvalidPose {
                     node: entry.node,
                     source,
                 })?;

@@ -1142,6 +1142,58 @@ then pass `mixed.transforms()` to `evaluate_with_transforms` or
 and skinning. Clip selection, per-clip timing, automatic subtree masks, and
 animation-state machines remain caller policy.
 
+### Additive poses
+
+`TransformPose::additive(sample, reference, weight)` applies a reference-relative
+change to the current local pose. The weight must be finite and within `[0, 1]`.
+For base `B`, sample `S`, reference `R`, and weight `w`:
+
+| Channel | Composition |
+| --- | --- |
+| Translation | `B + w * (S - R)`, in the parent's coordinate system |
+| Rotation | `B * slerp(identity, inverse(R) * S, w)`, with normalized XYZW quaternions and the shortest arc |
+| Scale | `B * ((1 - w) + w * (S / R))`, componentwise |
+
+The rotation delta acts in the base rotation's local frame. Translation is not
+rotated or scaled by the base. This is TRS channel composition, not full affine
+delta multiplication. Negative scales are supported, but a weighted scale ratio
+crossing zero returns `AnimationError::InvalidTransform`. All input and output
+poses must be invertible and representable, even at zero weight. Zero weight or
+identical sample/reference poses retain the exact base representation. Full
+weight with an identical base/reference retains the exact sample representation.
+
+`base.additive(sample, reference, weight, mask)` applies this operation to sparse
+node poses. Every sample node must exist in both the base and the reference;
+missing references return `PoseError::MissingReference`, including when global
+or mask weights are zero. Extra reference nodes are ignored. Mask weights and
+node validation follow `Pose::blend`; there is no implicit bind or identity pose.
+The output retains the base's node set and order, and failures leave all inputs
+unchanged.
+
+```rust
+use gpui_3d::{Node, Pose, PoseMask, SceneGraph, TransformPose};
+
+let mut graph = SceneGraph::new();
+let node = graph.insert(None, Node::new())?;
+let local = TransformPose { translation: [0., 1., 0.], ..Default::default() };
+let base = Pose::new([(node, local)])?;
+let reference = Pose::new([(node, TransformPose::default())])?;
+let sample = Pose::new([(node, TransformPose {
+    translation: [0., 0.2, 0.],
+    ..Default::default()
+})])?;
+let mask = PoseMask::new(0., [(node, 1.)])?;
+let mixed = base.additive(&sample, &reference, 0.5, Some(&mask))?;
+let evaluated = graph.evaluate_with_transforms(mixed.transforms())?;
+# let _ = evaluated;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Additive and override layers can be combined explicitly. Layer order matters,
+particularly for rotations. Keep reference poses explicit, sample tracks at the
+desired absolute time, apply layers, then evaluate constraints and world poses.
+The operations retain no playback history.
+
 ### Weight tracks
 
 `WeightTrack` samples a runtime-sized array of weights from absolute timestamps.

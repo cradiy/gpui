@@ -274,7 +274,11 @@ impl RotationTrack {
     pub fn sample(&self, time: Duration) -> Result<[f32; 4], AnimationError> {
         let (left, right, t, seconds) = self.0.segment(time);
         let value = if left != right && self.0.interpolation == Interpolation::Linear {
-            slerp(self.0.keys[left].value, self.0.keys[right].value, t)?
+            slerp(
+                self.0.keys[left].value.map(f64::from),
+                self.0.keys[right].value.map(f64::from),
+                t,
+            )?
         } else {
             self.0.components(left, right, t, seconds)
         };
@@ -282,9 +286,9 @@ impl RotationTrack {
     }
 }
 
-fn slerp(a: [f32; 4], b: [f32; 4], t: f64) -> Result<[f64; 4], AnimationError> {
-    let a = normalize(a.map(f64::from))?;
-    let mut b = normalize(b.map(f64::from))?;
+fn slerp(a: [f64; 4], b: [f64; 4], t: f64) -> Result<[f64; 4], AnimationError> {
+    let a = normalize(a)?;
+    let mut b = normalize(b)?;
     let mut dot = a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>();
     if dot < 0. {
         b = b.map(|v| -v);

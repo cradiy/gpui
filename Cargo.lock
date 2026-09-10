@@ -3014,6 +3014,7 @@ dependencies = [
  "gltf",
  "gpui",
  "gpui_3d",
+ "gpui_platform",
  "image",
  "indexmap",
  "parking_lot",

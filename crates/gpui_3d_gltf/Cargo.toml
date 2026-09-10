@@ -19,6 +19,7 @@ sha2.workspace = true
 image.workspace = true
 
 [dev-dependencies]
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 tempfile.workspace = true
 url.workspace = true
 

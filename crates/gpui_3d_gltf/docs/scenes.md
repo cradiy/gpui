@@ -1,5 +1,8 @@
 # Scenes
 
+The [model viewer](viewer.md) provides local loading, camera controls and source
+node/material inspection in a GPUI window.
+
 `PreparedDocument::scene(index, options)` converts a selected mesh scene
 into a `SceneDefinition`. `None` selects the document's declared default scene;
 without a default, pass an explicit index. An absent or out-of-range selection

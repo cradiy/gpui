@@ -163,6 +163,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Decoded image retention**: Content/MIME-keyed PNG/JPEG pixels, shared byte/entry LRU limits, per-call image admission and aggregate budgets on hits, worker transfer, and consumer-preserving release without retaining encoded buffers.
   - [x] **Bounded load admission**: Shared FIFO queues with independent active/waiting limits, lazy pipeline construction, typed saturation errors, cancellation-safe permit handoff, load-slot composition, and caller-owned execution.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.
+  - [x] **Local viewport example**: Background glTF/GLB loading, bounded queue and decoded-image reuse, cancel/reload with retained successful models, actual-viewport framing, Orbit and authored cameras with aspect fitting, and source node/material inspection.
 - [ ] **Animation import and playback**: File-format clips, playback state, looping, pause, and seeking feeding core pose, transform, and deformation inputs.
 - [ ] **Material presets**: Matte, metal, plastic, and emissive configurations built on core material parameters.
 - [ ] **3D annotations**: GPUI label widgets built on projection and depth queries, with configurable visibility and edge behavior.

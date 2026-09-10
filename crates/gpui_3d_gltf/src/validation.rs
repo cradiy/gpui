@@ -50,6 +50,29 @@ pub(crate) fn schema(document: &gltf::Document) -> Result<()> {
     if let Some((path, error)) = failure {
         anyhow::bail!("invalid glTF: {path}: {error}");
     }
+    for (index, animation) in root.animations.iter().enumerate() {
+        for (channel_index, channel) in animation.channels.iter().enumerate() {
+            channel.target.validate(
+                root,
+                || {
+                    Path::new()
+                        .field("animations")
+                        .index(index)
+                        .field("channels")
+                        .index(channel_index)
+                        .field("target")
+                },
+                &mut |path, error| {
+                    if failure.is_none() {
+                        failure = Some((path(), error));
+                    }
+                },
+            );
+        }
+    }
+    if let Some((path, error)) = failure {
+        anyhow::bail!("invalid glTF: {path}: {error}");
+    }
     for (index, camera) in root.cameras.iter().enumerate() {
         use gltf::json::camera::Type;
         let valid = match camera.type_.unwrap() {

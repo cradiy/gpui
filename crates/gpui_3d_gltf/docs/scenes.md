@@ -95,8 +95,9 @@ errors. Traversal is iterative. Different scenes may reference the same node.
 
 Skins and morph targets/weights are not converted and return errors
 when encountered. Animation clips are not sampled: ordinary transform-animated
-nodes use their declared base transforms. Required unsupported extensions are
-rejected; optional unknown extensions retain only their core glTF fallback.
+nodes use their declared base transforms. `PreparedDocument::animation` converts
+tracks separately for explicit instance-pose evaluation. Required unsupported
+extensions are rejected; optional unknown extensions retain only their core glTF fallback.
 Scene assets do not own animation playback, asset catalogs, file watching, loading
 queues or image/GPU cache policies.
 

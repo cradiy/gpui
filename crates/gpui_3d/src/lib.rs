@@ -49,7 +49,7 @@ pub use scene::{
     ConstraintStatus, EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ReparentMode, Scene,
     SceneError, SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode, TransformConstraint,
 };
-pub use spatial::{Hit, PickBehavior};
+pub use spatial::{Hit, PickBehavior, QueryObject};
 
 pub use gpui::AlphaMode3d as AlphaMode;
 pub use gpui::ElementId as ObjectId;

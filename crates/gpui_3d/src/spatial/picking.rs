@@ -17,6 +17,19 @@ pub enum PickBehavior {
     Ignore,
 }
 
+/// Borrowed object identity passed to a scene query's candidate filter.
+#[derive(Clone, Copy, Debug)]
+pub struct QueryObject<'a> {
+    /// Index in this scene's flattened list, not a persistent identity.
+    pub object_index: usize,
+    /// Graph identity, absent for objects constructed directly in a flat scene.
+    pub node: Option<crate::NodeHandle>,
+    /// Application identity; unnamed objects have no ID.
+    pub object_id: Option<&'a ObjectId>,
+    /// Authored picking behavior, which still applies to accepted candidates.
+    pub pick_behavior: PickBehavior,
+}
+
 pub(crate) enum PickSurface {
     Absent,
     Solid,
@@ -31,19 +44,21 @@ pub(crate) struct PickSnapshot {
 
 impl PickSnapshot {
     pub fn pick(&self, position: Point<Pixels>) -> Option<Hit> {
-        self.scene
-            .pick_filtered(self.bounds, position, |index, uv| {
-                match &self.surfaces[index] {
-                    PickSurface::Absent => None,
-                    PickSurface::Solid => Some(1.),
-                    PickSurface::Image(image) => {
-                        let size = image.size(0);
-                        (size.width.0 > 0 && size.height.0 > 0 && image.as_bytes(0).is_some()).then(
-                            || image_alpha(image, uv, self.scene.objects[index].material.sampling),
-                        )
-                    }
+        self.scene.pick_query(
+            self.bounds,
+            position,
+            |_| true,
+            |index, uv| match &self.surfaces[index] {
+                PickSurface::Absent => None,
+                PickSurface::Solid => Some(1.),
+                PickSurface::Image(image) => {
+                    let size = image.size(0);
+                    (size.width.0 > 0 && size.height.0 > 0 && image.as_bytes(0).is_some()).then(
+                        || image_alpha(image, uv, self.scene.objects[index].material.sampling),
+                    )
                 }
-            })
+            },
+        )
     }
 }
 
@@ -95,7 +110,8 @@ fn image_alpha(image: &RenderImage, uv: [f32; 2], sampling: crate::TextureSampli
     )
 }
 
-/// The nearest triangle intersection within the camera's clip range.
+/// The nearest eligible triangle intersection. Screen picking applies the
+/// camera's clip range; world-ray queries do not.
 #[derive(Clone, Debug)]
 pub struct Hit {
     /// Graph identity, or `None` for an object built directly in a flat scene.
@@ -127,19 +143,47 @@ impl Scene {
     /// ancestor clipping, and effect deformation are not sampled by this query.
     /// Viewport callbacks also sample prepared image alpha and use GPUI hitbox routing.
     pub fn pick(&self, bounds: Bounds<Pixels>, position: Point<Pixels>) -> Option<Hit> {
-        self.pick_filtered(bounds, position, |_, _| Some(1.))
+        self.pick_where(bounds, position, |_| true)
     }
 
     /// Geometric world-ray query, independent of the scene camera and its clip range.
     /// Respects material alpha and picking behavior, but does not resolve image alpha.
     pub fn raycast(&self, ray: crate::Ray) -> Option<Hit> {
-        self.trace(ray, |_| true, |_, _| Some(1.))
+        self.raycast_where(ray, |_| true)
     }
 
-    fn pick_filtered(
+    /// Screen picking restricted to candidates accepted by `filter`.
+    /// Rejected objects neither return hits nor occlude accepted objects. Accepted
+    /// objects retain their authored picking behavior and constant-alpha rules.
+    /// Filtering does not alter rendering, scene identity, or cached spatial data.
+    /// The predicate runs at most once per visited BVH candidate, in unspecified
+    /// order; it is not an enumeration of every scene object. Texture alpha is not
+    /// resolved. Viewport bounds and camera clipping match [`Scene::pick`].
+    pub fn pick_where(
         &self,
         bounds: Bounds<Pixels>,
         position: Point<Pixels>,
+        filter: impl FnMut(QueryObject<'_>) -> bool,
+    ) -> Option<Hit> {
+        self.pick_query(bounds, position, filter, |_, _| Some(1.))
+    }
+
+    /// World-ray query restricted by object identity or application policy.
+    /// Filtering has the same candidate and occlusion semantics as
+    /// [`Scene::pick_where`], without viewport or camera clipping.
+    pub fn raycast_where(
+        &self,
+        ray: crate::Ray,
+        filter: impl FnMut(QueryObject<'_>) -> bool,
+    ) -> Option<Hit> {
+        self.trace(ray, |_| true, |_, _| Some(1.), filter)
+    }
+
+    fn pick_query(
+        &self,
+        bounds: Bounds<Pixels>,
+        position: Point<Pixels>,
+        filter: impl FnMut(QueryObject<'_>) -> bool,
         alpha: impl Fn(usize, [f32; 2]) -> Option<f32>,
     ) -> Option<Hit> {
         let width = f32::from(bounds.size.width);
@@ -166,6 +210,7 @@ impl Scene {
                 depth >= camera.near && depth < camera.far
             },
             alpha,
+            filter,
         )
     }
 
@@ -174,12 +219,25 @@ impl Scene {
         ray: crate::Ray,
         within: impl Fn([f32; 3]) -> bool,
         alpha: impl Fn(usize, [f32; 2]) -> Option<f32>,
+        mut filter: impl FnMut(QueryObject<'_>) -> bool,
     ) -> Option<Hit> {
         self.trace_with(
             ray,
             within,
             alpha,
-            |visit| self.visit_objects(ray, visit),
+            |visit| {
+                self.visit_objects(ray, |object_index| {
+                    let object = &self.objects[object_index];
+                    if filter(QueryObject {
+                        object_index,
+                        node: object.node,
+                        object_id: object.id.as_ref(),
+                        pick_behavior: object.pick_behavior,
+                    }) {
+                        visit(object_index);
+                    }
+                });
+            },
             |mesh, model, ray, visit| mesh.visit_triangles(model, ray, visit),
         )
     }
@@ -473,7 +531,7 @@ mod tests {
                                     }
                                 },
                             );
-                            let actual = scene.trace(ray, within, alpha);
+                            let actual = scene.trace(ray, within, alpha, |_| true);
                             hits += usize::from(actual.is_some());
                             same_hit(actual, expected);
                         }

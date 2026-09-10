@@ -443,6 +443,40 @@ while respecting mesh geometry, constant material alpha, and picking behavior.
 It does not resolve images or sample image alpha. Query distance is measured from
 the ray origin.
 
+`Scene::pick_where` and `Scene::raycast_where` accept a per-query predicate over
+`QueryObject`. Its borrowed application ID, graph node handle, scene-local index,
+and authored picking behavior let the caller filter by an object set or external
+metadata without changing scene visibility or rebuilding the spatial index.
+
+```rust
+use gpui::rgb;
+use gpui_3d::{Material, Mesh, Object, ObjectId, Ray, Scene};
+use std::collections::HashSet;
+
+let scene = Scene::new()
+    .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))).id("surface"));
+let allowed = HashSet::from([ObjectId::from("surface")]);
+let ray = Ray::new([0., 0., 6.], [0., 0., -1.])?;
+let hit = scene.raycast_where(ray, |object| {
+    object.object_id.is_some_and(|id| allowed.contains(id))
+});
+assert!(hit.is_some());
+# Ok::<(), gpui_3d::RayError>(())
+```
+
+Rejected objects neither return hits nor occlude this query. Accepted candidates
+still honor `PickBehavior` and constant material alpha; accepting an `Ignore`
+object does not make it selectable. Use graph handles or application IDs for
+persistent filters because flattened indices can change between evaluated
+snapshots. Hidden graph nodes are absent from the scene query.
+
+The predicate runs at most once per visited BVH candidate, before triangle
+traversal, in unspecified order. It is not called for every scene object and does
+not report occlusion visibility. Screen queries retain viewport and camera clip
+checks; world rays remain independent of the camera. Neither filtered public
+query resolves image alpha or resource readiness; prepared viewport callbacks
+retain their image-alpha sampling behavior.
+
 Mesh queries use a CPU bounding-volume hierarchy (BVH) built lazily on the first
 query. `mesh.prepare_spatial_index()` builds it synchronously in advance, without
 a window or GPU; a worker can prepare a mesh clone before interactive use.

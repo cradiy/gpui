@@ -45,6 +45,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Camera extensions**: Orthographic projection, explicit up vectors, public view/projection matrices, viewport rays, world-to-screen projection, and framing from object bounds.
 - [x] **Bounds projection and frustum queries**: Reusable camera clip-volume snapshots, conservative world-AABB candidates, clipped screen rectangles across camera planes, viewport offsets and lens shifts, and outward-rounded pixel extents without occlusion claims.
 - [x] **World-ray queries**: Normalized arbitrary rays with camera-independent geometric intersection and stable node identities.
+- [x] **Query filtering**: Per-query node/application identity predicates for screen picks and world rays, BVH candidate pruning before mesh traversal, explicit exclusion/occlusion semantics, and unchanged render state and retained snapshots.
 - [x] **Mesh query acceleration**: Shared lazy CPU BVHs, explicit preparation, conservative transformed bounds, and original triangle identities for picking and world rays.
 - [x] **Scene query acceleration**: Lazy object BVHs shared by scene clones and camera views of evaluated states, fresh indices after graph evaluation or object insertion, and preserved snapshot queries.
 - [x] **Spatial index refitting**: Explicit previous-snapshot preparation, shared partitions with independent changed bounds, stable hidden-node slots, current-order query identities, topology-change rebuilds, and CPU build/refit benchmarks.

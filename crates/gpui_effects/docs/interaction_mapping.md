@@ -16,7 +16,7 @@ let surface = subtree_lens(content, LensOptions::default())
 ## Supported stages
 
 `EffectStage::lens` and `EffectStage::deformation` supply inverse coordinate maps.
-`identity`, `blur` and `color_adjust` preserve target geometry. These stages can
+`identity`, `blur`, `bloom` and `color_adjust` preserve target geometry. These stages can
 be composed with `subtree_effect_chain`; pointer mapping runs through the chain
 in reverse order. Nested wrappers map outer coordinates before inner coordinates.
 

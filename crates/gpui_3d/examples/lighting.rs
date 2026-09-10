@@ -7,6 +7,7 @@ use gpui_3d::{
     Material, Mesh, Object, OrbitController, PbrMaterial, PunctualLight, Scene,
     SpecularEnvironment, SpecularPrefilter, viewport3d,
 };
+use gpui_effects::{BloomOptions, EffectStage, SubtreeColorOptions, subtree_effect_chain};
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc};
 
@@ -36,6 +37,8 @@ fn environment() -> EnvironmentMap {
 }
 
 struct Lighting {
+    bloom: bool,
+    grading: usize,
     kind: usize,
     fill: bool,
     environment: DiffuseEnvironment,
@@ -65,6 +68,8 @@ impl Lighting {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let map = environment();
         Self {
+            bloom: false,
+            grading: 0,
             kind: 0,
             fill: false,
             environment: DiffuseEnvironment::from_map(&map).unwrap(),
@@ -180,9 +185,38 @@ impl Lighting {
 }
 
 impl Render for Lighting {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let bounds = self.bounds.clone();
         let view_id = cx.entity_id();
+        let effects_supported = window.supports_subtree_effects();
+        let grading = match self.grading {
+            1 => SubtreeColorOptions {
+                saturation: 0.,
+                ..Default::default()
+            },
+            2 => SubtreeColorOptions {
+                saturation: 1.3,
+                contrast: 1.1,
+                brightness: 1.,
+            },
+            _ => SubtreeColorOptions::default(),
+        };
+        let viewport = subtree_effect_chain(
+            viewport3d("shadow-scene", self.scene()).size_full(),
+            [
+                EffectStage::bloom(BloomOptions {
+                    threshold: 0.7,
+                    soft_knee: 0.1,
+                    intensity: 1.4,
+                    radius: px(32.),
+                    downsample: 2,
+                })
+                .enabled(self.bloom),
+                EffectStage::color_adjust(grading).enabled(self.grading != 0),
+            ],
+        )
+        .map_interaction(true)
+        .enabled(effects_supported);
         div()
             .size_full()
             .p_6()
@@ -237,6 +271,8 @@ impl Render for Lighting {
                         ("roughness", "Roughness"),
                         ("cone", "Spot cone"),
                         ("range", "Light range"),
+                        ("bloom", if self.bloom { "Bloom on" } else { "Bloom off" }),
+                        ("grading", ["Color: Natural", "Color: Monochrome", "Color: Vivid"][self.grading]),
                         ("reset", "Reset view"),
                     ]
                     .into_iter()
@@ -252,6 +288,8 @@ impl Render for Lighting {
                             .child(label)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 match id {
+                                    "bloom" => this.bloom = !this.bloom,
+                                    "grading" => this.grading = (this.grading + 1) % 3,
                                     "source" => this.kind = (this.kind+1)%3,
                                     "fill" => this.fill = !this.fill,
                                     "environment" => this.environment_on = !this.environment_on,
@@ -356,7 +394,7 @@ impl Render for Lighting {
                             cx.notify();
                         }
                     }))
-                    .child(viewport3d("shadow-scene", self.scene()).size_full())
+                    .child(viewport)
                     .child(
                         canvas(
                             move |rect, _, cx| {
@@ -371,6 +409,9 @@ impl Render for Lighting {
                         .size_full(),
                     ),
             )
+            .when(!effects_supported, |root| root.child(
+                div().text_color(rgb(0xa8bdd6)).child("Subtree effects are unavailable on this renderer."),
+            ))
             .child(div().text_color(rgb(0xa8bdd6)).child(format!("{} · Fill {} · Environment {} · Cone {:.0}° · Range {:.0} · Shadows available for directional light",
                 ["Directional", "Point", "Spot"][self.kind], self.fill, self.environment_on, self.cone.to_degrees(), self.range)))
             .child(div().text_color(rgb(0xa8bdd6)).child(format!(

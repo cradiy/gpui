@@ -2195,6 +2195,52 @@ paint order. Ancestor opacity applies once to the final image, and ancestor
 clipping still applies. Mesh edges default to four samples when supported,
 otherwise one. Captured viewports can be nested in other subtree effects.
 
+### Viewport effects
+
+Wrap a viewport with `gpui_effects::subtree_effect_chain` to apply Bloom and color
+adjustment to its composed image. The wrapper shares the viewport's layout;
+effect padding expands capture space without changing its camera aspect ratio
+or pointer coordinates. Put toolbars outside the wrapper to leave them unaffected.
+
+```no_run
+use gpui::{prelude::*, px};
+use gpui_3d::{Scene, viewport3d};
+use gpui_effects::{BloomOptions, EffectStage, SubtreeColorOptions, subtree_effect_chain};
+
+let view = subtree_effect_chain(
+    viewport3d("scene", Scene::new()).size_full(),
+    [
+        EffectStage::bloom(BloomOptions {
+            threshold: 0.7,
+            radius: px(32.),
+            ..Default::default()
+        }),
+        EffectStage::color_adjust(SubtreeColorOptions {
+            saturation: 0.8,
+            ..Default::default()
+        }),
+    ],
+)
+.map_interaction(true);
+```
+
+Stages run in order: color adjustment after Bloom also changes the halo's color.
+Both stages preserve geometry and support identity pointer mapping; the halo does
+not create additional interactive surfaces. Ancestor clipping also clips the
+halo. Use stage-level `enabled(false)` to remove a pass, or disable the wrapper
+to paint the viewport directly. The wrapper does not request animation frames
+for these static stages.
+
+The input is the viewport's display-encoded image after scene exposure and tone
+mapping, including its environment background. These stages do not read the
+linear HDR, depth, normal, or object-ID outputs, and they do not change geometric
+picking. For HDR processing before display mapping or depth-dependent effects,
+use the headless GPU output textures in a same-device rendering pipeline.
+
+Check `window.supports_subtree_effects()` in addition to 3D support. On a backend
+without subtree effects, the wrapper paints its content directly. The `lighting`
+example exposes Bloom and Natural/Monochrome/Vivid color controls on the viewport.
+
 ### Raster quality
 
 `resolution_scale` sets mesh raster density relative to physical render-surface pixels;
@@ -2354,7 +2400,7 @@ Each example is an independent executable.
 | --- | --- |
 | `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, free/rig cameras, attached spot lights, transform tracks, vertex tapering, two-target morph blending, and two-joint skin bending with independent weights and playback controls. |
 | `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing, mipmaps, anisotropy, and alpha modes. |
-| `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution and soft edges. |
+| `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution, soft edges, Bloom, and color adjustment. |
 | `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |
 | `headless` | Window-free display/HDR/ID/depth/normal readback, PNG previews and object identity inspection. |
 

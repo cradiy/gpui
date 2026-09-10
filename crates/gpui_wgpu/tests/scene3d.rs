@@ -8,6 +8,87 @@ use std::{rc::Rc, sync::Arc};
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn viewport_bloom_and_grading_preserve_nested_clipping_and_group_opacity() {
+    let mut renderer =
+        WgpuOffscreenRenderer::new(size(DevicePixels(64), DevicePixels(64))).unwrap();
+    let captured = scene(layer(
+        bounds(8., 8., 48., 48.),
+        Scene::default(),
+        vec![mesh(0.5, 0xff8040ff, MeshTexture3d::None)],
+        1.,
+    ));
+    let mut outer = layer(bounds(0., 0., 64., 64.), captured, vec![], 1.);
+    outer.scene3d = None;
+    let bloom = gpui::SubtreeEffectPass {
+        shader: gpui_effects::subtree_identity_shader(),
+        uniforms: gpui::EffectUniforms::new()
+            .with_slot(0, [0.4, 0.1, 1.6, 0.])
+            .with_slot(1, [12., 0., 0., 0.]),
+        time: 0.,
+        images: Default::default(),
+        bloom: Some(gpui::SubtreeBloomPass {
+            extract: gpui_effects::bloom_extract_shader(),
+            blur: gpui_effects::bloom_blur_shader(),
+            composite: gpui_effects::bloom_composite_shader(),
+            downsample: 1,
+        }),
+        feedback: None,
+        distance_field: None,
+        particles: None,
+        particle_transition: None,
+    };
+    let grading = gpui::SubtreeEffectPass {
+        shader: gpui_effects::subtree_color_adjust_shader(),
+        uniforms: gpui::EffectUniforms::new().with_slot(0, [0., 1., 1., 0.]),
+        bloom: None,
+        ..bloom.clone()
+    };
+
+    for extent in [64, 80, 64] {
+        renderer.resize(size(DevicePixels(extent), DevicePixels(extent)));
+        let pixel = |image: &[u8], x: usize, y: usize| -> [u8; 4] {
+            image[(y * extent as usize + x) * 4..][..4]
+                .try_into()
+                .unwrap()
+        };
+        let original = renderer.render_rgba(&scene(outer.clone())).unwrap();
+        assert_eq!(pixel(&original, 13, 32)[3], 0);
+        assert!(pixel(&original, 32, 32)[0] > pixel(&original, 32, 32)[1]);
+
+        let mut processed = outer.clone();
+        processed.intermediate_effects = vec![bloom.clone(), grading.clone()].into();
+        let image = renderer.render_rgba(&scene(processed.clone())).unwrap();
+        for (x, y) in [(32, 32), (13, 32)] {
+            let p = pixel(&image, x, y);
+            assert!(p[3] > 0);
+            assert!(p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1);
+        }
+        assert_eq!(pixel(&image, 32, 32)[3], 255);
+        assert_eq!(
+            renderer.render_rgba(&scene(processed.clone())).unwrap(),
+            image
+        );
+
+        processed.composite.opacity = 0.5;
+        let faded = renderer.render_rgba(&scene(processed.clone())).unwrap();
+        for (x, y) in [(32, 32), (13, 32)] {
+            let full_alpha = u16::from(pixel(&image, x, y)[3]);
+            let faded_alpha = u16::from(pixel(&faded, x, y)[3]);
+            assert!((2 * faded_alpha).abs_diff(full_alpha) <= 2);
+        }
+        processed.composite.content_mask.bounds = bounds(0., 0., 32., 64.);
+        let clipped = renderer.render_rgba(&scene(processed)).unwrap();
+        assert_eq!(pixel(&clipped, 40, 32), [0; 4]);
+        assert_eq!(pixel(&clipped, 20, 32), pixel(&faded, 20, 32));
+        assert_eq!(
+            renderer.render_rgba(&scene(outer.clone())).unwrap(),
+            original
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn submitted_viewports_restore_pixels_and_invalidate_changed_frames_and_ui() {
     let mut renderer =
         WgpuOffscreenRenderer::new(size(DevicePixels(64), DevicePixels(64))).unwrap();

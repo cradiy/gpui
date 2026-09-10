@@ -2960,6 +2960,7 @@ dependencies = [
  "bevy_mikktspace",
  "criterion",
  "gpui",
+ "gpui_effects",
  "gpui_platform",
  "gpui_wgpu",
  "image",

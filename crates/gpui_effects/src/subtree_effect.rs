@@ -444,6 +444,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bloom_and_color_preserve_pointer_mapping_across_stage_toggles() {
+        use crate::{BloomOptions, SubtreeColorOptions};
+        use gpui::{PointerTransform, point, size};
+
+        for bloom in [false, true] {
+            for color in [false, true] {
+                for scale in [1., 1.5, 2.] {
+                    let effect = subtree_effect_chain(
+                        gpui::div(),
+                        [
+                            EffectStage::identity().pointer_transform(PointerTransform::new(
+                                |p, _, _| p - point(px(12.), px(8.)),
+                            )),
+                            EffectStage::bloom(BloomOptions::default()).enabled(bloom),
+                            EffectStage::color_adjust(SubtreeColorOptions {
+                                saturation: 0.,
+                                ..Default::default()
+                            })
+                            .enabled(color),
+                        ],
+                    )
+                    .map_interaction(true);
+                    let bounds = Bounds::new(point(px(40.), px(60.)), size(px(200.), px(120.)))
+                        .dilate(effect.padding);
+                    let mapping = effect.interaction_transform().unwrap();
+                    for p in [point(px(110.), px(95.)), point(px(330.), px(220.))] {
+                        assert_eq!(mapping.map(p, bounds, scale), p - point(px(12.), px(8.)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn pointer_mapping_reverses_only_enabled_stages() {
         use gpui::{PointerTransform, point, size};
         let translate = || {

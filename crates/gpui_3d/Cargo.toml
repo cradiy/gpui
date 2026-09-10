@@ -18,6 +18,7 @@ slotmap.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+gpui_effects.workspace = true
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 image.workspace = true
 uic = { path = "../../uic" }

@@ -91,11 +91,15 @@ fn main() -> Result<()> {
             std::array::from_fn(|i| maximum[i].max(pixel[i]))
         });
     println!("Maximum premultiplied linear RGB: {maximum:?}");
-    for object in result.objects() {
-        let count = ids.iter().filter(|id| **id == object.output_id).count();
+    let coverage = result.coverage()?;
+    for entry in coverage.objects() {
         println!(
-            "ID {}: {:?}, {} visible pixels",
-            object.output_id, object.id, count
+            "ID {}: {:?}, {} visible pixels ({:.2}%), bounds {:?}",
+            entry.object.output_id,
+            entry.object.id,
+            entry.pixels,
+            entry.screen_fraction * 100.,
+            entry.bounds
         );
     }
     let id_preview = image::RgbaImage::from_fn(800, 600, |x, y| {

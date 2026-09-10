@@ -1,5 +1,8 @@
 #![doc = include_str!("../../docs/headless.md")]
 
+mod coverage;
+pub use coverage::{CoverageError, FrameCoverage, ObjectCoverage};
+
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
 use anyhow::{Context as _, Result, bail, ensure};

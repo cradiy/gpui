@@ -119,6 +119,62 @@ but a zero ID when its center is outside the mesh. Use one color sample for
 matching pixel-center coverage. Equal-depth ID overlaps keep the first submitted
 surface; equal-depth blended color layers compose in submission order.
 
+### Object coverage
+
+`ReadFrame::coverage()` summarizes an available object-ID channel without further
+rendering, GPU submission, or readback. It scans the tightly packed image once
+and uses one record per mapped object: O(pixels + objects) time and O(objects)
+additional storage. Request `Scene3dChannels::OBJECT_ID` when rendering; missing
+IDs return `CoverageError::MissingObjectIds`, not an empty summary.
+
+```rust
+use gpui_3d::{CoverageError, ReadFrame};
+
+fn inspect(frame: &ReadFrame) -> Result<(), CoverageError> {
+    let coverage = frame.coverage()?;
+    let size = coverage.size();
+    let camera = coverage.camera();
+    let background = coverage.background_pixels();
+    for entry in coverage.objects() {
+        let identity = (entry.object.node, &entry.object.id);
+        let pixel_count = entry.pixels;
+        let fraction_of_frame = entry.screen_fraction;
+        let pixel_bounds = entry.bounds;
+    }
+    Ok(())
+}
+```
+
+`FrameCoverage` owns its summary and shares the immutable object mapping. It
+retains the frame's camera and physical dimensions, but no GPU resources or pixel
+buffers, and survives dropping or replacing the read frame. Callers associate
+their scene revision, task, and animation time with that output. Modifying the
+public CPU pixel data affects subsequent calls to `coverage()`, not earlier
+summaries. Malformed dimensions, pixel counts, or IDs outside the frame mapping
+return structured errors instead of partial statistics.
+
+`objects()` includes all mapped objects in frame order, even when their count is
+zero. `object(output_id)` returns `None` for background ID zero or unknown IDs;
+an existing object with zero samples remains distinguishable from a missing
+object. Graph nodes omitted from the evaluated scene have no output mapping.
+Retain node handles or application IDs when comparing different frames, rather
+than assuming numeric output IDs remain unchanged.
+
+Counts use the ID channel's nearest surviving surface at each pixel center.
+They are not alpha-weighted color contributions: a low-opacity `Blend` fragment
+can own a sample ahead of an opaque object. `Mask` cutouts and clip planes follow
+the rendered ID channel. Color MSAA and post-processing do not change these
+statistics. Background samples have ID zero, including environment pixels.
+
+`screen_fraction` is `pixels / (width * height)`, not the visible fraction of an
+object's full projected surface. The per-object counts plus background count
+equal the frame's `pixel_count()`. Pixel bounds have a top-left origin and
+exclusive right/bottom endpoints, enclose every matching sample, and may contain
+holes or samples belonging to other objects. Zero-count objects have no bounds.
+Zero coverage alone does not distinguish occlusion, clipping, discarded alpha,
+or subpixel geometry. These results describe this output's resolution, not
+continuous geometric visibility or a different camera view.
+
 ### Linear HDR color
 
 `LINEAR_COLOR` exports linear shaded radiance before exposure, tone mapping,

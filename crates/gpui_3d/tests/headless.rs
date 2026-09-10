@@ -1380,6 +1380,92 @@ fn image_sampler_controls_color_and_id_cutouts() -> anyhow::Result<()> {
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn frame_coverage_matches_occlusion_alpha_modes_and_output_resolution() -> anyhow::Result<()> {
+    use gpui::{Bounds, point, rgba, size};
+    use gpui_3d::{AlphaMode, Object, Projection, Scene, Scene3dChannels};
+
+    let mut renderer = HeadlessRenderer::new()?;
+    for extent in [16, 32] {
+        for mode in [AlphaMode::Opaque, AlphaMode::Mask, AlphaMode::Blend] {
+            let camera = Camera {
+                projection: Projection::Orthographic { vertical_size: 4. },
+                ..Default::default()
+            };
+            let scene = Scene::new()
+                .camera(camera)
+                .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))).id("back"))
+                .object(
+                    Object::new(
+                        Mesh::plane(),
+                        Material::color(rgba(0xffffff08))
+                            .alpha_cutoff(0.5)
+                            .alpha_mode(mode),
+                    )
+                    .id("front")
+                    .position([0., 0., 1.])
+                    .scale([0.5, 0.5, 1.]),
+                )
+                .object(
+                    Object::new(Mesh::plane(), Material::color(rgb(0xffffff)))
+                        .id("hidden")
+                        .position([0., 0., -1.]),
+                );
+            let output = renderer.render(
+                &scene,
+                Scene3dOutputConfig {
+                    size: [extent, extent],
+                    channels: Scene3dChannels::OBJECT_ID,
+                    color_samples: 1,
+                },
+            )?;
+            let mut pending = output.readback()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let read = loop {
+                if let Some(read) = pending.try_read()? {
+                    break read;
+                }
+                anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            };
+            let coverage = read.coverage()?;
+            drop(read);
+            drop(output);
+            let union = u64::from(extent / 4).pow(2);
+            let front = if mode == AlphaMode::Mask {
+                0
+            } else {
+                u64::from(extent / 8).pow(2)
+            };
+            assert_eq!(
+                coverage.background_pixels(),
+                u64::from(extent).pow(2) - union
+            );
+            assert_eq!(coverage.object(1).unwrap().pixels, union - front);
+            assert_eq!(coverage.object(2).unwrap().pixels, front);
+            assert_eq!(coverage.object(3).unwrap().pixels, 0);
+            assert_eq!(
+                coverage.object(1).unwrap().bounds,
+                Some(Bounds::new(
+                    point(extent * 3 / 8, extent * 3 / 8),
+                    size(extent / 4, extent / 4)
+                ))
+            );
+            assert_eq!(
+                coverage.object(2).unwrap().bounds,
+                (front != 0).then(|| Bounds::new(
+                    point(extent * 7 / 16, extent * 7 / 16),
+                    size(extent / 8, extent / 8)
+                ))
+            );
+            assert_eq!(coverage.object(3).unwrap().bounds, None);
+            assert_eq!(coverage.object(2).unwrap().object.id, Some("front".into()));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn rendered_ids_retain_node_identity_after_graph_edits() -> anyhow::Result<()> {
     let mut graph = SceneGraph::new();
     let node = graph.insert(

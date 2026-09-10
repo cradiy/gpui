@@ -65,10 +65,11 @@ impl TextureEffectConfig {
 
 /// Executes a reusable `EffectShader` directly on one, two, or four GPU textures.
 ///
-/// All inputs must belong to this context's device and contain submitted data on
-/// its queue. Rendering submits work without waiting for GPU completion or reading
-/// pixels back. Each result owns fresh storage and remains valid after subsequent
-/// calls or dropping the processor. No native window, atlas, or UI layout is used.
+/// All inputs and command encoders must belong to this context's device. `render`
+/// submits on its queue; `encode` appends work for caller-controlled submission.
+/// Neither waits for GPU completion or reads pixels back. Each result owns fresh
+/// storage and remains valid after subsequent calls or dropping the processor.
+/// No native window, atlas, or UI layout is used.
 pub struct WgpuTextureEffect {
     context: WgpuContext,
     config: TextureEffectConfig,
@@ -224,13 +225,59 @@ impl WgpuTextureEffect {
         &self.config
     }
 
+    /// Device and queue used by the processor and its caller-owned command encoders.
+    pub fn context(&self) -> &WgpuContext {
+        &self.context
+    }
+
     /// Renders complete level-zero inputs into a fresh single-sample 2D texture.
     /// Inputs may have different sizes. Color-space conversion is shader-owned;
     /// R32Float depth can be sampled without filterable-float device features.
     /// Integer IDs, depth/stencil formats, array textures and multisampled inputs
     /// are rejected. Uniform dimensions and time are caller-supplied physical units.
+    /// Input writes must already be submitted on this queue; use [`Self::encode`]
+    /// when an input is produced by work still held in a command encoder.
     pub fn render(
         &self,
+        inputs: &[&wgpu::Texture],
+        size: [u32; 2],
+        uniforms: EffectUniforms,
+        time: f32,
+    ) -> Result<wgpu::Texture> {
+        ensure!(!self.context.device_lost(), "texture effect device is lost");
+        let device = &self.context.device;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("gpui.texture_effect"),
+        });
+        let output = self.encode(&mut encoder, inputs, size, uniforms, time)?;
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let commands = encoder.finish();
+        if let Some(error) = gpui::block_on(scope.pop()) {
+            anyhow::bail!("texture effect command validation failed: {error}");
+        }
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        self.context.queue.submit(Some(commands));
+        if let Some(error) = gpui::block_on(scope.pop()) {
+            anyhow::bail!("texture effect submission failed: {error}");
+        }
+        Ok(output)
+    }
+
+    /// Appends one effect pass without finishing or submitting the caller's encoder.
+    /// Uses the same input, dimension and output contracts as [`Self::render`].
+    /// Inputs may be written by earlier passes in this encoder or by commands that
+    /// the caller submits first on the same queue. The returned texture can feed
+    /// later passes in this encoder; its pixels are not ready before submission.
+    ///
+    /// Dropping an unfinished encoder cancels its work. Metadata and input binding
+    /// validation occur before recording the pass. If encoding fails after recording
+    /// begins, discard the encoder; its earlier commands cannot be rolled back.
+    /// The caller owns finish/submission validation and resource ordering.
+    /// Encoder ownership cannot be inspected through WGPU's public API; supplying
+    /// a different device's encoder follows WGPU's validation-error behavior.
+    pub fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
         inputs: &[&wgpu::Texture],
         size: [u32; 2],
         uniforms: EffectUniforms,
@@ -356,9 +403,6 @@ impl WgpuTextureEffect {
             view_formats: &[],
         });
         let view = output.create_view(&Default::default());
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("gpui.texture_effect"),
-        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("gpui.texture_effect"),
@@ -381,14 +425,8 @@ impl WgpuTextureEffect {
             pass.set_bind_group(1, &inputs, &[]);
             pass.draw(0..4, 0..1);
         }
-        let commands = encoder.finish();
         if let Some(error) = gpui::block_on(scope.pop()) {
             anyhow::bail!("texture effect encoding failed: {error}");
-        }
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        self.context.queue.submit(Some(commands));
-        if let Some(error) = gpui::block_on(scope.pop()) {
-            anyhow::bail!("texture effect submission failed: {error}");
         }
         Ok(output)
     }

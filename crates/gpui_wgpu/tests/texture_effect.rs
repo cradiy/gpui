@@ -206,6 +206,77 @@ fn hdr_depth_processing_preserves_texels_alpha_and_owned_results() -> Result<()>
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn caller_encoding_preserves_pass_order_cancellation_and_parameter_isolation() -> Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let source = upload(
+        &context,
+        [3, 2],
+        wgpu::TextureFormat::Rgba32Float,
+        &[2., 0.5, 0.25, 0.5].repeat(6),
+    );
+    let shader = EffectShader::wgsl_image(
+        "fn effect(i: EffectInput, p: EffectParams) -> vec4<f32> { let c = sample_effect_image(i, i.uv); return vec4<f32>(c.rgb * p.slots[0].x, c.a); }",
+    );
+    let processor = WgpuTextureEffect::new(
+        context.clone(),
+        &shader,
+        TextureEffectConfig {
+            output_format: wgpu::TextureFormat::Rgba32Float,
+            ..Default::default()
+        },
+    )?;
+    let gain = |value| EffectUniforms::new().with_slot(0, [value, 0., 0., 0.]);
+    let first = processor.render(&[&source], [3, 2], gain(2.), 0.)?;
+    let expected = processor.render(&[&first], [3, 2], gain(0.25), 0.)?;
+
+    let mut encoder = processor
+        .context()
+        .device
+        .create_command_encoder(&Default::default());
+    let pending_first = processor.encode(&mut encoder, &[&source], [3, 2], gain(2.), 0.)?;
+    assert!(
+        processor
+            .encode(&mut encoder, &[], [3, 2], gain(3.), 0.)
+            .is_err()
+    );
+    assert!(
+        processor
+            .encode(&mut encoder, &[&source], [0, 2], gain(3.), 0.)
+            .is_err()
+    );
+    let pending_last = processor.encode(&mut encoder, &[&pending_first], [3, 2], gain(0.25), 0.)?;
+    for output in [&pending_first, &pending_last] {
+        for pixel in read(&context, output)? {
+            near(pixel, [0.; 4]);
+        }
+    }
+    context.queue.submit(Some(encoder.finish()));
+    let expected_pixels = read(&context, &expected)?;
+    assert_eq!(read(&context, &pending_last)?, expected_pixels);
+    for pixel in read(&context, &pending_first)? {
+        near(pixel, [4., 1., 0.5, 0.5]);
+    }
+
+    let mut abandoned = context.device.create_command_encoder(&Default::default());
+    let unsubmitted = processor.encode(&mut abandoned, &[&source], [3, 2], gain(8.), 0.)?;
+    drop(abandoned);
+    for pixel in read(&context, &unsubmitted)? {
+        near(pixel, [0.; 4]);
+    }
+    assert_eq!(read(&context, &pending_last)?, expected_pixels);
+
+    let mut earlier = context.device.create_command_encoder(&Default::default());
+    let mut later = context.device.create_command_encoder(&Default::default());
+    let intermediate = processor.encode(&mut earlier, &[&source], [3, 2], gain(2.), 0.)?;
+    let output = processor.encode(&mut later, &[&intermediate], [3, 2], gain(0.25), 0.)?;
+    drop((processor, source, intermediate));
+    context.queue.submit([earlier.finish(), later.finish()]);
+    assert_eq!(read(&context, &output)?, expected_pixels);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn invalid_gpu_inputs_fail_without_poisoning_the_processor() -> Result<()> {
     let context = WgpuContext::new_headless()?;
     let other = WgpuContext::new_headless()?;

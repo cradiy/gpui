@@ -70,7 +70,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Effect integration**: Compose Bloom and color grading through `gpui_effects`; define depth texture access and coordinate conventions for depth-dependent effects.
   - [x] **Display-space viewport effects**: Bloom and color adjustment in one subtree chain, identity pointer mapping, independent controls in the lighting example, and existing viewport layout/clipping semantics.
   - [x] **Depth coordinates**: Retained output-camera snapshots, linear-depth world reconstruction for perspective/orthographic projections and lens shifts, physical pixel-center queries, and direct GPU sampling conventions.
-  - [x] **GPU channel composition**: Direct one/two/four-texture effect processing, per-input alpha/filter contracts, owned HDR/data outputs, byte admission, device validation, depth fog and HDR display mapping without CPU readback.
+  - [x] **GPU channel composition**: Direct one/two/four-texture effect processing, caller-owned batch encoding, per-input alpha/filter contracts, owned HDR/data outputs, byte admission, device validation, depth fog and HDR display mapping without CPU readback.
 
 ## Phase 4: Animation and Dynamic Content
 

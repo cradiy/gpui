@@ -159,8 +159,10 @@ channel selection, and retained HDR frames survive later renders and resizing.
 
 `gpui_wgpu::WgpuTextureEffect` processes output textures with an `EffectShader`
 without CPU readback, UI capture, or atlas upload. Construct processors once and
-reuse them for successive frames. Each call submits on the supplied context's
-queue and returns a new owned texture; later renders cannot overwrite it.
+reuse them for successive frames. `render` submits one pass on the supplied
+context's queue. `encode` appends a pass to a caller-owned command encoder, so
+multiple effects can share one submission. Both return new owned textures;
+later calls cannot overwrite an earlier output.
 
 ```no_run
 use gpui::{EffectTextureOptions, EffectUniforms};
@@ -177,7 +179,7 @@ let fog = WgpuTextureEffect::new(context.clone(), &depth_fog_shader(), TextureEf
     ],
     ..Default::default()
 })?;
-let display = WgpuTextureEffect::new(context, &hdr_tone_map_shader(), TextureEffectConfig {
+let display = WgpuTextureEffect::new(context.clone(), &hdr_tone_map_shader(), TextureEffectConfig {
     output_format: wgpu::TextureFormat::Rgba8Unorm,
     ..Default::default()
 })?;
@@ -187,7 +189,9 @@ let frame = renderer.render(scene, Scene3dOutputConfig {
     channels: Scene3dChannels::LINEAR_COLOR | Scene3dChannels::LINEAR_DEPTH,
     color_samples: 1,
 })?;
-let fogged = fog.render(
+let mut encoder = context.device.create_command_encoder(&Default::default());
+let fogged = fog.encode(
+    &mut encoder,
     &[frame.gpu().linear_color().unwrap(), frame.gpu().linear_depth().unwrap()],
     size,
     EffectUniforms::new()
@@ -195,10 +199,11 @@ let fogged = fog.render(
         .with_slot(1, [0.12, 0.18, 0.25, 1.]),
     0.,
 )?;
-let color = display.render(
-    &[&fogged], size,
+let color = display.encode(
+    &mut encoder, &[&fogged], size,
     EffectUniforms::new().with_slot(0, [0., 1., 0., 0.]), 0.,
 )?;
+context.queue.submit(Some(encoder.finish()));
 let view = color.create_view(&Default::default());
 // Bind this view in a subsequent same-device render pass.
 # Ok(())
@@ -245,7 +250,20 @@ output allocations; `None` retains only device dimension/format limits.
 
 The processor retains its pipeline, not rendered images or their readbacks.
 Shader, input, encoding and submission validation errors are returned to the
-caller. Retain and release output textures according to the consumer's lifetime;
+caller by `render`. With `encode`, the caller owns finish/submission validation.
+Create the encoder from `processor.context().device` or the same device passed
+at construction. Inputs may be written earlier in the encoder, or by command
+buffers submitted first on the same queue. An encoded output is not ready before
+its producing commands are submitted. Dropping an unfinished encoder cancels its
+work; output allocation alone does not execute an effect.
+
+Metadata and input-binding failures occur before recording the pass. After an
+encoding failure, discard the encoder: earlier commands cannot be rolled back.
+WGPU does not expose an encoder's owning device for inspection; wrong-device
+encoders follow WGPU's validation behavior rather than a guaranteed returned error.
+Keep different-device command streams separate.
+
+Retain and release output textures according to the consumer's lifetime;
 do not call `destroy()` while queued work or another consumer uses them. Native
 WGPU contexts are supported; this API does not import outputs into a `Window`
 or automatically execute compound `EffectStage` pipelines.

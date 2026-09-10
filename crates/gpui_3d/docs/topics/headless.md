@@ -1,6 +1,6 @@
 # Headless rendering
 
-[CPU label images](labels.md) · [GPU labels](gpu_labels.md)
+[CPU label images](labels.md) · [GPU labels](gpu_labels.md) · [Frame readback](readback.md)
 
 Enable the `wgpu` feature to render 3D scenes without a native window, `App`,
 or UI layout. `HeadlessRenderer` uses the same scene preparation, mesh pass,
@@ -454,7 +454,9 @@ cached by shared mesh allocation and reused between color and ID passes.
 Unused geometry is evicted on preparation. Holding many output frames retains
 their GPU memory; applications should drop frames they no longer need.
 
-`readback()` starts GPU copies and asynchronous mapping without waiting. At most
+`readback()` reads all rendered channels. For channel subsets and per-request
+payload budgets, use [`readback_with(config)`](readback.md).
+Both start GPU copies and asynchronous mapping without waiting. At most
 one readback per renderer may remain unfinished, including frames retained from
 earlier renders. A concurrent request returns an error. `try_read()` pumps GPU
 callbacks without waiting and returns `None` until all requested channels are

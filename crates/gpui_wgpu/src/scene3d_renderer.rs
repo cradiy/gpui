@@ -18,6 +18,8 @@ mod capabilities;
 pub use capabilities::{Scene3dDeviceCapabilities, Scene3dFormatCapabilities};
 mod memory;
 pub use memory::Scene3dTargetMemory;
+mod readback;
+pub use readback::{Scene3dReadbackConfig, Scene3dReadbackMemory};
 
 bitflags::bitflags! {
     /// Independently selectable outputs. Non-color channels use the pixel center.
@@ -714,6 +716,18 @@ impl Scene3dGpuOutput {
     /// Starts a bounded, nonblocking readback. Poll its result or drop to cancel.
     /// A second pending readback from this renderer returns an error.
     pub fn readback(&self) -> Result<Scene3dReadback> {
+        self.readback_with(Scene3dReadbackConfig::new(self.config.channels))
+    }
+
+    /// Reads a nonempty subset of this frame's channels. Validates availability,
+    /// payload budgets and device buffer limits before acquiring the queue permit
+    /// or allocating staging buffers. Does not modify or release source textures.
+    pub fn readback_with(&self, config: Scene3dReadbackConfig) -> Result<Scene3dReadback> {
+        let memory = config.validate(
+            self.config.size,
+            self.config.channels,
+            self.context.device.limits().max_buffer_size,
+        )?;
         ensure!(!self.context.device_lost(), "3D rendering device is lost");
         self.context.device.poll(wgpu::PollType::Poll)?;
         ensure!(
@@ -728,6 +742,7 @@ impl Scene3dGpuOutput {
             slots: Vec::new(),
             permit: Some(Arc::new(ReadbackPermit(self.readback_busy.clone()))),
             finished: false,
+            memory,
         };
         let [width, height] = self.config.size;
         let mut encoder =
@@ -746,6 +761,9 @@ impl Scene3dGpuOutput {
             let Some(texture) = texture else {
                 continue;
             };
+            if !config.channels.contains(kind.channel()) {
+                continue;
+            }
             let stride = readback_stride(width, kind.bytes_per_pixel()) as u32;
             let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("scene3d.readback"),
@@ -817,63 +835,6 @@ pub struct Scene3dPixels {
     pub world_normals: Option<Vec<[f32; 4]>>,
 }
 
-impl Scene3dPixels {
-    fn read_channel(&mut self, kind: OutputKind, stride: u32, data: &[u8]) {
-        let width_bytes = self.size[0] as usize * kind.bytes_per_pixel() as usize;
-        let packed = data
-            .chunks_exact(stride as usize)
-            .take(self.size[1] as usize)
-            .flat_map(|row| row[..width_bytes].iter().copied())
-            .collect::<Vec<_>>();
-        match kind {
-            OutputKind::Color => self.rgba = Some(packed),
-            OutputKind::LinearColor => {
-                self.linear_rgba = Some(
-                    packed
-                        .chunks_exact(8)
-                        .map(|bytes| {
-                            std::array::from_fn(|i| {
-                                half::f16::from_bits(u16::from_le_bytes(
-                                    bytes[i * 2..i * 2 + 2].try_into().unwrap(),
-                                ))
-                                .to_f32()
-                            })
-                        })
-                        .collect(),
-                );
-            }
-            OutputKind::ObjectId => {
-                self.object_ids = Some(
-                    packed
-                        .chunks_exact(4)
-                        .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-                        .collect(),
-                )
-            }
-            OutputKind::LinearDepth => {
-                self.linear_depth = Some(
-                    packed
-                        .chunks_exact(4)
-                        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
-                        .collect(),
-                )
-            }
-            OutputKind::WorldNormal => {
-                self.world_normals = Some(
-                    packed
-                        .chunks_exact(16)
-                        .map(|bytes| {
-                            std::array::from_fn(|i| {
-                                f32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
-                            })
-                        })
-                        .collect(),
-                )
-            }
-        }
-    }
-}
-
 /// Pending readback that owns its staging buffers and renderer queue permit.
 pub struct Scene3dReadback {
     context: WgpuContext,
@@ -881,8 +842,13 @@ pub struct Scene3dReadback {
     slots: Vec<ReadbackSlot>,
     permit: Option<Arc<ReadbackPermit>>,
     finished: bool,
+    memory: Scene3dReadbackMemory,
 }
 impl Scene3dReadback {
+    /// Payload admitted for this request, independent of later renderer changes.
+    pub fn memory(&self) -> Scene3dReadbackMemory {
+        self.memory
+    }
     /// Pumps GPU callbacks without waiting. Returns None until all requested
     /// channels are ready. A completed or failed readback cannot be polled again.
     pub fn try_read(&mut self) -> Result<Option<Scene3dPixels>> {
@@ -924,7 +890,7 @@ impl Scene3dReadback {
         };
         for slot in &self.slots {
             let mapped = slot.buffer.get_mapped_range(..)?;
-            pixels.read_channel(slot.kind, slot.stride, &mapped);
+            pixels.read_channel(slot.kind, slot.stride, &mapped)?;
         }
         Ok(Some(pixels))
     }
@@ -978,7 +944,7 @@ mod tests {
             for (row, bytes) in packed.chunks_exact(row_len).enumerate() {
                 padded[row * stride..row * stride + row_len].copy_from_slice(bytes);
             }
-            pixels.read_channel(kind, stride as u32, &padded);
+            pixels.read_channel(kind, stride as u32, &padded).unwrap();
         }
         assert_eq!(pixels.linear_depth.as_deref(), Some(depth.as_slice()));
         assert_eq!(pixels.world_normals.as_deref(), Some(normals.as_slice()));
@@ -1063,7 +1029,9 @@ mod tests {
                     .copy_from_slice(&bits.to_le_bytes());
             }
         }
-        pixels.read_channel(OutputKind::LinearColor, stride as u32, &padded);
+        pixels
+            .read_channel(OutputKind::LinearColor, stride as u32, &padded)
+            .unwrap();
         assert_eq!(pixels.linear_rgba.as_deref(), Some(expected.as_slice()));
         assert!(pixels.rgba.is_none());
     }

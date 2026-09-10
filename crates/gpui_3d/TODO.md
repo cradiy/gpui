@@ -138,6 +138,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Mesh output-cache budgets**: Configurable window/external-renderer quotas shared by nested UI captures, allocation counts and bytes, immediate entry release on budget changes, zero-budget bypass, and recovery-preserved settings.
   - [x] **Instance capacity reclamation**: Device-bounded growth, quarter-capacity shrink hysteresis, active-batch reuse, and removed-batch release across viewport and direct-output passes.
   - [x] **Direct target admission**: CPU-only output/attachment/shadow payload reports, optional per-request byte limits before uploads, preserved cache/frame ownership, and submission-local reports independent of cache hits.
+  - [x] **Selective readback admission**: Available-channel subsets, aligned staging and widened CPU payload budgets before allocation, retained request reports, and direct decoding with the shared pending/cancellation limit.
 - [ ] **Platform coverage**: Add macOS and Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
 - [ ] **Cross-platform validation**: Cover depth, transparency, texture colors, nested composition, input mapping, and high DPI; distinguish automated checks from manual visual confirmation.
 

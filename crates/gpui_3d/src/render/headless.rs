@@ -23,7 +23,7 @@ use crate::{Camera, CameraError, PreparationCache, Scene, TextureSource, Texture
 pub use gpui_wgpu::{
     IdRemapConfig, Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities,
     Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dOutputConfig, Scene3dPixels,
-    Scene3dTargetMemory, WgpuContext, WgpuIdRemapper,
+    Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dTargetMemory, WgpuContext, WgpuIdRemapper,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load
@@ -173,8 +173,13 @@ impl RenderedFrame {
         lookup(&self.objects, output_id)
     }
     pub fn readback(&self) -> Result<FrameReadback> {
+        self.readback_with(Scene3dReadbackConfig::new(self.output.config().channels))
+    }
+    /// Starts a bounded readback of selected available channels while retaining
+    /// this frame's complete object identity mapping and camera.
+    pub fn readback_with(&self, config: Scene3dReadbackConfig) -> Result<FrameReadback> {
         Ok(FrameReadback {
-            pending: self.output.readback()?,
+            pending: self.output.readback_with(config)?,
             objects: self.objects.clone(),
             camera: self.camera,
         })
@@ -188,6 +193,9 @@ pub struct FrameReadback {
     camera: Camera,
 }
 impl FrameReadback {
+    pub fn memory(&self) -> Scene3dReadbackMemory {
+        self.pending.memory()
+    }
     pub fn try_read(&mut self) -> Result<Option<ReadFrame>> {
         Ok(self.pending.try_read()?.map(|pixels| ReadFrame {
             pixels,

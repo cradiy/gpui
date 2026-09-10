@@ -28,6 +28,7 @@ pub enum TextureSlot {
 pub struct MaterialTexture {
     pub(crate) image: ImageSource,
     pub(crate) sampling: TextureSampling,
+    pub(crate) uv_set: u32,
 }
 
 impl MaterialTexture {
@@ -36,12 +37,18 @@ impl MaterialTexture {
         Self {
             image: image.into(),
             sampling: TextureSampling::default(),
+            uv_set: 0,
         }
     }
 
     /// Sets the UV transform, per-axis addressing, mip filtering and anisotropy.
     pub fn sampling(mut self, sampling: TextureSampling) -> Self {
         self.sampling = sampling;
+        self
+    }
+    /// Selects a mesh coordinate set. Defaults to zero; active missing sets are errors.
+    pub fn uv_set(mut self, set: u32) -> Self {
+        self.uv_set = set;
         self
     }
 }
@@ -56,6 +63,7 @@ pub struct Material {
     pub(crate) alpha_mode: AlphaMode,
     pub(crate) double_sided: bool,
     pub(crate) sampling: TextureSampling,
+    pub(crate) uv_set: u32,
     pub(crate) image_color_space: TextureColorSpace,
     pub(crate) pbr: Option<PbrMaterial>,
     pub(crate) metallic_roughness_texture: Option<MaterialTexture>,
@@ -76,6 +84,7 @@ impl Material {
             alpha_mode: AlphaMode::Mask,
             double_sided: true,
             sampling: TextureSampling::default(),
+            uv_set: 0,
             image_color_space: TextureColorSpace::default(),
             pbr: None,
             metallic_roughness_texture: None,
@@ -112,6 +121,11 @@ impl Material {
         self.sampling = sampling;
         self
     }
+    /// Selects the base-color image's mesh coordinates. Captured UI uses set zero.
+    pub fn image_uv_set(mut self, set: u32) -> Self {
+        self.uv_set = set;
+        self
+    }
     /// Sets image RGB encoding. Alpha remains linear; solid tint and UI captures
     /// use sRGB regardless of this setting.
     pub fn image_color_space(mut self, color_space: TextureColorSpace) -> Self {
@@ -123,6 +137,7 @@ impl Material {
     pub fn base_color_texture(mut self, texture: MaterialTexture) -> Self {
         self.texture = Texture::Image(texture.image);
         self.sampling = texture.sampling;
+        self.uv_set = texture.uv_set;
         self
     }
     /// Enables metallic-roughness shading, preserving the base color, texture and cutoff.
@@ -144,8 +159,8 @@ impl Material {
         self
     }
     /// Uses linear RGB tangent-space normals decoded from [0, 1] to [-1, 1].
-    /// Alpha is ignored. Requires mesh tangents when lit PBR and nonzero scale
-    /// are enabled. Does not change geometry, silhouettes or picking normals.
+    /// Alpha is ignored. Requires mesh tangents for this map's UV set when lit PBR
+    /// and nonzero scale are enabled. Does not change geometry or picking normals.
     pub fn normal_texture(mut self, texture: MaterialTexture) -> Self {
         self.normal_texture = Some(texture);
         self

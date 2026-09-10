@@ -351,6 +351,13 @@ impl WgpuScene3dRenderer {
             "3D orthographic view direction must be nonzero"
         );
         for object in frame.objects.iter() {
+            for set in object.texture_uv_sets() {
+                ensure!(
+                    object.mesh.uv_at(set, 0).is_some(),
+                    "3D object {}: missing UV set {set}",
+                    object.output_id
+                );
+            }
             ensure!(
                 !matches!(object.texture, gpui::MeshTexture3d::Image(_))
                     || object.sampling.is_valid(),
@@ -402,8 +409,8 @@ impl WgpuScene3dRenderer {
                     || object.pbr.is_none()
                     || object.unlit
                     || object.normal_scale == 0.
-                    || object.mesh.tangent_uv_set() == Some(0),
-                "3D object {}: normal maps require mesh tangents for UV set 0",
+                    || object.mesh.tangent_uv_set() == object.normal_texture.map(|map| map.uv_set),
+                "3D object {}: normal maps require mesh tangents for the selected UV set",
                 object.output_id
             );
             ensure!(

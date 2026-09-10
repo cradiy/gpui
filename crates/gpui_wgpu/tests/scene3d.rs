@@ -261,6 +261,7 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         color: rgba(color),
         texture,
         sampling: Default::default(),
+        uv_set: 0,
         image_color_space: Default::default(),
         pbr: None,
         metallic_roughness_texture: None,

@@ -222,8 +222,8 @@ mesh and at most four logical pixels apart. When sharing the button with camera
 gestures, ignore clicks after a drag, including drags returning to their starting
 position. Application state changes should notify the view as usual.
 
-Viewport callbacks sample the first image frame's alpha using the material's UV
-transform, addressing and filter, matching the material shader. Sampled
+Viewport callbacks sample the first image frame's alpha using its selected
+coordinate set, UV transform, addressing and filter, matching the material shader. Sampled
 alpha is multiplied by material alpha and evaluated using the material's alpha
 mode; discarded regions allow hits on surfaces behind them. This also applies to occluders.
 Images that are loading, failed, empty, or unavailable to the renderer do not

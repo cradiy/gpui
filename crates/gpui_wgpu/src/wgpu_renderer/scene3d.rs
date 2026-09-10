@@ -27,8 +27,40 @@ struct DisplayParams {
 struct Vertex {
     position: [f32; 3],
     normal: [f32; 3],
-    uv: [f32; 2],
+    uv: [f32; 4],
     tangent: [f32; 4],
+    detail_uv: [f32; 4],
+    occlusion_uv: [f32; 2],
+}
+
+impl Vertex {
+    fn new(mesh: &Mesh3d, index: usize, sets: [u32; 5]) -> Self {
+        let v = mesh.vertices()[index];
+        let [base, surface, emission, normal, occlusion] = sets.map(|set| {
+            mesh.uv_at(set, index)
+                .expect("missing material coordinate set")
+        });
+        Self {
+            position: v.position,
+            normal: v.normal,
+            uv: [base[0], base[1], surface[0], surface[1]],
+            tangent: mesh.tangents().map_or([0.; 4], |t| t[index]),
+            detail_uv: [emission[0], emission[1], normal[0], normal[1]],
+            occlusion_uv: occlusion,
+        }
+    }
+
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+            0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x4,
+            14 => Float32x4, 15 => Float32x2
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &ATTRIBUTES,
+        }
+    }
 }
 
 #[repr(C)]
@@ -171,7 +203,8 @@ pub(crate) fn validate_device_limits(limits: &wgpu::Limits) -> anyhow::Result<()
     let count = |predicate: fn(&wgpu::BindGroupLayoutEntry) -> bool| {
         bindings.iter().filter(|entry| predicate(entry)).count() as u64
     };
-    let attributes = 4 + Instance::layout().attributes.len() as u64;
+    let attributes =
+        (Vertex::layout().attributes.len() + Instance::layout().attributes.len()) as u64;
     let uniform_size = std::mem::size_of::<Params>() as u64;
     for (name, actual, required) in [
         ("max_bind_groups", u64::from(limits.max_bind_groups), 1),
@@ -223,7 +256,7 @@ pub(crate) fn validate_device_limits(limits: &wgpu::Limits) -> anyhow::Result<()
         (
             "max_inter_stage_shader_variables",
             u64::from(limits.max_inter_stage_shader_variables),
-            7,
+            9,
         ),
         (
             "max_color_attachments",
@@ -395,17 +428,14 @@ struct Geometry {
 }
 
 impl Geometry {
-    fn prepare(device: &wgpu::Device, previous: Option<Self>, mesh: &Mesh3d) -> Self {
-        let vertices = mesh
-            .vertices()
-            .iter()
-            .enumerate()
-            .map(|(index, v)| Vertex {
-                position: v.position,
-                normal: v.normal,
-                uv: v.uv,
-                tangent: mesh.tangents().map_or([0.; 4], |t| t[index]),
-            })
+    fn prepare(
+        device: &wgpu::Device,
+        previous: Option<Self>,
+        mesh: &Mesh3d,
+        uv_sets: [u32; 5],
+    ) -> Self {
+        let vertices = (0..mesh.vertices().len())
+            .map(|index| Vertex::new(mesh, index, uv_sets))
             .collect::<Vec<_>>();
         let contents = bytemuck::cast_slice(&vertices);
         if let Some(mut previous) = previous {
@@ -504,21 +534,46 @@ impl Scene3dRenderer {
         let shadow_pipeline = (!data_output).then(|| {
             let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("scene3d_shadow_material"),
-                entries: &bindings.iter().filter(|binding| binding.binding <= 2).cloned().collect::<Vec<_>>(),
+                entries: &bindings
+                    .iter()
+                    .filter(|binding| binding.binding <= 2)
+                    .cloned()
+                    .collect::<Vec<_>>(),
             });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("scene3d_shadow"), bind_group_layouts: &[Some(&material)], immediate_size: 0,
+                label: Some("scene3d_shadow"),
+                bind_group_layouts: &[Some(&material)],
+                immediate_size: 0,
             });
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("scene3d_shadow"), layout: Some(&layout),
-                vertex: wgpu::VertexState { module: &shader, entry_point: Some("shadow_vertex"), compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 48, step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] }), Some(Instance::layout())] },
-                fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("shadow_fragment"), compilation_options: Default::default(), targets: &[] }),
-                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
-                depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true), depth_compare: Some(wgpu::CompareFunction::Less), stencil: Default::default(), bias: Default::default() }),
-                multisample: Default::default(), multiview_mask: None, cache: None,
+                label: Some("scene3d_shadow"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("shadow_vertex"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(Vertex::layout()), Some(Instance::layout())],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("shadow_fragment"),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
             })
         });
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -532,21 +587,42 @@ impl Scene3dRenderer {
         });
         let create_pipeline = |blend: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("scene3d"), layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader, entry_point: Some("vertex"), compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 48, step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4] }), Some(Instance::layout())],
-            },
-            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(fragment), compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format: mesh_format, blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }),
-            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
-            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(!blend), depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(), bias: Default::default() }),
-            multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
-            multiview_mask: None, cache: None,
-        })
+                label: Some("scene3d"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vertex"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(Vertex::layout()), Some(Instance::layout())],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: mesh_format,
+                        blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(!blend),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
         };
         let pipeline = create_pipeline(false);
         let blend_pipeline = (!data_output).then(|| create_pipeline(true));
@@ -748,14 +824,14 @@ impl Scene3dRenderer {
         let meshes: Vec<_> = frames
             .iter()
             .flat_map(|frame| {
-                self.plan(frame)
-                    .order
-                    .iter()
-                    .map(|&index| frame.objects[index].mesh.clone())
+                self.plan(frame).order.iter().map(|&index| {
+                    let object = &frame.objects[index];
+                    (object.mesh.clone(), object.texture_uv_sets())
+                })
             })
             .collect();
-        self.geometry.prepare(meshes, |previous, mesh| {
-            Geometry::prepare(device, previous, mesh)
+        self.geometry.prepare(meshes, |previous, mesh, uv_sets| {
+            Geometry::prepare(device, previous, mesh, uv_sets)
         });
         let mut shadow_sizes = HashSet::new();
         let mut batch_sizes = Vec::new();
@@ -882,11 +958,10 @@ impl Scene3dRenderer {
         let plans = &self.plans;
         let limit = self.batch_limit;
         self.geometry.retain(frame.into_iter().flat_map(|frame| {
-            plans
-                .get(frame, color, limit)
-                .order
-                .iter()
-                .map(|&index| frame.objects[index].mesh.clone())
+            plans.get(frame, color, limit).order.iter().map(|&index| {
+                let object = &frame.objects[index];
+                (object.mesh.clone(), object.texture_uv_sets())
+            })
         }));
     }
 
@@ -951,8 +1026,10 @@ impl Scene3dRenderer {
         let mut uploaded = HashSet::new();
         for &index in &plan.order {
             let object = &frame.objects[index];
-            if uploaded.insert(Arc::as_ptr(&object.mesh)) {
-                self.geometry.get(&object.mesh).encode_upload(encoder);
+            if uploaded.insert((Arc::as_ptr(&object.mesh), object.texture_uv_sets())) {
+                self.geometry
+                    .get(&object.mesh, object.texture_uv_sets())
+                    .encode_upload(encoder);
             }
         }
         let specular_environment = frame
@@ -1008,6 +1085,7 @@ impl Scene3dRenderer {
                     gpui::MaterialTexture3d {
                         tile,
                         sampling: object.sampling,
+                        uv_set: object.uv_set,
                     },
                     object.image_color_space,
                 )),
@@ -1309,7 +1387,7 @@ impl Scene3dRenderer {
                 if !plan.passes[batch.start].shadow {
                     continue;
                 }
-                let geometry = self.geometry.get(&object.mesh);
+                let geometry = self.geometry.get(&object.mesh, object.texture_uv_sets());
                 pass.set_bind_group(0, &shadow_groups[index], &[]);
                 pass.set_vertex_buffer(0, geometry.vertices.slice(..));
                 pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
@@ -1375,7 +1453,7 @@ impl Scene3dRenderer {
                     &self.pipeline
                 };
                 pass.set_pipeline(pipeline);
-                let geometry = self.geometry.get(&object.mesh);
+                let geometry = self.geometry.get(&object.mesh, object.texture_uv_sets());
                 pass.set_bind_group(0, group, &[]);
                 pass.set_vertex_buffer(0, geometry.vertices.slice(..));
                 pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
@@ -1642,6 +1720,7 @@ mod tests {
                     ..tile
                 },
                 sampling: Default::default(),
+                uv_set: 0,
             });
         }
         let mut referenced = Vec::new();
@@ -1760,6 +1839,7 @@ mod tests {
             color: gpui::rgb(0xffffff),
             texture: gpui::MeshTexture3d::None,
             sampling: Default::default(),
+            uv_set: 0,
             image_color_space: Default::default(),
             pbr: None,
             metallic_roughness_texture: None,
@@ -2267,6 +2347,7 @@ mod tests {
         let map = gpui::MaterialTexture3d {
             tile,
             sampling: Default::default(),
+            uv_set: 0,
         };
         let mut source = object();
         source.unlit = false;
@@ -2277,6 +2358,22 @@ mod tests {
         source.normal_texture = Some(map);
         source.occlusion_texture = Some(map);
         let mut variants = Vec::new();
+        let mut changed = source.clone();
+        changed.uv_set = 7;
+        variants.push(changed);
+        for slot in 0..4 {
+            let mut changed = source.clone();
+            [
+                &mut changed.metallic_roughness_texture,
+                &mut changed.emissive_texture,
+                &mut changed.normal_texture,
+                &mut changed.occlusion_texture,
+            ][slot]
+                .as_mut()
+                .unwrap()
+                .uv_set = 7;
+            variants.push(changed);
+        }
         for slot in 0..4 {
             for change_sampling in [false, true] {
                 let mut changed = source.clone();
@@ -2505,6 +2602,40 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+        let vertex_layout = Vertex::layout();
+        for entry in module
+            .entry_points
+            .iter()
+            .filter(|e| e.stage == naga::ShaderStage::Vertex)
+        {
+            for argument in &entry.function.arguments {
+                let Some(naga::Binding::Location { location, .. }) = argument.binding else {
+                    continue;
+                };
+                let attribute = vertex_layout
+                    .attributes
+                    .iter()
+                    .find(|a| a.shader_location == location)
+                    .unwrap();
+                let offset = match argument.name.as_deref().unwrap() {
+                    "position" => std::mem::offset_of!(Vertex, position),
+                    "normal" => std::mem::offset_of!(Vertex, normal),
+                    "uv" => std::mem::offset_of!(Vertex, uv),
+                    "tangent" => std::mem::offset_of!(Vertex, tangent),
+                    "detail_uv" => std::mem::offset_of!(Vertex, detail_uv),
+                    "occlusion_uv" => std::mem::offset_of!(Vertex, occlusion_uv),
+                    _ => panic!("unknown vertex attribute"),
+                };
+                assert_eq!(attribute.offset as usize, offset);
+                let naga::TypeInner::Vector { size, scalar } = module.types[argument.ty].inner
+                else {
+                    panic!("vector attribute");
+                };
+                assert_eq!(scalar.kind, naga::ScalarKind::Float);
+                assert_eq!(attribute.format.size(), u64::from(size as u8) * 4);
+                assert!(attribute.offset + attribute.format.size() <= vertex_layout.array_stride);
+            }
+        }
         let instance_layout = Instance::layout();
         let (instance_type, members) = module
             .types
@@ -2678,6 +2809,32 @@ mod tests {
                 .find(|member| member.name.as_deref() == Some(name))
                 .unwrap();
             assert_eq!(member.offset as usize, offset, "{name}");
+        }
+    }
+
+    #[test]
+    fn scene3d_vertex_upload_packs_selected_material_coordinates() {
+        let mut mesh = object().mesh;
+        let sets = [3, 7, 11, 19, u32::MAX];
+        for (slot, set) in sets.into_iter().enumerate() {
+            mesh = mesh
+                .with_uv_set(
+                    set,
+                    (0..mesh.vertices().len())
+                        .map(|vertex| [slot as f32, vertex as f32 + 0.5])
+                        .collect(),
+                )
+                .unwrap();
+        }
+        for index in 0..mesh.vertices().len() {
+            let vertex = Vertex::new(&mesh, index, sets);
+            assert_eq!(vertex.position, mesh.vertices()[index].position);
+            assert_eq!(vertex.uv, [0., index as f32 + 0.5, 1., index as f32 + 0.5]);
+            assert_eq!(
+                vertex.detail_uv,
+                [2., index as f32 + 0.5, 3., index as f32 + 0.5]
+            );
+            assert_eq!(vertex.occlusion_uv, [4., index as f32 + 0.5]);
         }
     }
 }

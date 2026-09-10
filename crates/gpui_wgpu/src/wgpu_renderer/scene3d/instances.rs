@@ -205,7 +205,7 @@ impl BatchPlan {
 }
 
 fn same_map(a: Option<MaterialTexture3d>, b: Option<MaterialTexture3d>) -> bool {
-    a.map(|m| (m.tile, m.sampling)) == b.map(|m| (m.tile, m.sampling))
+    a.map(|m| (m.tile, m.sampling, m.uv_set)) == b.map(|m| (m.tile, m.sampling, m.uv_set))
 }
 
 fn compatible(a: &MeshDraw3d, b: &MeshDraw3d) -> bool {
@@ -224,6 +224,7 @@ fn compatible(a: &MeshDraw3d, b: &MeshDraw3d) -> bool {
             _ => false,
         }
         && a.sampling == b.sampling
+        && a.texture_uv_sets() == b.texture_uv_sets()
         && a.image_color_space == b.image_color_space
         && a.pbr == b.pbr
         && same_map(a.metallic_roughness_texture, b.metallic_roughness_texture)

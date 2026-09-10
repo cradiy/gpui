@@ -177,6 +177,34 @@ decoded-image requirements as other material maps in viewport/headless rendering
 The `materials` example toggles occlusion independently of normal, metallic-roughness,
 and emission maps. Occlusion uses the R channel of the shared ORM image.
 
+## Coordinate selection
+
+Each image slot selects mesh coordinates with `MaterialTexture::uv_set(set)`.
+`Material::image_uv_set(set)` selects coordinates for a base-color image created
+with `Material::image`. The default is set zero. `base_color_texture(texture)`
+copies both the sampling configuration and coordinate selection.
+
+```rust
+use gpui_3d::{Material, MaterialTexture, PbrMaterial};
+
+let material = Material::image("base.png")
+    .image_uv_set(0)
+    .pbr(PbrMaterial::default())
+    .normal_texture(MaterialTexture::new("normal.png").uv_set(2))
+    .occlusion_texture(MaterialTexture::new("occlusion.png").uv_set(7));
+```
+
+The mesh must contain each active slot's coordinate set. A normal map requires
+a tangent basis generated or supplied for its selected set. Missing sets or
+mismatched bases fail scene preparation before resolving that object's images. Inactive maps
+do not require coordinates. Captured UI always uses set zero, independent of
+image settings.
+
+UV transforms and sampling gradients operate on each slot's selected set.
+Color, depth, normal, object-ID and shadow passes use the same base-color
+coordinates for alpha coverage. Viewport image-alpha picking uses that set at
+level zero; `Hit::uv` remains the untransformed set-zero coordinate.
+
 ## Normal maps and tangents
 
 ```rust,no_run
@@ -216,7 +244,7 @@ preserve this association when supplying replacement tangents.
 Invalid counts, non-finite or undefined bases, zero vertex normals, and mixed W
 signs within a triangle return `TangentError`. Split vertices at tangent-space
 seams before supplying data. Rendering does not generate missing tangent bases.
-Rendering an active normal map requires a tangent basis for set zero.
+Rendering an active normal map requires a tangent basis for its selected UV set.
 
 `Mesh::generate_tangents()` generates MikkTSpace frames synchronously and returns
 `GeneratedTangents`. It uses normalized copies of indexed normals and preserves

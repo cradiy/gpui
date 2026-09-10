@@ -48,10 +48,20 @@ impl PickSnapshot {
             self.bounds,
             position,
             |_| true,
-            |index, uv| match &self.surfaces[index] {
+            |index, _, triangle, barycentric| match &self.surfaces[index] {
                 PickSurface::Absent => None,
                 PickSurface::Solid => Some(1.),
                 PickSurface::Image(image) => {
+                    let object = &self.scene.objects[index];
+                    let indices = &object.mesh.indices()[triangle * 3..][..3];
+                    let mut uv = [0.; 2];
+                    for (corner, &vertex) in indices.iter().enumerate() {
+                        let coordinate =
+                            object.mesh.uv_at(object.material.uv_set, vertex as usize)?;
+                        for component in 0..2 {
+                            uv[component] += coordinate[component] * barycentric[corner];
+                        }
+                    }
                     let size = image.size(0);
                     (size.width.0 > 0 && size.height.0 > 0 && image.as_bytes(0).is_some()).then(
                         || image_alpha(image, uv, self.scene.objects[index].material.sampling),
@@ -126,7 +136,8 @@ pub struct Hit {
     pub position: [f32; 3],
     /// Interpolated world-space shading normal, flipped on back faces.
     pub normal: [f32; 3],
-    /// Interpolated texture coordinates; `(0, 0)` is the top left.
+    /// Interpolated set-zero coordinates, independent of material sampling.
+    /// `(0, 0)` is the top left.
     pub uv: [f32; 2],
     /// Weights corresponding to the triangle's three indexed vertices.
     pub barycentric: [f32; 3],
@@ -175,7 +186,7 @@ impl Scene {
         position: Point<Pixels>,
         filter: impl FnMut(QueryObject<'_>) -> bool,
     ) -> Option<Hit> {
-        self.pick_query(bounds, position, filter, |_, _| Some(1.))
+        self.pick_query(bounds, position, filter, |_, _, _, _| Some(1.))
     }
 
     /// World-ray query restricted by object identity or application policy.
@@ -186,7 +197,7 @@ impl Scene {
         ray: crate::Ray,
         filter: impl FnMut(QueryObject<'_>) -> bool,
     ) -> Option<Hit> {
-        self.trace(ray, |_| true, |_, _| Some(1.), filter)
+        self.trace(ray, |_| true, |_, _, _, _| Some(1.), filter)
     }
 
     fn pick_query(
@@ -194,7 +205,7 @@ impl Scene {
         bounds: Bounds<Pixels>,
         position: Point<Pixels>,
         filter: impl FnMut(QueryObject<'_>) -> bool,
-        alpha: impl Fn(usize, [f32; 2]) -> Option<f32>,
+        alpha: impl Fn(usize, [f32; 2], usize, [f32; 3]) -> Option<f32>,
     ) -> Option<Hit> {
         let width = f32::from(bounds.size.width);
         let height = f32::from(bounds.size.height);
@@ -228,7 +239,7 @@ impl Scene {
         &self,
         ray: crate::Ray,
         within: impl Fn([f32; 3]) -> bool,
-        alpha: impl Fn(usize, [f32; 2]) -> Option<f32>,
+        alpha: impl Fn(usize, [f32; 2], usize, [f32; 3]) -> Option<f32>,
         mut filter: impl FnMut(QueryObject<'_>) -> bool,
     ) -> Option<Hit> {
         self.trace_with(
@@ -250,7 +261,7 @@ impl Scene {
         &self,
         ray: crate::Ray,
         within: impl Fn([f32; 3]) -> bool,
-        alpha: impl Fn(usize, [f32; 2]) -> Option<f32>,
+        alpha: impl Fn(usize, [f32; 2], usize, [f32; 3]) -> Option<f32>,
         objects: impl FnOnce(&mut dyn FnMut(usize)),
         mut candidates: impl FnMut(&crate::Mesh, crate::math::Matrix, crate::Ray, &mut dyn FnMut(usize)),
     ) -> Option<Hit> {
@@ -303,7 +314,7 @@ impl Scene {
                 let uv = std::array::from_fn(|i| {
                     (0..3).map(|j| vertices[j].uv[i] * barycentric[j]).sum()
                 });
-                let Some(alpha) = alpha(object_index, uv) else {
+                let Some(alpha) = alpha(object_index, uv, triangle_index, barycentric) else {
                     return;
                 };
                 if !object
@@ -532,7 +543,7 @@ mod tests {
                             let within = |p: [f32; 3]| {
                                 pose.inverse().transform_point(p)[2] >= -0.4 || x > 0.
                             };
-                            let alpha = |index, uv: [f32; 2]| {
+                            let alpha = |index, uv: [f32; 2], _, _| {
                                 Some(if index == 0 && uv[0] > 0.4 { 0. } else { 1. })
                             };
                             let expected = scene.trace_with(
@@ -582,7 +593,7 @@ mod tests {
             let actual = scene.trace_with(
                 ray,
                 |_| true,
-                |_, _| Some(1.),
+                |_, _, _, _| Some(1.),
                 |visit| scene.visit_objects(ray, visit),
                 |mesh, model, ray, visit| {
                     mesh.visit_triangles(model, ray, |triangle| {
@@ -594,7 +605,7 @@ mod tests {
             let expected = scene.trace_with(
                 ray,
                 |_| true,
-                |_, _| Some(1.),
+                |_, _, _, _| Some(1.),
                 |visit| (0..scene.objects.len()).for_each(visit),
                 |mesh, _, _, visit| {
                     for triangle in 0..mesh.triangle_count() {
@@ -660,7 +671,7 @@ mod tests {
         let actual = scene.trace_with(
             ray,
             |_| true,
-            |_, _| Some(1.),
+            |_, _, _, _| Some(1.),
             |visit| {
                 scene.visit_objects(ray, |index| {
                     tested += 1;
@@ -672,7 +683,7 @@ mod tests {
         let expected = scene.trace_with(
             ray,
             |_| true,
-            |_, _| Some(1.),
+            |_, _, _, _| Some(1.),
             |visit| (0..scene.objects.len()).for_each(visit),
             |mesh, _, _, visit| (0..mesh.triangle_count()).for_each(visit),
         );
@@ -1036,6 +1047,36 @@ mod tests {
         assert_eq!(
             snapshot.pick(point).unwrap().object_id,
             Some("front".into())
+        );
+    }
+
+    #[test]
+    fn cutout_uses_selected_coordinates_without_changing_geometric_hit_uvs() {
+        let image = alpha_image(2, 1, &[0, 255]);
+        let mesh = Mesh::plane().with_uv_set(7, vec![[0.25, 0.5]; 4]).unwrap();
+        let scene = Scene::new()
+            .object(plane().id("rear").position([0., 0., -1.]))
+            .object(Object::new(mesh, Material::image(image.clone()).image_uv_set(7)).id("front"));
+        let mut snapshot = PickSnapshot {
+            scene,
+            bounds: bounds(),
+            surfaces: vec![PickSurface::Solid, PickSurface::Image(image)],
+        };
+        let point = project(Camera::default(), bounds(), [0.25, 0., 0.]);
+        assert_eq!(snapshot.pick(point).unwrap().object_index, 0);
+        let geometric = snapshot.scene.pick(bounds(), point).unwrap();
+        assert_eq!(geometric.object_index, 1);
+        assert!((geometric.uv[0] - 0.75).abs() < 1e-6);
+        let object = &mut snapshot.scene.objects[1];
+        object.mesh = object.mesh.with_uv_set(7, vec![[0.75, 0.5]; 4]).unwrap();
+        let hit = snapshot.pick(point).unwrap();
+        assert_eq!(hit.object_index, 1);
+        assert_eq!(hit.uv, geometric.uv);
+        snapshot.scene.objects[1].material.uv_set = 9;
+        assert_eq!(snapshot.pick(point).unwrap().object_index, 0);
+        assert_eq!(
+            snapshot.scene.pick(bounds(), point).unwrap().object_index,
+            1
         );
     }
 

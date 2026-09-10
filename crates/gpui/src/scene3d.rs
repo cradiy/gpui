@@ -608,6 +608,8 @@ pub struct MaterialTexture3d {
     pub tile: AtlasTile,
     /// Image-coordinate transform, addressing and filtering.
     pub sampling: crate::TextureSampling3d,
+    /// Mesh coordinate-set identifier.
+    pub uv_set: u32,
 }
 
 /// Shadow-map projection and sampling for one directional source.
@@ -659,6 +661,8 @@ pub struct MeshDraw3d {
     pub texture: MeshTexture3d,
     /// Image sampling; solid materials and captured UI textures ignore this.
     pub sampling: crate::TextureSampling3d,
+    /// Base-color image coordinates; solid materials and UI captures use set zero.
+    pub uv_set: u32,
     /// Image RGB transfer function; does not affect solid colors or captured UI.
     pub image_color_space: crate::TextureColorSpace3d,
     /// Optional metallic-roughness shading. Unlit materials ignore these parameters.
@@ -691,6 +695,31 @@ pub struct MeshDraw3d {
     pub cast_shadows: bool,
     /// Receive direct-light shadows; ignored by unlit materials.
     pub receive_shadows: bool,
+}
+
+impl MeshDraw3d {
+    /// Active coordinate sets in base-color, metallic-roughness, emissive, normal,
+    /// and occlusion order. Inactive slots and captured UI use set zero.
+    pub fn texture_uv_sets(&self) -> [u32; 5] {
+        let pbr = self.pbr.is_some() && !self.unlit;
+        let selected = |map: Option<MaterialTexture3d>, active| {
+            map.filter(|_| active).map_or(0, |map| map.uv_set)
+        };
+        [
+            if matches!(self.texture, MeshTexture3d::Image(_)) {
+                self.uv_set
+            } else {
+                0
+            },
+            selected(self.metallic_roughness_texture, pbr),
+            selected(self.emissive_texture, pbr),
+            selected(self.normal_texture, pbr && self.normal_scale > 0.),
+            selected(
+                self.occlusion_texture,
+                !self.unlit && self.occlusion_strength > 0.,
+            ),
+        ]
+    }
 }
 
 /// Immutable input for a depth-tested 3D viewport.

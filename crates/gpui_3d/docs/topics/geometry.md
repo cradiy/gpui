@@ -69,12 +69,12 @@ outside `[0, 1]` are accepted. Invalid counts or non-finite components return
 Snapshots share unchanged storage. Replacing the coordinate set identified by
 `tangent_uv_set()` removes existing tangents; editing other sets preserves them.
 Normal and tangent generation remap all coordinate sets when splitting vertices.
-Fixed-topology updates, Morph and Skin
-preserve additional coordinate sets.
+Fixed-topology updates, Morph and Skin preserve additional coordinate sets.
 
 `generate_tangents_for_uv_set(set, mode)` generates a basis for a selected set
-without changing set zero. Rendering and alpha queries use set zero, without
-per-material selection.
+without changing set zero. [Material textures](materials.md#coordinate-selection)
+select their coordinate sets independently. `Hit::uv` reports set-zero coordinates;
+image-alpha picking uses the base-color image's selected set.
 
 ## Primitive meshes
 

@@ -76,7 +76,24 @@ impl Scene {
                     || object.material.sampling.is_valid(),
                 "object {index} has invalid image sampling"
             );
+            ensure!(
+                !matches!(object.material.texture, crate::Texture::Image(_))
+                    || object.mesh.uv_at(object.material.uv_set, 0).is_some(),
+                "object {index}: missing base-color UV set {}",
+                object.material.uv_set
+            );
             for (slot, texture) in object.material.lighting_textures() {
+                ensure!(
+                    object.mesh.uv_at(texture.uv_set, 0).is_some(),
+                    "object {index}: missing {slot:?} UV set {}",
+                    texture.uv_set
+                );
+                ensure!(
+                    slot != TextureSlot::Normal
+                        || object.mesh.tangent_uv_set() == Some(texture.uv_set),
+                    "object {index}: normal maps require mesh tangents for UV set {}",
+                    texture.uv_set
+                );
                 ensure!(
                     texture.sampling.is_valid(),
                     "object {index} has invalid {slot:?} sampling"
@@ -98,14 +115,6 @@ impl Scene {
                 object.material.occlusion_strength.is_finite()
                     && (0. ..=1.).contains(&object.material.occlusion_strength),
                 "object {index} has invalid occlusion strength"
-            );
-            ensure!(
-                !object
-                    .material
-                    .lighting_textures()
-                    .any(|(slot, _)| slot == TextureSlot::Normal)
-                    || object.mesh.tangent_uv_set() == Some(0),
-                "object {index}: normal maps require mesh tangents for UV set 0"
             );
             let transform = object.transform;
             ensure!(
@@ -181,6 +190,7 @@ impl Scene {
                         let resolved = Some(gpui::MaterialTexture3d {
                             tile,
                             sampling: map.sampling,
+                            uv_set: map.uv_set,
                         });
                         match slot {
                             TextureSlot::MetallicRoughness => metallic_roughness_texture = resolved,
@@ -211,6 +221,7 @@ impl Scene {
                 color,
                 texture,
                 sampling: object.material.sampling,
+                uv_set: object.material.uv_set,
                 image_color_space: object.material.image_color_space,
                 pbr: object.material.pbr,
                 metallic_roughness_texture,
@@ -269,6 +280,70 @@ mod tests {
     use super::*;
     use crate::{AffineTransform, Camera, Material, Mesh, Node, Object, SceneGraph};
     use gpui::rgb;
+
+    #[test]
+    fn independent_coordinate_sets_reach_all_material_slots() {
+        use crate::{MaterialTexture, PbrMaterial};
+        let mut mesh = Mesh::plane();
+        for set in [2, 7, 11, 19, u32::MAX] {
+            mesh = mesh
+                .with_uv_set(set, mesh.vertices().iter().map(|v| v.uv).collect())
+                .unwrap();
+        }
+        mesh = mesh
+            .with_tangents_for_uv_set(19, mesh.tangents().unwrap().to_vec())
+            .unwrap();
+        let material = Material::image("base.png")
+            .image_uv_set(2)
+            .pbr(PbrMaterial::default())
+            .metallic_roughness_texture(MaterialTexture::new("surface.png").uv_set(7))
+            .emissive_texture(MaterialTexture::new("emission.png").uv_set(11))
+            .normal_texture(MaterialTexture::new("normal.png").uv_set(19))
+            .occlusion_texture(MaterialTexture::new("occlusion.png").uv_set(u32::MAX));
+        let tile = gpui::AtlasTile {
+            texture_id: gpui::AtlasTextureId {
+                index: 0,
+                kind: gpui::AtlasTextureKind::Polychrome,
+            },
+            tile_id: gpui::TileId(0),
+            padding: 0,
+            bounds: gpui::Bounds::new(
+                gpui::point(gpui::DevicePixels(0), gpui::DevicePixels(0)),
+                gpui::size(gpui::DevicePixels(1), gpui::DevicePixels(1)),
+            ),
+        };
+        let scene = Scene::new().object(Object::new(mesh.clone(), material.clone()));
+        let frame = scene
+            .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::Image(tile))))
+            .unwrap();
+        assert_eq!(frame.objects[0].texture_uv_sets(), [2, 7, 11, 19, u32::MAX]);
+        let missing =
+            Scene::new().object(Object::new(mesh.clone(), material.clone().image_uv_set(3)));
+        assert!(
+            missing
+                .prepare_frame(1., None, |_, _, _| panic!("missing coordinates"))
+                .is_err()
+        );
+        let mismatch = Scene::new().object(Object::new(
+            mesh.clone(),
+            material.normal_texture(MaterialTexture::new("normal.png").uv_set(7)),
+        ));
+        assert!(
+            mismatch
+                .prepare_frame(1., None, |_, _, _| panic!("mismatched normal basis"))
+                .is_err()
+        );
+        let ui = Scene::new().object(Object::new(
+            mesh,
+            Material::ui()
+                .image_uv_set(3)
+                .normal_texture(MaterialTexture::new("unused.png").uv_set(3)),
+        ));
+        let frame = ui
+            .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::Subtree)))
+            .unwrap();
+        assert_eq!(frame.objects[0].texture_uv_sets(), [0; 5]);
+    }
 
     #[test]
     fn frame_culling_skips_resources_but_keeps_shadow_casters_and_original_ids() {

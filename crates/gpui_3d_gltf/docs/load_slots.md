@@ -5,6 +5,9 @@ It retains the last successful asset while a replacement loads. The slot owns
 request identity, cancellation and publication state; callers provide I/O,
 execution, retries and UI notification.
 
+Use a shared [scene load queue](load_queue.md) to bound concurrent pipelines and
+waiting work across slots.
+
 ## Request lifecycle
 
 1. `slot.begin()` creates a `SceneLoadRequest`, clears the previous error and

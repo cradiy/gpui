@@ -1,4 +1,6 @@
+mod frustum;
 mod orbit;
+pub use frustum::Frustum;
 pub use orbit::{OrbitController, OrbitError, OrbitSettings};
 
 use crate::{

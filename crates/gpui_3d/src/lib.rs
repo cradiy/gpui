@@ -19,8 +19,8 @@ pub use animation::{
     VectorTrack,
 };
 pub use camera::{
-    Camera, CameraError, OrbitController, OrbitError, OrbitSettings, Projection, Ray, RayError,
-    ScreenPoint,
+    Camera, CameraError, Frustum, OrbitController, OrbitError, OrbitSettings, Projection, Ray,
+    RayError, ScreenPoint,
 };
 pub use geometry::{
     Aabb, AffineTransform, AimError, AimResult, AimSettings, AimStatus, ConeOptions,

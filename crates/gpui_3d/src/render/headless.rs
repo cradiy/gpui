@@ -2,8 +2,10 @@
 
 mod coverage;
 mod depth;
+mod labels;
 pub use coverage::{CoverageError, FrameCoverage, ObjectCoverage};
 pub use depth::{DepthComparison, DepthQueryError, DepthRelation};
+pub use labels::{FrameLabels, LabelError};
 
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
 

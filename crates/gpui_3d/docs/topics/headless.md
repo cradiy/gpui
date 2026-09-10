@@ -127,6 +127,9 @@ surface; equal-depth blended color layers compose in submission order.
 
 ### Object coverage
 
+[Frame labels](labels.md) remap these object IDs into caller-defined instance or
+segmentation groups as an owned CPU integer image.
+
 `ReadFrame::coverage()` summarizes an available object-ID channel without further
 rendering, GPU submission, or readback. It scans the tightly packed image once
 and uses one record per mapped object: O(pixels + objects) time and O(objects)

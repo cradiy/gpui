@@ -51,6 +51,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Bounds overlap and distance**: Closed AABB intersections and finite f64 distances, BVH-pruned world-volume candidates with stable identities and ordered filtering, final-snapshot geometry, and explicit conservative rather than exact-mesh semantics.
 - [x] **Frame coverage queries**: Single-pass CPU object-ID counts, fractions of the physical output, exclusive pixel bounds, background and zero-count records, retained camera/identity snapshots, and structured malformed-data errors with explicit sampling and transparency semantics.
   - [x] **Point depth comparisons**: Constant-time world-point projection into retained depth frames, explicit background/front/tolerance/behind results, half-open pixel bounds, and typed input/channel errors without continuous-visibility claims.
+  - [x] **CPU label images**: Bounded object-ID remapping to exact caller-defined u32 labels, merged primitive groups, zero exclusion, retained source identities, and composition with per-object coverage after readback.
 - [x] **Mesh query acceleration**: Shared lazy CPU BVHs, explicit preparation, conservative transformed bounds, and original triangle identities for picking and world rays.
 - [x] **Scene query acceleration**: Lazy object BVHs shared by scene clones and camera views of evaluated states, fresh indices after graph evaluation or object insertion, and preserved snapshot queries.
 - [x] **Spatial index refitting**: Explicit previous-snapshot preparation, shared partitions with independent changed bounds, stable hidden-node slots, current-order query identities, topology-change rebuilds, and CPU build/refit benchmarks.
@@ -109,6 +110,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 - [x] **Direct headless 3D rendering**: Solid and decoded-image scenes without native windows or UI layout; shared viewport preparation and mesh passes, owned GPU outputs, and bounded nonblocking readback.
 - [x] **Color and object ID outputs**: Display-encoded RGBA8 and exact R32Uint IDs, explicit pixel-center/MSAA coverage, zero ID background, and retained node/application identity maps.
+- [ ] **GPU label outputs**: Remap object-ID textures to caller-defined integer groups without CPU pixel readback, with owned outputs and retained source-label correspondence.
 - [x] **Depth and normal outputs**: Selectable R32Float camera-forward depth and Rgba32Float world-space vertex normals, pixel-center nearest-surface coverage, owned GPU textures, and bounded floating-point readback. Normal maps do not perturb geometry channels.
 - [x] **HDR output**: Independently selectable premultiplied linear RGBA16Float textures, linear MSAA resolve, owned frames, and f32 readback before exposure and display mapping.
 - [ ] **Capabilities and diagnostics**: Query formats, channels, sample counts, limits, and backend support; return actionable asset and rendering failures.

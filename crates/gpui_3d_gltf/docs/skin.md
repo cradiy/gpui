@@ -37,7 +37,7 @@ transform applies only the joint transforms to the final surface. Transforms on
 a shared instance ancestor still move the whole rig.
 
 ```no_run
-use gpui_3d::{EvaluatedScene, Pose, SceneGraph, SubtreeInstance};
+use gpui_3d::{EvaluatedScene, NodeHandle, Pose, SceneGraph, SubtreeInstance, TransformConstraint};
 use gpui_3d_gltf::SceneAsset;
 
 fn evaluate(
@@ -45,17 +45,22 @@ fn evaluate(
     asset: &SceneAsset,
     instance: &SubtreeInstance,
     pose: &Pose,
+    constraints: &[(NodeHandle, TransformConstraint)],
 ) -> anyhow::Result<EvaluatedScene> {
-    let transforms = graph.evaluate_with_transforms(pose.transforms())?;
+    let transforms = graph.evaluate_with_constraints(
+        pose.transforms(), constraints.iter().copied(),
+    )?;
     let replacements = asset.deform(instance, &transforms, &[])?;
-    Ok(graph.evaluate_with_overrides(pose.transforms(), replacements)?)
+    Ok(graph.evaluate_with_constraints_and_meshes(
+        pose.transforms(), constraints.iter().copied(), replacements,
+    )?)
 }
 ```
 
 Use the final evaluated snapshot for bounds, picking, color, shadow, and geometry
-outputs. When applying constraints, use the same final constrained transforms
-for skinning and final scene evaluation. For multiple instances, compute all
-replacements from the same pose snapshot before applying them. Graph mutations
+outputs. An empty constraint list uses the sampled local pose. Skinning and final
+scene evaluation use the same constraint inputs. For multiple instances, compute
+all replacements from the same pose snapshot before final evaluation. Graph mutations
 between sampling and replacement require the caller to resample; missing or
 foreign handles return errors.
 

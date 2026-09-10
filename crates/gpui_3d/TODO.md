@@ -91,6 +91,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Additive pose layers**: Explicit reference-relative translation, local shortest-arc rotation deltas, multiplicative signed scale, sparse node masks, retained base ordering, transactional validation, and absolute-time composition with hierarchy constraints.
 - [x] **Deformation**: CPU linear-blend skeletal skinning and morph targets from explicit pose/weight inputs, shared by rendering and queries.
   - [x] **Nonmutating mesh evaluation**: Combined local-transform and mesh overrides, preserved authored graphs and snapshots, replacement-aware bounds, spatial-index refits, and preparation-cache identity.
+  - [x] **Constrained deformation**: Follow/Aim evaluation with replacement meshes, retained constraint outcomes, and shared final transforms for Morph/Skin geometry, bounds, queries, cameras, and lights.
   - [x] **Morph targets**: Shared dense position/normal/tangent deltas, validated signed weights, normalized direction blending, preserved handedness, and immutable CPU-evaluated meshes reused by rendering, bounds, and picking.
   - [x] **Skeletal skinning**: Shared inverse bind matrices, arbitrary per-vertex influences with validated normalized weights, mesh-local/world-space joint inputs, inverse-transpose normals, reflection-aware tangents, morph composition, and immutable deformed geometry for rendering and queries.
 - [x] **Dynamic geometry**: Update vertex and instance data while reusing GPU buffers instead of rebuilding mesh resources each frame.

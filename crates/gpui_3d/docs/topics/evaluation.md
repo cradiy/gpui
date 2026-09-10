@@ -45,6 +45,16 @@ pass the same local transforms and the resulting meshes to
 For multiple instances, gather their transforms and mesh replacements before
 evaluating the final scene.
 
+With Follow or Aim constraints, evaluate the joint pose using
+`evaluate_with_constraints`, then pass the same local transforms, constraints,
+and sampled meshes to
+`evaluate_with_constraints_and_meshes(transforms, constraints, meshes)`.
+The final snapshot retains constraint outcomes and uses constrained world
+transforms for geometry, cameras, lights, and queries. Mesh replacements do not
+change constraint targets or dependency order. An empty constraint input uses
+ordinary hierarchy evaluation. See [Constraints](constraints.md) for dependencies
+and errors.
+
 The caller owns sampling, deformation, input resource limits, and scheduling.
 Evaluation performs synchronous CPU work; it does not run a clock, upload meshes,
 or retain prior samples as defaults. See [Animation](animation.md) for tracks,

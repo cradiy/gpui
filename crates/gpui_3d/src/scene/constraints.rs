@@ -1,5 +1,5 @@
 use super::{EvaluatedScene, NodeHandle, SceneError, SceneGraph};
-use crate::{AffineTransform, AimError, AimSettings, AimStatus};
+use crate::{AffineTransform, AimError, AimSettings, AimStatus, Mesh};
 use std::collections::HashMap;
 
 /// Stateless world-transform constraints evaluated after local pose overrides.
@@ -49,6 +49,21 @@ impl SceneGraph {
         transforms: impl IntoIterator<Item = (NodeHandle, AffineTransform)>,
         constraints: impl IntoIterator<Item = (NodeHandle, TransformConstraint)>,
     ) -> Result<EvaluatedScene, SceneError> {
+        self.evaluate_with_constraints_and_meshes(transforms, constraints, [])
+    }
+
+    /// Evaluates local transforms, world constraints, and replacement mesh resources.
+    /// Meshes use their node's final constrained world transform for rendering,
+    /// bounds, and queries. Constraint outcomes are retained in the snapshot.
+    /// Mesh targets must contain geometry; duplicate, foreign, expired, and
+    /// non-mesh targets are rejected as in `evaluate_with_overrides`.
+    /// The graph, its revision, and previous snapshots remain unchanged.
+    pub fn evaluate_with_constraints_and_meshes(
+        &self,
+        transforms: impl IntoIterator<Item = (NodeHandle, AffineTransform)>,
+        constraints: impl IntoIterator<Item = (NodeHandle, TransformConstraint)>,
+        meshes: impl IntoIterator<Item = (NodeHandle, Mesh)>,
+    ) -> Result<EvaluatedScene, SceneError> {
         let mut locals = HashMap::new();
         for (node, local) in transforms {
             self.node(node)?;
@@ -67,7 +82,7 @@ impl SceneGraph {
             }
         }
         if bindings.is_empty() {
-            return self.evaluate_with_transforms(locals);
+            return self.evaluate_with_overrides(locals, meshes);
         }
 
         let mut worlds: HashMap<NodeHandle, AffineTransform> = HashMap::with_capacity(self.len());
@@ -157,7 +172,7 @@ impl SceneGraph {
                 }
             }
         }
-        let mut evaluated = self.evaluate_using(|node, _| Ok(worlds[&node]))?;
+        let mut evaluated = self.evaluate_using(meshes, |node, _| Ok(worlds[&node]))?;
         evaluated.constraint_status = statuses;
         Ok(evaluated)
     }

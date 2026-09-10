@@ -34,17 +34,7 @@ impl SceneGraph {
                 return Err(SceneError::DuplicateTransform(handle));
             }
         }
-        let mut replacements = HashMap::new();
-        for (handle, mesh) in meshes {
-            let key = self.key(handle)?;
-            if self.nodes[key].node.surface.is_none() {
-                return Err(SceneError::NoMesh(handle));
-            }
-            if replacements.insert(key, mesh).is_some() {
-                return Err(SceneError::DuplicateMesh(handle));
-            }
-        }
-        self.evaluate_using_meshes(&replacements, |handle, parent| {
+        self.evaluate_using(meshes, |handle, parent| {
             parent
                 .compose(
                     locals
@@ -61,19 +51,22 @@ impl SceneGraph {
 
     pub(in crate::scene) fn evaluate_using(
         &self,
-        world_transform: impl FnMut(NodeHandle, AffineTransform) -> Result<AffineTransform, SceneError>,
-    ) -> Result<EvaluatedScene, SceneError> {
-        self.evaluate_using_meshes(&HashMap::new(), world_transform)
-    }
-
-    fn evaluate_using_meshes(
-        &self,
-        meshes: &HashMap<NodeKey, Mesh>,
+        meshes: impl IntoIterator<Item = (NodeHandle, Mesh)>,
         mut world_transform: impl FnMut(
             NodeHandle,
             AffineTransform,
         ) -> Result<AffineTransform, SceneError>,
     ) -> Result<EvaluatedScene, SceneError> {
+        let mut replacements = HashMap::new();
+        for (handle, mesh) in meshes {
+            let key = self.key(handle)?;
+            if self.nodes[key].node.surface.is_none() {
+                return Err(SceneError::NoMesh(handle));
+            }
+            if replacements.insert(key, mesh).is_some() {
+                return Err(SceneError::DuplicateMesh(handle));
+            }
+        }
         let mut evaluated = EvaluatedScene {
             preparation_revision: Arc::new(()),
             revision: self.revision,
@@ -125,7 +118,7 @@ impl SceneGraph {
                     lights.push((handle, light));
                 }
             }
-            let mesh_override = meshes.get(&key);
+            let mesh_override = replacements.get(&key);
             let local_bounds = mesh_override.map(Mesh::bounds).or(node.bounds);
             let bounds = local_bounds
                 .map(|bounds| bounds.transformed(world))

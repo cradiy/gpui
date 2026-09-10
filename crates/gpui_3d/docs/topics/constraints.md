@@ -50,6 +50,14 @@ Camera and light properties, bounds, spatial queries, and renderer preparation
 use the same final transforms. Hierarchy traversal order and frame-local object
 identity ordering are unchanged.
 
+`evaluate_with_constraints_and_meshes(transforms, constraints, meshes)` also
+accepts replacement geometry without editing mesh nodes. For skinning, evaluate
+the constrained joint pose first, compute the deformed meshes, and pass the same
+transform and constraint inputs to this method. The returned snapshot preserves
+constraint outcomes while using the replacement meshes for bounds, rendering,
+and picking. See [Scene evaluation](evaluation.md) for mesh admission and snapshot
+semantics.
+
 The graph, its revision, and retained snapshots are not modified. Callers own
 the constraint list and can evaluate any sampled pose without playback history.
 Omitting a constraint restores the authored or supplied local transform. To

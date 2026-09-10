@@ -210,18 +210,13 @@ fn inspect(options: Options) -> Result<()> {
         asset.morphs().len()
     );
     let mut graph = SceneGraph::new();
-    let instance = graph.instantiate(None, asset.subtree())?;
-    let bindings: HashMap<_, _> = asset
-        .nodes()
-        .iter()
-        .map(|node| (node.index, instance.node(node.handle).unwrap()))
-        .collect();
+    let instance = asset.instantiate(&mut graph, None)?;
     let overrides: Vec<_> = options
         .weights
         .iter()
         .map(|(index, weights)| {
-            let node = *bindings
-                .get(index)
+            let node = instance
+                .node(*index)
                 .with_context(|| format!("weight node {index} is outside the selected scene"))?;
             let morph = asset
                 .morphs()
@@ -244,7 +239,7 @@ fn inspect(options: Options) -> Result<()> {
         let mut skipped = 0;
         if let Some(clip) = &clip {
             for animation in clip.nodes() {
-                let Some(&node) = bindings.get(&animation.node_index()) else {
+                let Some(node) = instance.node(animation.node_index()) else {
                     skipped += 1;
                     continue;
                 };
@@ -264,7 +259,7 @@ fn inspect(options: Options) -> Result<()> {
             }
         }
         let poses = graph.evaluate_with_transforms(transforms.iter().copied())?;
-        let replacements = asset.deform(&instance, &poses, &weights)?;
+        let replacements = instance.deform(&poses, &weights)?;
         let mut fingerprint = DefaultHasher::new();
         let mut vertices = 0;
         for (node, mesh) in replacements {

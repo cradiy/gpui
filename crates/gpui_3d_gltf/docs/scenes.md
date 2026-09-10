@@ -58,7 +58,10 @@ handles. `primitives()` associates each occurrence with its original node, mesh,
 primitive and material indices. Duplicate names are allowed and do not become
 application IDs. The synthetic root has no original node index.
 
-Use `SubtreeInstance::node(source_handle)` to map these records to an instance.
+`SceneAsset::instantiate` returns a [scene instance](instances.md) with direct
+source-index lookups, reverse primitive mappings, and authored material groups.
+For core-only instantiation, use `SubtreeInstance::node(source_handle)` to map
+these records to an instance.
 Core evaluation, picking and frame-output mappings then identify the instantiated
 primitive nodes. Application IDs can be assigned through
 `SceneGraph::instantiate_with_ids`; they are not inferred from names or file indices.

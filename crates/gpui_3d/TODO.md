@@ -155,6 +155,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
       - [x] **glTF coordinate bindings**: Preserve authored coordinate sets, bind each material slot independently, retain selected tangent bases through Morph, and bound coordinate admission.
     - [x] **Vertex colors**: Normalized linear RGBA storage, split/deformation correspondence, material modulation, shared output and query alpha coverage, and glTF COLOR_0 conversion.
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
+  - [x] **glTF instance identities**: Retained shared assets, source-index and reverse occurrence mappings, authored material groups for graph overrides, application ID admission, and bound Morph/Skin evaluation.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.
 - [ ] **Animation import and playback**: File-format clips, playback state, looping, pause, and seeking feeding core pose, transform, and deformation inputs.

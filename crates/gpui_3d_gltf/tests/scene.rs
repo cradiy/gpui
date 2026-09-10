@@ -213,6 +213,154 @@ fn decoding_is_shared_across_materials_instances_and_retryable() {
 }
 
 #[test]
+fn bound_instances_map_occurrences_and_isolate_material_overrides() {
+    let mut value = source();
+    value["meshes"][0]["primitives"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("material");
+    let asset = prepared(value)
+        .scene(None, SceneOptions::default())
+        .unwrap()
+        .resolve_images(|_, _| panic!("no texture"))
+        .unwrap();
+    let mut graph = SceneGraph::new();
+    let first = asset.instantiate(&mut graph, None).unwrap();
+    let second = asset.instantiate(&mut graph, None).unwrap();
+    drop(asset);
+    assert_eq!(first.asset().nodes().len(), 3);
+    assert!(first.node(999).is_none());
+    assert!(first.primitive(0, 0).is_none());
+    assert!(first.primitive(1, 2).is_none());
+    assert!(first.source_node(first.root()).is_none());
+    assert!(first.source_primitive(first.root()).is_none());
+    for node_index in [1, 2] {
+        let group = first.node(node_index).unwrap();
+        assert_eq!(first.source_node(group).unwrap().index, node_index);
+        assert!(first.source_primitive(group).is_none());
+        for primitive_index in [0, 1] {
+            let handle = first.primitive(node_index, primitive_index).unwrap();
+            let source = first.source_primitive(handle).unwrap();
+            assert_eq!(
+                (source.node_index, source.primitive_index),
+                (node_index, primitive_index)
+            );
+            assert_eq!(first.subtree_instance().node(source.handle), Some(handle));
+            assert_eq!(graph.parent(handle).unwrap(), Some(group));
+            assert!(first.source_node(handle).is_none());
+            assert!(second.source_primitive(handle).is_none());
+        }
+        assert!(second.source_node(group).is_none());
+    }
+    assert_eq!(
+        first.material_nodes(Some(0)).collect::<Vec<_>>(),
+        [
+            first.primitive(1, 0).unwrap(),
+            first.primitive(2, 0).unwrap(),
+        ]
+    );
+    assert_eq!(
+        first.material_nodes(None).collect::<Vec<_>>(),
+        [
+            first.primitive(1, 1).unwrap(),
+            first.primitive(2, 1).unwrap(),
+        ]
+    );
+    assert_eq!(first.material_nodes(Some(99)).count(), 0);
+    let retained = graph.evaluate().unwrap().scene(Camera::default());
+    for node in first.material_nodes(Some(0)) {
+        graph
+            .set_material(node, Material::color(rgb(0x0000ff)))
+            .unwrap();
+    }
+    let changed = graph.evaluate().unwrap().scene(Camera::default());
+    let old_frame = retained
+        .prepare(1., None, |_| Ok(TextureState::Ready(ResolvedTexture::None)))
+        .unwrap();
+    let frame = changed
+        .prepare(1., None, |_| Ok(TextureState::Ready(ResolvedTexture::None)))
+        .unwrap();
+    for (index, object) in frame.frame().objects.iter().enumerate() {
+        let handle = frame.objects()[index].node.unwrap();
+        let overridden = first
+            .source_primitive(handle)
+            .is_some_and(|p| p.material_index == Some(0));
+        assert_eq!(
+            object.color,
+            if overridden {
+                rgb(0x0000ff)
+            } else {
+                old_frame.frame().objects[index].color
+            }
+        );
+        assert!(Arc::ptr_eq(
+            &object.mesh,
+            &old_frame.frame().objects[index].mesh
+        ));
+    }
+    assert_eq!(first.material_nodes(Some(0)).count(), 2);
+    let stale = first.primitive(1, 0).unwrap();
+    graph.remove_subtree(first.root()).unwrap();
+    let replacement = graph.insert(None, gpui_3d::Node::new()).unwrap();
+    assert!(graph.node(stale).is_err());
+    assert!(first.source_primitive(replacement).is_none());
+    assert_eq!(first.source_primitive(stale).unwrap().node_index, 1);
+    let live = second.root();
+    drop(second);
+    assert!(graph.node(live).is_ok());
+}
+
+#[test]
+fn bound_instantiation_preserves_id_admission_and_graph_identity() {
+    let asset = prepared(source())
+        .scene(None, SceneOptions::default())
+        .unwrap()
+        .resolve_images(|_, _| panic!("no texture"))
+        .unwrap();
+    let mut graph = SceneGraph::new();
+    let mut other = SceneGraph::new();
+    let foreign = other.insert(None, gpui_3d::Node::new()).unwrap();
+    let revision = graph.revision();
+    assert!(asset.instantiate(&mut graph, Some(foreign)).is_err());
+    assert!(
+        asset
+            .instantiate_with_ids(&mut graph, None, |_, _| Some("same".into()))
+            .is_err()
+    );
+    assert_eq!(graph.revision(), revision);
+    assert!(graph.is_empty());
+    let source = asset.nodes()[1].handle;
+    let instance = asset
+        .instantiate_with_ids(&mut graph, None, |handle, _| {
+            (handle == source).then(|| "part".into())
+        })
+        .unwrap();
+    assert_eq!(graph.find(&"part".into()), instance.node(1));
+    let other_instance = asset.instantiate(&mut other, None).unwrap();
+    assert!(
+        instance
+            .source_node(other_instance.node(1).unwrap())
+            .is_none()
+    );
+    assert!(
+        instance
+            .source_primitive(other_instance.primitive(1, 0).unwrap())
+            .is_none()
+    );
+    let revision = graph.revision();
+    let count = graph.len();
+    assert!(
+        asset
+            .instantiate_with_ids(&mut graph, None, |handle, _| {
+                (handle == source).then(|| "part".into())
+            })
+            .is_err()
+    );
+    assert_eq!(graph.len(), count);
+    assert_eq!(graph.revision(), revision);
+}
+
+#[test]
 fn aggregate_limits_count_primitive_occurrences_but_share_mesh_storage() {
     let document = prepared(source());
     let exact = SceneOptions {

@@ -1,6 +1,6 @@
 # Scenes
 
-`PreparedDocument::scene(index, options)` converts a selected static mesh scene
+`PreparedDocument::scene(index, options)` converts a selected mesh scene
 into a `SceneDefinition`. `None` selects the document's declared default scene;
 without a default, pass an explicit index. An absent or out-of-range selection
 returns an error. Nodes outside the selected scene are not converted.
@@ -77,6 +77,13 @@ asset. Retained evaluated scenes preserve their previous state.
 - `vertex_limit` and `index_limit` apply across unique converted mesh primitives,
   including vertices split by normal or tangent generation. Repeated occurrences
   do not consume additional geometry quota.
+- `influence_limit` counts retained geometry joint/weight slots and each unique
+  `(skin, primitive)` binding's slots, including zero weights.
+- `joint_limit` counts joints in each unique skin definition and each unique
+  `(skin, primitive)` binding. Repeated occurrences share bindings and do not
+  consume additional joint/influence quota.
+- `deformed_vertex_limit` counts initial skinned output vertices per primitive
+  occurrence, including repeated meshes. Its default is 4,194,304.
 
 These are conversion limits, not device-memory quotas. Document/encoded-resource
 limits and callback-owned decoded-image limits remain separate. Conversion may
@@ -93,8 +100,10 @@ Duplicate roots, multiply referenced nodes within the selected scene, hierarchy
 cycles, combined matrix/TRS properties and singular transforms return contextual
 errors. Traversal is iterative. Different scenes may reference the same node.
 
-Skins and morph targets/weights are not converted and return errors
-when encountered. Animation clips are not sampled: ordinary transform-animated
+Skin bindings retain joint order and initialize mesh geometry from the authored
+joint pose. `skins()` exposes bindings for subsequent instance-pose evaluation.
+Morph targets/weights return errors when encountered. Animation clips are not
+sampled during scene conversion: ordinary transform-animated
 nodes use their declared base transforms. `PreparedDocument::animation` converts
 tracks separately for explicit instance-pose evaluation. Required unsupported
 extensions are rejected; optional unknown extensions retain only their core glTF fallback.

@@ -4,7 +4,7 @@ use gltf::{
     accessor::{DataType, Dimensions},
     mesh::Mode,
 };
-use gpui_3d::{Mesh, NormalMode, Vertex};
+use gpui_3d::{Mesh, NormalMode, SkinInfluence, Vertex};
 
 use crate::PreparedDocument;
 
@@ -19,6 +19,8 @@ pub struct GeometryOptions {
     pub vertex_limit: usize,
     /// Maximum expanded triangle indices.
     pub index_limit: usize,
+    /// Maximum input and final joint/weight slots, including zero weights.
+    pub influence_limit: usize,
 }
 
 impl Default for GeometryOptions {
@@ -28,6 +30,7 @@ impl Default for GeometryOptions {
             generate_tangents: false,
             vertex_limit: 4_194_304,
             index_limit: 12_582_912,
+            influence_limit: 16_777_216,
         }
     }
 }
@@ -41,6 +44,7 @@ pub struct PrimitiveGeometry {
     primitive_index: usize,
     material_index: Option<usize>,
     tex_coord_set: Option<u32>,
+    pub(crate) influences: Option<crate::skin::VertexInfluences>,
 }
 
 impl PrimitiveGeometry {
@@ -64,6 +68,17 @@ impl PrimitiveGeometry {
     pub fn tex_coord_set(&self) -> Option<u32> {
         self.tex_coord_set
     }
+    /// Joint indices address a skin's joint array, not document node indices.
+    /// Each slice belongs to one output vertex, after normal/tangent splitting.
+    pub fn skin_influences(&self) -> Option<std::slice::ChunksExact<'_, SkinInfluence>> {
+        self.influences
+            .as_ref()
+            .map(|data| data.values.chunks_exact(data.stride))
+    }
+    pub fn influence_count(&self) -> usize {
+        self.influences.as_ref().map_or(0, |data| data.values.len())
+    }
+    /// Returns base geometry and vertex correspondence, discarding skin inputs.
     pub fn into_parts(self) -> (Mesh, Vec<u32>) {
         (self.mesh, self.source_vertices)
     }
@@ -126,6 +141,19 @@ impl PreparedDocument {
                 Semantic::TexCoords(_) => {
                     has_uvs = true;
                     accessor.dimensions() == Dimensions::Vec2
+                        && match accessor.data_type() {
+                            DataType::F32 => !accessor.normalized(),
+                            DataType::U8 | DataType::U16 => accessor.normalized(),
+                            _ => false,
+                        }
+                }
+                Semantic::Joints(_) => {
+                    accessor.dimensions() == Dimensions::Vec4
+                        && !accessor.normalized()
+                        && matches!(accessor.data_type(), DataType::U8 | DataType::U16)
+                }
+                Semantic::Weights(_) => {
+                    accessor.dimensions() == Dimensions::Vec4
                         && match accessor.data_type() {
                             DataType::F32 => !accessor.normalized(),
                             DataType::U8 | DataType::U16 => accessor.normalized(),
@@ -300,6 +328,13 @@ impl PreparedDocument {
             "generated vertex count {} exceeds vertex limit",
             mesh.vertex_count()
         );
+        let influences = crate::skin::influences(
+            self,
+            &primitive,
+            count,
+            &source_vertices,
+            options.influence_limit,
+        )?;
         Ok(PrimitiveGeometry {
             mesh,
             source_vertices,
@@ -307,6 +342,7 @@ impl PreparedDocument {
             primitive_index,
             material_index: primitive.material().index(),
             tex_coord_set: uv.map(|_| options.tex_coord_set),
+            influences,
         })
     }
 }
@@ -317,7 +353,7 @@ fn float(accessor: &Accessor<'_>, dimensions: Dimensions) -> bool {
         && !accessor.normalized()
 }
 
-fn collect<T: Default + Clone>(
+pub(crate) fn collect<T: Default + Clone>(
     accessor: &Accessor<'_>,
     values: Option<impl Iterator<Item = T>>,
 ) -> Result<Vec<T>> {

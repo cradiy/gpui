@@ -31,8 +31,13 @@ Bounds are computed from converted vertices, not accessor min/max metadata.
   UVs are not flipped or transformed. When no sets exist, vertices use zero UVs
   and the result reports `tex_coord_set() == None`. When sets exist but the
   requested set does not, conversion returns an error.
-- All attribute counts must match POSITION. Vertex colors, skin attributes,
-  custom attributes, and morph targets are unsupported and return errors.
+- Skin attributes retain consecutive `JOINTS_n`/`WEIGHTS_n` pairs. Joint indices
+  use unsigned-byte/unsigned-short VEC4; weights use float or normalized
+  unsigned-byte/unsigned-short VEC4. Weights must be finite and nonnegative, with
+  a positive total per vertex. `skin_influences()` exposes output-vertex slices
+  after normal/tangent splitting. Indices address a skin's joint array.
+- All attribute counts must match POSITION. Vertex colors, custom attributes,
+  and morph targets are unsupported and return errors.
 
 Indexed primitives accept unsigned-byte, unsigned-short, or unsigned-int scalar
 indices. Non-indexed primitives use accessor order. Triangle lists retain their
@@ -66,7 +71,10 @@ Defaults admit 4,194,304 input/final vertices and 12,582,912 expanded indices pe
 primitive. Counts and topology expansion are checked before decoding arrays.
 Final vertex admission also applies after normal/tangent splitting; temporary
 generation storage is bounded by admitted index counts, not the final vertex
-limit. These are element limits, not an exact process-memory budget. Resource
+limit. `influence_limit` bounds both input and output joint/weight slots,
+including zero weights; its default is 16,777,216. Skin metadata is retained
+separately from the core mesh and is discarded by `into_parts()`.
+These are element limits, not an exact process-memory budget. Resource
 byte limits remain independent and apply during document preparation.
 
 Errors retain mesh/primitive context and relevant accessor, vertex, or triangle

@@ -47,6 +47,13 @@ fn evaluate(document: &PreparedDocument, time: Duration) -> anyhow::Result<()> {
         }
     }
     let pose = Pose::new(locals)?;
+    let transforms = graph.evaluate_with_transforms(pose.transforms())?;
+    let meshes = asset.skins().iter()
+        .map(|skin| skin.evaluate(&instance, &transforms))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    for (handle, mesh) in meshes {
+        graph.set_mesh(handle, mesh)?;
+    }
     let evaluated = graph.evaluate_with_transforms(pose.transforms())?;
     // Use evaluated cameras, meshes, and queries from the same snapshot.
     let _ = evaluated;

@@ -2,10 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use gpui::RenderImage;
-use gpui_3d::{AffineTransform, Camera, Node, NodeHandle, SceneGraph, SceneSubtree};
+use gpui_3d::{AffineTransform, Camera, Node, NodeHandle, SceneGraph, SceneSubtree, Skin};
 
 use crate::{
     EncodedImage, GeometryOptions, MaterialDefinition, PreparedDocument, PrimitiveGeometry,
+    SceneSkin, SkinDefinition, SkinOptions,
 };
 
 /// Aggregate limits for one selected scene. Geometry is charged once per unique
@@ -15,6 +16,12 @@ pub struct SceneOptions {
     pub node_limit: usize,
     pub vertex_limit: usize,
     pub index_limit: usize,
+    /// Total retained geometry influence slots and unique skin-binding slots.
+    pub influence_limit: usize,
+    /// Total joints in unique skin definitions and unique primitive bindings.
+    pub joint_limit: usize,
+    /// Initial skinned output vertices, charged per primitive occurrence.
+    pub deformed_vertex_limit: usize,
 }
 
 impl Default for SceneOptions {
@@ -23,6 +30,9 @@ impl Default for SceneOptions {
             node_limit: 100_000,
             vertex_limit: 4_194_304,
             index_limit: 12_582_912,
+            influence_limit: 33_554_432,
+            joint_limit: 65_536,
+            deformed_vertex_limit: 4_194_304,
         }
     }
 }
@@ -34,6 +44,7 @@ struct DefinitionNode {
     parent: Option<usize>,
     local: AffineTransform,
     camera: Option<(usize, Camera)>,
+    skin: Option<usize>,
     primitives: Vec<usize>,
 }
 
@@ -43,7 +54,7 @@ struct DefinitionPrimitive {
     material: usize,
 }
 
-/// A selected static scene with converted geometry and encoded material inputs.
+/// A selected scene with converted geometry, skin bindings, and encoded material inputs.
 /// Clones share the definition. Image decoding and GPU work are not performed.
 #[derive(Clone)]
 pub struct SceneDefinition(Arc<Definition>);
@@ -53,6 +64,8 @@ struct Definition {
     nodes: Vec<DefinitionNode>,
     primitives: Vec<DefinitionPrimitive>,
     materials: Vec<MaterialDefinition>,
+    skins: HashMap<usize, SkinDefinition>,
+    bindings: HashMap<(usize, usize), Skin>,
 }
 
 /// Original glTF node identity and its source-subtree handle. Names are metadata,
@@ -63,6 +76,7 @@ pub struct SceneNode {
     pub name: Option<String>,
     pub handle: NodeHandle,
     pub camera_index: Option<usize>,
+    pub skin_index: Option<usize>,
 }
 
 /// One primitive occurrence beneath an original glTF node.
@@ -72,6 +86,7 @@ pub struct ScenePrimitive {
     pub mesh_index: usize,
     pub primitive_index: usize,
     pub material_index: Option<usize>,
+    pub skin_index: Option<usize>,
     pub handle: NodeHandle,
 }
 
@@ -83,6 +98,7 @@ pub struct SceneAsset {
     subtree: SceneSubtree,
     nodes: Arc<[SceneNode]>,
     primitives: Arc<[ScenePrimitive]>,
+    skins: Arc<[SceneSkin]>,
 }
 
 impl SceneAsset {
@@ -98,6 +114,10 @@ impl SceneAsset {
     }
     pub fn primitives(&self) -> &[ScenePrimitive] {
         &self.primitives
+    }
+    /// Primitive bindings in scene order, retaining undeformed base geometry.
+    pub fn skins(&self) -> &[SceneSkin] {
+        &self.skins
     }
 }
 
@@ -151,6 +171,7 @@ impl SceneDefinition {
                 name: source.name.clone(),
                 handle,
                 camera_index: source.camera.map(|(index, _)| index),
+                skin_index: source.skin,
             });
             for &index in &source.primitives {
                 let primitive = &self.0.primitives[index];
@@ -167,8 +188,52 @@ impl SceneDefinition {
                     mesh_index: geometry.mesh_index(),
                     primitive_index: geometry.primitive_index(),
                     material_index: geometry.material_index(),
+                    skin_index: source.skin,
                     handle,
                 });
+            }
+        }
+        let node_handles: HashMap<_, _> =
+            nodes.iter().map(|node| (node.index, node.handle)).collect();
+        let joint_handles: HashMap<_, Arc<[NodeHandle]>> = self
+            .0
+            .skins
+            .iter()
+            .map(|(&index, skin)| {
+                (
+                    index,
+                    skin.joints()
+                        .iter()
+                        .map(|joint| node_handles[joint])
+                        .collect(),
+                )
+            })
+            .collect();
+        let mut skins = Vec::new();
+        let mut primitive_cursor = 0;
+        for source in &self.0.nodes {
+            for &geometry_index in &source.primitives {
+                let primitive = &primitives[primitive_cursor];
+                primitive_cursor += 1;
+                if let Some(index) = source.skin {
+                    skins.push(SceneSkin {
+                        index,
+                        primitive: primitive.handle,
+                        joints: joint_handles[&index].clone(),
+                        binding: self.0.bindings[&(index, geometry_index)].clone(),
+                        base: self.0.primitives[geometry_index].geometry.mesh().clone(),
+                    });
+                }
+            }
+        }
+        if !skins.is_empty() {
+            let poses = graph.evaluate()?;
+            let meshes = skins
+                .iter()
+                .map(|skin| skin.evaluate_using(Some, &poses))
+                .collect::<Result<Vec<_>>>()?;
+            for (handle, mesh) in meshes {
+                graph.set_mesh(handle, mesh)?;
             }
         }
         Ok(SceneAsset {
@@ -176,12 +241,13 @@ impl SceneDefinition {
             subtree: graph.snapshot_subtree(root)?,
             nodes: nodes.into(),
             primitives: primitives.into(),
+            skins: skins.into(),
         })
     }
 }
 
 impl PreparedDocument {
-    /// Converts a selected scene's static mesh hierarchy. None selects the declared
+    /// Converts a selected scene's mesh hierarchy and skin bindings. None selects the declared
     /// default scene and fails when none exists. Only reachable nodes are converted.
     pub fn scene(&self, index: Option<usize>, options: SceneOptions) -> Result<SceneDefinition> {
         self.scene_definition(index, options)
@@ -211,6 +277,8 @@ impl PreparedDocument {
             nodes: Vec::new(),
             primitives: Vec::new(),
             materials: Vec::new(),
+            skins: HashMap::new(),
+            bindings: HashMap::new(),
         };
         let mut pending = Vec::new();
         let mut discovered = vec![false; self.gltf().nodes().len()];
@@ -233,11 +301,16 @@ impl PreparedDocument {
         let mut node_count = 1usize;
         let mut vertices_left = options.vertex_limit;
         let mut indices_left = options.index_limit;
+        let mut influences_left = options.influence_limit;
         while let Some((source, parent, parent_world)) = pending.pop() {
             let source_index = source.index();
             let convert = (|| -> Result<()> {
                 let raw = &self.gltf().as_json().nodes[source_index];
-                ensure!(source.skin().is_none(), "skin conversion is unsupported");
+                let skin = source.skin().map(|skin| skin.index());
+                ensure!(
+                    skin.is_none() || source.mesh().is_some(),
+                    "skin node requires a mesh"
+                );
                 ensure!(
                     raw.weights.is_none(),
                     "morph weight conversion is unsupported"
@@ -327,11 +400,13 @@ impl PreparedDocument {
                                                     .is_none()),
                                         vertex_limit: vertices_left,
                                         index_limit: indices_left,
+                                        influence_limit: influences_left,
                                     },
                                 )?;
                                 binding.validate_geometry(&geometry)?;
                                 vertices_left -= geometry.mesh().vertex_count();
                                 indices_left -= geometry.mesh().index_count();
+                                influences_left -= geometry.influence_count();
                                 let index = definition.primitives.len();
                                 definition
                                     .primitives
@@ -356,6 +431,7 @@ impl PreparedDocument {
                     parent,
                     local,
                     camera,
+                    skin,
                     primitives: node_primitives,
                 });
                 let start = pending.len();
@@ -376,6 +452,93 @@ impl PreparedDocument {
                 Ok(())
             })();
             convert.with_context(|| format!("node {source_index}"))?;
+        }
+        let lookup: HashMap<_, _> = definition
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, node)| (node.index, i))
+            .collect();
+        let mut roots = Vec::with_capacity(definition.nodes.len());
+        let mut ends: Vec<_> = (1..=definition.nodes.len()).collect();
+        for (i, node) in definition.nodes.iter().enumerate() {
+            roots.push(node.parent.map_or(i, |parent| roots[parent]));
+        }
+        for (i, node) in definition.nodes.iter().enumerate().rev() {
+            if let Some(parent) = node.parent {
+                ends[parent] = ends[parent].max(ends[i]);
+            }
+        }
+        let mut joints_left = options.joint_limit;
+        let mut deformed_vertices_left = options.deformed_vertex_limit;
+        for node in &definition.nodes {
+            let Some(index) = node.skin else {
+                continue;
+            };
+            let bind = (|| -> Result<()> {
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    definition.skins.entry(index)
+                {
+                    let skin = self.skin(
+                        index,
+                        SkinOptions {
+                            joint_limit: joints_left,
+                        },
+                    )?;
+                    let joints = skin
+                        .joints()
+                        .iter()
+                        .map(|joint| {
+                            lookup.get(joint).copied().with_context(|| {
+                                format!("joint node {joint} is outside the selected scene")
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let root = roots[joints[0]];
+                    ensure!(
+                        joints.iter().all(|&joint| roots[joint] == root),
+                        "skin joints have no common scene root"
+                    );
+                    if let Some(skeleton) = skin.skeleton() {
+                        let skeleton = *lookup
+                            .get(&skeleton)
+                            .context("skeleton is outside the selected scene")?;
+                        ensure!(
+                            joints
+                                .iter()
+                                .all(|&joint| skeleton <= joint && joint < ends[skeleton]),
+                            "skeleton must be an ancestor of every joint"
+                        );
+                    }
+                    joints_left -= skin.joints().len();
+                    entry.insert(skin);
+                }
+                let skin = &definition.skins[&index];
+                for &geometry_index in &node.primitives {
+                    deformed_vertices_left = deformed_vertices_left
+                        .checked_sub(
+                            definition.primitives[geometry_index]
+                                .geometry
+                                .mesh()
+                                .vertex_count(),
+                        )
+                        .context("initial skinned vertices exceed deformed vertex limit")?;
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        definition.bindings.entry((index, geometry_index))
+                    {
+                        let geometry = &definition.primitives[geometry_index].geometry;
+                        joints_left = joints_left
+                            .checked_sub(skin.joints().len())
+                            .context("skin bindings exceed joint limit")?;
+                        influences_left = influences_left
+                            .checked_sub(geometry.influence_count())
+                            .context("skin bindings exceed influence limit")?;
+                        entry.insert(skin.bind(geometry)?);
+                    }
+                }
+                Ok(())
+            })();
+            bind.with_context(|| format!("node {} skin {index}", node.index))?;
         }
         Ok(SceneDefinition(Arc::new(definition)))
     }

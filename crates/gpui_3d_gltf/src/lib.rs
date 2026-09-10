@@ -11,6 +11,7 @@
 #[doc = include_str!("../docs/scenes.md")]
 #[doc = include_str!("../docs/images.md")]
 #[doc = include_str!("../docs/animation.md")]
+#[doc = include_str!("../docs/skin.md")]
 pub mod guide {}
 
 mod animation;
@@ -20,6 +21,7 @@ mod image;
 mod material;
 mod resources;
 mod scene;
+mod skin;
 mod validation;
 
 pub use animation::{AnimationClip, AnimationOptions, NodeAnimation};
@@ -28,3 +30,4 @@ pub use image::ImageDecodeLimits;
 pub use material::{MaterialDefinition, TextureBinding};
 pub use resources::{Document, EncodedImage, Limits, PreparedDocument};
 pub use scene::{SceneAsset, SceneDefinition, SceneNode, SceneOptions, ScenePrimitive};
+pub use skin::{SceneSkin, SkinDefinition, SkinOptions};

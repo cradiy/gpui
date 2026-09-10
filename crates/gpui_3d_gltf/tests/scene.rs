@@ -219,6 +219,7 @@ fn aggregate_limits_count_primitive_occurrences_but_share_mesh_storage() {
         node_limit: 8,
         vertex_limit: 6,
         index_limit: 6,
+        ..Default::default()
     };
     assert!(document.scene(None, exact).is_ok());
     for options in [

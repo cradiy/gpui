@@ -177,7 +177,9 @@ fn normal_generation_handles_extreme_finite_position_scales() {
 
 #[test]
 fn generated_vertex_maps_compose_with_tangents_morph_and_skin_inputs() {
-    let source = folded();
+    let source = folded()
+        .with_uv_set(7, (0..5).map(|i| [i as f32, -2.]).collect())
+        .unwrap();
     let (normal_mesh, normal_sources) = source
         .generate_normals(NormalMode::Flat)
         .unwrap()
@@ -199,6 +201,9 @@ fn generated_vertex_maps_compose_with_tangents_morph_and_skin_inputs() {
     )
     .unwrap();
     let morphed = targets.evaluate(&[1.]).unwrap();
+    for (vertex, &index) in sources.iter().enumerate() {
+        assert_eq!(morphed.uv_at(7, vertex), source.uv_at(7, index as usize));
+    }
     let influences: Vec<_> = sources
         .iter()
         .map(|&i| {
@@ -218,6 +223,9 @@ fn generated_vertex_maps_compose_with_tangents_morph_and_skin_inputs() {
             ],
         )
         .unwrap();
+    for (output, &index) in sources.iter().enumerate() {
+        assert_eq!(deformed.uv_at(7, output), source.uv_at(7, index as usize));
+    }
     for (vertex, &index) in deformed.vertices().iter().zip(&sources) {
         let source = source.vertices()[index as usize];
         close(

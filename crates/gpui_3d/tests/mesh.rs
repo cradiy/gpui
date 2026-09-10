@@ -14,6 +14,64 @@ fn vertices() -> Vec<Vertex> {
         .to_vec()
 }
 
+#[test]
+fn uv_snapshots_validate_sparse_sets_and_invalidate_replaced_basis() {
+    use gpui_3d::UvSetError;
+    let plane = Mesh::plane();
+    let original = Mesh::new(plane.vertices().to_vec(), vec![0, 1, 2])
+        .with_tangents(plane.tangents().unwrap().to_vec())
+        .unwrap();
+    let coordinates = vec![[-2., 3.], [4., 5.], [6., 7.], [8., 9.]];
+    let attached = original.with_uv_set(u32::MAX, coordinates.clone()).unwrap();
+    assert_eq!(attached.uv_sets().collect::<Vec<_>>(), [0, u32::MAX]);
+    assert_eq!(original.uv_at(u32::MAX, 0), None);
+    assert_eq!(attached.uv_at(1, 0), None);
+    assert_eq!(attached.uv_at(u32::MAX, 4), None);
+    assert!(std::ptr::eq(original.vertices(), attached.vertices()));
+    assert!(std::ptr::eq(original.indices(), attached.indices()));
+    assert!(std::ptr::eq(
+        original.tangents().unwrap(),
+        attached.tangents().unwrap()
+    ));
+    let replaced = attached.with_uv_set(0, coordinates.clone()).unwrap();
+    assert!(replaced.tangents().is_none());
+    for (i, uv) in coordinates.iter().enumerate() {
+        assert_eq!(replaced.uv_at(0, i), Some(*uv));
+        assert_eq!(replaced.uv_at(u32::MAX, i), Some(*uv));
+        assert_eq!(attached.uv_at(0, i), Some(original.vertices()[i].uv));
+    }
+    for set in [0, u32::MAX] {
+        assert_eq!(
+            attached.with_uv_set(set, vec![]).unwrap_err(),
+            UvSetError::Count {
+                set,
+                expected: 4,
+                actual: 0
+            }
+        );
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut invalid = coordinates.clone();
+            invalid[3][1] = value;
+            assert_eq!(
+                attached.with_uv_set(set, invalid).unwrap_err(),
+                UvSetError::NonFinite {
+                    set,
+                    vertex: 3,
+                    component: 1
+                }
+            );
+        }
+    }
+    let updated = attached
+        .with_vertices(attached.vertices().to_vec(), None)
+        .unwrap();
+    assert_eq!(updated.uv_at(u32::MAX, 3), Some(coordinates[3]));
+    assert_eq!(attached.uv_at(u32::MAX, 3), Some(coordinates[3]));
+    let overwritten = attached.with_uv_set(u32::MAX, vec![[0., 1.]; 4]).unwrap();
+    assert_eq!(overwritten.uv_at(u32::MAX, 3), Some([0., 1.]));
+    assert_eq!(attached.uv_at(u32::MAX, 3), Some(coordinates[3]));
+}
+
 fn rejects(vertices: Vec<Vertex>, indices: Vec<u32>, expected: MeshError) {
     assert_eq!(
         Mesh::try_new(vertices.clone(), indices.clone()).unwrap_err(),

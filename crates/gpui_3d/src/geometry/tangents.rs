@@ -237,6 +237,7 @@ impl Mesh {
         let mesh = Mesh::new(vertices, indices)
             .with_tangents(tangents)
             .map_err(TangentGenerationError::Tangents)?;
+        let mesh = self.remap_uv_sets(mesh, &source_vertices);
         Ok(GeneratedTangents {
             mesh,
             source_vertices,

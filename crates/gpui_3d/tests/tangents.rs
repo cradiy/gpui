@@ -58,9 +58,17 @@ fn shared_planar_tangents_match_analytic_frames_and_replace_existing_data() {
 
 #[test]
 fn mirrored_uvs_split_shared_vertices_without_changing_triangles_or_queries() {
-    let source = quad(true);
+    let source = quad(true)
+        .with_uv_set(2, (0..4).map(|i| [i as f32, 3.]).collect())
+        .unwrap();
     let generated = source.generate_tangents().unwrap();
     let output = generated.mesh();
+    for (vertex, &source_vertex) in generated.source_vertices().iter().enumerate() {
+        assert_eq!(
+            output.uv_at(2, vertex),
+            source.uv_at(2, source_vertex as usize)
+        );
+    }
     assert_eq!(output.vertex_count(), 6);
     assert_eq!(output.triangle_count(), source.triangle_count());
     assert!(source.tangents().is_none());

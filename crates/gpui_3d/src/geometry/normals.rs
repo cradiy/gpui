@@ -154,6 +154,7 @@ impl Mesh {
             indices.push(index);
         }
         let mesh = Mesh::try_new(vertices, indices).map_err(NormalGenerationError::Mesh)?;
+        let mesh = self.remap_uv_sets(mesh, &source_vertices);
         Ok(GeneratedNormals {
             mesh,
             source_vertices,

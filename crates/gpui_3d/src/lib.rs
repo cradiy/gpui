@@ -57,6 +57,7 @@ pub use gpui::MeshVertex3d as Vertex;
 pub use gpui::PbrMaterial3d as PbrMaterial;
 pub use gpui::Scene3dViewportQuality as ViewportQuality;
 pub use gpui::TangentError3d as TangentError;
+pub use gpui::UvSetError3d as UvSetError;
 pub use gpui::{
     ColorOutput3d as ColorOutput, TextureColorSpace3d as TextureColorSpace,
     ToneMapping3d as ToneMapping,

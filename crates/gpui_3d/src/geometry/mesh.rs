@@ -1,4 +1,4 @@
-use crate::{MeshError, MeshUpdateError, TangentError, Vertex, math, spatial::bvh};
+use crate::{MeshError, MeshUpdateError, TangentError, UvSetError, Vertex, math, spatial::bvh};
 use gpui::Mesh3d;
 use std::sync::{Arc, OnceLock};
 
@@ -25,6 +25,38 @@ impl Mesh {
     pub fn indices(&self) -> &[u32] {
         self.0.indices()
     }
+    /// Stored coordinate-set identifiers in ascending order, including set zero.
+    pub fn uv_sets(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.uv_sets()
+    }
+    /// A coordinate, or `None` for a missing set or out-of-range vertex.
+    pub fn uv_at(&self, set: u32, vertex: usize) -> Option<[f32; 2]> {
+        self.0.uv_at(set, vertex)
+    }
+    /// Attaches or replaces a finite coordinate for every vertex, including unused ones.
+    /// Set zero replaces `Vertex::uv` and removes tangents. Other sets retain them.
+    /// Unchanged attributes and the spatial index remain shared with the source mesh.
+    pub fn with_uv_set(&self, set: u32, coordinates: Vec<[f32; 2]>) -> Result<Self, UvSetError> {
+        self.0
+            .with_uv_set(set, coordinates)
+            .map(|mesh| Self(mesh, self.1.clone()))
+    }
+
+    pub(super) fn remap_uv_sets(&self, mut output: Self, source_vertices: &[u32]) -> Self {
+        for set in self.uv_sets().skip(1) {
+            let coordinates = source_vertices
+                .iter()
+                .map(|&source| {
+                    self.uv_at(set, source as usize)
+                        .expect("validated source vertex")
+                })
+                .collect();
+            output = output
+                .with_uv_set(set, coordinates)
+                .expect("validated UV remapping");
+        }
+        output
+    }
     /// Mesh-local tangent XYZ and handedness W, if supplied.
     pub fn tangents(&self) -> Option<&[[f32; 4]]> {
         self.0.tangents()
@@ -41,6 +73,7 @@ impl Mesh {
     /// Vertex count and triangle identities are preserved; index storage is shared.
     /// Supply tangents for the replacement normals, or `None` to omit them.
     /// The new snapshot has independent bounds and a fresh lazy query index.
+    /// Additional coordinate sets remain shared with the source mesh.
     pub fn with_vertices(
         &self,
         vertices: Vec<Vertex>,

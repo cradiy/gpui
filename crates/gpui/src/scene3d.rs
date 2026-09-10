@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use crate::{AtlasTile, DevicePixels, Pixels, Rgba, Size, size};
 
@@ -134,11 +134,13 @@ impl Scene3dSupport {
 }
 
 mod environment;
+mod uv;
 mod visibility;
 pub use environment::{
     EnvironmentBackground3d, EnvironmentError3d, EnvironmentMap3d, SpecularEnvironment3d,
     SpecularEnvironmentMap3d,
 };
+pub use uv::UvSetError3d;
 
 /// Logical dimensions and raster density of a decorative UI texture.
 #[derive(Clone, Copy, Debug)]
@@ -206,6 +208,7 @@ pub struct Mesh3d {
     vertices: Arc<[MeshVertex3d]>,
     indices: Arc<[u32]>,
     tangents: Option<Arc<[[f32; 4]]>>,
+    uv_sets: BTreeMap<u32, Arc<[[f32; 2]]>>,
     bounds: [[f32; 3]; 2],
 }
 
@@ -343,6 +346,7 @@ impl Mesh3d {
             vertices: vertices.into(),
             indices: indices.into(),
             tangents: None,
+            uv_sets: BTreeMap::new(),
         }))
     }
 
@@ -385,6 +389,7 @@ impl Mesh3d {
             vertices: vertices.into(),
             indices: self.indices.clone(),
             tangents: None,
+            uv_sets: self.uv_sets.clone(),
         };
         Ok(match tangents {
             Some(tangents) => mesh.with_tangents(tangents)?,
@@ -450,6 +455,7 @@ impl Mesh3d {
             vertices: self.vertices.clone(),
             indices: self.indices.clone(),
             tangents: Some(tangents.into()),
+            uv_sets: self.uv_sets.clone(),
         }))
     }
 }

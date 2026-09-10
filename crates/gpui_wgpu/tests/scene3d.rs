@@ -52,7 +52,7 @@ fn viewport_bloom_and_grading_preserve_nested_clipping_and_group_opacity() {
                 .unwrap()
         };
         let original = renderer.render_rgba(&scene(outer.clone())).unwrap();
-        assert_eq!(pixel(&original, 13, 32)[3], 0);
+        assert_eq!(pixel(&original, 13, 32), [0, 0, 0, 255]);
         assert!(pixel(&original, 32, 32)[0] > pixel(&original, 32, 32)[1]);
 
         let mut processed = outer.clone();
@@ -60,7 +60,7 @@ fn viewport_bloom_and_grading_preserve_nested_clipping_and_group_opacity() {
         let image = renderer.render_rgba(&scene(processed.clone())).unwrap();
         for (x, y) in [(32, 32), (13, 32)] {
             let p = pixel(&image, x, y);
-            assert!(p[3] > 0);
+            assert!(p[0] > 0);
             assert!(p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1);
         }
         assert_eq!(pixel(&image, 32, 32)[3], 255);
@@ -72,13 +72,15 @@ fn viewport_bloom_and_grading_preserve_nested_clipping_and_group_opacity() {
         processed.composite.opacity = 0.5;
         let faded = renderer.render_rgba(&scene(processed.clone())).unwrap();
         for (x, y) in [(32, 32), (13, 32)] {
-            let full_alpha = u16::from(pixel(&image, x, y)[3]);
-            let faded_alpha = u16::from(pixel(&faded, x, y)[3]);
-            assert!((2 * faded_alpha).abs_diff(full_alpha) <= 2);
+            for channel in 0..3 {
+                let full = u16::from(pixel(&image, x, y)[channel]);
+                let faded = u16::from(pixel(&faded, x, y)[channel]);
+                assert!((2 * faded).abs_diff(full) <= 2);
+            }
         }
         processed.composite.content_mask.bounds = bounds(0., 0., 32., 64.);
         let clipped = renderer.render_rgba(&scene(processed)).unwrap();
-        assert_eq!(pixel(&clipped, 40, 32), [0; 4]);
+        assert_eq!(pixel(&clipped, 40, 32), [0, 0, 0, 255]);
         assert_eq!(pixel(&clipped, 20, 32), pixel(&faded, 20, 32));
         assert_eq!(
             renderer.render_rgba(&scene(outer.clone())).unwrap(),

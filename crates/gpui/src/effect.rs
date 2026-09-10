@@ -33,6 +33,58 @@ const EFFECT_SECOND_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_SECOND_IMAGE_S
 const EFFECT_ADDITIONAL_IMAGE_SOURCE_MARKER: &str = "// __GPUI_EFFECT_ADDITIONAL_IMAGE_SOURCE__";
 const EFFECT_MASK_SOURCE_MARKER: &str = "// __GPUI_EFFECT_MASK_SOURCE__";
 
+/// Sampling contract for an independently allocated effect input texture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct EffectTextureOptions {
+    /// Divide sampled RGB by alpha before passing it to the effect function.
+    /// Linear interpolation operates on the stored premultiplied values first.
+    pub premultiplied_alpha: bool,
+    /// Select the nearest texel instead of interpolating four texels.
+    /// Suitable for depth and other discontinuous numeric inputs.
+    pub nearest: bool,
+}
+
+/// Composes an image effect over complete, independently allocated textures.
+/// Sampling uses pixel-center coordinates and clamps at texture edges. No color
+/// transfer function or tone mapping is inserted. Effect functions return
+/// straight-alpha colors; the renderer selects the output alpha representation.
+#[doc(hidden)]
+pub fn compose_texture_effect_wgsl(
+    shader: &EffectShader,
+    inputs: &[EffectTextureOptions],
+) -> String {
+    assert!(!shader.is_mask() && matches!(shader.image_count(), 1 | 2 | 4));
+    assert_eq!(inputs.len(), usize::from(shader.image_count()));
+    let helpers: Vec<_> = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, options)| {
+            let name = ["", "second_", "third_", "fourth_"][index];
+            include_str!("effect_texture.wgsl")
+                .replace("NAME", name)
+                .replace("BINDING", &[1, 3, 4, 5][index].to_string())
+                .replace(
+                    "PREMULTIPLIED",
+                    if options.premultiplied_alpha {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                )
+                .replace("NEAREST", if options.nearest { "true" } else { "false" })
+        })
+        .collect();
+    include_str!("effect.wgsl")
+        .replace(EFFECT_IMAGE_SOURCE_MARKER, &helpers.join("\n"))
+        .replace(EFFECT_SECOND_IMAGE_SOURCE_MARKER, "")
+        .replace(EFFECT_ADDITIONAL_IMAGE_SOURCE_MARKER, "")
+        .replace(
+            EFFECT_MASK_SOURCE_MARKER,
+            "fn effect_mask_coverage(input: EffectInput) -> f32 { return 1.0; }",
+        )
+        .replace(EFFECT_SOURCE_MARKER, shader.wgsl_source())
+}
+
 /// Composes a complete portable WGSL module around an effect function.
 ///
 /// This is renderer-facing API. Applications normally provide only the

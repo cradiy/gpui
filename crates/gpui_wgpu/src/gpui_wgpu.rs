@@ -15,6 +15,8 @@ pub use wgpu_renderer::{
     GpuContext, WgpuExternalRenderTarget, WgpuExternalRendererConfig, WgpuRenderer,
     WgpuSurfaceConfig,
 };
+#[cfg(not(target_family = "wasm"))]
+pub use wgpu_renderer::{TextureEffectConfig, WgpuTextureEffect};
 
 #[cfg(test)]
 mod tests {

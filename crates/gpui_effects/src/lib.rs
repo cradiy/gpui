@@ -53,6 +53,7 @@ mod sticky;
 mod subtree_builtins;
 mod subtree_effect;
 mod text_blur;
+mod texture;
 mod timed_text;
 mod transition;
 
@@ -118,5 +119,6 @@ pub use subtree_builtins::{
 };
 pub use subtree_effect::{SubtreeEffect, subtree_effect, subtree_effect_chain};
 pub use text_blur::TextBlur;
+pub use texture::{depth_fog_shader, hdr_tone_map_shader};
 pub use timed_text::{TimedText, TimedTextEmphasis, TimedTextRevealWave, TimedTextUnit};
 pub use transition::{SubtreeTransition, TransitionKind, subtree_transition, transition_shader};

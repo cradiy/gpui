@@ -164,6 +164,19 @@ let content = subtree_effect(
 .effect_opacity(0.8);
 ```
 
+## GPU texture inputs
+
+`depth_fog_shader()` accepts linear color and camera-forward depth as two inputs.
+`hdr_tone_map_shader()` maps linear HDR color to display-encoded sRGB. Their API
+documentation specifies uniform slots, units, and alpha behavior.
+
+Use `gpui_wgpu::WgpuTextureEffect` to run image shaders on owned GPU textures
+without UI capture or CPU readback. Input sampling and premultiplied alpha are
+configured per texture; float output formats preserve HDR values. These shaders
+do not infer depth or HDR data from a display-color subtree capture. See
+[GPU texture effects](../../gpui_3d/docs/headless.md#gpu-texture-effects) for a
+depth-fog and display-mapping pipeline.
+
 ## Configuration
 
 - `uniforms` replaces the first stage's uniform slots; `uniform` updates one slot.

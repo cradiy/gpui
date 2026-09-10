@@ -30,7 +30,11 @@ mod particle_transition;
 mod particles;
 pub(crate) mod scene3d;
 mod scene_snapshot;
+#[cfg(not(target_family = "wasm"))]
+mod texture_effect;
 mod ui_capture;
+#[cfg(not(target_family = "wasm"))]
+pub use texture_effect::{TextureEffectConfig, WgpuTextureEffect};
 
 #[derive(Clone, Copy)]
 struct FeedbackSnapshot {

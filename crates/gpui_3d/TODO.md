@@ -67,10 +67,10 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Diffuse irradiance**: Decoded linear HDR equirectangular inputs, L2 spherical-harmonic projection, precomputed coefficient inputs, intensity and world-Y rotation, shared viewport/headless shading, and environment controls in the lighting example.
   - [x] **Specular IBL**: Explicit bounded GGX cube prefiltering, external prefiltered inputs, cached RGBA16Float cube levels and integrated BRDF lookup, normal-map-aware roughness-dependent reflections, independent intensity/rotation, and shared viewport/headless shading.
   - [x] **Environment background**: Shared decoded HDR maps, independent visibility/intensity/world-Y rotation, camera-correct distant rays, linear composition, cached uploads, and shared viewport/headless rendering without geometry-channel coverage.
-- [ ] **Effect integration**: Compose Bloom and color grading through `gpui_effects`; define depth texture access and coordinate conventions for depth-dependent effects.
+- [x] **Effect integration**: Compose Bloom and color grading through `gpui_effects`; define depth texture access and coordinate conventions for depth-dependent effects.
   - [x] **Display-space viewport effects**: Bloom and color adjustment in one subtree chain, identity pointer mapping, independent controls in the lighting example, and existing viewport layout/clipping semantics.
   - [x] **Depth coordinates**: Retained output-camera snapshots, linear-depth world reconstruction for perspective/orthographic projections and lens shifts, physical pixel-center queries, and direct GPU sampling conventions.
-  - [ ] **GPU channel composition**: Reuse linear HDR and depth outputs as effect inputs without CPU readback, with explicit color/alpha contracts and device ownership.
+  - [x] **GPU channel composition**: Direct one/two/four-texture effect processing, per-input alpha/filter contracts, owned HDR/data outputs, byte admission, device validation, depth fog and HDR display mapping without CPU readback.
 
 ## Phase 4: Animation and Dynamic Content
 

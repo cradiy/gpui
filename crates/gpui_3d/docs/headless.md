@@ -155,6 +155,101 @@ Use `capabilities().linear_color_msaa4` to query four-sample HDR resolve support
 `color_msaa4` describes display output. Both outputs are independent of geometry
 channel selection, and retained HDR frames survive later renders and resizing.
 
+### GPU texture effects
+
+`gpui_wgpu::WgpuTextureEffect` processes output textures with an `EffectShader`
+without CPU readback, UI capture, or atlas upload. Construct processors once and
+reuse them for successive frames. Each call submits on the supplied context's
+queue and returns a new owned texture; later renders cannot overwrite it.
+
+```no_run
+use gpui::{EffectTextureOptions, EffectUniforms};
+use gpui_3d::{HeadlessRenderer, Scene, Scene3dChannels, Scene3dOutputConfig};
+use gpui_effects::{depth_fog_shader, hdr_tone_map_shader};
+use gpui_wgpu::{TextureEffectConfig, WgpuTextureEffect, wgpu};
+
+# fn process(renderer: &mut HeadlessRenderer, scene: &Scene) -> anyhow::Result<()> {
+let context = renderer.context().clone();
+let fog = WgpuTextureEffect::new(context.clone(), &depth_fog_shader(), TextureEffectConfig {
+    inputs: vec![
+        EffectTextureOptions { premultiplied_alpha: true, nearest: false },
+        EffectTextureOptions { premultiplied_alpha: false, nearest: true },
+    ],
+    ..Default::default()
+})?;
+let display = WgpuTextureEffect::new(context, &hdr_tone_map_shader(), TextureEffectConfig {
+    output_format: wgpu::TextureFormat::Rgba8Unorm,
+    ..Default::default()
+})?;
+let size = [1280, 720];
+let frame = renderer.render(scene, Scene3dOutputConfig {
+    size,
+    channels: Scene3dChannels::LINEAR_COLOR | Scene3dChannels::LINEAR_DEPTH,
+    color_samples: 1,
+})?;
+let fogged = fog.render(
+    &[frame.gpu().linear_color().unwrap(), frame.gpu().linear_depth().unwrap()],
+    size,
+    EffectUniforms::new()
+        .with_slot(0, [3., 12., 0., 0.])
+        .with_slot(1, [0.12, 0.18, 0.25, 1.]),
+    0.,
+)?;
+let color = display.render(
+    &[&fogged], size,
+    EffectUniforms::new().with_slot(0, [0., 1., 0., 0.]), 0.,
+)?;
+let view = color.create_view(&Default::default());
+// Bind this view in a subsequent same-device render pass.
+# Ok(())
+# }
+```
+
+The fog shader reads linear color and positive camera-forward depth, leaves zero
+depth unchanged, and preserves color alpha. Slot 0.xy defines start/end distances
+in scene units; slot 1 contains linear fog RGB and its strength in alpha. An equal
+or reversed distance interval gives a hard transition at the start distance.
+Geometry depth identifies only the nearest surviving surface, so fog is not a
+volumetric integration through multiple transparent layers. Single-sample color
+matches geometry coverage; MSAA-resolved color can differ at silhouette pixels.
+
+The display shader applies exposure in stops from slot 0.x and optional Reinhard
+mapping when slot 0.y exceeds 0.5, then encodes sRGB. Scene exposure and tone
+mapping have not been applied to `LINEAR_COLOR`. Store this display result in
+`Rgba8Unorm`, not an sRGB-encoding attachment. Both processors use premultiplied
+output by default.
+
+Inputs must be single-sample, single-layer 2D textures with `TEXTURE_BINDING`
+usage from the same device. One, two, and four inputs may have different sizes.
+Float-sampled formats include `R32Float` depth and `Rgba32Float` normals without
+requiring float32 filtering features. Integer object IDs and native depth/stencil
+formats are not accepted. Input sRGB formats use hardware decoding; other formats
+are sampled as stored. The processor inserts no exposure or color-space conversion.
+
+Each input independently chooses nearest or pixel-center bilinear sampling,
+clamped at its edges. Premultiplied color is interpolated before unpremultiplication;
+numeric data should set `premultiplied_alpha: false`. Effect functions receive and
+return straight-alpha color. `load_effect_image` and the corresponding
+`load_effect_second_image`, `load_effect_third_image`, and `load_effect_fourth_image`
+helpers return raw clamped texels without alpha conversion. Uniform pixel values
+are physical pixels and are not adjusted for window DPI.
+
+Output formats are `Rgba8Unorm`, `Bgra8Unorm`, `Rgba16Float`, `Rgba32Float`,
+`R32Float`, and `Rg32Float`, subject to device support. Outputs support sampling
+and copying as well as render attachments. Floating formats retain HDR or signed
+numeric RGB; alpha is clamped to `[0, 1]`. Set output `premultiplied_alpha: false`
+when writing scalar/vector data. `max_output_bytes` defaults to 64 MiB per output;
+`output_bytes(size)` checks its unpadded payload without a GPU. This excludes held
+inputs, previous outputs, temporary buffers, and driver overhead. Zero rejects all
+output allocations; `None` retains only device dimension/format limits.
+
+The processor retains its pipeline, not rendered images or their readbacks.
+Shader, input, encoding and submission validation errors are returned to the
+caller. Retain and release output textures according to the consumer's lifetime;
+do not call `destroy()` while queued work or another consumer uses them. Native
+WGPU contexts are supported; this API does not import outputs into a `Window`
+or automatically execute compound `EffectStage` pipelines.
+
 ### Geometry channels
 
 `Scene::background` fills uncovered color pixels with a decoded HDR environment.

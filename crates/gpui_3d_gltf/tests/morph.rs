@@ -487,10 +487,9 @@ fn weight_animation_deforms_before_skinning_and_keeps_instances_independent() {
             .unwrap();
         let poses = graph.evaluate().unwrap();
         let meshes = asset.deform(&first, &poses, &[(target, values)]).unwrap();
-        for (node, mesh) in meshes {
-            graph.set_mesh(node, mesh).unwrap();
-        }
-        let scene = graph.evaluate().unwrap().scene(Camera::default());
+        let evaluated = poses.with_meshes(meshes).unwrap();
+        assert_eq!(graph.revision(), poses.revision());
+        let scene = evaluated.scene(Camera::default());
         let hit = scene
             .raycast(Ray::new([-0.5, time as f32 + 0.5, 5.], [0., 0., -1.]).unwrap())
             .unwrap();

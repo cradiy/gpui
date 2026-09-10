@@ -102,9 +102,7 @@ fn authored_bases_mix_disjoint_clips_without_losing_defaults_or_instance_placeme
             .evaluate_with_transforms(mixed_pose.transforms())
             .unwrap();
         let meshes = a.deform(&poses, mixed_weights.weights()).unwrap();
-        let evaluated = graph
-            .evaluate_with_overrides(mixed_pose.transforms(), meshes)
-            .unwrap();
+        let evaluated = poses.with_meshes(meshes).unwrap();
         let t = seconds as f32;
         near(
             evaluated.node(n1).unwrap().world.transform_point([0.; 3]),

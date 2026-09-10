@@ -113,7 +113,7 @@ fn evaluate(document: &PreparedDocument, time: Duration) -> anyhow::Result<()> {
     let sample = binding.sample(time)?;
     let transforms = graph.evaluate_with_transforms(sample.pose().transforms())?;
     let meshes = instance.deform(&transforms, sample.weights())?;
-    let evaluated = graph.evaluate_with_overrides(sample.pose().transforms(), meshes)?;
+    let evaluated = transforms.with_meshes(meshes)?;
     // Use evaluated cameras, meshes, and queries from the same snapshot.
     let _ = evaluated;
     Ok(())

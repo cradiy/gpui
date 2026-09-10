@@ -279,6 +279,24 @@ pub(crate) struct IndexObject {
 }
 
 impl IndexObject {
+    pub(crate) fn node_handle(self) -> Option<NodeHandle> {
+        match self.key {
+            ObjectKey::Node(handle) => Some(handle),
+            ObjectKey::Flat(_) => None,
+        }
+    }
+
+    pub(crate) fn with_bounds(self, local: Aabb, world: AffineTransform) -> Self {
+        Self {
+            bounds: Bounds {
+                min: local.min().map(f64::from),
+                max: local.max().map(f64::from),
+            }
+            .transformed(world.matrix()),
+            ..self
+        }
+    }
+
     pub(crate) fn node(
         handle: NodeHandle,
         local: Aabb,
@@ -287,13 +305,10 @@ impl IndexObject {
     ) -> Self {
         Self {
             key: ObjectKey::Node(handle),
-            bounds: Bounds {
-                min: local.min().map(f64::from),
-                max: local.max().map(f64::from),
-            }
-            .transformed(world.matrix()),
+            bounds: None,
             object,
         }
+        .with_bounds(local, world)
     }
 
     pub(crate) fn flat(objects: &[Object]) -> Vec<Self> {

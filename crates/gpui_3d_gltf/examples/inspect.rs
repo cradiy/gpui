@@ -269,7 +269,7 @@ fn inspect(options: Options) -> Result<()> {
             vertices += mesh.vertex_count();
             hash_mesh(mesh, &mut fingerprint);
         }
-        let evaluated = graph.evaluate_with_overrides(pose.transforms(), replacements)?;
+        let evaluated = poses.with_meshes(replacements)?;
         for node in evaluated.nodes() {
             for value in node.world.matrix().into_iter().flatten() {
                 value.to_bits().hash(&mut fingerprint);

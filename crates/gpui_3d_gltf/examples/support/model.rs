@@ -138,9 +138,7 @@ impl Model {
             .graph
             .evaluate_with_transforms(sample.pose().transforms())?;
         let replacements = self.instance.deform(&poses, sample.weights())?;
-        let evaluated = self
-            .graph
-            .evaluate_with_overrides(sample.pose().transforms(), replacements)?;
+        let evaluated = poses.with_meshes(replacements)?;
         self.evaluated = evaluated;
         self.skipped_tracks = self
             .animation

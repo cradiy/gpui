@@ -1,6 +1,7 @@
 mod evaluation;
 #[cfg(test)]
 mod evaluation_tests;
+mod resources;
 
 use crate::{
     Aabb, AffineTransform, AimError, Camera, CameraError, ConstraintStatus, LightError, Material,
@@ -124,6 +125,7 @@ pub enum SceneError {
     DuplicateId(ObjectId),
     DuplicateTransform(NodeHandle),
     DuplicateMesh(NodeHandle),
+    DuplicateMaterial(NodeHandle),
     DuplicateConstraint(NodeHandle),
     InvalidConstraintTarget {
         node: NodeHandle,
@@ -159,6 +161,9 @@ impl fmt::Display for SceneError {
                 write!(f, "duplicate local transform for node {node:?}")
             }
             Self::DuplicateMesh(node) => write!(f, "duplicate mesh override for node {node:?}"),
+            Self::DuplicateMaterial(node) => {
+                write!(f, "duplicate material replacement for node {node:?}")
+            }
             Self::DuplicateConstraint(node) => write!(f, "duplicate constraint for node {node:?}"),
             Self::InvalidConstraintTarget { node, target } => {
                 write!(
@@ -484,35 +489,6 @@ impl SceneGraph {
         self.revision += 1;
         Ok(())
     }
-    /// Replaces only this node's material; shared geometry is unchanged.
-    pub fn set_material(
-        &mut self,
-        handle: NodeHandle,
-        material: Material,
-    ) -> Result<(), SceneError> {
-        let key = self.key(handle)?;
-        let (_, current) = self.nodes[key]
-            .node
-            .surface
-            .as_mut()
-            .ok_or(SceneError::NoMesh(handle))?;
-        *current = material;
-        self.revision += 1;
-        Ok(())
-    }
-
-    /// Replaces an existing mesh and its local bounds, retaining material, identity,
-    /// hierarchy and transform. Previous evaluated scenes keep their geometry.
-    pub fn set_mesh(&mut self, handle: NodeHandle, mesh: Mesh) -> Result<(), SceneError> {
-        let key = self.key(handle)?;
-        let node = &mut self.nodes[key].node;
-        let (current, _) = node.surface.as_mut().ok_or(SceneError::NoMesh(handle))?;
-        node.bounds = Some(mesh.bounds());
-        *current = mesh;
-        self.revision += 1;
-        Ok(())
-    }
-
     fn siblings_mut(&mut self, parent: Option<NodeKey>) -> &mut Vec<NodeKey> {
         match parent {
             Some(parent) => &mut self.nodes[parent].children,

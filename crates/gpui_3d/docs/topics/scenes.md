@@ -60,6 +60,21 @@ Groups can organize several mesh nodes under one application-defined instance.
 File importers and asset/instance managers belong to extensions built on these
 format-independent APIs. The graph does not load files or manage model catalogs.
 
+### Material batches
+
+`set_materials` accepts `(NodeHandle, Material)` replacements. Every target must
+be a live mesh node in this graph; hidden mesh nodes are supported. Duplicate
+targets return `DuplicateMaterial`, invalid handles return `InvalidHandle`, and
+non-mesh targets return `NoMesh`. Any such error leaves all materials and the
+graph revision unchanged.
+
+A nonempty batch applies every replacement and increments the revision once.
+An empty batch does not change the revision. Geometry, transforms, hierarchy,
+identities, and visibility remain unchanged, and retained evaluated snapshots
+keep their prior materials. Material parameters and texture compatibility are
+validated during scene preparation, as with `set_material`. Input iterator
+side effects are outside the graph operation.
+
 ## Reusable subtrees
 
 `snapshot_subtree(root)` captures a local hierarchy as an immutable `SceneSubtree`.

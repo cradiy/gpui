@@ -268,11 +268,15 @@ fn bound_instances_map_occurrences_and_isolate_material_overrides() {
     );
     assert_eq!(first.material_nodes(Some(99)).count(), 0);
     let retained = graph.evaluate().unwrap().scene(Camera::default());
-    for node in first.material_nodes(Some(0)) {
-        graph
-            .set_material(node, Material::color(rgb(0x0000ff)))
-            .unwrap();
-    }
+    let revision = graph.revision();
+    graph
+        .set_materials(
+            first
+                .material_nodes(Some(0))
+                .map(|node| (node, Material::color(rgb(0x0000ff)))),
+        )
+        .unwrap();
+    assert_eq!(graph.revision(), revision + 1);
     let changed = graph.evaluate().unwrap().scene(Camera::default());
     let old_frame = retained
         .prepare(1., None, |_| Ok(TextureState::Ready(ResolvedTexture::None)))

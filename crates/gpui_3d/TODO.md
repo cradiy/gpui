@@ -36,6 +36,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 ## Phase 2: Scenes and Resource Primitives
 
 - [x] **Scene hierarchy**: Group and mesh nodes, graph-scoped generational handles, unique application IDs, inherited visibility, atomic reparenting, and subtree removal.
+  - [x] **Material batches**: Atomic multi-node material replacement with complete target validation, one revision increment, unchanged geometry and identities, and retained evaluated snapshots.
 - [x] **Affine transforms**: Quaternion TRS and full affine matrices, including shear and negative scale, with keep-local/keep-world reparenting and inverse-transpose normals.
 - [x] **Static scene evaluation**: Camera-independent owned results, world and aggregate bounds, node identities in picking, and hierarchy editing in the scene example.
 - [x] **Camera and light nodes**: Optional local camera/light properties, complete world-transform evaluation, explicit camera selection, inherited light visibility, subtree reuse, structured validation, and shared viewport/headless scene preparation without extra geometry or picking IDs.

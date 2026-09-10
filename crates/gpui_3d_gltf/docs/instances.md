@@ -17,9 +17,11 @@ fn instantiate(asset: &SceneAsset, graph: &mut SceneGraph) -> anyhow::Result<()>
         second.root(),
         AffineTransform::from_translation([3., 0., 0.])?,
     )?;
-    for node in first.material_nodes(Some(0)) {
-        graph.set_material(node, Material::color(rgb(0x4080ff)))?;
-    }
+    graph.set_materials(
+        first
+            .material_nodes(Some(0))
+            .map(|node| (node, Material::color(rgb(0x4080ff)))),
+    )?;
     Ok(())
 }
 ```
@@ -55,8 +57,11 @@ primitive, material and skin indices.
 `material_nodes(Some(index))` selects occurrences of that original glTF material.
 `None` selects primitives with an implicit material; it does not select all
 materials. Assigning a new material in the graph leaves this authored association
-unchanged. A nonexistent source index yields no handles. Individual graph
-mutations are not a multi-node transaction.
+unchanged. A nonexistent source index yields no handles. Pass the selected nodes
+to `SceneGraph::set_materials` to replace a group atomically: invalid, stale,
+duplicate, or non-mesh targets leave every material unchanged. Successful
+nonempty batches increment the graph revision once. See
+[Material batches](../../gpui_3d/docs/topics/scenes.md#material-batches).
 
 `instantiate_with_ids()` accepts the same source-handle callback as the core
 graph API. IDs remain caller-defined, including the synthetic root and primitive

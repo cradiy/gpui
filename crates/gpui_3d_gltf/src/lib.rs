@@ -8,6 +8,7 @@ mod animation;
 mod attribute;
 mod cache;
 mod camera;
+mod diagnostics;
 mod geometry;
 mod image;
 mod image_cache;
@@ -25,6 +26,7 @@ mod validation;
 
 pub use animation::{AnimationClip, AnimationOptions, NodeAnimation};
 pub use cache::{ResourceCache, ResourceCacheLimits};
+pub use diagnostics::ImportDiagnostic;
 pub use geometry::{GeometryOptions, PrimitiveGeometry};
 pub use image::{DecodedScene, ImageDecodeLimits};
 pub use image_cache::{ImageCache, ImageCacheLimits};

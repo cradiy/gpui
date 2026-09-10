@@ -11,13 +11,7 @@ use gpui_3d::{
 
 use crate::{PreparedDocument, SceneAsset, ScenePrimitive, SceneSkin};
 
-pub(crate) fn unsupported_attributes(bytes: &[u8]) -> Result<HashMap<(usize, usize), String>> {
-    let json = if bytes.starts_with(b"glTF") {
-        gltf::binary::Glb::from_slice(bytes)?.json
-    } else {
-        std::borrow::Cow::Borrowed(bytes)
-    };
-    let raw: serde_json::Value = serde_json::from_slice(&json)?;
+pub(crate) fn unsupported_attributes(raw: &serde_json::Value) -> HashMap<(usize, usize), String> {
     let mut unsupported = HashMap::new();
     for (mesh, value) in raw["meshes"].as_array().into_iter().flatten().enumerate() {
         for (primitive, value) in value["primitives"]
@@ -47,7 +41,7 @@ pub(crate) fn unsupported_attributes(bytes: &[u8]) -> Result<HashMap<(usize, usi
             }
         }
     }
-    Ok(unsupported)
+    unsupported
 }
 
 /// Shared morph deltas with the primitive's normal/tangent evaluation policy.

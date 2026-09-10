@@ -8,6 +8,9 @@ can run in caller-managed background work; neither needs a window or GPU.
 `prepare_async(load_uri)` accepts a future-returning loader; see
 [asynchronous loading](loading.md) for scheduling, cancellation and byte budgets.
 
+`diagnostics()` exposes [import advisories](diagnostics.md), including ignored
+optional extensions and their source paths, before any resource loading.
+
 ```rust
 use gpui_3d_gltf::{Document, Limits};
 
@@ -55,6 +58,7 @@ without a declared type retains `None` for the caller's decoder to identify.
 `Limits` controls total input bytes, total unique encoded resource bytes, and
 buffer/image/accessor/node counts. Defaults are 16 MiB of input, 256 MiB of
 resources, 4,096 buffers and images each, and 100,000 accessors and nodes each.
+Diagnostic output has independent record and text-byte limits.
 The input-byte limit includes the entire GLB container, not only its JSON chunk.
 Count limits apply after bounded-input JSON parsing. Base64 sizes and declared
 individual buffer sizes are checked before resource allocation or resolution.
@@ -86,8 +90,8 @@ separately.
 
 The `inspect` example converts a local asset, decodes active images, instantiates
 its selected scene, samples an optional animation, and prepares CPU spatial
-indices. It prints resource counts, deformation counts, and world bounds without
-opening a window or creating a GPU device.
+indices. It prints import advisories, resource counts, deformation counts, and
+world bounds without opening a window or creating a GPU device.
 
 ```sh
 cargo run -p gpui_3d_gltf --example inspect -- /path/to/model.glb

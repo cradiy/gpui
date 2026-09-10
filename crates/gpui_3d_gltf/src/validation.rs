@@ -12,17 +12,18 @@ pub(crate) fn quantization(document: &gltf::Document) -> bool {
 pub(crate) fn supported_extensions(document: &gltf::Document) -> Result<()> {
     for extension in document.extensions_required() {
         ensure!(
-            matches!(
-                extension,
-                "KHR_materials_unlit"
-                    | "KHR_texture_transform"
-                    | "KHR_lights_punctual"
-                    | QUANTIZATION
-            ),
+            supports_extension(extension),
             "unsupported required extension {extension}"
         );
     }
     Ok(())
+}
+
+pub(crate) fn supports_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "KHR_materials_unlit" | "KHR_texture_transform" | "KHR_lights_punctual" | QUANTIZATION
+    )
 }
 
 pub(crate) fn schema(document: &gltf::Document) -> Result<()> {

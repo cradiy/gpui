@@ -139,6 +139,9 @@ fn inspect(options: Options) -> Result<()> {
     let bytes = read_bounded(&path, limits.document_bytes)?;
     let document = Document::from_slice(&bytes, limits)?;
     println!("Asset: {}", path.display());
+    for diagnostic in document.diagnostics() {
+        println!("Import: {diagnostic}");
+    }
     println!(
         "Scenes: {} · Meshes: {} · Animations: {}",
         document.gltf().scenes().len(),

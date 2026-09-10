@@ -100,6 +100,7 @@ Required extensions other than `KHR_materials_unlit`, `KHR_texture_transform`,
 [`KHR_lights_punctual`](lights.md) and [`KHR_mesh_quantization`](quantization.md)
 return errors; unknown optional extensions use core glTF fallback behavior and
 are not interpreted as supported features.
+Ignored optional extensions are available through [document diagnostics](diagnostics.md).
 
 ## Resource ownership
 

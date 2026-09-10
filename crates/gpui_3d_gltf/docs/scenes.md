@@ -126,6 +126,8 @@ sampled during scene conversion: ordinary transform-animated
 nodes use their declared base transforms. `PreparedDocument::animation` converts
 tracks separately for explicit instance-pose evaluation. Required unsupported
 extensions are rejected; optional unknown extensions retain only their core glTF fallback.
+[Document diagnostics](diagnostics.md) identify ignored optional extensions across
+all scenes before conversion.
 Scene assets do not own animation playback, asset catalogs, file watching, loading
 queues or image/GPU cache policies.
 

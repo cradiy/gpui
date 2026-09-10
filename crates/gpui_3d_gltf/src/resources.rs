@@ -4,6 +4,8 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures::FutureExt;
 
+use crate::{ImportDiagnostic, diagnostics::Metadata};
+
 /// One external URI and its remaining encoded-byte allowance. URI spelling is
 /// unchanged; the caller owns path/scheme policy and must bound I/O allocations.
 #[derive(Clone, Debug)]
@@ -23,6 +25,10 @@ pub struct Limits {
     pub images: usize,
     pub accessors: usize,
     pub nodes: usize,
+    /// Maximum retained nonfatal diagnostic records per document.
+    pub diagnostics: usize,
+    /// Total UTF-8 bytes of retained diagnostic names and JSON Pointer paths.
+    pub diagnostic_bytes: usize,
 }
 
 impl Default for Limits {
@@ -34,6 +40,8 @@ impl Default for Limits {
             images: 4096,
             accessors: 100_000,
             nodes: 100_000,
+            diagnostics: 4096,
+            diagnostic_bytes: 1024 * 1024,
         }
     }
 }
@@ -43,7 +51,7 @@ impl Default for Limits {
 #[derive(Clone, Debug)]
 pub struct Document {
     document: Arc<gltf::Document>,
-    unsupported_morphs: Arc<HashMap<(usize, usize), String>>,
+    metadata: Arc<Metadata>,
     binary: Option<Arc<[u8]>>,
     limits: Limits,
 }
@@ -60,7 +68,7 @@ impl Document {
         admit("accessors", gltf.accessors().len(), limits.accessors)?;
         admit("nodes", gltf.nodes().len(), limits.nodes)?;
         super::validation::layout(&gltf.document)?;
-        let unsupported_morphs = Arc::new(crate::morph::unsupported_attributes(bytes)?);
+        let metadata = Arc::new(crate::diagnostics::metadata(bytes, limits)?);
         for buffer in gltf.buffers() {
             if let gltf::buffer::Source::Bin = buffer.source() {
                 ensure!(
@@ -82,7 +90,7 @@ impl Document {
         }
         Ok(Self {
             document: Arc::new(gltf.document),
-            unsupported_morphs,
+            metadata,
             binary: gltf.blob.map(Arc::from),
             limits,
         })
@@ -90,6 +98,11 @@ impl Document {
 
     pub fn gltf(&self) -> &gltf::Document {
         &self.document
+    }
+
+    /// Document-wide advisories, independent of scene selection. No logging occurs.
+    pub fn diagnostics(&self) -> &[ImportDiagnostic] {
+        &self.metadata.diagnostics
     }
 
     /// Resolves all declared buffers and images. Non-data URIs are passed unchanged
@@ -229,7 +242,7 @@ impl Document {
         }
         Ok(PreparedDocument {
             document: self.document.clone(),
-            unsupported_morphs: self.unsupported_morphs.clone(),
+            metadata: self.metadata.clone(),
             buffers,
             images,
             resource_bytes: used,
@@ -271,7 +284,7 @@ impl EncodedImage {
 #[derive(Clone, Debug)]
 pub struct PreparedDocument {
     document: Arc<gltf::Document>,
-    unsupported_morphs: Arc<HashMap<(usize, usize), String>>,
+    metadata: Arc<Metadata>,
     buffers: Vec<Buffer>,
     images: Vec<EncodedImage>,
     resource_bytes: usize,
@@ -279,13 +292,17 @@ pub struct PreparedDocument {
 
 impl PreparedDocument {
     pub(crate) fn validate_morph_attributes(&self, mesh: usize, primitive: usize) -> Result<()> {
-        if let Some(reason) = self.unsupported_morphs.get(&(mesh, primitive)) {
+        if let Some(reason) = self.metadata.unsupported_morphs.get(&(mesh, primitive)) {
             bail!("{reason}");
         }
         Ok(())
     }
     pub fn gltf(&self) -> &gltf::Document {
         &self.document
+    }
+    /// The same shared document-wide advisories available before resource loading.
+    pub fn diagnostics(&self) -> &[ImportDiagnostic] {
+        &self.metadata.diagnostics
     }
     /// Returns only the buffer's declared bytes, excluding any GLB padding.
     pub fn buffer(&self, index: usize) -> Option<&[u8]> {

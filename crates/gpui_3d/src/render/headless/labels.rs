@@ -175,6 +175,7 @@ mod tests {
         let nodes = std::array::from_fn::<_, 4, _>(|_| graph.insert(None, Node::new()).unwrap());
         ReadFrame {
             pixels: Scene3dPixels {
+                depth_background: Default::default(),
                 size: [4, 2],
                 object_ids: Some(vec![0, 1, 2, 3, 2, 0, 1, 3]),
                 rgba: None,

@@ -729,9 +729,35 @@ impl MeshDraw3d {
     }
 }
 
+/// Background sentinel for nonnegative linear camera-forward depth.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DepthBackground3d {
+    /// For projections whose visible depth is strictly positive.
+    #[default]
+    Zero,
+    /// Allows zero-depth surfaces on an orthographic camera's eye plane.
+    NegativeOne,
+}
+
+impl DepthBackground3d {
+    /// Exact value written when no surface survives the depth pass.
+    pub fn value(self) -> f32 {
+        match self {
+            Self::Zero => 0.,
+            Self::NegativeOne => -1.,
+        }
+    }
+    /// Tests the sentinel without treating other invalid depths as background.
+    pub fn is_background(self, depth: f32) -> bool {
+        depth == self.value()
+    }
+}
+
 /// Immutable input for a depth-tested 3D viewport.
 #[derive(Clone, Debug)]
 pub struct Scene3dFrame {
+    /// Clear value for linear depth outputs; independent of ID and normal validity.
+    pub depth_background: DepthBackground3d,
     /// Window viewport raster quality. Direct renderers use their output configuration instead.
     pub viewport_quality: Scene3dViewportQuality,
     /// An origin-zero UI capture with independent dimensions and density.

@@ -262,6 +262,7 @@ mod tests {
     #[test]
     fn readback_decoding_preserves_integer_ids_and_color_rows_without_extra_channels() {
         let mut pixels = Scene3dPixels {
+            depth_background: Default::default(),
             size: [3, 2],
             rgba: None,
             linear_rgba: None,

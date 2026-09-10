@@ -1418,7 +1418,14 @@ impl Scene3dRenderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: if self.format == wgpu::TextureFormat::R32Float {
+                            f64::from(frame.depth_background.value())
+                        } else {
+                            0.
+                        },
+                        ..wgpu::Color::TRANSPARENT
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -1802,6 +1809,7 @@ mod tests {
 
     pub(super) fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
         gpui::Scene3dFrame {
+            depth_background: Default::default(),
             viewport_quality: Default::default(),
             ui_texture: None,
             view_projection: IDENTITY,

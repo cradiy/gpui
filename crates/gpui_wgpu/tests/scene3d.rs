@@ -286,6 +286,7 @@ fn layer(
     source.finish();
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
+            depth_background: Default::default(),
             viewport_quality: Default::default(),
             background: None,
             specular_environment: None,

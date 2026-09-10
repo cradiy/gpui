@@ -17,9 +17,9 @@ pub enum DepthRelation {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DepthComparison {
     pub pixel: [u32; 2],
-    /// Positive camera-forward depth in scene units, not ray distance.
+    /// Nonnegative camera-forward depth in scene units, not ray distance.
     pub point_depth: f32,
-    /// Nearest surviving surface depth; `None` denotes a zero background sample.
+    /// Nearest surviving surface depth; `None` denotes the frame's background sentinel.
     pub surface_depth: Option<f32>,
     pub relation: DepthRelation,
 }
@@ -117,11 +117,12 @@ impl ReadFrame {
         let pixel = [x.floor() as u32, y.floor() as u32];
         let index = (u64::from(pixel[1]) * u64::from(width) + u64::from(pixel[0])) as usize;
         let surface = depths[index];
-        if !surface.is_finite() || surface < 0. {
+        let background = self.pixels.depth_background.is_background(surface);
+        if !background && (!surface.is_finite() || surface < 0.) {
             return Err(DepthQueryError::InvalidSample { pixel });
         }
         let delta = f64::from(projected.depth) - f64::from(surface);
-        let relation = if surface == 0. {
+        let relation = if background {
             DepthRelation::Background
         } else if delta.abs() <= f64::from(tolerance) {
             DepthRelation::WithinTolerance
@@ -133,7 +134,7 @@ impl ReadFrame {
         Ok(Some(DepthComparison {
             pixel,
             point_depth: projected.depth,
-            surface_depth: (surface != 0.).then_some(surface),
+            surface_depth: (!background).then_some(surface),
             relation,
         }))
     }
@@ -145,9 +146,58 @@ mod tests {
     use crate::{Camera, Projection, Scene3dPixels};
     use std::sync::Arc;
 
+    #[test]
+    fn zero_depth_surfaces_are_distinct_from_the_retained_background_sentinel() {
+        let mut frame = frame(Projection::Orthographic { vertical_size: 4. });
+        frame.camera.near = 0.;
+        frame.pixels.depth_background = crate::DepthBackground::NegativeOne;
+        frame.pixels.linear_depth = Some(vec![0., -1., 4., 8., 4., -1., 8., 4.]);
+        let viewport = Bounds::new(point(px(0.), px(0.)), size(px(4.), px(2.)));
+        let on_plane = frame
+            .camera
+            .screen_to_world(viewport, point(px(0.5), px(0.5)), 0.)
+            .unwrap();
+        assert_eq!(frame.world_position_at(0, 0).unwrap(), Some(on_plane));
+        assert_eq!(frame.world_position_at(1, 0).unwrap(), None);
+        let comparison = frame.compare_depth(on_plane, 0.).unwrap().unwrap();
+        assert_eq!(comparison.relation, DepthRelation::WithinTolerance);
+        assert_eq!(comparison.surface_depth, Some(0.));
+        let behind = frame
+            .camera
+            .screen_to_world(viewport, point(px(0.5), px(0.5)), 1.)
+            .unwrap();
+        assert_eq!(
+            frame.compare_depth(behind, 0.).unwrap().unwrap().relation,
+            DepthRelation::Behind
+        );
+        let empty = frame
+            .camera
+            .screen_to_world(viewport, point(px(1.5), px(0.5)), 0.)
+            .unwrap();
+        let comparison = frame.compare_depth(empty, 0.).unwrap().unwrap();
+        assert_eq!(comparison.relation, DepthRelation::Background);
+        assert_eq!(comparison.surface_depth, None);
+        for invalid in [-2., f32::NAN, f32::INFINITY] {
+            frame.pixels.linear_depth.as_mut().unwrap()[0] = invalid;
+            assert!(frame.world_position_at(0, 0).is_err());
+            assert!(matches!(
+                frame.compare_depth(on_plane, 0.),
+                Err(DepthQueryError::InvalidSample { .. })
+            ));
+        }
+        frame.pixels.depth_background = crate::DepthBackground::Zero;
+        frame.pixels.linear_depth.as_mut().unwrap()[0] = 0.;
+        assert_eq!(frame.world_position_at(0, 0).unwrap(), None);
+        assert_eq!(
+            frame.compare_depth(on_plane, 0.).unwrap().unwrap().relation,
+            DepthRelation::Background
+        );
+    }
+
     fn frame(projection: Projection) -> ReadFrame {
         ReadFrame {
             pixels: Scene3dPixels {
+                depth_background: Default::default(),
                 size: [4, 2],
                 rgba: None,
                 linear_rgba: None,

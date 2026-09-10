@@ -49,8 +49,8 @@ impl Scene3dChannels {
     }
 }
 
-/// Physical output dimensions and color sampling. Geometry background values are
-/// zero; color is transparent unless an environment background is configured.
+/// Physical output dimensions and color sampling. Color is transparent unless
+/// an environment background is configured.
 /// COLOR uses display-encoded RGBA8 after exposure and tone
 /// mapping; LINEAR_COLOR uses premultiplied RGBA16Float before display mapping.
 #[derive(Clone, Copy, Debug)]
@@ -575,6 +575,7 @@ impl WgpuScene3dRenderer {
         }
         self.context.queue.submit([encoder.finish()]);
         Ok(Scene3dGpuOutput {
+            depth_background: frame.depth_background,
             context: self.context.clone(),
             draw_statistics,
             config,
@@ -663,6 +664,7 @@ fn output_texture(
 /// An owned submitted frame. Textures remain valid across subsequent renders
 /// and resizes. GPU consumers must use the same device and queue ordering.
 pub struct Scene3dGpuOutput {
+    depth_background: gpui::DepthBackground3d,
     context: WgpuContext,
     draw_statistics: Scene3dDrawStatistics,
     config: Scene3dOutputConfig,
@@ -675,6 +677,10 @@ pub struct Scene3dGpuOutput {
     target_memory: Scene3dTargetMemory,
 }
 impl Scene3dGpuOutput {
+    /// Background sentinel used by this frame's linear-depth texture.
+    pub fn depth_background(&self) -> gpui::DepthBackground3d {
+        self.depth_background
+    }
     /// Target payload of this submission's configuration, independent of cache reuse.
     pub fn target_memory(&self) -> Scene3dTargetMemory {
         self.target_memory
@@ -701,7 +707,8 @@ impl Scene3dGpuOutput {
         self.ids.as_ref()
     }
 
-    /// R32Float: positive camera-forward depth in scene units; zero background.
+    /// R32Float: nonnegative camera-forward depth in scene units. Consult
+    /// `depth_background()` for this frame's no-surface sentinel.
     pub fn linear_depth(&self) -> Option<&wgpu::Texture> {
         self.depth.as_ref()
     }
@@ -737,6 +744,7 @@ impl Scene3dGpuOutput {
             "a 3D readback is already pending"
         );
         let mut pending = Scene3dReadback {
+            depth_background: self.depth_background,
             context: self.context.clone(),
             size: self.config.size,
             slots: Vec::new(),
@@ -824,12 +832,15 @@ impl Drop for ReadbackPermit {
 /// Top-left-origin, tightly packed output. Every channel contains width * height
 /// pixels, without GPU row padding. Channels not requested are None.
 pub struct Scene3dPixels {
+    /// Background sentinel for the linear-depth channel, if requested.
+    pub depth_background: gpui::DepthBackground3d,
     pub size: [u32; 2],
     pub rgba: Option<Vec<u8>>,
     /// Premultiplied linear HDR RGBA, widened from binary16 without display conversion.
     pub linear_rgba: Option<Vec<[f32; 4]>>,
     pub object_ids: Option<Vec<u32>>,
-    /// Positive camera-forward distance per pixel, in scene units; zero background.
+    /// Nonnegative camera-forward distance in scene units;
+    /// `depth_background` identifies samples without a surface.
     pub linear_depth: Option<Vec<f32>>,
     /// World XYZ normal and surface-validity W. Normal maps are not applied.
     pub world_normals: Option<Vec<[f32; 4]>>,
@@ -837,6 +848,7 @@ pub struct Scene3dPixels {
 
 /// Pending readback that owns its staging buffers and renderer queue permit.
 pub struct Scene3dReadback {
+    depth_background: gpui::DepthBackground3d,
     context: WgpuContext,
     size: [u32; 2],
     slots: Vec<ReadbackSlot>,
@@ -881,6 +893,7 @@ impl Scene3dReadback {
             }
         }
         let mut pixels = Scene3dPixels {
+            depth_background: self.depth_background,
             size: self.size,
             rgba: None,
             linear_rgba: None,
@@ -914,6 +927,7 @@ mod tests {
     #[test]
     fn scene3d_readback_decodes_float_channels_without_row_padding() {
         let mut pixels = Scene3dPixels {
+            depth_background: Default::default(),
             size: [3, 2],
             rgba: None,
             linear_rgba: None,
@@ -1001,6 +1015,7 @@ mod tests {
     #[test]
     fn scene3d_linear_color_readback_preserves_hdr_alpha_and_row_order() {
         let mut pixels = Scene3dPixels {
+            depth_background: Default::default(),
             size: [2, 2],
             rgba: None,
             linear_rgba: None,

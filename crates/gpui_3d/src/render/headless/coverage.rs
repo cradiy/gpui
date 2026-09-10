@@ -180,6 +180,7 @@ mod tests {
         let node = graph.insert(None, Node::new()).unwrap();
         ReadFrame {
             pixels: Scene3dPixels {
+                depth_background: Default::default(),
                 size,
                 object_ids: Some(ids),
                 rgba: None,

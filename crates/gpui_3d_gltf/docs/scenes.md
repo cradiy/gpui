@@ -166,9 +166,10 @@ clip parameters must be finite and satisfy the core camera's range requirements.
 
 Orthographic `ymag` gives half the full vertical span. The fixed aspect is
 `xmag / ymag`, preserving both authored magnitudes independently of output shape.
-Magnitudes must be positive and finite. The core requires positive near depth,
-so orthographic `znear = 0` is unsupported and returns an error. No clip distance
-is substituted silently.
+Magnitudes must be positive and finite. Orthographic `znear` is nonnegative,
+including zero, and `zfar` is finite and greater than `znear`. Authored clip
+distances are preserved. Zero-near depth outputs use the core frame's `-1`
+background sentinel, keeping eye-plane surface depth zero valid.
 
 Node/world transforms use the core camera transform contract: eye, viewing
 direction and up follow the hierarchy; projection and clip distances are not

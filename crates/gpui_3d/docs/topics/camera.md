@@ -14,6 +14,12 @@ Pixels still span the full output, so a mismatched output ratio stretches the
 image. Letterboxing or matching output dimensions is caller-owned. Projection,
 ray, depth-reconstruction, background and framing calculations use the same ratio.
 
+Perspective near depth must be finite and positive. Orthographic near depth may
+be zero, including surfaces on the eye plane, and far depth must be finite and
+greater than near. Negative near depths are rejected. Zero-near orthographic
+frames use a `-1` linear-depth background sentinel so zero remains a valid
+surface depth; see [Headless output](headless.md).
+
 Perspective `far: f32::INFINITY` uses an infinite projection with finite matrix
 coefficients. Near clipping remains active. Depth and ray queries have no finite
 far limit, while hardware depth precision still limits distinguishable distant
@@ -54,7 +60,7 @@ These APIs require no `Window`, layout, or GPU:
 | `world_to_view(point)` | Camera-space position; points in front have negative Z |
 | `world_to_screen(viewport, point)` | Screen position, NDC, linear forward depth, and frustum membership |
 | `screen_to_ray(viewport, position)` | Normalized world-space ray |
-| `screen_to_world(viewport, position, depth)` | World position from positive linear camera-forward depth |
+| `screen_to_world(viewport, position, depth)` | World position from linear camera-forward depth |
 | `frustum(aspect)` | Owned camera clip-volume snapshot for repeated world-AABB queries |
 | `project_bounds(viewport, bounds)` | Screen rectangle of the clipped world AABB, or `None` for an empty intersection |
 
@@ -65,15 +71,17 @@ DPI scale produces the same ray. Pixel centers in physical image data are at
 `(x + 0.5, y + 0.5)`; convert them and the viewport into one coordinate system
 before querying. No implicit DPI conversion is performed.
 
-`world_to_screen` returns `None` on or behind the eye plane. Points in front but
+`world_to_screen` returns `None` behind the eye plane, and on it for perspective
+projection. Orthographic eye-plane points retain their coordinates. Points
 outside the viewport or clip planes retain their projected coordinates with
 `in_frustum = false`. The near plane is included and the far plane excluded.
 Frustum membership is geometric, not proof that a point is unoccluded.
 
 `screen_to_world` inverts screen projection using linear forward depth in scene
 units, not normalized hardware depth or distance along a picking ray. Depth must
-be finite and strictly positive. Off-screen positions and depths outside the
-near/far interval remain valid inputs; reconstruction does not test visibility.
+be finite, positive for perspective, and nonnegative for orthographic projection.
+Off-screen positions and depths outside the near/far interval remain valid inputs;
+reconstruction does not test visibility.
 Viewport offsets, DPI-scaled coordinates, and lens shifts follow the same
 conventions as `world_to_screen`.
 

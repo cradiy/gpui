@@ -181,7 +181,7 @@ fn object_id(input: Output, @builtin(front_facing) front: bool) -> @location(0) 
 fn linear_depth(input: Output, @builtin(front_facing) front: bool) -> @location(0) f32 {
     let gradients = mat2x2<f32>(dpdx(input.uv.xy), dpdy(input.uv.xy));
     let base = base_color(input, gradients, front);
-    return dot(params.depth_plane, vec4<f32>(input.world, 1.0));
+    return max(dot(params.depth_plane, vec4<f32>(input.world, 1.0)), 0.0);
 }
 
 @fragment

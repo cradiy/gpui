@@ -238,6 +238,11 @@ impl Scene {
             });
         }
         Ok(Scene3dFrame {
+            depth_background: if self.camera.near == 0. {
+                gpui::DepthBackground3d::NegativeOne
+            } else {
+                gpui::DepthBackground3d::Zero
+            },
             viewport_quality: Default::default(),
             specular_environment: self
                 .specular_environment

@@ -25,12 +25,12 @@ interpolated across surfaces or background. `Ok(None)` means the point is behind
 the eye, clipped by near/far, or outside that rectangle. Near depth is inclusive;
 far depth and the right/bottom edges are exclusive.
 
-An in-bounds result contains the pixel, the point's positive camera-forward depth,
+An in-bounds result contains the pixel, the point's nonnegative camera-forward depth,
 the sampled surface depth, and a `DepthRelation`:
 
 | Relation | Meaning |
 | --- | --- |
-| `Background` | The sample is zero; `surface_depth` is `None`. |
+| `Background` | The sample equals the frame's depth-background sentinel; `surface_depth` is `None`. |
 | `InFront` | The point is nearer than the sampled surface by more than the tolerance. |
 | `WithinTolerance` | The absolute forward-depth difference is at most the tolerance. |
 | `Behind` | The point is farther than the sampled surface by more than the tolerance. |
@@ -39,6 +39,11 @@ Tolerance is a finite nonnegative distance in scene units, not pixels, normalize
 hardware depth, or ray distance. Choose it for the scene scale and depth precision;
 zero requests a strict comparison. Differences are computed in f64 from the f32
 point and depth values. This does not recover precision lost during rendering.
+
+`frame.pixels.depth_background` identifies background: `Zero` for positive-near
+frames and `NegativeOne` for zero-near orthographic frames. With `NegativeOne`,
+depth zero is an ordinary valid surface and can compare as `WithinTolerance` or
+`Behind`. No Object ID or normal channel is required to distinguish it.
 
 These results describe one depth sample, not continuous visibility. A world point
 can project away from the pixel center where the surface was sampled, especially
@@ -50,7 +55,8 @@ alpha-weighted contributions, and post-processing do not change the comparison.
 
 The complete depth-channel length and nonzero dimensions are required even for
 clipped points. Missing channels, mismatched lengths, invalid tolerance, invalid
-camera/point values, and a selected negative or nonfinite depth return
+camera/point values, and a selected nonfinite depth or negative value other than
+the frame's background sentinel return
 `DepthQueryError`. Other pixels are not scanned or validated. Queries take O(1)
 time and leave the frame unchanged. Compare points from the same scene state as
 the retained frame; later graph edits do not update its depth samples.

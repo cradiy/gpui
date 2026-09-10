@@ -49,6 +49,7 @@ pub use scene::{
 pub use spatial::{Hit, PickBehavior, QueryObject};
 
 pub use gpui::AlphaMode3d as AlphaMode;
+pub use gpui::DepthBackground3d as DepthBackground;
 pub use gpui::ElementId as ObjectId;
 pub use gpui::LightKind3d as LightKind;
 pub use gpui::MAX_PUNCTUAL_LIGHTS_3D as MAX_PUNCTUAL_LIGHTS;

@@ -90,7 +90,7 @@ impl fmt::Display for CameraError {
                 "viewport requires finite origin and positive finite dimensions"
             }
             Self::InvalidPoint => "point coordinates must be finite",
-            Self::InvalidDepth => "linear camera depth must be positive and finite",
+            Self::InvalidDepth => "linear camera depth is invalid for this projection",
             Self::InvalidFraming => "framing margin must be finite and at least one",
             Self::Unrepresentable => "camera calculation exceeds finite coordinate precision",
         })
@@ -135,7 +135,7 @@ impl Ray {
     }
 }
 
-/// Projection of a point in front of the camera, including points outside its frustum.
+/// Projected point, including points outside the camera's frustum.
 #[derive(Clone, Copy, Debug)]
 pub struct ScreenPoint {
     pub position: Point<Pixels>,
@@ -161,6 +161,7 @@ pub struct Camera {
     /// coverage right/up in camera space; the optical axis projects to -shift NDC.
     /// Applies to perspective and orthographic views. Any finite value is valid.
     pub lens_shift: [f32; 2],
+    /// Inclusive near depth. Positive for perspective, nonnegative for orthographic.
     pub near: f32,
     /// Exclusive far depth for queries. Positive infinity is valid for perspective
     /// projection; orthographic projection requires a finite value.
@@ -283,7 +284,8 @@ impl Camera {
         }
         if !self.near.is_finite()
             || self.far.is_nan()
-            || self.near <= 0.
+            || self.near < 0.
+            || (self.near == 0. && matches!(self.projection, Projection::Perspective { .. }))
             || self.far <= self.near
             || !self.lens_shift.iter().all(|v| v.is_finite())
         {
@@ -355,7 +357,8 @@ impl Camera {
         Ok(p)
     }
 
-    /// Returns `None` on or behind the eye plane. Screen origin is top-left.
+    /// Returns `None` behind the eye plane, or on it for perspective projection.
+    /// Orthographic points on the eye plane retain coordinates. Screen origin is top-left.
     /// Off-screen and near/far-clipped points in front retain coordinates and depth.
     pub fn world_to_screen(
         self,
@@ -366,7 +369,8 @@ impl Camera {
         let projection = self.projection_matrix(width / height)?;
         let view = self.world_to_view(world)?;
         let depth = -view[2];
-        if depth <= 0. {
+        if depth < 0. || (depth == 0. && matches!(self.projection, Projection::Perspective { .. }))
+        {
             return Ok(None);
         }
         let clip = transform(projection, [view[0], view[1], view[2], 1.]);
@@ -395,7 +399,8 @@ impl Camera {
     }
 
     /// Reconstructs a world position from top-left-origin screen coordinates and
-    /// positive linear camera-forward depth, not ray distance or hardware depth.
+    /// linear camera-forward depth, not ray distance or hardware depth. Depth is
+    /// positive for perspective and nonnegative for orthographic projection.
     /// Positions outside the viewport and depths outside near/far are not clipped.
     pub fn screen_to_world(
         self,
@@ -410,7 +415,10 @@ impl Camera {
         {
             return Err(CameraError::InvalidPoint);
         }
-        if !depth.is_finite() || depth <= 0. {
+        if !depth.is_finite()
+            || depth < 0.
+            || (depth == 0. && matches!(self.projection, Projection::Perspective { .. }))
+        {
             return Err(CameraError::InvalidDepth);
         }
         let projection = self.projection_matrix(width / height)?;
@@ -608,6 +616,101 @@ fn viewport_size(bounds: Bounds<Pixels>) -> Result<[f32; 2], CameraError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_near_orthographic_projects_picks_and_prepares_the_eye_plane() {
+        use crate::{Aabb, DepthBackground, Material, Mesh, Object, Scene, TextureState};
+        let camera = Camera {
+            eye: [0.; 3],
+            target: [0., 0., -1.],
+            near: 0.,
+            far: 10.,
+            projection: Projection::Orthographic { vertical_size: 4. },
+            lens_shift: [0.25, -0.5],
+            aspect_ratio: Some(1.5),
+            ..Default::default()
+        };
+        for scale in [1., 2.] {
+            let viewport = Bounds::new(
+                point(px(37. * scale), px(19. * scale)),
+                gpui::size(px(300. * scale), px(200. * scale)),
+            );
+            for world in [[0.; 3], [0.25, 0.25, 0.], [-0.25, -0.25, -5.]] {
+                let projected = camera.world_to_screen(viewport, world).unwrap().unwrap();
+                assert!(projected.in_frustum);
+                let restored = camera
+                    .screen_to_world(viewport, projected.position, projected.depth)
+                    .unwrap();
+                for (a, b) in restored.into_iter().zip(world) {
+                    assert!((a - b).abs() < 1e-5);
+                }
+                if world[2] == 0. {
+                    assert_eq!(projected.ndc[2], 0.);
+                    let scene = Scene::new().camera(camera).object(
+                        Object::new(Mesh::plane(), Material::color(gpui::rgb(0xffffff)))
+                            .id("plane"),
+                    );
+                    let hit = scene.pick(viewport, projected.position).unwrap();
+                    assert_eq!(hit.object_id, Some("plane".into()));
+                    assert!(hit.distance.abs() < 1e-5);
+                }
+            }
+            assert!(
+                camera
+                    .world_to_screen(viewport, [0., 0., 1.])
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                !camera
+                    .world_to_screen(viewport, [0., 0., -10.])
+                    .unwrap()
+                    .unwrap()
+                    .in_frustum
+            );
+            assert!(
+                camera
+                    .project_bounds(
+                        viewport,
+                        Aabb::new([-0.25, -0.25, 0.], [0.25, 0.25, 0.]).unwrap()
+                    )
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        for near in [0., 0.5] {
+            let scene = Scene::new().camera(Camera { near, ..camera });
+            let prepared = scene
+                .prepare(1.5, None, |_| {
+                    Ok(TextureState::Ready(gpui::MeshTexture3d::None))
+                })
+                .unwrap();
+            assert_eq!(
+                prepared.frame().depth_background,
+                if near == 0. {
+                    DepthBackground::NegativeOne
+                } else {
+                    DepthBackground::Zero
+                }
+            );
+        }
+        for bad in [
+            Camera {
+                near: -0.1,
+                ..camera
+            },
+            Camera {
+                far: f32::INFINITY,
+                ..camera
+            },
+            Camera {
+                near: 0.,
+                ..Default::default()
+            },
+        ] {
+            assert!(bad.projection_matrix(1.).is_err());
+        }
+    }
     use crate::{Material, Mesh, Object, Scene};
     use gpui::{rgb, size};
 
@@ -826,12 +929,15 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
-            assert!(
-                camera
-                    .world_to_screen(viewport(), [0.; 3])
-                    .unwrap()
-                    .is_none()
-            );
+            let eye_plane = camera.world_to_screen(viewport(), [0.; 3]).unwrap();
+            match projection {
+                Projection::Perspective { .. } => assert!(eye_plane.is_none()),
+                Projection::Orthographic { .. } => {
+                    let eye_plane = eye_plane.unwrap();
+                    assert_eq!(eye_plane.depth, 0.);
+                    assert!(!eye_plane.in_frustum);
+                }
+            }
             for (depth, inside) in [
                 (0.5, false),
                 (1., true),

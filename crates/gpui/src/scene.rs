@@ -1433,6 +1433,7 @@ mod tests {
     #[test]
     fn scene3d_capture_replay_keeps_frame_and_nested_texture_reservations() {
         let frame = Arc::new(crate::Scene3dFrame {
+            depth_background: Default::default(),
             viewport_quality: Default::default(),
             background: None,
             specular_environment: None,

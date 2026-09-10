@@ -219,7 +219,7 @@ impl ReadFrame {
 
     /// Reconstructs the nearest surface at a physical pixel center using this
     /// frame's camera and linear depth. Background, out-of-bounds coordinates,
-    /// or missing depth samples return `None`. Invalid nonzero depth values and
+    /// or missing depth samples return `None`. Invalid non-background depth values and
     /// unrepresentable world coordinates return an error.
     pub fn world_position_at(&self, x: u32, y: u32) -> Result<Option<[f32; 3]>, CameraError> {
         let [width, height] = self.pixels.size;
@@ -233,7 +233,7 @@ impl ReadFrame {
         let Some(&depth) = depth else {
             return Ok(None);
         };
-        if depth == 0. {
+        if self.pixels.depth_background.is_background(depth) {
             return Ok(None);
         }
         self.camera
@@ -280,6 +280,7 @@ mod tests {
     fn depth_frame(projection: Projection) -> ReadFrame {
         ReadFrame {
             pixels: Scene3dPixels {
+                depth_background: Default::default(),
                 size: [3, 2],
                 rgba: None,
                 linear_rgba: None,

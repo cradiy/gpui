@@ -76,6 +76,28 @@ fn orthographic_conversion_preserves_both_magnitudes_independent_of_output_shape
 }
 
 #[test]
+fn zero_near_orthographic_conversion_keeps_the_authored_camera_plane() {
+    let source = document(
+        json!([{"type":"orthographic","orthographic":{"xmag":3.,"ymag":2.,"znear":0.,"zfar":30.}}]),
+    );
+    let camera = source.camera(0).unwrap();
+    assert_eq!(camera.near, 0.);
+    let viewport = Bounds::new(point(px(20.), px(30.)), size(px(600.), px(400.)));
+    let point = camera
+        .world_to_screen(viewport, [3., 2., 0.])
+        .unwrap()
+        .unwrap();
+    assert!(point.in_frustum);
+    assert_eq!(point.depth, 0.);
+    assert_eq!(
+        camera
+            .screen_to_world(viewport, point.position, point.depth)
+            .unwrap(),
+        [3., 2., 0.]
+    );
+}
+
+#[test]
 fn camera_nodes_keep_parent_pose_source_indices_and_independent_instance_selection() {
     let source = json!({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
         "nodes":[{"translation":[1,0,0],"rotation":[0,std::f32::consts::FRAC_1_SQRT_2,0,std::f32::consts::FRAC_1_SQRT_2],"children":[1,2]},
@@ -169,7 +191,7 @@ fn mismatched_camera_schema_and_invalid_projection_parameters_fail_without_panic
         json!({"type":"perspective","perspective":{"yfov":1.,"znear":0.1,"zfar":0.01}}),
         json!({"type":"perspective","perspective":{"yfov":1.,"znear":0.1,"aspectRatio":0.}}),
         json!({"type":"perspective","perspective":{"yfov":1.,"znear":0.1,"zfar":1e40}}),
-        json!({"type":"orthographic","orthographic":{"xmag":1.,"ymag":1.,"znear":0.,"zfar":10.}}),
+        json!({"type":"orthographic","orthographic":{"xmag":1.,"ymag":1.,"znear":-0.1,"zfar":10.}}),
         json!({"type":"orthographic","orthographic":{"xmag":-1.,"ymag":1.,"znear":0.1,"zfar":10.}}),
     ] {
         let error = document(json!([camera])).camera(0).unwrap_err();

@@ -87,7 +87,7 @@ or read back.
 | Color | `Rgba8Unorm` | RGBA bytes, width × 4 bytes per row | Transparent black or configured environment; premultiplied alpha |
 | Linear color | `Rgba16Float` | `[f32; 4]` values in `linear_rgba`, width values per row | Transparent black or configured environment; premultiplied linear HDR |
 | Object ID | `R32Uint` | `u32` values, width values per row | Zero background; nearest surviving surface at the pixel center |
-| Linear depth | `R32Float` | `f32` values, width values per row | Zero background; positive camera-forward depth in scene units |
+| Linear depth | `R32Float` | `f32` values, width values per row | Frame-defined background sentinel; nonnegative camera-forward depth in scene units |
 | World normal | `Rgba32Float` | `[f32; 4]` values, width values per row | Zero background; world XYZ normal and validity W |
 
 All images have a top-left origin. Readback strips GPU row padding. Color uses
@@ -372,8 +372,14 @@ if let Some(result) = pending.try_read()? {
 
 Linear depth is the negated view-space Z coordinate, not hardware depth in
 `[0, 1]` and not radial distance from the camera. It uses the same scene units
-as object positions, for both perspective and orthographic cameras. Zero means
-background for a valid camera whose near plane is positive.
+as object positions, for both perspective and orthographic cameras.
+`frame.gpu().depth_background()` and `frame.pixels.depth_background` report its
+background convention. `DepthBackground::Zero` uses zero for positive-near
+cameras. Zero-near orthographic cameras use `DepthBackground::NegativeOne`, with
+`-1` as background and zero as a valid eye-plane surface. `value()` exposes the
+clear value for GPU consumers; `is_background(depth)` tests a CPU sample. ID and
+normal validity remain unchanged. Low-level `Scene3dFrame` callers choose the
+sentinel explicitly through `depth_background`.
 
 `RenderedFrame::camera()` and `ReadFrame::camera()` retain the camera that
 produced each output. Camera edits, resizing, and renderer destruction do not

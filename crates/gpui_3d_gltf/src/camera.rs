@@ -42,10 +42,6 @@ impl PreparedDocument {
                     p.xmag().is_finite() && p.xmag() > 0. && p.ymag().is_finite() && p.ymag() > 0.,
                     "orthographic magnitudes must be finite and positive"
                 );
-                ensure!(
-                    p.znear() > 0.,
-                    "orthographic znear must be positive; zero near depth is unsupported by the core"
-                );
                 camera.projection = Projection::Orthographic {
                     vertical_size: 2. * p.ymag(),
                 };

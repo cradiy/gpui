@@ -108,7 +108,7 @@ reflections. Viewport and headless rendering share cube upload, BRDF lookup,
 roughness sampling, and normal-map handling. Prefilter on the caller's resource
 preparation path, not in the render loop. Reflections affect both display and
 linear HDR color, but not geometry channels or background visibility. See
-[Specular environment lighting](viewport.md#specular-environment-lighting).
+[Specular environment lighting](lighting.md#specular-environment-lighting).
 
 `Opaque` ignores alpha, `Mask` discards values below its cutoff and makes survivors
 opaque, and `Blend` blends nonzero alpha using linear premultiplied source-over.
@@ -338,7 +338,7 @@ composition beneath transparent objects and appears in both color outputs;
 exposure and tone mapping apply only to `COLOR`. Background visibility, brightness,
 and rotation are independent of illumination. Geometry channels retain zero
 background values and nearest-surface coverage. See
-[Environment background](viewport.md#environment-background) for map orientation,
+[Environment background](lighting.md#environment-background) for map orientation,
 camera projection, filtering, and cache ownership.
 
 ```no_run

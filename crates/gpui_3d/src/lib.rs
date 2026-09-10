@@ -1,9 +1,5 @@
 //! Depth-tested mesh viewports embedded in GPUI layouts.
 
-/// Camera, material, layout and rendering guide.
-#[doc = include_str!("../docs/viewport.md")]
-pub mod guide {}
-
 mod animation;
 mod camera;
 mod geometry;

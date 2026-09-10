@@ -1077,6 +1077,71 @@ all channels before evaluating a snapshot. Additive or relative motion can be
 expressed by composing a sampled transform with an authored affine transform
 before passing it to `evaluate_with_transforms`.
 
+### Pose blending
+
+`TransformPose::blend(target, weight)` blends complete local TRS values at a finite
+weight in `[0, 1]`. Translation and signed scale interpolate componentwise;
+rotation uses normalized shortest-arc interpolation. Weight zero and one retain
+the exact input representations. Both inputs and the result must form valid,
+invertible transforms, even at endpoint weights. A scale crossing zero returns
+`AnimationError::InvalidTransform`; weights outside the allowed range are errors,
+not clamped values. The operation does not decompose affine matrices or preserve
+shear from an unrelated authored transform.
+
+`Pose` is an immutable, ordered collection of `(NodeHandle, TransformPose)` entries.
+`Pose::new` rejects duplicate handles and invalid TRS values. Entries contain full
+local transforms, not partial animation channels. Resolve missing track channels
+against an explicit base pose before constructing the collection. Empty poses
+are valid; clones share storage. `get` retrieves a local pose, `poses` iterates
+entries, and `transforms` provides validated affine overrides for scene evaluation.
+
+```rust
+use gpui_3d::{Node, Pose, PoseMask, SceneGraph, TransformPose};
+use std::f32::consts::FRAC_1_SQRT_2;
+
+let mut graph = SceneGraph::new();
+let root = graph.insert(None, Node::new())?;
+let joint = graph.insert(Some(root), Node::new())?;
+let local = TransformPose {
+    translation: [0., 1., 0.],
+    ..Default::default()
+};
+let base = Pose::new([(root, TransformPose::default()), (joint, local)])?;
+let target = Pose::new([(joint, TransformPose {
+    rotation: [0., 0., FRAC_1_SQRT_2, FRAC_1_SQRT_2],
+    ..local
+})])?;
+let mask = PoseMask::new(0., [(joint, 1.)])?;
+let mixed = base.blend(&target, 0.5, Some(&mask))?;
+let evaluated = graph.evaluate_with_transforms(mixed.transforms())?;
+# let _ = evaluated;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`base.blend(target, weight, mask)` retains the base's node set and insertion order.
+Target entries may be sparse; omitted nodes retain their base poses. Every target
+node and every explicit mask node must exist in the base, including at zero
+weight. Unknown nodes produce `PoseError::MissingNode` instead of blending against
+an implicit identity pose. The inputs remain unchanged if any result fails
+validation. Node liveness and graph membership are checked when passing the
+overrides to `SceneGraph`, not when storing a pose.
+
+`PoseMask::new(default_weight, entries)` assigns finite `[0, 1]` weights to stable
+node handles, with an explicit default for unspecified nodes. Effective blend
+weight is the global weight multiplied by the node's mask weight. With no mask,
+all target nodes use the global weight. A default of zero includes only listed
+nodes; a default of one can exclude selected nodes with zero-weight entries.
+Mask weights apply to local poses and do not expand through the hierarchy. A
+masked-out child still inherits its parent's final transform.
+
+Successive `blend` calls form ordered override layers. They are not a normalized
+multi-way mean, so changing layer order can change the result. Sample tracks at
+explicit times, construct the input poses, apply layers and local overrides,
+then pass `mixed.transforms()` to `evaluate_with_transforms` or
+`evaluate_with_constraints`. Use the resulting world transforms for attachments
+and skinning. Clip selection, per-clip timing, automatic subtree masks, and
+animation-state machines remain caller policy.
+
 ### Weight tracks
 
 `WeightTrack` samples a runtime-sized array of weights from absolute timestamps.

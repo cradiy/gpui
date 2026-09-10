@@ -2,6 +2,8 @@
 
 mod weights;
 pub use weights::WeightTrack;
+mod pose;
+pub use pose::{Pose, PoseError, PoseMask};
 
 use crate::{AffineTransform, TransformError};
 use std::{fmt, sync::Arc, time::Duration};
@@ -69,6 +71,7 @@ pub enum AnimationError {
         expected: usize,
         actual: usize,
     },
+    InvalidBlendWeight,
     /// Interpolation produced an unrepresentable value or a zero quaternion.
     InvalidSample,
     InvalidTransform(TransformError),
@@ -105,6 +108,9 @@ impl fmt::Display for AnimationError {
                 f,
                 "sample output has {actual} components; expected {expected}"
             ),
+            Self::InvalidBlendWeight => {
+                f.write_str("pose blend weight must be finite and between zero and one")
+            }
             Self::InvalidSample => {
                 f.write_str("animation sample is nonfinite, unrepresentable, or a zero quaternion")
             }
@@ -268,28 +274,32 @@ impl RotationTrack {
     pub fn sample(&self, time: Duration) -> Result<[f32; 4], AnimationError> {
         let (left, right, t, seconds) = self.0.segment(time);
         let value = if left != right && self.0.interpolation == Interpolation::Linear {
-            let a = normalize(self.0.keys[left].value.map(f64::from))?;
-            let mut b = normalize(self.0.keys[right].value.map(f64::from))?;
-            let mut dot = a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>();
-            if dot < 0. {
-                b = b.map(|v| -v);
-                dot = -dot;
-            }
-            let (wa, wb) = if dot > 0.9995 {
-                (1. - t, t)
-            } else {
-                let angle = dot.clamp(0., 1.).acos();
-                (
-                    ((1. - t) * angle).sin() / angle.sin(),
-                    (t * angle).sin() / angle.sin(),
-                )
-            };
-            std::array::from_fn(|i| wa * a[i] + wb * b[i])
+            slerp(self.0.keys[left].value, self.0.keys[right].value, t)?
         } else {
             self.0.components(left, right, t, seconds)
         };
         Ok(normalize(value)?.map(|v| v as f32))
     }
+}
+
+fn slerp(a: [f32; 4], b: [f32; 4], t: f64) -> Result<[f64; 4], AnimationError> {
+    let a = normalize(a.map(f64::from))?;
+    let mut b = normalize(b.map(f64::from))?;
+    let mut dot = a.iter().zip(b).map(|(a, b)| a * b).sum::<f64>();
+    if dot < 0. {
+        b = b.map(|v| -v);
+        dot = -dot;
+    }
+    let (wa, wb) = if dot > 0.9995 {
+        (1. - t, t)
+    } else {
+        let angle = dot.clamp(0., 1.).acos();
+        (
+            ((1. - t) * angle).sin() / angle.sin(),
+            (t * angle).sin() / angle.sin(),
+        )
+    };
+    Ok(std::array::from_fn(|i| wa * a[i] + wb * b[i]))
 }
 
 fn normalize(value: [f64; 4]) -> Result<[f64; 4], AnimationError> {

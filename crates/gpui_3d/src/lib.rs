@@ -15,8 +15,8 @@ mod scene;
 mod spatial;
 
 pub use animation::{
-    AnimationError, Interpolation, Keyframe, RotationTrack, TransformPose, TransformTrack,
-    VectorTrack, WeightTrack,
+    AnimationError, Interpolation, Keyframe, Pose, PoseError, PoseMask, RotationTrack,
+    TransformPose, TransformTrack, VectorTrack, WeightTrack,
 };
 pub use camera::{
     Camera, CameraError, Frustum, OrbitController, OrbitError, OrbitSettings, Projection, Ray,

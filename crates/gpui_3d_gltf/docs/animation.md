@@ -47,6 +47,55 @@ for masked override or reference-relative additive mixing. Supply a complete bas
 for every layered target; sparse clip samples do not insert unanimated defaults.
 Pass the mixed collection's `weights()` into instance deformation.
 
+### Authored bases
+
+`SceneInstance::authored_pose()` builds a core `Pose` containing every
+TRS-authored node in the selected scene, including unanimated nodes. Values use
+destination handles and parent-first scene order. Signed scales and authored
+quaternion representations are retained. Matrix-authored nodes are excluded
+without decomposition; their graph matrices remain in effect during evaluation.
+The synthetic instance root and primitive children are excluded, so an outer
+placement transform is not reset by applying the base.
+
+`authored_weights()` builds a core `WeightPose` with one array per Morph node,
+regardless of primitive count. Node weights override mesh defaults; absent
+defaults become zero. Values remain signed and are not normalized. Nodes without
+Morph targets are excluded. Both methods use retained asset data, not current
+graph edits or clip samples, and do not require an animation clip. Graph evaluation
+and deformation validate destination-handle liveness.
+
+Build and retain these bases once per instance. To crossfade clips with different
+target sets, expand each sparse sample against the same base before blending:
+
+```rust
+use gpui_3d::{Pose, WeightPose};
+use gpui_3d_gltf::AnimationSample;
+
+fn crossfade(
+    base_pose: &Pose,
+    base_weights: &WeightPose,
+    a: &AnimationSample,
+    b: &AnimationSample,
+    weight: f32,
+) -> anyhow::Result<(Pose, WeightPose)> {
+    let pose_a = base_pose.blend(a.pose(), 1., None)?;
+    let pose_b = base_pose.blend(b.pose(), 1., None)?;
+    let weights_a = base_weights.blend(a.weight_pose(), 1., None)?;
+    let weights_b = base_weights.blend(b.weight_pose(), 1., None)?;
+    Ok((
+        pose_a.blend(&pose_b, weight, None)?,
+        weights_a.blend(&weights_b, weight, None)?,
+    ))
+}
+```
+
+This gives omitted targets their authored values on each side of the fade.
+For layered overrides, blend sparse samples directly onto the current base with
+the desired weight and optional mask. The authored bases can also be retained
+as additive references.
+
+### Scene evaluation
+
 ```no_run
 use std::time::Duration;
 use gpui_3d::SceneGraph;

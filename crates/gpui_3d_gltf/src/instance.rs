@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use gpui_3d::{
-    EvaluatedScene, Mesh, NodeHandle, ObjectId, SceneError, SceneGraph, SubtreeInstance,
+    EvaluatedScene, Mesh, NodeHandle, ObjectId, Pose, PoseError, SceneError, SceneGraph,
+    SubtreeInstance, WeightPose, WeightPoseError,
 };
 
 use crate::{SceneAsset, SceneNode, ScenePrimitive};
@@ -75,6 +76,32 @@ impl SceneInstance {
     /// Core mapping for APIs accepting a `SubtreeInstance`.
     pub fn subtree_instance(&self) -> &SubtreeInstance {
         &self.subtree
+    }
+
+    /// Authored local TRS for every TRS node in this instance, in scene order.
+    /// Matrix-authored nodes are not decomposed. Synthetic roots and primitive
+    /// children are excluded. Graph edits do not change this base; evaluation
+    /// validates handle liveness. Retain the result for repeated clip mixing.
+    pub fn authored_pose(&self) -> Result<Pose, PoseError> {
+        Pose::new(
+            self.asset
+                .authored_poses
+                .iter()
+                .map(|&(source, pose)| (self.subtree.node(source).unwrap(), pose)),
+        )
+    }
+
+    /// Authored Morph weights, once per original node, in scene order.
+    /// Node weights take precedence over mesh defaults; missing values are zero.
+    /// Nodes without Morph targets are excluded. Values retain signed weights and
+    /// destination group handles, independently of graph edits or clip samples.
+    pub fn authored_weights(&self) -> Result<WeightPose, WeightPoseError> {
+        WeightPose::new(
+            self.asset
+                .authored_weights
+                .iter()
+                .map(|(source, weights)| (self.subtree.node(*source).unwrap(), weights.to_vec())),
+        )
     }
 
     /// Looks up an original glTF node index, not a mesh or primitive index.

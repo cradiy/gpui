@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use gpui::RenderImage;
 use gpui_3d::{
     AffineTransform, Camera, Material, Node, NodeHandle, PunctualLight, SceneGraph, SceneSubtree,
-    Skin,
+    Skin, TransformPose,
 };
 
 use crate::{
@@ -57,6 +57,7 @@ struct DefinitionNode {
     name: Option<String>,
     parent: Option<usize>,
     local: AffineTransform,
+    pose: Option<TransformPose>,
     camera: Option<(usize, Camera)>,
     light: Option<(usize, PunctualLight)>,
     skin: Option<usize>,
@@ -120,6 +121,8 @@ pub struct SceneAsset {
     skins: Arc<[SceneSkin]>,
     morphs: Arc<[SceneMorph]>,
     materials: Rc<HashMap<Option<usize>, Material>>,
+    pub(crate) authored_poses: Arc<[(NodeHandle, TransformPose)]>,
+    pub(crate) authored_weights: Arc<[(NodeHandle, Arc<[f32]>)]>,
 }
 
 impl SceneAsset {
@@ -199,6 +202,8 @@ impl SceneDefinition {
         let root = graph.insert(None, Node::new())?;
         let mut nodes: Vec<SceneNode> = Vec::with_capacity(self.0.nodes.len());
         let mut primitives = Vec::new();
+        let mut authored_poses = Vec::new();
+        let mut authored_weights = Vec::new();
         for source in &self.0.nodes {
             let parent = source.parent.map_or(root, |index| nodes[index].handle);
             let mut node = Node::new().transform(source.local);
@@ -209,6 +214,12 @@ impl SceneDefinition {
                 node = node.light(light);
             }
             let handle = graph.insert(Some(parent), node)?;
+            if let Some(pose) = source.pose {
+                authored_poses.push((handle, pose));
+            }
+            if !source.weights.is_empty() {
+                authored_weights.push((handle, source.weights.clone()));
+            }
             nodes.push(SceneNode {
                 index: source.index,
                 name: source.name.clone(),
@@ -295,6 +306,8 @@ impl SceneDefinition {
             primitives: primitives.into(),
             skins: skins.into(),
             morphs: morphs.into(),
+            authored_poses: authored_poses.into(),
+            authored_weights: authored_weights.into(),
             materials: Rc::new(
                 self.0
                     .materials
@@ -389,15 +402,22 @@ impl PreparedDocument {
                             && raw.scale.is_none()),
                     "matrix and TRS properties cannot be combined"
                 );
-                let local = match source.transform() {
+                let (local, pose) = match source.transform() {
                     gltf::scene::Transform::Matrix { matrix } => {
-                        AffineTransform::from_matrix(matrix)?
+                        (AffineTransform::from_matrix(matrix)?, None)
                     }
                     gltf::scene::Transform::Decomposed {
                         translation,
                         rotation,
                         scale,
-                    } => AffineTransform::from_trs(translation, rotation, scale)?,
+                    } => {
+                        let pose = TransformPose {
+                            translation,
+                            rotation,
+                            scale,
+                        };
+                        (pose.affine()?, Some(pose))
+                    }
                 };
                 let world = parent_world.compose(local)?;
                 let light = source
@@ -510,6 +530,7 @@ impl PreparedDocument {
                     name: source.name().map(str::to_owned),
                     parent,
                     local,
+                    pose,
                     camera,
                     light,
                     skin,

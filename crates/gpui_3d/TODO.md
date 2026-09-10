@@ -174,6 +174,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Local viewport example**: Background glTF/GLB loading, bounded queue and decoded-image reuse, cancel/reload with retained successful models, actual-viewport framing, Orbit and authored cameras with aspect fitting, and source node/material inspection.
 - [ ] **Animation import and playback**: File-format clips, playback state, looping, pause, and seeking feeding core pose, transform, and deformation inputs.
   - [x] **Instance animation binding**: Source-identity validation, explicit missing-target policy, shared graph-handle mappings, and independent absolute-time Pose/Morph samples with retained results on failure.
+  - [x] **Authored animation bases**: Instance-mapped TRS and per-node Morph defaults, retained independently of graph edits, with matrix and outer-placement preservation for sparse clip layers and crossfades.
   - [x] **Clip playback and viewer sampling**: Caller-advanced authored time ranges, signed rates, looping, pause/seek, partition-independent elapsed scaling, and selected-clip viewer controls with shared TRS/Morph/Skin snapshots and retained frames on sampling failure.
 - [ ] **Material presets**: Matte, metal, plastic, and emissive configurations built on core material parameters.
 - [ ] **3D annotations**: GPUI label widgets built on projection and depth queries, with configurable visibility and edge behavior.

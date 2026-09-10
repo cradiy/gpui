@@ -3,6 +3,187 @@ use gpui_3d::{AffineTransform, Node, SceneError};
 use gpui_3d_gltf::AnimationTargetPolicy;
 
 #[test]
+fn authored_bases_mix_disjoint_clips_without_losing_defaults_or_instance_placement() {
+    let mut fixture = Fixture::new();
+    fixture.morph_mesh();
+    fixture.json["meshes"][0]["weights"] = json!([0.25, 0.5]);
+    let primitive = fixture.json["meshes"][0]["primitives"][0].clone();
+    fixture.json["meshes"][0]["primitives"]
+        .as_array_mut()
+        .unwrap()
+        .push(primitive);
+    fixture.json["nodes"][1]["weights"] = json!([0.5, -0.25]);
+    fixture.json["nodes"][0]["children"] = json!([1, 2, 3]);
+    fixture.json["nodes"].as_array_mut().unwrap().extend([
+        json!({"mesh":0,"translation":[-2,0,0]}),
+        json!({"matrix":[1,0,0,0, 0.5,1,0,0, 0,0,1,0, 0,4,0,1]}),
+    ]);
+    let times = fixture.times(&[0., 2.]);
+    let translation = fixture.floats("VEC3", &[1., 2., 3., 5., 2., 3.]);
+    let weights = fixture.floats("SCALAR", &[0.5, -0.25, 1., 0.]);
+    fixture.channel(1, "translation", times, translation, "LINEAR");
+    fixture.channel(1, "weights", times, weights, "LINEAR");
+    let first_clip = fixture.json["animations"][0].clone();
+    fixture.json["animations"][0] = json!({"channels":[],"samplers":[]});
+    let translation = fixture.floats("VEC3", &[-2., 0., 0., -6., 0., 0.]);
+    let weights = fixture.floats("SCALAR", &[0.25, 0.5, -0.25, 0.5]);
+    fixture.channel(2, "translation", times, translation, "LINEAR");
+    fixture.channel(2, "weights", times, weights, "LINEAR");
+    let second_clip = fixture.json["animations"][0].clone();
+    fixture.json["animations"] = json!([first_clip, second_clip]);
+    let document = fixture.prepare().unwrap();
+    let asset = document
+        .scene(None, SceneOptions::default())
+        .unwrap()
+        .decode_images(ImageDecodeLimits::default())
+        .unwrap();
+    let mut graph = SceneGraph::new();
+    let a = asset.instantiate(&mut graph, None).unwrap();
+    let b = asset.instantiate(&mut graph, None).unwrap();
+    let first = document
+        .animation(0, AnimationOptions::default())
+        .unwrap()
+        .bind(&a, AnimationTargetPolicy::RequireAll)
+        .unwrap();
+    let second = document
+        .animation(1, AnimationOptions::default())
+        .unwrap()
+        .bind(&a, AnimationTargetPolicy::RequireAll)
+        .unwrap();
+    drop(asset);
+    drop(document);
+    let pose = a.authored_pose().unwrap();
+    let weights = a.authored_weights().unwrap();
+    let n1 = a.node(1).unwrap();
+    let n2 = a.node(2).unwrap();
+    assert_eq!(pose.len(), 3);
+    assert!(pose.get(a.root()).is_none());
+    assert!(pose.get(a.node(3).unwrap()).is_none());
+    assert!(pose.get(a.primitive(1, 0).unwrap()).is_none());
+    assert_eq!(
+        weights.weights(),
+        &[(n1, vec![0.5, -0.25]), (n2, vec![0.25, 0.5])]
+    );
+    assert!(b.authored_pose().unwrap().get(n1).is_none());
+    graph
+        .set_transform(
+            a.root(),
+            AffineTransform::from_translation([20., 0., 0.]).unwrap(),
+        )
+        .unwrap();
+    let untouched = graph.evaluate().unwrap();
+    graph
+        .set_transform(
+            n1,
+            AffineTransform::from_translation([100., 0., 0.]).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(a.authored_pose().unwrap().get(n1), pose.get(n1));
+    let revision = graph.revision();
+    for seconds in [2, 0, 1, 2] {
+        let time = Duration::from_secs(seconds);
+        let first = first.sample(time).unwrap();
+        let second = second.sample(time).unwrap();
+        let mixed_pose = pose
+            .blend(first.pose(), 1., None)
+            .unwrap()
+            .blend(&pose.blend(second.pose(), 1., None).unwrap(), 0.5, None)
+            .unwrap();
+        let mixed_weights = weights
+            .blend(first.weight_pose(), 1., None)
+            .unwrap()
+            .blend(
+                &weights.blend(second.weight_pose(), 1., None).unwrap(),
+                0.5,
+                None,
+            )
+            .unwrap();
+        let poses = graph
+            .evaluate_with_transforms(mixed_pose.transforms())
+            .unwrap();
+        let meshes = a.deform(&poses, mixed_weights.weights()).unwrap();
+        let evaluated = graph
+            .evaluate_with_overrides(mixed_pose.transforms(), meshes)
+            .unwrap();
+        let t = seconds as f32;
+        near(
+            evaluated.node(n1).unwrap().world.transform_point([0.; 3]),
+            [31. + t, 2., 3.],
+        );
+        near(
+            evaluated.node(n2).unwrap().world.transform_point([0.; 3]),
+            [28. - t, 0., 0.],
+        );
+        assert_eq!(
+            evaluated.node(a.primitive(1, 0).unwrap()).unwrap().bounds,
+            Some(
+                gpui_3d::Aabb::new([31. + t, 2., 3.], [33.5 + 1.375 * t, 5.75 + 0.5625 * t, 3.])
+                    .unwrap()
+            )
+        );
+        for node in [a.node(3).unwrap(), b.node(1).unwrap(), b.node(2).unwrap()] {
+            assert_eq!(
+                evaluated.node(node).unwrap().world,
+                untouched.node(node).unwrap().world
+            );
+        }
+        let hit = evaluated
+            .scene(gpui_3d::Camera::default())
+            .raycast(gpui_3d::Ray::new([31.1 + t, 2.1, 10.], [0., 0., -1.]).unwrap())
+            .unwrap();
+        assert_eq!(a.source_primitive(hit.node.unwrap()).unwrap().node_index, 1);
+        assert_eq!(graph.revision(), revision);
+    }
+    assert_eq!(weights.get(n1), Some([0.5, -0.25].as_slice()));
+    graph.remove_subtree(a.root()).unwrap();
+    assert!(
+        graph
+            .evaluate_with_transforms(a.authored_pose().unwrap().transforms())
+            .is_err()
+    );
+}
+
+#[test]
+fn authored_bases_preserve_signed_trs_and_zero_morph_defaults_without_clips() {
+    let mut fixture = Fixture::new();
+    fixture.morph_mesh();
+    fixture.json.as_object_mut().unwrap().remove("animations");
+    fixture.json["meshes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("weights");
+    fixture.json["nodes"][1]["scale"] = json!([-2, 3, 4]);
+    fixture.json["nodes"][1]["rotation"] = json!([0, 0, 0, -1]);
+    let asset = fixture
+        .prepare()
+        .unwrap()
+        .scene(None, SceneOptions::default())
+        .unwrap()
+        .decode_images(ImageDecodeLimits::default())
+        .unwrap();
+    let mut graph = SceneGraph::new();
+    let instance = asset.instantiate(&mut graph, None).unwrap();
+    let pose = instance.authored_pose().unwrap();
+    let weights = instance.authored_weights().unwrap();
+    let node = instance.node(1).unwrap();
+    assert_eq!(pose.get(node).unwrap().scale, [-2., 3., 4.]);
+    assert_eq!(pose.get(node).unwrap().rotation, [0., 0., 0., -1.]);
+    assert_eq!(weights.get(node), Some([0., 0.].as_slice()));
+    let original = graph.evaluate().unwrap();
+    let poses = graph.evaluate_with_transforms(pose.transforms()).unwrap();
+    let meshes = instance.deform(&poses, weights.weights()).unwrap();
+    let evaluated = graph
+        .evaluate_with_overrides(pose.transforms(), meshes)
+        .unwrap();
+    assert_eq!(evaluated.bounds(), original.bounds());
+    for node in original.nodes() {
+        let unchanged = evaluated.node(node.handle).unwrap();
+        assert_eq!(unchanged.world, node.world);
+        assert_eq!(unchanged.bounds, node.bounds);
+    }
+}
+
+#[test]
 fn bound_samples_retain_tracks_and_keep_instance_poses_and_weights_independent() {
     let mut fixture = Fixture::new();
     fixture.morph_mesh();

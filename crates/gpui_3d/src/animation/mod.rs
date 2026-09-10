@@ -1,4 +1,7 @@
-//! Absolute-time transform sampling without playback state.
+//! Absolute-time animation sampling without playback state.
+
+mod weights;
+pub use weights::WeightTrack;
 
 use crate::{AffineTransform, TransformError};
 use std::{fmt, sync::Arc, time::Duration};
@@ -50,6 +53,22 @@ pub enum AnimationError {
     InvalidRotation {
         key: usize,
     },
+    EmptyWeights,
+    WeightCount {
+        key: usize,
+        expected: usize,
+        actual: usize,
+    },
+    WeightTangentCount {
+        key: usize,
+        expected: usize,
+        incoming: usize,
+        outgoing: usize,
+    },
+    OutputCount {
+        expected: usize,
+        actual: usize,
+    },
     /// Interpolation produced an unrepresentable value or a zero quaternion.
     InvalidSample,
     InvalidTransform(TransformError),
@@ -64,6 +83,28 @@ impl fmt::Display for AnimationError {
             }
             Self::NonFiniteKey { key } => write!(f, "keyframe {key} contains nonfinite components"),
             Self::InvalidRotation { key } => write!(f, "keyframe {key} contains a zero quaternion"),
+            Self::EmptyWeights => f.write_str("a weight track needs at least one component"),
+            Self::WeightCount {
+                key,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "keyframe {key} has {actual} weights; expected {expected}"
+            ),
+            Self::WeightTangentCount {
+                key,
+                expected,
+                incoming,
+                outgoing,
+            } => write!(
+                f,
+                "keyframe {key} has {incoming} incoming and {outgoing} outgoing weight derivatives; expected zero or {expected} each"
+            ),
+            Self::OutputCount { expected, actual } => write!(
+                f,
+                "sample output has {actual} components; expected {expected}"
+            ),
             Self::InvalidSample => {
                 f.write_str("animation sample is nonfinite, unrepresentable, or a zero quaternion")
             }
@@ -81,14 +122,14 @@ impl std::error::Error for AnimationError {
 }
 
 #[derive(Clone, Debug)]
-struct Track<const N: usize> {
-    keys: Arc<[Keyframe<[f32; N]>]>,
+struct Track<T> {
+    keys: Arc<[Keyframe<T>]>,
     interpolation: Interpolation,
 }
 
-impl<const N: usize> Track<N> {
+impl<T: AsRef<[f32]>> Track<T> {
     fn new(
-        keys: impl IntoIterator<Item = Keyframe<[f32; N]>>,
+        keys: impl IntoIterator<Item = Keyframe<T>>,
         interpolation: Interpolation,
     ) -> Result<Self, AnimationError> {
         let keys = keys.into_iter().collect::<Vec<_>>();
@@ -101,9 +142,10 @@ impl<const N: usize> Track<N> {
             }
             if !key
                 .value
+                .as_ref()
                 .iter()
-                .chain(&key.in_tangent)
-                .chain(&key.out_tangent)
+                .chain(key.in_tangent.as_ref())
+                .chain(key.out_tangent.as_ref())
                 .all(|v| v.is_finite())
             {
                 return Err(AnimationError::NonFiniteKey { key: index });
@@ -129,31 +171,43 @@ impl<const N: usize> Track<N> {
         (left, right, t, seconds)
     }
 
-    fn components(&self, left: usize, right: usize, t: f64, seconds: f64) -> [f64; N] {
+    fn components<const N: usize>(
+        &self,
+        left: usize,
+        right: usize,
+        t: f64,
+        seconds: f64,
+    ) -> [f64; N] {
+        std::array::from_fn(|i| self.component(left, right, t, seconds, i))
+    }
+
+    fn component(&self, left: usize, right: usize, t: f64, seconds: f64, i: usize) -> f64 {
         let a = &self.keys[left];
         let b = &self.keys[right];
         if left == right || self.interpolation == Interpolation::Step {
-            return a.value.map(f64::from);
+            return f64::from(a.value.as_ref()[i]);
         }
-        std::array::from_fn(|i| match self.interpolation {
-            Interpolation::Linear => (1. - t) * f64::from(a.value[i]) + t * f64::from(b.value[i]),
+        match self.interpolation {
+            Interpolation::Linear => {
+                (1. - t) * f64::from(a.value.as_ref()[i]) + t * f64::from(b.value.as_ref()[i])
+            }
             Interpolation::CubicSpline => {
                 let t2 = t * t;
                 let t3 = t2 * t;
-                (2. * t3 - 3. * t2 + 1.) * f64::from(a.value[i])
-                    + seconds * (t3 - 2. * t2 + t) * f64::from(a.out_tangent[i])
-                    + (-2. * t3 + 3. * t2) * f64::from(b.value[i])
-                    + seconds * (t3 - t2) * f64::from(b.in_tangent[i])
+                (2. * t3 - 3. * t2 + 1.) * f64::from(a.value.as_ref()[i])
+                    + seconds * (t3 - 2. * t2 + t) * f64::from(a.out_tangent.as_ref()[i])
+                    + (-2. * t3 + 3. * t2) * f64::from(b.value.as_ref()[i])
+                    + seconds * (t3 - t2) * f64::from(b.in_tangent.as_ref()[i])
             }
             Interpolation::Step => unreachable!(),
-        })
+        }
     }
 }
 
 /// Immutable XYZ track. Times must be strictly increasing and all components finite.
 /// Sampling clamps to the first/last key, including single-key tracks.
 #[derive(Clone, Debug)]
-pub struct VectorTrack(Track<3>);
+pub struct VectorTrack(Track<[f32; 3]>);
 
 impl VectorTrack {
     pub fn new(
@@ -187,7 +241,7 @@ impl VectorTrack {
 /// the supplied components and derivatives without sign changes, then normalizes.
 /// Keys must be finite and nonzero; cubic curves crossing zero return an error.
 #[derive(Clone, Debug)]
-pub struct RotationTrack(Track<4>);
+pub struct RotationTrack(Track<[f32; 4]>);
 
 impl RotationTrack {
     pub fn new(

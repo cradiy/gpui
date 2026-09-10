@@ -1077,6 +1077,55 @@ all channels before evaluating a snapshot. Additive or relative motion can be
 expressed by composing a sampled transform with an authored affine transform
 before passing it to `evaluate_with_transforms`.
 
+### Weight tracks
+
+`WeightTrack` samples a runtime-sized array of weights from absolute timestamps.
+Keys use `Keyframe<Vec<f32>>`; every key has the same nonzero component count.
+Step holds the preceding value, Linear interpolates components, and CubicSpline
+uses Hermite interpolation with derivatives per second. Empty derivative arrays
+mean zeros and are expanded during construction; nonempty arrays must match the
+weight count. All supplied values and derivatives must be finite, including
+derivatives unused by Step or Linear. Timestamps must be strictly increasing.
+
+```rust
+use gpui_3d::{Interpolation, Keyframe, Mesh, MorphTarget, MorphTargets, WeightTrack};
+use std::time::Duration;
+
+let base = Mesh::plane();
+let targets = MorphTargets::new(base.clone(), [
+    MorphTarget {
+        positions: Some(vec![[0., 0., 0.2]; base.vertex_count()].into()),
+        ..Default::default()
+    },
+    MorphTarget {
+        positions: Some(vec![[0.1, 0., 0.]; base.vertex_count()].into()),
+        ..Default::default()
+    },
+])?;
+let track = WeightTrack::new([
+    Keyframe::new(Duration::ZERO, vec![0., 0.]),
+    Keyframe::new(Duration::from_secs(2), vec![1., -0.5]),
+], Interpolation::Linear)?;
+let mut weights = vec![0.; track.weight_count()];
+track.sample_into(Duration::from_millis(750), &mut weights)?;
+let mesh = targets.evaluate(&weights)?;
+# let _ = mesh;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Weights are signed and neither clamped nor normalized. Cubic curves can overshoot
+their keys. `sample(time)` returns an owned vector; `sample_into(time, output)`
+uses a caller-owned slice of exactly `weight_count()` components without
+allocating. A length mismatch or unrepresentable sample returns `AnimationError`
+without changing the output slice. Sampling outside the key range retains the
+first or last key. Clones share immutable keys but no playback or sampling state.
+
+Weight order must match `MorphTargets::targets()`. Sample each instance's weights
+at the chosen time, evaluate from the base targets, then apply `Skin` if needed.
+The resulting mesh supplies geometry for rendering, bounds, and queries. The
+track does not bind itself to nodes, mutate mesh assets, or own looping and clip
+time conversion.
+
 ### Transform constraints
 
 `SceneGraph::evaluate_with_constraints(transforms, constraints)` evaluates local

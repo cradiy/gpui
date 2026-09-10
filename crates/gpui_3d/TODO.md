@@ -78,6 +78,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 ## Phase 4: Animation and Dynamic Content
 
 - [x] **Transform evaluation**: Immutable translation, XYZW quaternion rotation, and scale tracks; Step, Linear/shortest-arc SLERP, and cubic Hermite interpolation; absolute-time sampling, explicit base poses, nonmutating hierarchy overrides, and shared rendering/query snapshots.
+- [x] **Weight evaluation**: Runtime-sized signed weight tracks, absolute-time Step/Linear/CubicSpline sampling, per-second derivatives, immutable shared keys, allocation-free transactional output sampling, and explicit Morph/Skin composition.
 - [x] **Deformation**: CPU linear-blend skeletal skinning and morph targets from explicit pose/weight inputs, shared by rendering and queries.
   - [x] **Morph targets**: Shared dense position/normal/tangent deltas, validated signed weights, normalized direction blending, preserved handedness, and immutable CPU-evaluated meshes reused by rendering, bounds, and picking.
   - [x] **Skeletal skinning**: Shared inverse bind matrices, arbitrary per-vertex influences with validated normalized weights, mesh-local/world-space joint inputs, inverse-transpose normals, reflection-aware tangents, morph composition, and immutable deformed geometry for rendering and queries.

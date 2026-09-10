@@ -5,6 +5,8 @@ the metadata and optional binary chunk without accessing external resources.
 `Document::prepare(load_uri)` resolves all declared buffers and encoded images,
 returning an immutable `PreparedDocument`. Both operations are synchronous and
 can run in caller-managed background work; neither needs a window or GPU.
+`prepare_async(load_uri)` accepts a future-returning loader; see
+[asynchronous loading](loading.md) for scheduling, cancellation and byte budgets.
 
 ```rust
 use gpui_3d_gltf::{Document, Limits};

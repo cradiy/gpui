@@ -157,6 +157,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
   - [x] **glTF instance identities**: Retained shared assets, source-index and reverse occurrence mappings, authored material groups for graph overrides, application ID admission, and bound Morph/Skin evaluation.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
+  - [x] **Asynchronous URI preparation**: Executor-independent glTF loaders, remaining-byte request budgets, shared synchronous/asynchronous validation, drop-based cancellation, and retryable partial-resource cleanup.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.
 - [ ] **Animation import and playback**: File-format clips, playback state, looping, pause, and seeking feeding core pose, transform, and deformation inputs.
 - [ ] **Material presets**: Matte, metal, plastic, and emissive configurations built on core material parameters.

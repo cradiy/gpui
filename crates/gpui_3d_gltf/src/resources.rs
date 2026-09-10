@@ -1,7 +1,16 @@
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{collections::HashMap, future::Future, ops::Range, sync::Arc};
 
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use futures::FutureExt;
+
+/// One external URI and its remaining encoded-byte allowance. URI spelling is
+/// unchanged; the caller owns path/scheme policy and must bound I/O allocations.
+#[derive(Clone, Debug)]
+pub struct ResourceRequest {
+    pub uri: String,
+    pub byte_limit: usize,
+}
 
 /// Admission limits for document parsing and encoded resource preparation.
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +104,26 @@ impl Document {
         &self,
         mut load_uri: impl FnMut(&str) -> Result<Vec<u8>>,
     ) -> Result<PreparedDocument> {
+        self.prepare_async(|request| std::future::ready(load_uri(&request.uri)))
+            .now_or_never()
+            .expect("synchronous resource resolution cannot suspend")
+    }
+
+    /// Resolves resources sequentially with a caller-owned asynchronous loader.
+    /// Identical URIs share one payload per call. Each request carries the remaining
+    /// aggregate byte budget; returned sizes are validated independently.
+    ///
+    /// No work starts until polled. Dropping the future drops the pending resolver
+    /// future and partial inputs, without publishing a prepared document. Detached
+    /// work started by the resolver remains its responsibility. Base64 decoding
+    /// and validation within a poll are not preemptible; use a background executor
+    /// when that work must not run on the UI thread. Failure or cancellation leaves
+    /// this document reusable. No runtime, threads, filesystem or GPU work is owned.
+    pub async fn prepare_async<F, Fut>(&self, mut load_uri: F) -> Result<PreparedDocument>
+    where
+        F: FnMut(ResourceRequest) -> Fut,
+        Fut: Future<Output = Result<Vec<u8>>>,
+    {
         let mut cache = HashMap::new();
         let mut used = 0;
         let mut buffers = Vec::with_capacity(self.document.buffers().len());
@@ -122,6 +151,7 @@ impl Document {
                     self.limits.resource_bytes,
                     &mut load_uri,
                 )
+                .await
                 .with_context(|| format!("buffer {}", buffer.index()))?,
             };
             ensure!(
@@ -158,6 +188,7 @@ impl Document {
                         self.limits.resource_bytes,
                         &mut load_uri,
                     )
+                    .await
                     .with_context(|| format!("image {}", image.index()))?;
                     let embedded_mime = data_uri(uri)?.map(|(mime, _)| mime);
                     if let (Some(declared), Some(embedded)) = (mime_type, embedded_mime) {
@@ -248,13 +279,17 @@ impl PreparedDocument {
     }
 }
 
-fn resource<'a>(
+async fn resource<'a, F, Fut>(
     uri: &'a str,
     cache: &mut HashMap<&'a str, Arc<[u8]>>,
     used: &mut usize,
     limit: usize,
-    load: &mut impl FnMut(&str) -> Result<Vec<u8>>,
-) -> Result<Arc<[u8]>> {
+    load: &mut F,
+) -> Result<Arc<[u8]>>
+where
+    F: FnMut(ResourceRequest) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>>>,
+{
     if let Some(data) = cache.get(uri) {
         return Ok(data.clone());
     }
@@ -278,7 +313,12 @@ fn resource<'a>(
             .decode(payload)
             .context("data URI: invalid base64 payload")?
     } else {
-        load(uri).context("URI resolver failed")?
+        load(ResourceRequest {
+            uri: uri.to_owned(),
+            byte_limit: limit.saturating_sub(*used),
+        })
+        .await
+        .context("URI resolver failed")?
     };
     charge(used, bytes.len(), limit)?;
     let bytes: Arc<[u8]> = bytes.into();

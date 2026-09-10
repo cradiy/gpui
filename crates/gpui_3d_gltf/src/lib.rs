@@ -22,6 +22,6 @@ pub use image::ImageDecodeLimits;
 pub use instance::SceneInstance;
 pub use material::{MaterialDefinition, TextureBinding};
 pub use morph::{MorphGeometry, SceneMorph};
-pub use resources::{Document, EncodedImage, Limits, PreparedDocument};
+pub use resources::{Document, EncodedImage, Limits, PreparedDocument, ResourceRequest};
 pub use scene::{SceneAsset, SceneDefinition, SceneNode, SceneOptions, ScenePrimitive};
 pub use skin::{SceneSkin, SkinDefinition, SkinOptions};

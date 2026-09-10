@@ -108,6 +108,189 @@ fn uri_resolution_preserves_policy_and_shares_duplicate_and_view_payloads() {
 }
 
 #[test]
+fn async_resolution_shares_payloads_and_passes_remaining_admission() {
+    let value = json!({"asset":{"version":"2.0"},
+        "buffers":[{"byteLength":4,"uri":"mesh%20data.bin"}],
+        "bufferViews":[{"buffer":0,"byteOffset":1,"byteLength":2}],
+        "images":[{"uri":"mesh%20data.bin"},{"bufferView":0,"mimeType":"image/png"},
+            {"uri":"data:image/png;base64,AQI="},{"uri":"custom:cover"},{"uri":"custom:cover"}]});
+    let document = Document::from_slice(
+        &serde_json::to_vec(&value).unwrap(),
+        Limits {
+            resource_bytes: 9,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    let mut requests = Vec::new();
+    let future = document.prepare_async(|request| {
+        let bytes = match request.uri.as_str() {
+            "mesh%20data.bin" => vec![1, 2, 3, 4],
+            "custom:cover" => vec![5, 6, 7],
+            _ => panic!("unexpected URI"),
+        };
+        requests.push((request.uri, request.byte_limit));
+        std::future::ready(Ok(bytes))
+    });
+    let prepared = std::thread::scope(|scope| {
+        scope
+            .spawn(move || futures::executor::block_on(future))
+            .join()
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(
+        requests,
+        [
+            ("mesh%20data.bin".to_owned(), 9),
+            ("custom:cover".to_owned(), 3)
+        ]
+    );
+    assert_eq!(prepared.resource_bytes(), 9);
+    assert_eq!(prepared.image(2).unwrap().bytes(), [1, 2]);
+    assert_eq!(
+        prepared.buffer(0).unwrap().as_ptr(),
+        prepared.image(0).unwrap().bytes().as_ptr()
+    );
+    assert_eq!(
+        prepared.buffer(0).unwrap()[1..].as_ptr(),
+        prepared.image(1).unwrap().bytes().as_ptr()
+    );
+    assert_eq!(
+        prepared.image(3).unwrap().bytes().as_ptr(),
+        prepared.image(4).unwrap().bytes().as_ptr()
+    );
+}
+
+#[test]
+fn pending_resource_cancellation_drops_io_and_retry_reloads_partial_inputs() {
+    use futures::{
+        channel::oneshot,
+        future::{AbortHandle, Abortable},
+        task::{ArcWake, waker},
+    };
+    use std::{
+        cell::RefCell,
+        future::Future,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Poll},
+    };
+
+    struct WakeCount(AtomicUsize);
+    impl ArcWake for WakeCount {
+        fn wake_by_ref(this: &Arc<Self>) {
+            this.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let document = parse(&json!({"asset":{"version":"2.0"},
+        "buffers":[{"byteLength":4,"uri":"mesh.bin"}],
+        "images":[{"uri":"cover"},{"uri":"later"}]}));
+    for abort in [false, true] {
+        let calls = RefCell::new(Vec::new());
+        let (sender, receiver) = oneshot::channel::<Vec<u8>>();
+        let mut receiver = Some(receiver);
+        let future = document.prepare_async(|request| {
+            calls.borrow_mut().push(request.uri.clone());
+            let wait = (request.uri == "cover").then(|| receiver.take().unwrap());
+            async move {
+                match wait {
+                    Some(receiver) => Ok(receiver.await?),
+                    None => Ok(vec![0; 4]),
+                }
+            }
+        });
+        let (handle, registration) = AbortHandle::new_pair();
+        let mut future = Box::pin(Abortable::new(future, registration));
+        let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = waker(wakes.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(calls.borrow().is_empty());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(*calls.borrow(), ["mesh.bin", "cover"]);
+        if abort {
+            handle.abort();
+            assert!(wakes.0.load(Ordering::Relaxed) > 0);
+            assert!(matches!(future.as_mut().poll(&mut cx), Poll::Ready(Err(_))));
+        }
+        drop(future);
+        assert!(sender.is_canceled());
+        assert!(sender.send(vec![8]).is_err());
+        let prepared = futures::executor::block_on(document.prepare_async(|request| {
+            calls.borrow_mut().push(request.uri);
+            std::future::ready(Ok(vec![1; 4]))
+        }))
+        .unwrap();
+        assert_eq!(
+            *calls.borrow(),
+            ["mesh.bin", "cover", "mesh.bin", "cover", "later"]
+        );
+        assert_eq!(prepared.buffer(0).unwrap(), [1; 4]);
+        assert_eq!(prepared.image(0).unwrap().bytes(), [1; 4]);
+    }
+}
+
+#[test]
+fn resumed_resource_results_are_validated_before_requesting_more() {
+    use futures::channel::oneshot;
+    use std::{
+        cell::RefCell,
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+
+    let bytes = serde_json::to_vec(&json!({"asset":{"version":"2.0"},
+        "buffers":[{"byteLength":4,"uri":"mesh"}],"images":[{"uri":"later"}]}))
+    .unwrap();
+    let document = Document::from_slice(
+        &bytes,
+        Limits {
+            resource_bytes: 4,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    for result in [
+        Ok(vec![0; 3]),
+        Ok(vec![0; 5]),
+        Err(anyhow::anyhow!("unavailable")),
+        Ok(vec![0; 4]),
+    ] {
+        let valid = result.as_ref().is_ok_and(|bytes| bytes.len() == 4);
+        let (sender, receiver) = oneshot::channel();
+        let mut receiver = Some(receiver);
+        let calls = RefCell::new(Vec::new());
+        let mut future = Box::pin(document.prepare_async(|request| {
+            calls.borrow_mut().push(request.uri);
+            let receiver = receiver.take();
+            async move {
+                match receiver {
+                    Some(receiver) => receiver.await?,
+                    None => Ok(Vec::new()),
+                }
+            }
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        sender.send(result).unwrap();
+        let Poll::Ready(result) = future.as_mut().poll(&mut cx) else {
+            panic!("completed resources must finish preparation");
+        };
+        if valid {
+            let prepared = result.unwrap();
+            assert_eq!(prepared.buffer(0).unwrap(), [0; 4]);
+            assert_eq!(prepared.resource_bytes(), 4);
+            assert_eq!(*calls.borrow(), ["mesh", "later"]);
+        } else {
+            assert!(format!("{:#}", result.unwrap_err()).contains("buffer 0"));
+            assert_eq!(*calls.borrow(), ["mesh"]);
+        }
+    }
+}
+
+#[test]
 fn glb_padding_is_excluded_from_buffer_reads_and_resource_views_share_storage() {
     let value = json!({
         "asset":{"version":"2.0"}, "buffers":[{"byteLength":5}],

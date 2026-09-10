@@ -85,3 +85,5 @@ results even if they completed successfully. Loading queues, cross-request cache
 retry timing, decoded-image budgets and GPU uploads remain caller-owned policies.
 [`SceneLoadSlot`](load_slots.md) provides request identity, cancellation and
 latest-request-only publication for a destination holding a decoded scene asset.
+[`ResourceCache`](cache.md) provides bounded cross-request retention of encoded
+URI payloads through `prepare_shared_async`.

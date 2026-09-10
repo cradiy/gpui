@@ -9,6 +9,8 @@ license = "MIT"
 anyhow.workspace = true
 base64.workspace = true
 futures.workspace = true
+indexmap.workspace = true
+parking_lot.workspace = true
 gpui.workspace = true
 gpui_3d.workspace = true
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "extensions", "KHR_materials_unlit", "KHR_texture_transform"] }

@@ -3015,6 +3015,8 @@ dependencies = [
  "gpui",
  "gpui_3d",
  "image",
+ "indexmap",
+ "parking_lot",
  "serde_json",
  "tempfile",
  "url",

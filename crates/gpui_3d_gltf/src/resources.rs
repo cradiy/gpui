@@ -124,6 +124,26 @@ impl Document {
         F: FnMut(ResourceRequest) -> Fut,
         Fut: Future<Output = Result<Vec<u8>>>,
     {
+        self.prepare_shared_async(|request| {
+            let limit = self.limits.resource_bytes;
+            let mut used = limit - request.byte_limit;
+            load_uri(request).map(move |result| {
+                let bytes = result?;
+                charge(&mut used, bytes.len(), limit)?;
+                Ok(Arc::from(bytes))
+            })
+        })
+        .await
+    }
+
+    /// Resolves shared external payloads without copying their bytes. Cache hits
+    /// still consume this preparation's resource budget. Other validation and
+    /// cancellation rules are identical to `prepare_async`.
+    pub async fn prepare_shared_async<F, Fut>(&self, mut load_uri: F) -> Result<PreparedDocument>
+    where
+        F: FnMut(ResourceRequest) -> Fut,
+        Fut: Future<Output = Result<Arc<[u8]>>>,
+    {
         let mut cache = HashMap::new();
         let mut used = 0;
         let mut buffers = Vec::with_capacity(self.document.buffers().len());
@@ -288,7 +308,7 @@ async fn resource<'a, F, Fut>(
 ) -> Result<Arc<[u8]>>
 where
     F: FnMut(ResourceRequest) -> Fut,
-    Fut: Future<Output = Result<Vec<u8>>>,
+    Fut: Future<Output = Result<Arc<[u8]>>>,
 {
     if let Some(data) = cache.get(uri) {
         return Ok(data.clone());
@@ -312,6 +332,7 @@ where
         STANDARD
             .decode(payload)
             .context("data URI: invalid base64 payload")?
+            .into()
     } else {
         load(ResourceRequest {
             uri: uri.to_owned(),
@@ -321,7 +342,6 @@ where
         .context("URI resolver failed")?
     };
     charge(used, bytes.len(), limit)?;
-    let bytes: Arc<[u8]> = bytes.into();
     cache.insert(uri, bytes.clone());
     Ok(bytes)
 }

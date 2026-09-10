@@ -5,6 +5,7 @@
 //! the caller. Prepared resources preserve glTF indices for scene conversion.
 
 mod animation;
+mod cache;
 mod camera;
 mod geometry;
 mod image;
@@ -18,6 +19,7 @@ mod skin;
 mod validation;
 
 pub use animation::{AnimationClip, AnimationOptions, NodeAnimation};
+pub use cache::{ResourceCache, ResourceCacheLimits};
 pub use geometry::{GeometryOptions, PrimitiveGeometry};
 pub use image::{DecodedScene, ImageDecodeLimits};
 pub use instance::SceneInstance;

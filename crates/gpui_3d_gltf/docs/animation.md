@@ -22,45 +22,56 @@ for pause, seek, signed speed and looping without changing track data.
 
 ### Scene instances
 
-Match `NodeAnimation::node_index()` to `SceneNode::index` from the same document,
-then use the chosen `SubtreeInstance` to map its source handle. A clip may target
-nodes outside the selected scene; the caller decides whether to skip or reject
-those targets. Names are optional metadata, not binding keys.
+`AnimationClip::bind(instance, policy)` maps tracks to a `SceneInstance` once.
+`AnimationTargetPolicy::RequireAll` rejects targets outside that scene;
+`SkipMissing` excludes them and records their original indices in
+`BoundAnimation::missing_nodes()`, in first-channel order. A binding may contain
+no active tracks when all targets are explicitly skipped.
+
+Clips and assets must originate from the same parsed `Document`. Clones,
+preparations, selected scenes, decoded assets, and repeated instances preserve
+this source identity. Independently parsing identical bytes creates a different
+identity and cannot be bound automatically. Names and numeric indices alone do
+not establish compatibility. Explicit retargeting can use `NodeAnimation` tracks
+and caller-owned handle mappings.
+
+`BoundAnimation::sample(time)` returns an owned `AnimationSample` containing a
+local `Pose` and destination-node Morph weights. Unanimated TRS channels use
+authored values; unanimated weights are omitted for deformation to use asset
+defaults. `into_parts()` returns the owned pose and weight list for composition.
+The default sample is empty. Each call samples absolute time independently;
+failure returns no partial sample and leaves previous samples usable.
 
 ```no_run
 use std::time::Duration;
-use gpui_3d::{Pose, SceneGraph};
-use gpui_3d_gltf::{AnimationOptions, ImageDecodeLimits, PreparedDocument, SceneOptions};
+use gpui_3d::SceneGraph;
+use gpui_3d_gltf::{
+    AnimationOptions, AnimationTargetPolicy, ImageDecodeLimits, PreparedDocument, SceneOptions,
+};
 
 fn evaluate(document: &PreparedDocument, time: Duration) -> anyhow::Result<()> {
     let clip = document.animation(0, AnimationOptions::default())?;
     let asset = document.scene(None, SceneOptions::default())?
         .decode_images(ImageDecodeLimits::default())?;
     let mut graph = SceneGraph::new();
-    let instance = graph.instantiate(None, asset.subtree())?;
-    let bindings: std::collections::HashMap<_, _> = asset.nodes().iter()
-        .map(|node| (node.index, instance.node(node.handle).unwrap()))
-        .collect();
-    let mut locals = Vec::new();
-    let mut weights = Vec::new();
-    for animation in clip.nodes() {
-        let Some(&handle) = bindings.get(&animation.node_index()) else { continue; };
-        if let Some(track) = animation.transform() {
-            locals.push((handle, track.sample(time)?));
-        }
-        if let Some(track) = animation.weights() {
-            weights.push((handle, track.sample(time)?));
-        }
-    }
-    let pose = Pose::new(locals)?;
-    let transforms = graph.evaluate_with_transforms(pose.transforms())?;
-    let meshes = asset.deform(&instance, &transforms, &weights)?;
-    let evaluated = graph.evaluate_with_overrides(pose.transforms(), meshes)?;
+    let instance = asset.instantiate(&mut graph, None)?;
+    let binding = clip.bind(&instance, AnimationTargetPolicy::RequireAll)?;
+    let sample = binding.sample(time)?;
+    let transforms = graph.evaluate_with_transforms(sample.pose().transforms())?;
+    let meshes = instance.deform(&transforms, sample.weights())?;
+    let evaluated = graph.evaluate_with_overrides(sample.pose().transforms(), meshes)?;
     // Use evaluated cameras, meshes, and queries from the same snapshot.
     let _ = evaluated;
     Ok(())
 }
 ```
+
+Bindings share clip tracks and mapped handles across clones without retaining
+the parsed document, encoded buffers, scene geometry, or the graph. They can be
+sampled on worker threads. Graph deletion does not retarget a binding; scene
+evaluation rejects expired handles. Bind separately for each instance and combine
+sampled poses and mesh replacements before final scene evaluation. Playback,
+layer mixing, constraints, and release of graph nodes remain caller-owned.
 
 ### Admission and errors
 

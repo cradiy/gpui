@@ -1,3 +1,6 @@
+mod binding;
+pub use binding::{AnimationSample, AnimationTargetPolicy, BoundAnimation};
+
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, ensure};
@@ -56,6 +59,7 @@ impl NodeAnimation {
 /// Clones share tracks; no graph, clock, playback policy, or GPU resources are owned.
 #[derive(Clone, Debug)]
 pub struct AnimationClip {
+    source: Arc<()>,
     index: usize,
     name: Option<Arc<str>>,
     nodes: Arc<[NodeAnimation]>,
@@ -322,6 +326,7 @@ impl PreparedDocument {
             convert.with_context(|| format!("channel {}", channel.index()))?;
         }
         Ok(AnimationClip {
+            source: self.source_identity(),
             index,
             name: animation.name().map(Arc::from),
             nodes: nodes.into(),

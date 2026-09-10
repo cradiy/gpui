@@ -291,6 +291,10 @@ pub struct PreparedDocument {
 }
 
 impl PreparedDocument {
+    pub(crate) fn source_identity(&self) -> Arc<()> {
+        self.metadata.source.clone()
+    }
+
     pub(crate) fn validate_morph_attributes(&self, mesh: usize, primitive: usize) -> Result<()> {
         if let Some(reason) = self.metadata.unsupported_morphs.get(&(mesh, primitive)) {
             bail!("{reason}");

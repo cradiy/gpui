@@ -75,6 +75,7 @@ struct DefinitionPrimitive {
 pub struct SceneDefinition(Arc<Definition>);
 
 struct Definition {
+    source: Arc<()>,
     index: usize,
     nodes: Vec<DefinitionNode>,
     primitives: Vec<DefinitionPrimitive>,
@@ -110,6 +111,7 @@ pub struct ScenePrimitive {
 /// Geometry and decoded images are shared; instances own their node properties.
 #[derive(Clone)]
 pub struct SceneAsset {
+    pub(crate) source: Arc<()>,
     index: usize,
     subtree: SceneSubtree,
     nodes: Arc<[SceneNode]>,
@@ -277,6 +279,7 @@ impl SceneDefinition {
             }
         }
         Ok(SceneAsset {
+            source: self.0.source.clone(),
             index: self.index(),
             subtree: graph.snapshot_subtree(root)?,
             nodes: nodes.into(),
@@ -314,6 +317,7 @@ impl PreparedDocument {
         };
         ensure!(options.node_limit > 0, "node limit excludes the scene root");
         let mut definition = Definition {
+            source: self.source_identity(),
             index: scene.index(),
             nodes: Vec::new(),
             primitives: Vec::new(),

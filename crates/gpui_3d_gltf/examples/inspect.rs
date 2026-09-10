@@ -7,7 +7,9 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use gpui_3d::SceneGraph;
-use gpui_3d_gltf::{AnimationOptions, Document, ImageDecodeLimits, Limits, SceneOptions};
+use gpui_3d_gltf::{
+    AnimationOptions, AnimationTargetPolicy, Document, ImageDecodeLimits, Limits, SceneOptions,
+};
 
 #[path = "support/files.rs"]
 mod files;
@@ -216,6 +218,10 @@ fn inspect(options: Options) -> Result<()> {
     );
     let mut graph = SceneGraph::new();
     let instance = asset.instantiate(&mut graph, None)?;
+    let animation = clip
+        .as_ref()
+        .map(|clip| clip.bind(&instance, AnimationTargetPolicy::SkipMissing))
+        .transpose()?;
     let overrides: Vec<_> = options
         .weights
         .iter()
@@ -239,23 +245,15 @@ fn inspect(options: Options) -> Result<()> {
         .collect::<Result<_>>()?;
     let mut fingerprints = HashMap::new();
     for time in options.times {
-        let mut transforms = Vec::new();
-        let mut weights = Vec::new();
-        let mut skipped = 0;
-        if let Some(clip) = &clip {
-            for animation in clip.nodes() {
-                let Some(node) = instance.node(animation.node_index()) else {
-                    skipped += 1;
-                    continue;
-                };
-                if let Some(track) = animation.transform() {
-                    transforms.push((node, track.sample_transform(time)?));
-                }
-                if let Some(track) = animation.weights() {
-                    weights.push((node, track.sample(time)?));
-                }
-            }
-        }
+        let (pose, mut weights) = animation
+            .as_ref()
+            .map(|binding| binding.sample(time))
+            .transpose()?
+            .unwrap_or_default()
+            .into_parts();
+        let skipped = animation
+            .as_ref()
+            .map_or(0, |binding| binding.missing_nodes().len());
         for (node, values) in &overrides {
             if let Some((_, animated)) = weights.iter_mut().find(|(target, _)| target == node) {
                 animated.clone_from(values);
@@ -263,7 +261,7 @@ fn inspect(options: Options) -> Result<()> {
                 weights.push((*node, values.clone()));
             }
         }
-        let poses = graph.evaluate_with_transforms(transforms.iter().copied())?;
+        let poses = graph.evaluate_with_transforms(pose.transforms())?;
         let replacements = instance.deform(&poses, &weights)?;
         let mut fingerprint = DefaultHasher::new();
         let mut vertices = 0;
@@ -271,7 +269,7 @@ fn inspect(options: Options) -> Result<()> {
             vertices += mesh.vertex_count();
             hash_mesh(mesh, &mut fingerprint);
         }
-        let evaluated = graph.evaluate_with_overrides(transforms, replacements)?;
+        let evaluated = graph.evaluate_with_overrides(pose.transforms(), replacements)?;
         for node in evaluated.nodes() {
             for value in node.world.matrix().into_iter().flatten() {
                 value.to_bits().hash(&mut fingerprint);

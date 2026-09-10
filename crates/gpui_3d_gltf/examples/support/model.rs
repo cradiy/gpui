@@ -9,7 +9,9 @@ use gpui_3d_gltf::{
 };
 
 use super::files;
-use gpui_3d_gltf::{AnimationClip, AnimationOptions, AnimationPlayback};
+use gpui_3d_gltf::{
+    AnimationClip, AnimationOptions, AnimationPlayback, AnimationTargetPolicy, BoundAnimation,
+};
 
 pub(super) struct PixelsReady {
     decoded: DecodedScene,
@@ -70,7 +72,7 @@ pub(super) struct Model {
     pub(super) evaluated: EvaluatedScene,
     materials: HashMap<Option<usize>, String>,
     graph: SceneGraph,
-    animation: Option<AnimationClip>,
+    animation: Option<BoundAnimation>,
     pub(super) playback: Option<AnimationPlayback>,
     pub(super) skipped_tracks: usize,
 }
@@ -87,12 +89,17 @@ pub(super) fn publish(
         let instance = asset.instantiate(&mut graph, None)?;
         let evaluated = graph.evaluate()?;
         let playback = pixels.animation.as_ref().map(AnimationPlayback::new);
+        let animation = pixels
+            .animation
+            .as_ref()
+            .map(|clip| clip.bind(&instance, AnimationTargetPolicy::SkipMissing))
+            .transpose()?;
         let mut model = Model {
             instance,
             evaluated,
             materials: pixels.materials,
             graph,
-            animation: pixels.animation,
+            animation,
             playback,
             skipped_tracks: 0,
         };
@@ -110,7 +117,8 @@ pub(super) fn publish(
 
 impl Model {
     pub(super) fn animation_label(&self) -> Option<String> {
-        self.animation.as_ref().map(|clip| {
+        self.animation.as_ref().map(|binding| {
+            let clip = binding.clip();
             format!(
                 "Clip {} · {}",
                 clip.index(),
@@ -120,32 +128,24 @@ impl Model {
     }
 
     fn sample(&mut self, time: Duration) -> Result<()> {
-        let mut transforms = Vec::new();
-        let mut weights = Vec::new();
-        let mut skipped = 0;
-        if let Some(clip) = &self.animation {
-            for animation in clip.nodes() {
-                let Some(node) = self.instance.node(animation.node_index()) else {
-                    skipped += 1;
-                    continue;
-                };
-                if let Some(track) = animation.transform() {
-                    transforms.push((node, track.sample_transform(time)?));
-                }
-                if let Some(track) = animation.weights() {
-                    weights.push((node, track.sample(time)?));
-                }
-            }
-        }
+        let sample = self
+            .animation
+            .as_ref()
+            .map(|binding| binding.sample(time))
+            .transpose()?
+            .unwrap_or_default();
         let poses = self
             .graph
-            .evaluate_with_transforms(transforms.iter().copied())?;
-        let replacements = self.instance.deform(&poses, &weights)?;
+            .evaluate_with_transforms(sample.pose().transforms())?;
+        let replacements = self.instance.deform(&poses, sample.weights())?;
         let evaluated = self
             .graph
-            .evaluate_with_overrides(transforms, replacements)?;
+            .evaluate_with_overrides(sample.pose().transforms(), replacements)?;
         self.evaluated = evaluated;
-        self.skipped_tracks = skipped;
+        self.skipped_tracks = self
+            .animation
+            .as_ref()
+            .map_or(0, |binding| binding.missing_nodes().len());
         Ok(())
     }
 

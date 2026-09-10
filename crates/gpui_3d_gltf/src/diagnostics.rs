@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -32,6 +33,7 @@ impl fmt::Display for ImportDiagnostic {
 
 #[derive(Debug)]
 pub(crate) struct Metadata {
+    pub source: Arc<()>,
     pub unsupported_morphs: HashMap<(usize, usize), String>,
     pub diagnostics: Vec<ImportDiagnostic>,
 }
@@ -70,6 +72,7 @@ pub(crate) fn metadata(bytes: &[u8], limits: Limits) -> Result<Metadata> {
         ) => a.cmp(b),
     });
     Ok(Metadata {
+        source: Arc::new(()),
         unsupported_morphs: crate::morph::unsupported_attributes(&raw),
         diagnostics: collector.diagnostics,
     })

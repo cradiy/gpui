@@ -24,7 +24,10 @@ mod scene;
 mod skin;
 mod validation;
 
-pub use animation::{AnimationClip, AnimationOptions, NodeAnimation};
+pub use animation::{
+    AnimationClip, AnimationOptions, AnimationSample, AnimationTargetPolicy, BoundAnimation,
+    NodeAnimation,
+};
 pub use cache::{ResourceCache, ResourceCacheLimits};
 pub use diagnostics::ImportDiagnostic;
 pub use geometry::{GeometryOptions, PrimitiveGeometry};

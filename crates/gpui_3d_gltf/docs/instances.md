@@ -65,6 +65,10 @@ unchanged; callback side effects are not rolled back.
 
 ## Deformation and lifetime
 
+[`AnimationClip::bind`](animation.md#scene-instances) creates reusable track
+bindings for this instance with an explicit policy for scene-external targets.
+Each binding samples independent local poses and Morph weights.
+
 `instance.deform(&poses, &weights)` evaluates the retained asset's Morph and Skin
 inputs against the instance's final pose snapshot. Weight targets use destination
 group handles, obtainable with `node(index)`. Omitted weights use authored

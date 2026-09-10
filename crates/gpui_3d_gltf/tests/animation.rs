@@ -6,6 +6,9 @@ use gpui_3d_gltf::{
 };
 use serde_json::{Value, json};
 
+#[path = "animation/binding.rs"]
+mod binding;
+
 struct Fixture {
     json: Value,
     bytes: Vec<u8>,

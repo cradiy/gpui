@@ -161,6 +161,14 @@ impl PreparedDocument {
             let valid = match semantic {
                 Semantic::Positions | Semantic::Normals => float(&accessor, Dimensions::Vec3),
                 Semantic::Tangents => float(&accessor, Dimensions::Vec4),
+                Semantic::Colors(0) => {
+                    matches!(accessor.dimensions(), Dimensions::Vec3 | Dimensions::Vec4)
+                        && match accessor.data_type() {
+                            DataType::F32 => !accessor.normalized(),
+                            DataType::U8 | DataType::U16 => accessor.normalized(),
+                            _ => false,
+                        }
+                }
                 Semantic::TexCoords(set) => {
                     tex_coord_sets.push(set);
                     accessor.dimensions() == Dimensions::Vec2
@@ -313,6 +321,15 @@ impl PreparedDocument {
             uv_values.insert(set, values);
         }
         let mut vertices = Vec::with_capacity(count);
+        let color_values = primitive.get(&Semantic::Colors(0)).map(|accessor| {
+            let values = collect(&accessor, reader.read_colors(0).map(|v| v.into_rgba_f32()))?;
+            for (vertex, color) in values.iter().enumerate() {
+                if let Some(component) = color.iter().position(|v| !(0. ..=1.).contains(v)) {
+                    bail!("COLOR_0 accessor {} vertex {vertex} component {component} must be finite and within 0..=1", accessor.index());
+                }
+            }
+            Ok::<_, anyhow::Error>(values)
+        }).transpose()?;
         for (index, position) in position_values.into_iter().enumerate() {
             let normal = match &normal_values {
                 Some(values) => {
@@ -346,6 +363,16 @@ impl PreparedDocument {
             indices = (0..vertices.len() as u32).collect();
         }
         let mut mesh = Mesh::try_new(vertices, indices).context("mesh attributes")?;
+        if let Some(colors) = color_values {
+            mesh = mesh
+                .with_vertex_colors(
+                    source_vertices
+                        .iter()
+                        .map(|&i| colors[i as usize])
+                        .collect(),
+                )
+                .context("COLOR_0")?;
+        }
         for (&set, values) in &uv_values {
             if set != 0 {
                 mesh = mesh

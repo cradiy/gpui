@@ -50,6 +50,9 @@ Base-color factors are linear in glTF. Conversion encodes their RGB values into
 the core's sRGB tint representation; rendering decodes that tint before
 multiplication. Alpha remains linear. Metallic, roughness and emissive factors
 retain their numeric values. Factors outside their glTF ranges return errors.
+`COLOR_0` multiplies the linear base color and alpha without an additional color
+transfer conversion. Its values belong to the mesh, so material overrides retain
+the same vertex colors.
 
 Opaque, Mask and Blend map directly to core alpha modes. Mask cutoffs preserve
 zero and values above one. `doubleSided` controls face visibility, including

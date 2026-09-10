@@ -133,9 +133,11 @@ impl Scene3dSupport {
     }
 }
 
+mod color;
 mod environment;
 mod uv;
 mod visibility;
+pub use color::VertexColorError3d;
 pub use environment::{
     EnvironmentBackground3d, EnvironmentError3d, EnvironmentMap3d, SpecularEnvironment3d,
     SpecularEnvironmentMap3d,
@@ -210,6 +212,7 @@ pub struct Mesh3d {
     tangents: Option<Arc<[[f32; 4]]>>,
     tangent_uv_set: u32,
     uv_sets: BTreeMap<u32, Arc<[[f32; 2]]>>,
+    vertex_colors: Option<Arc<[[f32; 4]]>>,
     bounds: [[f32; 3]; 2],
 }
 
@@ -355,6 +358,7 @@ impl Mesh3d {
             tangents: None,
             tangent_uv_set: 0,
             uv_sets: BTreeMap::new(),
+            vertex_colors: None,
         }))
     }
 
@@ -380,6 +384,7 @@ impl Mesh3d {
     /// Replaces fixed-count vertex attributes while sharing triangle index storage.
     /// The source and its snapshots remain unchanged. Tangents must be supplied
     /// for the new normals, or `None` explicitly removes them.
+    /// Additional coordinate sets and vertex colors remain shared.
     /// Replacement tangents use the source tangent set, or set zero if absent.
     pub fn with_vertices(
         &self,
@@ -400,6 +405,7 @@ impl Mesh3d {
             tangents: None,
             tangent_uv_set: 0,
             uv_sets: self.uv_sets.clone(),
+            vertex_colors: self.vertex_colors.clone(),
         };
         Ok(match tangents {
             Some(tangents) => mesh.with_tangents_for_uv_set(self.tangent_uv_set, tangents)?,
@@ -485,6 +491,7 @@ impl Mesh3d {
             tangents: Some(tangents.into()),
             tangent_uv_set: set,
             uv_sets: self.uv_sets.clone(),
+            vertex_colors: self.vertex_colors.clone(),
         }))
     }
 }

@@ -12,6 +12,9 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 
 struct Materials {
     mesh: Mesh,
+    colored_mesh: Mesh,
+    colored_strip: Mesh,
+    vertex_colors: bool,
     controls: OrbitController,
     bounds: Rc<Cell<Bounds<Pixels>>>,
     roughness: f32,
@@ -45,8 +48,32 @@ impl Materials {
         .generate_tangents()
         .unwrap()
         .into_parts();
+        let colored_mesh = mesh
+            .with_vertex_colors(
+                mesh.vertices()
+                    .iter()
+                    .map(|v| {
+                        let rgb = v.normal.map(|n| (n * 0.5 + 0.5).clamp(0., 1.));
+                        [rgb[0], rgb[1], rgb[2], 1.]
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        let strip = Mesh::plane();
+        let colored_strip = strip
+            .with_vertex_colors(
+                strip
+                    .vertices()
+                    .iter()
+                    .map(|v| [v.uv[0], 1. - v.uv[0], 0.75, v.uv[0]])
+                    .collect(),
+            )
+            .unwrap();
         Self {
             mesh,
+            colored_mesh,
+            colored_strip,
+            vertex_colors: false,
             controls: OrbitController::new(Camera::orbit(0., 0.12, 7.5)).unwrap(),
             bounds: Rc::new(Cell::new(Bounds::default())),
             roughness: 0.4,
@@ -179,9 +206,16 @@ impl Materials {
                     );
             }
             scene = scene.object(
-                Object::new(self.mesh.clone(), material)
-                    .position([x, 0., 0.])
-                    .id(name),
+                Object::new(
+                    if self.vertex_colors {
+                        self.colored_mesh.clone()
+                    } else {
+                        self.mesh.clone()
+                    },
+                    material,
+                )
+                .position([x, 0., 0.])
+                .id(name),
             );
         }
         let sampling = TextureSampling {
@@ -206,7 +240,11 @@ impl Materials {
             )
             .object(
                 Object::new(
-                    Mesh::plane(),
+                    if self.vertex_colors {
+                        self.colored_strip.clone()
+                    } else {
+                        Mesh::plane()
+                    },
                     Material::image(self.pattern.clone())
                         .image_sampling(sampling)
                         .alpha_mode(self.alpha)
@@ -245,6 +283,7 @@ impl Render for Materials {
                         ("dim", "Emission −"),
                         ("glow", "Emission +"),
                         ("maps", "Toggle maps"),
+                        ("vertex-colors", "Vertex colors"),
                         ("density", "Map density"),
                         ("shift", "Shift emission"),
                         ("normal", "Normal map"),
@@ -279,6 +318,7 @@ impl Render for Materials {
                                     "dim" => this.emission = (this.emission - 0.5).max(0.),
                                     "glow" => this.emission = (this.emission + 0.5).min(8.),
                                     "maps" => this.maps = !this.maps,
+                                    "vertex-colors" => this.vertex_colors = !this.vertex_colors,
                                     "density" => this.density = if this.density < 4. { this.density * 2. } else { 1. },
                                     "shift" => this.emission_offset = (this.emission_offset + 0.0625) % 1.,
                                     "normal" => this.normal = !this.normal,

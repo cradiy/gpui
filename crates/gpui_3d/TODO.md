@@ -153,7 +153,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
       - [x] **Selected-set tangents**: MikkTSpace and repair policies use the selected set, with preserved UV data, basis associations, and deformation propagation.
       - [x] **Coordinate selection**: Per-slot GPU coordinates and gradients, UV-aware geometry caching and batching, matching alpha coverage across outputs, and image-alpha queries.
       - [x] **glTF coordinate bindings**: Preserve authored coordinate sets, bind each material slot independently, retain selected tangent bases through Morph, and bound coordinate admission.
-    - [ ] **Vertex colors**: Linear color/alpha attributes shared by material shading, deformation mappings, and geometry-output visibility.
+    - [x] **Vertex colors**: Normalized linear RGBA storage, split/deformation correspondence, material modulation, shared output and query alpha coverage, and glTF COLOR_0 conversion.
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.

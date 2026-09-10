@@ -39,8 +39,12 @@ Bounds are computed from converted vertices, not accessor min/max metadata.
   after normal/tangent splitting. Indices address a skin's joint array.
 - Morph targets retain float VEC3 position, normal, and tangent deltas through
   `morph()`. Target data follows the generated vertex correspondence.
-- All attribute counts must match POSITION. Vertex colors and custom attributes
-  are unsupported and return errors.
+- `COLOR_0` accepts unnormalized float or normalized unsigned-byte/unsigned-short
+  VEC3 and VEC4. RGB stays linear; VEC3 uses alpha one. Every component must be
+  finite and within `[0, 1]`, including unused vertices. Colors retain their
+  correspondence through normal/tangent splits, Morph, and Skin. Missing colors
+  use implicit white. Additional color sets and custom attributes are unsupported.
+- All attribute counts must match POSITION.
 
 Indexed primitives accept unsigned-byte, unsigned-short, or unsigned-int scalar
 indices. Non-indexed primitives use accessor order. Triangle lists retain their

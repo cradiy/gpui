@@ -4,7 +4,7 @@
 
 `Ray::new(origin, direction)` accepts arbitrary world rays and normalizes their
 direction. `Scene::raycast(ray)` ignores the camera and its clipping planes,
-while respecting mesh geometry, constant material alpha, and picking behavior.
+while respecting mesh geometry, material/vertex alpha, and picking behavior.
 It does not resolve images or sample image alpha. Query distance is measured from
 the ray origin.
 
@@ -30,7 +30,7 @@ assert!(hit.is_some());
 ```
 
 Rejected objects neither return hits nor occlude this query. Accepted candidates
-still honor `PickBehavior` and constant material alpha; accepting an `Ignore`
+still honor `PickBehavior` and material/vertex alpha; accepting an `Ignore`
 object does not make it selectable. Use graph handles or application IDs for
 persistent filters because flattened indices can change between evaluated
 snapshots. Hidden graph nodes are absent from the scene query.
@@ -236,7 +236,7 @@ normal hitbox routing for ancestor clipping and overlapping UI. They do not map
 events into captured UI controls or account for visual effect deformation.
 
 `Scene::pick(bounds, position)` provides a geometric query for custom input
-handling. It respects picking behavior and constant material alpha but does not
+handling. It respects picking behavior and material/vertex alpha but does not
 resolve images or sample texture alpha. Both arguments use logical window
 coordinates; the caller supplies the viewport bounds and handles UI clipping
 and input routing. Queries traverse the scene and mesh BVHs on the CPU; their

@@ -160,7 +160,7 @@ impl Scene {
     /// Finds the nearest geometric surface at a logical window position.
     ///
     /// Material face visibility is respected. Unnamed objects still occlude other objects.
-    /// Constant material alpha is respected; texture alpha, image availability,
+    /// Material and interpolated vertex alpha are respected; texture alpha, image availability,
     /// ancestor clipping, and effect deformation are not sampled by this query.
     /// Viewport callbacks also sample prepared image alpha and use GPUI hitbox routing.
     pub fn pick(&self, bounds: Bounds<Pixels>, position: Point<Pixels>) -> Option<Hit> {
@@ -175,7 +175,7 @@ impl Scene {
 
     /// Screen picking restricted to candidates accepted by `filter`.
     /// Rejected objects neither return hits nor occlude accepted objects. Accepted
-    /// objects retain their authored picking behavior and constant-alpha rules.
+    /// objects retain their authored picking behavior and material/vertex-alpha rules.
     /// Filtering does not alter rendering, scene identity, or cached spatial data.
     /// The predicate runs at most once per visited BVH candidate, in unspecified
     /// order; it is not an enumeration of every scene object. Texture alpha is not
@@ -317,9 +317,14 @@ impl Scene {
                 let Some(alpha) = alpha(object_index, uv, triangle_index, barycentric) else {
                     return;
                 };
+                let vertex_alpha = object.mesh.vertex_colors().map_or(1., |colors| {
+                    (0..3)
+                        .map(|corner| colors[indices[corner] as usize][3] * barycentric[corner])
+                        .sum::<f32>()
+                });
                 if !object
                     .material
-                    .alpha_visible(alpha * object.material.color.a)
+                    .alpha_visible(alpha * object.material.color.a * vertex_alpha)
                 {
                     return;
                 }
@@ -806,6 +811,73 @@ mod tests {
         assert_eq!(moved.raycast(moved_ray).unwrap().node, Some(surface));
         drop(graph);
         same_hit(before.raycast(ray), cloned.raycast(ray));
+    }
+
+    #[test]
+    fn vertex_alpha_interpolates_and_combines_with_texture_and_material() {
+        let mesh = Mesh::new(
+            [[-1., -1., 0.], [1., -1., 0.], [0., 1., 0.]]
+                .map(|position| crate::Vertex {
+                    position,
+                    normal: [0., 0., 1.],
+                    uv: [0.; 2],
+                })
+                .to_vec(),
+            vec![0, 1, 2],
+        )
+        .with_vertex_colors(vec![[1., 0., 0., 0.], [0., 1., 0., 1.], [0., 0., 1., 0.]])
+        .unwrap();
+        let mut snapshot = PickSnapshot {
+            scene: Scene::new()
+                .object(plane().id("rear").scale([4.; 3]))
+                .object(
+                    Object::new(mesh, Material::color(rgb(0xffffff)).alpha_cutoff(0.5))
+                        .id("front")
+                        .position([0., 0., 1.]),
+                ),
+            bounds: bounds(),
+            surfaces: vec![PickSurface::Solid, PickSurface::Solid],
+        };
+        let at = |x| project(Camera::default(), bounds(), [x, -0.5, 1.]);
+        for (x, expected) in [(-0.6, "rear"), (0.6, "front")] {
+            assert_eq!(
+                snapshot.pick(at(x)).unwrap().object_id,
+                Some(expected.into())
+            );
+            let ray = crate::Ray::new([x, -0.5, 3.], [0., 0., -1.]).unwrap();
+            assert_eq!(
+                snapshot.scene.raycast(ray).unwrap().object_id,
+                Some(expected.into())
+            );
+        }
+        snapshot.surfaces[1] = PickSurface::Image(alpha_image(1, 1, &[192]));
+        assert_eq!(
+            snapshot.pick(at(0.6)).unwrap().object_id,
+            Some("front".into())
+        );
+        snapshot.scene.objects[1].material.color.a = 0.8;
+        assert_eq!(
+            snapshot.pick(at(0.6)).unwrap().object_id,
+            Some("rear".into())
+        );
+        snapshot.scene.objects[1].material.alpha_mode = crate::AlphaMode::Blend;
+        assert_eq!(
+            snapshot.pick(at(-0.6)).unwrap().object_id,
+            Some("front".into())
+        );
+        snapshot.scene.objects[1].mesh = snapshot.scene.objects[1]
+            .mesh
+            .with_vertex_colors(vec![[1., 1., 1., 0.]; 3])
+            .unwrap();
+        assert_eq!(
+            snapshot.pick(at(0.6)).unwrap().object_id,
+            Some("rear".into())
+        );
+        snapshot.scene.objects[1].material.alpha_mode = crate::AlphaMode::Opaque;
+        assert_eq!(
+            snapshot.pick(at(0.6)).unwrap().object_id,
+            Some("front".into())
+        );
     }
 
     #[test]

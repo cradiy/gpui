@@ -72,6 +72,7 @@ impl Mesh3d {
             tangents: self.tangents.clone(),
             tangent_uv_set: self.tangent_uv_set,
             uv_sets: self.uv_sets.clone(),
+            vertex_colors: self.vertex_colors.clone(),
             bounds: self.bounds,
         };
         if set == 0 {

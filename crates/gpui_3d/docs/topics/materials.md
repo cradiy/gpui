@@ -48,7 +48,8 @@ let material = Material::color(rgba(0x65e0f580))
     .alpha_mode(AlphaMode::Blend);
 ```
 
-Texture alpha and tint alpha are multiplied and clamped to `[0, 1]`. Blending
+Texture alpha, tint alpha, and interpolated vertex alpha are multiplied and
+clamped to `[0, 1]`. Blending
 uses premultiplied source-over in the linear HDR target, before exposure and
 tone mapping. It applies to both lit and unlit materials.
 
@@ -65,7 +66,15 @@ transparency, refraction, and transparent shadows are not provided.
 Viewport image picking and headless object IDs select the nearest surviving
 surface, even when its blended opacity is small; they do not choose the largest
 color contributor. `Opaque` ignores alpha, `Mask` uses the cutoff, and `Blend`
-passes through only zero-alpha regions. Captured UI picking remains geometric.
+passes through only zero-alpha regions. Captured UI picking respects vertex and
+material alpha but does not sample captured pixel alpha.
+
+Vertex RGB multiplies the linear base color with perspective-correct
+interpolation. It is not sRGB-decoded, does not tint emission, and applies to
+solid, image, and captured-UI materials. Color, shadow, depth, normal, and object-ID
+passes use the same base-alpha calculation. In the `materials` example,
+`Vertex colors` toggles sphere color gradients and a color/alpha ramp on the
+textured strip; `Alpha mode` controls the strip's coverage.
 
 ## Metallic-roughness materials
 

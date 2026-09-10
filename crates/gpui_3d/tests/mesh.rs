@@ -15,6 +15,128 @@ fn vertices() -> Vec<Vertex> {
 }
 
 #[test]
+fn vertex_colors_validate_and_preserve_immutable_snapshots() {
+    use gpui_3d::VertexColorError;
+    let plane = Mesh::plane();
+    let original = Mesh::new(plane.vertices().to_vec(), vec![0, 1, 2]);
+    let colors = vec![
+        [0.1, 0.2, 0.3, 0.4],
+        [1., 0., 0., 1.],
+        [0., 1., 0., 0.],
+        [0., 0., 1., 0.5],
+    ];
+    let colored = original.with_vertex_colors(colors.clone()).unwrap();
+    assert!(original.vertex_colors().is_none());
+    assert!(std::ptr::eq(original.vertices(), colored.vertices()));
+    assert!(std::ptr::eq(original.indices(), colored.indices()));
+    assert_eq!(colored.vertex_colors().unwrap(), colors);
+    let updated = colored
+        .with_vertices(colored.vertices().to_vec(), None)
+        .unwrap()
+        .with_uv_set(7, vec![[0.; 2]; 4])
+        .unwrap()
+        .with_tangents_for_uv_set(7, plane.tangents().unwrap().to_vec())
+        .unwrap();
+    assert!(std::ptr::eq(
+        updated.vertex_colors().unwrap(),
+        colored.vertex_colors().unwrap()
+    ));
+    let replaced = updated.with_vertex_colors(vec![[1.; 4]; 4]).unwrap();
+    assert_eq!(colored.vertex_colors().unwrap(), colors);
+    assert_eq!(replaced.tangent_uv_set(), Some(7));
+    assert_eq!(replaced.vertex_colors().unwrap(), [[1.; 4]; 4]);
+    assert_eq!(
+        colored.with_vertex_colors(vec![]).unwrap_err(),
+        VertexColorError::Count {
+            expected: 4,
+            actual: 0
+        }
+    );
+    for component in 0..4 {
+        for value in [-0.1, 1.1, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut invalid = colors.clone();
+            invalid[3][component] = value;
+            assert_eq!(
+                colored.with_vertex_colors(invalid).unwrap_err(),
+                VertexColorError::InvalidComponent {
+                    vertex: 3,
+                    component
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn vertex_colors_follow_split_morph_and_skin_correspondence() {
+    let positions = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
+    let uvs = [[0., 0.], [1., 0.], [0., 1.], [0., 1.]];
+    let colors: Vec<_> = (0..4)
+        .map(|i| [i as f32 / 4., 0.2, 0.4, 1. - i as f32 / 4.])
+        .collect();
+    let source = Mesh::new(
+        (0..4)
+            .map(|i| Vertex {
+                position: positions[i],
+                normal: [0.; 3],
+                uv: uvs[i],
+            })
+            .collect(),
+        vec![0, 1, 2, 0, 3, 1],
+    )
+    .with_vertex_colors(colors.clone())
+    .unwrap();
+    let normals = source.generate_normals(gpui_3d::NormalMode::Flat).unwrap();
+    assert!(normals.mesh().vertex_count() > source.vertex_count());
+    for (index, &original) in normals.source_vertices().iter().enumerate() {
+        assert_eq!(
+            normals.mesh().vertex_colors().unwrap()[index],
+            colors[original as usize]
+        );
+    }
+    let tangents = normals.mesh().generate_tangents().unwrap();
+    for (index, &original) in tangents.source_vertices().iter().enumerate() {
+        assert_eq!(
+            tangents.mesh().vertex_colors().unwrap()[index],
+            normals.mesh().vertex_colors().unwrap()[original as usize]
+        );
+    }
+    let mesh = tangents.mesh();
+    let morph = MorphTargets::new(
+        mesh.clone(),
+        [MorphTarget {
+            positions: Some(vec![[0., 0., 1.]; mesh.vertex_count()].into()),
+            ..Default::default()
+        }],
+    )
+    .unwrap()
+    .evaluate(&[0.5])
+    .unwrap();
+    let skin = Skin::new(
+        [AffineTransform::IDENTITY],
+        vec![
+            [SkinInfluence {
+                joint: 0,
+                weight: 1.
+            }];
+            mesh.vertex_count()
+        ],
+    )
+    .unwrap();
+    let skinned = skin
+        .evaluate(
+            &morph,
+            &[AffineTransform::from_translation([1., 0., 0.]).unwrap()],
+        )
+        .unwrap();
+    assert!(std::ptr::eq(
+        mesh.vertex_colors().unwrap(),
+        skinned.vertex_colors().unwrap()
+    ));
+    assert_ne!(skinned.vertices()[0].position, mesh.vertices()[0].position);
+}
+
+#[test]
 fn uv_snapshots_validate_sparse_sets_and_invalidate_replaced_basis() {
     use gpui_3d::UvSetError;
     let plane = Mesh::plane();

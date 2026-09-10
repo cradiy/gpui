@@ -207,8 +207,16 @@ fn authored_direction_deltas_keep_signed_weights_and_tangent_handedness() {
 }
 
 #[test]
-fn morph_regeneration_preserves_coordinate_sets_and_selected_tangent_basis() {
+fn morph_regeneration_preserves_vertex_attributes_and_selected_tangent_basis() {
     let mut fixture = Fixture::new();
+    let colors = [
+        [0.1, 0.2, 0.3, 0.4],
+        [1., 0., 0., 1.],
+        [0., 1., 0., 0.],
+        [0., 0., 1., 0.5],
+    ];
+    let color = fixture.floats("VEC4", &colors.into_iter().flatten().collect::<Vec<_>>());
+    fixture.attribute("COLOR_0", color);
     let uv = fixture.floats("VEC2", &[0., 0., 0., 1., 1., 1., 1., 0.]);
     fixture.attribute("TEXCOORD_7", uv);
     let document = fixture.prepare().unwrap();
@@ -227,6 +235,12 @@ fn morph_regeneration_preserves_coordinate_sets_and_selected_tangent_basis() {
     for weight in [1., -0.5, 0., 1.] {
         let mesh = morph.evaluate(&[weight]).unwrap();
         assert_eq!(mesh.tangent_uv_set(), Some(7));
+        for (index, &source) in geometry.source_vertices().iter().enumerate() {
+            assert_eq!(
+                mesh.vertex_colors().unwrap()[index],
+                colors[source as usize]
+            );
+        }
         let reference = mesh
             .generate_tangents_for_uv_set(7, gpui_3d::TangentGenerationMode::Repair)
             .unwrap();

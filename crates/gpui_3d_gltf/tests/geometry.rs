@@ -102,6 +102,99 @@ fn error(document: &PreparedDocument, options: GeometryOptions) -> String {
 }
 
 #[test]
+fn vertex_colors_decode_linear_rgb_rgba_and_normalized_components() {
+    for component in [5121, 5123, 5126] {
+        for channels in [3, 4] {
+            let mut fixture = triangle();
+            let mut bytes = Vec::new();
+            let expected: Vec<[f32; 4]> = (0..3)
+                .map(|vertex| {
+                    let mut rgba = [1.; 4];
+                    for (channel, value) in rgba.iter_mut().enumerate().take(channels) {
+                        let n = (vertex * 4 + channel) as u32;
+                        *value = match component {
+                            5121 => {
+                                bytes.push(n as u8);
+                                n as f32 / 255.
+                            }
+                            5123 => {
+                                bytes.extend_from_slice(&(n as u16 * 1000).to_le_bytes());
+                                (n * 1000) as f32 / 65535.
+                            }
+                            _ => {
+                                let v = n as f32 / 16.;
+                                bytes.extend_from_slice(&v.to_le_bytes());
+                                v
+                            }
+                        };
+                    }
+                    bytes.resize(bytes.len().next_multiple_of(4), 0);
+                    rgba
+                })
+                .collect();
+            let stride = (channels
+                * if component == 5121 {
+                    1
+                } else if component == 5123 {
+                    2
+                } else {
+                    4
+                })
+            .next_multiple_of(4);
+            let view = fixture.view(&bytes, Some(stride));
+            let accessor = fixture.accessor(json!({"bufferView":view,"componentType":component,"count":3,"type":format!("VEC{channels}"),"normalized":component != 5126}));
+            fixture.json["meshes"][0]["primitives"][0]["attributes"]["COLOR_0"] = json!(accessor);
+            let geometry = fixture
+                .prepare()
+                .geometry(0, 0, Default::default())
+                .unwrap();
+            for (index, &source) in geometry.source_vertices().iter().enumerate() {
+                let actual = geometry.mesh().vertex_colors().unwrap()[index];
+                for channel in 0..4 {
+                    assert!((actual[channel] - expected[source as usize][channel]).abs() < 1e-7);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sparse_vertex_colors_and_invalid_unused_components_are_checked() {
+    let mut fixture = triangle();
+    let indices = fixture.view(&[1], None);
+    let values = fixture.view(&[128, 64, 255, 192], None);
+    let color = fixture.accessor(json!({"componentType":5121,"normalized":true,"count":3,"type":"VEC4",
+        "sparse":{"count":1,"indices":{"bufferView":indices,"componentType":5121},"values":{"bufferView":values}}}));
+    fixture.json["meshes"][0]["primitives"][0]["attributes"]["COLOR_0"] = json!(color);
+    let geometry = fixture
+        .prepare()
+        .geometry(0, 0, Default::default())
+        .unwrap();
+    let colors = geometry.mesh().vertex_colors().unwrap();
+    assert_eq!(colors[0], [0.; 4]);
+    assert_eq!(colors[2], [0.; 4]);
+    for (actual, expected) in colors[1].iter().zip([128., 64., 255., 192.]) {
+        assert!((*actual - expected / 255.).abs() < 1e-7);
+    }
+    for value in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+        let mut fixture = Fixture::new();
+        fixture.attribute(
+            "POSITION",
+            &[[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [2., 2., 0.]],
+        );
+        fixture.indices(&[0, 1, 2], 5121);
+        let mut colors = [[1.; 4]; 4];
+        colors[3][2] = value;
+        fixture.attribute("COLOR_0", &colors);
+        let failure = error(&fixture.prepare(), Default::default());
+        assert!(
+            failure.contains("COLOR_0") && failure.contains("vertex 3 component 2"),
+            "{failure}"
+        );
+    }
+}
+
+#[test]
 fn coordinate_admission_bounds_all_sets_and_split_workspace() {
     let mut fixture = triangle();
     fixture.attribute("TEXCOORD_7", &[[0., 0.], [1., 0.], [0., 1.]]);
@@ -501,7 +594,7 @@ fn malformed_attributes_and_indices_report_primitive_context() {
     wrong_uv.attribute("TEXCOORD_0", &[[0., 0., 0.]; 3]);
     assert!(error(&wrong_uv.prepare(), GeometryOptions::default()).contains("format"));
     let mut colors = triangle();
-    colors.attribute("COLOR_0", &[[1., 1., 1.]; 3]);
+    colors.attribute("COLOR_1", &[[1., 1., 1.]; 3]);
     assert!(
         error(&colors.prepare(), GeometryOptions::default())
             .contains("unsupported vertex attribute")

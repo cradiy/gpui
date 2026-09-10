@@ -76,6 +76,19 @@ without changing set zero. [Material textures](materials.md#coordinate-selection
 select their coordinate sets independently. `Hit::uv` reports set-zero coordinates;
 image-alpha picking uses the base-color image's selected set.
 
+## Vertex colors
+
+`Mesh::with_vertex_colors(colors)` attaches linear, straight-alpha RGBA
+multipliers. Supply one color per vertex, including unused vertices, with finite
+components in `[0, 1]`. Invalid counts or components return `VertexColorError`.
+`vertex_colors()` borrows the stored array; `None` means implicit white.
+
+Color changes share geometry, tangents, coordinate sets, and the spatial index
+without modifying existing snapshots. Normal/tangent generation maps colors
+through vertex splits. Fixed-topology updates, Morph, and Skin preserve them.
+Colors do not alter bounds. Their interpolated alpha participates in surface
+visibility and picking under the material's alpha mode.
+
 ## Primitive meshes
 
 `Mesh::sphere`, `Mesh::cylinder`, `Mesh::cone`, and `Mesh::subdivided_plane`

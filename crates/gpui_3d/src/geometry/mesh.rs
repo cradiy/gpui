@@ -1,4 +1,7 @@
-use crate::{MeshError, MeshUpdateError, TangentError, UvSetError, Vertex, math, spatial::bvh};
+use crate::{
+    MeshError, MeshUpdateError, TangentError, UvSetError, Vertex, VertexColorError, math,
+    spatial::bvh,
+};
 use gpui::Mesh3d;
 use std::sync::{Arc, OnceLock};
 
@@ -43,7 +46,20 @@ impl Mesh {
             .map(|mesh| Self(mesh, self.1.clone()))
     }
 
-    pub(super) fn remap_uv_sets(&self, mut output: Self, source_vertices: &[u32]) -> Self {
+    /// Linear, straight-alpha RGBA multipliers, or `None` for implicit white.
+    pub fn vertex_colors(&self) -> Option<&[[f32; 4]]> {
+        self.0.vertex_colors()
+    }
+    /// Attaches finite RGBA components in 0..=1, including unused vertices.
+    /// Colors multiply the material's linear base color. Geometry, tangents, and
+    /// the spatial index remain shared; the source mesh is unchanged.
+    pub fn with_vertex_colors(&self, colors: Vec<[f32; 4]>) -> Result<Self, VertexColorError> {
+        self.0
+            .with_vertex_colors(colors)
+            .map(|mesh| Self(mesh, self.1.clone()))
+    }
+
+    pub(super) fn remap_attributes(&self, mut output: Self, source_vertices: &[u32]) -> Self {
         for set in self.uv_sets().skip(1) {
             let coordinates = source_vertices
                 .iter()
@@ -55,6 +71,16 @@ impl Mesh {
             output = output
                 .with_uv_set(set, coordinates)
                 .expect("validated UV remapping");
+        }
+        if let Some(colors) = self.vertex_colors() {
+            output = output
+                .with_vertex_colors(
+                    source_vertices
+                        .iter()
+                        .map(|&source| colors[source as usize])
+                        .collect(),
+                )
+                .expect("validated color remapping");
         }
         output
     }
@@ -89,7 +115,7 @@ impl Mesh {
     /// Vertex count and triangle identities are preserved; index storage is shared.
     /// Supply tangents for the replacement normals, or `None` to omit them.
     /// The new snapshot has independent bounds and a fresh lazy query index.
-    /// Additional coordinate sets remain shared with the source mesh.
+    /// Additional coordinate sets and vertex colors remain shared with the source mesh.
     /// Replacement tangents use the source tangent set, or set zero if absent.
     pub fn with_vertices(
         &self,

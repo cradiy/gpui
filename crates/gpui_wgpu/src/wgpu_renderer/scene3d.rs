@@ -31,6 +31,7 @@ struct Vertex {
     tangent: [f32; 4],
     detail_uv: [f32; 4],
     occlusion_uv: [f32; 2],
+    vertex_color: [f32; 4],
 }
 
 impl Vertex {
@@ -47,13 +48,14 @@ impl Vertex {
             tangent: mesh.tangents().map_or([0.; 4], |t| t[index]),
             detail_uv: [emission[0], emission[1], normal[0], normal[1]],
             occlusion_uv: occlusion,
+            vertex_color: mesh.vertex_colors().map_or([1.; 4], |colors| colors[index]),
         }
     }
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+        const ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x4,
-            14 => Float32x4, 15 => Float32x2
+            14 => Float32x4, 15 => Float32x2, 11 => Float32x4
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Self>() as u64,
@@ -67,7 +69,7 @@ impl Vertex {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Instance {
     model: [[f32; 4]; 4],
-    normal: [[f32; 4]; 4],
+    normal: [[f32; 4]; 3],
     color: [f32; 4],
     ids: [u32; 4],
 }
@@ -76,7 +78,7 @@ impl Instance {
     fn new(object: &gpui::MeshDraw3d) -> Self {
         Self {
             model: object.model,
-            normal: object.normal,
+            normal: [object.normal[0], object.normal[1], object.normal[2]],
             color: [
                 object.color.r,
                 object.color.g,
@@ -87,9 +89,9 @@ impl Instance {
         }
     }
     fn layout() -> wgpu::VertexBufferLayout<'static> {
-        const ATTRIBUTES: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
+        const ATTRIBUTES: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
             4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
-            8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4,
+            8 => Float32x4, 9 => Float32x4, 10 => Float32x4,
             12 => Float32x4, 13 => Uint32x4
         ];
         wgpu::VertexBufferLayout {
@@ -2265,7 +2267,7 @@ mod tests {
         for (index, instance) in data.iter().enumerate() {
             let object = &objects[index];
             assert_eq!(instance.model, object.model);
-            assert_eq!(instance.normal, object.normal);
+            assert_eq!(instance.normal, object.normal[..3]);
             assert_eq!(
                 instance.color,
                 [
@@ -2624,6 +2626,7 @@ mod tests {
                     "tangent" => std::mem::offset_of!(Vertex, tangent),
                     "detail_uv" => std::mem::offset_of!(Vertex, detail_uv),
                     "occlusion_uv" => std::mem::offset_of!(Vertex, occlusion_uv),
+                    "vertex_color" => std::mem::offset_of!(Vertex, vertex_color),
                     _ => panic!("unknown vertex attribute"),
                 };
                 assert_eq!(attribute.offset as usize, offset);
@@ -2637,6 +2640,18 @@ mod tests {
             }
         }
         let instance_layout = Instance::layout();
+        let mut locations = std::collections::BTreeSet::new();
+        for attribute in vertex_layout
+            .attributes
+            .iter()
+            .chain(instance_layout.attributes)
+        {
+            assert!(
+                locations.insert(attribute.shader_location),
+                "duplicate vertex location"
+            );
+            assert!(attribute.shader_location < wgpu::Limits::default().max_vertex_attributes);
+        }
         let (instance_type, members) = module
             .types
             .iter()
@@ -2815,6 +2830,11 @@ mod tests {
     #[test]
     fn scene3d_vertex_upload_packs_selected_material_coordinates() {
         let mut mesh = object().mesh;
+        assert_eq!(Vertex::new(&mesh, 0, [0; 5]).vertex_color, [1.; 4]);
+        let colors: Vec<_> = (0..mesh.vertices().len())
+            .map(|i| [0.25, 0.5, 0.75, i as f32 / mesh.vertices().len() as f32])
+            .collect();
+        mesh = mesh.with_vertex_colors(colors.clone()).unwrap();
         let sets = [3, 7, 11, 19, u32::MAX];
         for (slot, set) in sets.into_iter().enumerate() {
             mesh = mesh
@@ -2835,6 +2855,7 @@ mod tests {
                 [2., index as f32 + 0.5, 3., index as f32 + 0.5]
             );
             assert_eq!(vertex.occlusion_uv, [4., index as f32 + 0.5]);
+            assert_eq!(vertex.vertex_color, colors[index]);
         }
     }
 }

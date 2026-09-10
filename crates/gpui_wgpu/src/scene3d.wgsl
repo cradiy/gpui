@@ -40,14 +40,14 @@ struct InstanceInput {
     @location(4) model_0: vec4<f32>, @location(5) model_1: vec4<f32>,
     @location(6) model_2: vec4<f32>, @location(7) model_3: vec4<f32>,
     @location(8) normal_0: vec4<f32>, @location(9) normal_1: vec4<f32>,
-    @location(10) normal_2: vec4<f32>, @location(11) normal_3: vec4<f32>,
+    @location(10) normal_2: vec4<f32>,
     @location(12) color: vec4<f32>, @location(13) ids: vec4<u32>,
 };
-struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec4<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32, @location(5) @interpolate(flat) color: vec4<f32>, @location(6) @interpolate(flat) output_id: u32, @location(7) detail_uv: vec4<f32>, @location(8) occlusion_uv: vec2<f32> };
+struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec4<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32, @location(5) color: vec4<f32>, @location(6) @interpolate(flat) output_id: u32, @location(7) detail_uv: vec4<f32>, @location(8) occlusion_uv: vec2<f32> };
 @vertex
-fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, instance: InstanceInput) -> Output {
+fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
     let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
-    let normal_matrix = mat4x4<f32>(instance.normal_0, instance.normal_1, instance.normal_2, instance.normal_3);
+    let normal_matrix = mat3x3<f32>(instance.normal_0.xyz, instance.normal_1.xyz, instance.normal_2.xyz);
     var clip = params.camera * model * vec4<f32>(position, 1.0);
     let origin = params.bounds.xy / params.viewport.xy;
     let extent = params.bounds.zw / params.viewport.xy;
@@ -55,7 +55,8 @@ fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @loc
     clip.y = (1.0 - origin.y * 2.0) * clip.w + (clip.y - clip.w) * extent.y;
     let handedness = sign(dot(cross(unit_vector(model[0].xyz), unit_vector(model[1].xyz)), unit_vector(model[2].xyz)));
     let world_tangent = vec4<f32>((model * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w * handedness);
-    return Output(clip, (normal_matrix * vec4<f32>(normal, 0.0)).xyz, uv, (model * vec4<f32>(position, 1.0)).xyz, world_tangent, handedness, instance.color, instance.ids.x, detail_uv, occlusion_uv);
+    let color = vertex_color * vec4<f32>(srgb_to_linear(instance.color.rgb), instance.color.a);
+    return Output(clip, normal_matrix * normal, uv, (model * vec4<f32>(position, 1.0)).xyz, world_tangent, handedness, color, instance.ids.x, detail_uv, occlusion_uv);
 }
 fn address_coordinate(value: f32, mode: u32) -> f32 {
     if (mode == 1u) { return value - floor(value); }
@@ -121,18 +122,19 @@ fn base_color(input: Output, gradients: mat2x2<f32>, front: bool) -> vec4<f32> {
         if (params.flags.z > 0.5) { sampled = vec4<f32>(sampled.rgb / max(sampled.a, 0.00001), sampled.a); }
         sampled = vec4<f32>(srgb_to_linear(sampled.rgb), sampled.a);
     }
-    let base = sampled * vec4<f32>(srgb_to_linear(input.color.rgb), input.color.a);
+    let base = sampled * input.color;
     let alpha = clamp(base.a, 0.0, 1.0);
     if (params.ids.y == 1u && alpha < params.flags.x) { discard; }
     if (params.ids.y == 2u && alpha <= 0.0) { discard; }
     return vec4<f32>(base.rgb, select(1.0, alpha, params.ids.y == 2u));
 }
 @vertex
-fn shadow_vertex(@location(0) position: vec3<f32>, @location(2) uv: vec4<f32>, instance: InstanceInput) -> Output {
+fn shadow_vertex(@location(0) position: vec3<f32>, @location(2) uv: vec4<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
     let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
     let world = model * vec4<f32>(position, 1.0);
     let handedness = sign(dot(cross(unit_vector(model[0].xyz), unit_vector(model[1].xyz)), unit_vector(model[2].xyz)));
-    return Output(params.shadow_camera * world, vec3<f32>(0.0), uv, world.xyz, vec4<f32>(0.0), handedness, instance.color, instance.ids.x, vec4<f32>(0.0), vec2<f32>(0.0));
+    let color = vertex_color * vec4<f32>(srgb_to_linear(instance.color.rgb), instance.color.a);
+    return Output(params.shadow_camera * world, vec3<f32>(0.0), uv, world.xyz, vec4<f32>(0.0), handedness, color, instance.ids.x, vec4<f32>(0.0), vec2<f32>(0.0));
 }
 @fragment
 fn shadow_fragment(input: Output, @builtin(front_facing) front: bool) {

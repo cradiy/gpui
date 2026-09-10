@@ -254,7 +254,7 @@ impl Mesh {
             indices.push(index);
         }
         let mesh = self
-            .remap_uv_sets(Mesh::new(vertices, indices), &source_vertices)
+            .remap_attributes(Mesh::new(vertices, indices), &source_vertices)
             .with_tangents_for_uv_set(set, tangents)
             .map_err(TangentGenerationError::Tangents)?;
         Ok(GeneratedTangents {

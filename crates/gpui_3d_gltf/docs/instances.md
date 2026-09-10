@@ -63,6 +63,45 @@ duplicate, or non-mesh targets leave every material unchanged. Successful
 nonempty batches increment the graph revision once. See
 [Material batches](../../gpui_3d/docs/topics/scenes.md#material-batches).
 
+## Material editing
+
+`graph.node(handle)?.surface()` provides the current mesh and material, including
+for hidden nodes. Clone the material before applying a tint or another property
+to retain its remaining parameters and texture inputs.
+
+`asset.material(index)` borrows the resolved source material by its original glTF
+index. Only materials used by the selected scene are retained. `None` selects the
+implicit default, and returns no material when every primitive uses an explicit
+index. Unknown and unused indices return no material. Asset clones share this
+table and its decoded images; instance overrides do not modify it.
+
+Restore one authored material group without replacing its geometry:
+
+```rust
+use gpui_3d::SceneGraph;
+use gpui_3d_gltf::SceneInstance;
+
+fn restore_material(
+    instance: &SceneInstance,
+    graph: &mut SceneGraph,
+    index: Option<usize>,
+) -> anyhow::Result<()> {
+    let material = instance
+        .asset()
+        .material(index)
+        .ok_or_else(|| anyhow::anyhow!("material is not used by this scene"))?;
+    graph.set_materials(
+        instance.material_nodes(index).map(|node| (node, material.clone())),
+    )?;
+    Ok(())
+}
+```
+
+Restoring uses the same target validation as any batch replacement. Removed
+primitive handles cause an error without changing the remaining materials.
+
+## Application identities
+
 `instantiate_with_ids()` accepts the same source-handle callback as the core
 graph API. IDs remain caller-defined, including the synthetic root and primitive
 children. Duplicate IDs and invalid parents leave the graph and revision

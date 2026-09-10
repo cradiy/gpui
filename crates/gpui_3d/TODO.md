@@ -163,6 +163,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
     - [x] **Vertex colors**: Normalized linear RGBA storage, split/deformation correspondence, material modulation, shared output and query alpha coverage, and glTF COLOR_0 conversion.
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
   - [x] **glTF instance identities**: Retained shared assets, source-index and reverse occurrence mappings, authored material groups for graph overrides, application ID admission, and bound Morph/Skin evaluation.
+  - [x] **Material edit sources**: Borrowed current node surfaces and shared resolved source-material lookup by authored index, retaining decoded images for property edits and batch restoration without replacing geometry.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
   - [x] **Asynchronous URI preparation**: Executor-independent glTF loaders, remaining-byte request budgets, shared synchronous/asynchronous validation, drop-based cancellation, and retryable partial-resource cleanup.
   - [x] **Scene load publication**: Per-slot request identity, supersession and cancellation, retained successful assets, transferable decoded resources, owner-thread resolution, and rejection of stale or foreign completions.

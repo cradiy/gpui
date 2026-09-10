@@ -181,35 +181,103 @@ fn decoding_is_shared_across_materials_instances_and_retryable() {
         })
         .unwrap();
     assert_eq!(calls, 1);
+    assert!(asset.material(None).is_none());
+    let retained_asset = asset.clone();
+    assert!(std::ptr::eq(
+        asset.material(Some(0)).unwrap(),
+        retained_asset.material(Some(0)).unwrap(),
+    ));
     let mut graph = SceneGraph::new();
+    let first = asset.instantiate(&mut graph, None).unwrap();
     graph.instantiate(None, asset.subtree()).unwrap();
-    graph.instantiate(None, asset.subtree()).unwrap();
+    drop(asset);
+    drop(definition);
     let mut requests = 0;
-    graph
+    let mut resolve = |request: gpui_3d::TextureRequest<'_>| {
+        let TextureSource::Image(ImageSource::Render(image)) = request.source else {
+            panic!("decoded source expected")
+        };
+        assert!(Arc::ptr_eq(image, &pixels));
+        requests += 1;
+        Ok(TextureState::Ready(ResolvedTexture::Image(AtlasTile {
+            texture_id: AtlasTextureId {
+                index: 0,
+                kind: AtlasTextureKind::Polychrome,
+            },
+            tile_id: TileId(0),
+            padding: 0,
+            bounds: Bounds::new(
+                point(DevicePixels(0), DevicePixels(0)),
+                size(DevicePixels(2), DevicePixels(2)),
+            ),
+        })))
+    };
+    let original = graph
         .evaluate()
         .unwrap()
         .scene(Camera::default())
-        .prepare(1., None, |request| {
-            let TextureSource::Image(ImageSource::Render(image)) = request.source else {
-                panic!("decoded source expected")
-            };
-            assert!(Arc::ptr_eq(image, &pixels));
-            requests += 1;
-            Ok(TextureState::Ready(ResolvedTexture::Image(AtlasTile {
-                texture_id: AtlasTextureId {
-                    index: 0,
-                    kind: AtlasTextureKind::Polychrome,
-                },
-                tile_id: TileId(0),
-                padding: 0,
-                bounds: Bounds::new(
-                    point(DevicePixels(0), DevicePixels(0)),
-                    size(DevicePixels(2), DevicePixels(2)),
-                ),
-            })))
-        })
+        .prepare(1., None, &mut resolve)
         .unwrap();
-    assert_eq!(requests, 8);
+    assert!(graph.node(first.root()).unwrap().surface().is_none());
+    let target = first.primitive(1, 0).unwrap();
+    graph.set_visible(target, false).unwrap();
+    let (mesh, material) = graph.node(target).unwrap().surface().unwrap();
+    let mesh = mesh.clone();
+    let tinted = material.clone().tint(rgb(0x0000ff));
+    graph.set_material(target, tinted).unwrap();
+    assert!(!graph.node(target).unwrap().is_visible());
+    graph.set_visible(target, true).unwrap();
+    let changed = graph
+        .evaluate()
+        .unwrap()
+        .scene(Camera::default())
+        .prepare(1., None, &mut resolve)
+        .unwrap();
+    assert_eq!(changed.frame().objects[0].color, rgb(0x0000ff));
+    assert_eq!(
+        changed.frame().objects[0].pbr,
+        original.frame().objects[0].pbr
+    );
+    for (before, after) in original
+        .frame()
+        .objects
+        .iter()
+        .zip(changed.frame().objects.iter())
+        .skip(1)
+    {
+        assert_eq!(before.color, after.color);
+    }
+    assert!(std::ptr::eq(
+        graph.node(target).unwrap().surface().unwrap().0.vertices(),
+        mesh.vertices(),
+    ));
+    graph
+        .set_materials(
+            first
+                .material_nodes(Some(0))
+                .map(|node| (node, first.asset().material(Some(0)).unwrap().clone())),
+        )
+        .unwrap();
+    let restored = graph
+        .evaluate()
+        .unwrap()
+        .scene(Camera::default())
+        .prepare(1., None, &mut resolve)
+        .unwrap();
+    for (before, after) in original
+        .frame()
+        .objects
+        .iter()
+        .zip(restored.frame().objects.iter())
+    {
+        assert_eq!(before.color, after.color);
+        assert_eq!(before.pbr, after.pbr);
+        assert_eq!(before.sampling, after.sampling);
+        assert_eq!(before.alpha_mode, after.alpha_mode);
+        assert_eq!(before.double_sided, after.double_sided);
+        assert!(Arc::ptr_eq(&before.mesh, &after.mesh));
+    }
+    assert_eq!(requests, 24);
 }
 
 #[test]
@@ -229,6 +297,10 @@ fn bound_instances_map_occurrences_and_isolate_material_overrides() {
     let second = asset.instantiate(&mut graph, None).unwrap();
     drop(asset);
     assert_eq!(first.asset().nodes().len(), 3);
+    assert!(first.asset().material(Some(0)).is_some());
+    assert!(first.asset().material(None).is_some());
+    assert!(first.asset().material(Some(1)).is_none());
+    assert!(first.asset().material(Some(999)).is_none());
     assert!(first.node(999).is_none());
     assert!(first.primitive(0, 0).is_none());
     assert!(first.primitive(1, 2).is_none());

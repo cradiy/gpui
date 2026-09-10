@@ -65,6 +65,14 @@ impl Node {
         self.surface = Some((mesh, material));
         self
     }
+    /// Borrows this node's geometry and material, including when hidden.
+    /// Groups return `None`. Clone the material before editing it through the graph;
+    /// this does not copy shared mesh or decoded-image storage.
+    pub fn surface(&self) -> Option<(&Mesh, &Material)> {
+        self.surface
+            .as_ref()
+            .map(|(mesh, material)| (mesh, material))
+    }
     pub fn pick_behavior(mut self, behavior: PickBehavior) -> Self {
         self.picking = behavior;
         self

@@ -60,6 +60,12 @@ Groups can organize several mesh nodes under one application-defined instance.
 File importers and asset/instance managers belong to extensions built on these
 format-independent APIs. The graph does not load files or manage model catalogs.
 
+`Node::surface()` borrows the current `(Mesh, Material)` pair without evaluating
+the scene. Hidden mesh nodes retain their resources; groups return `None`.
+Clone the material to retain its textures and other parameters while changing
+one property, then apply it with `set_material` or `set_materials`.
+Shared mesh and decoded-image allocations are not copied by cloning.
+
 ### Material batches
 
 `set_materials` accepts `(NodeHandle, Material)` replacements. Every target must

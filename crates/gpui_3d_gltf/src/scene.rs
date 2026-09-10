@@ -1,9 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use gpui::RenderImage;
 use gpui_3d::{
-    AffineTransform, Camera, Node, NodeHandle, PunctualLight, SceneGraph, SceneSubtree, Skin,
+    AffineTransform, Camera, Material, Node, NodeHandle, PunctualLight, SceneGraph, SceneSubtree,
+    Skin,
 };
 
 use crate::{
@@ -118,6 +119,7 @@ pub struct SceneAsset {
     primitives: Arc<[ScenePrimitive]>,
     skins: Arc<[SceneSkin]>,
     morphs: Arc<[SceneMorph]>,
+    materials: Rc<HashMap<Option<usize>, Material>>,
 }
 
 impl SceneAsset {
@@ -133,6 +135,13 @@ impl SceneAsset {
     }
     pub fn primitives(&self) -> &[ScenePrimitive] {
         &self.primitives
+    }
+    /// Resolved source material by its original glTF index, independent of graph edits.
+    /// `None` selects the implicit default. Materials unused by this selected scene
+    /// are absent, including the default when every primitive has an explicit material.
+    /// Cloning a returned material retains shared decoded-image storage.
+    pub fn material(&self, index: Option<usize>) -> Option<&Material> {
+        self.materials.get(&index)
     }
     /// Primitive bindings in scene order, retaining undeformed base geometry.
     pub fn skins(&self) -> &[SceneSkin] {
@@ -286,6 +295,14 @@ impl SceneDefinition {
             primitives: primitives.into(),
             skins: skins.into(),
             morphs: morphs.into(),
+            materials: Rc::new(
+                self.0
+                    .materials
+                    .iter()
+                    .map(|definition| definition.index())
+                    .zip(materials)
+                    .collect(),
+            ),
         })
     }
 }

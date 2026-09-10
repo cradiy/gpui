@@ -183,6 +183,147 @@ fn dimension_pixel_output_and_working_limits_are_checked_and_retryable() {
 }
 
 #[test]
+fn image_cache_matches_contents_and_mime_without_retaining_source_buffers() {
+    use gpui_3d_gltf::{ImageCache, ImageCacheLimits};
+    use std::sync::Arc;
+
+    let cache = ImageCache::new(ImageCacheLimits {
+        bytes: 32,
+        entries: 4,
+    });
+    let bytes: Arc<[u8]> = png().into();
+    let weak = Arc::downgrade(&bytes);
+    let metadata = Document::from_slice(
+        br#"{"asset":{"version":"2.0"},"images":[{"uri":"image","mimeType":"image/png"}]}"#,
+        Limits::default(),
+    )
+    .unwrap();
+    let source = futures::executor::block_on(
+        metadata.prepare_shared_async(|_| std::future::ready(Ok(bytes.clone()))),
+    )
+    .unwrap();
+    let first = cache
+        .decode(source.image(0).unwrap(), ImageDecodeLimits::default())
+        .unwrap();
+    drop(source);
+    drop(bytes);
+    assert!(weak.upgrade().is_none());
+    let same = document(&[png()], Some("image/png"));
+    let second = cache
+        .decode(same.image(0).unwrap(), ImageDecodeLimits::default())
+        .unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    let invalid_mime = document(&[png()], Some("image/jpeg"));
+    assert!(
+        cache
+            .decode(invalid_mime.image(0).unwrap(), ImageDecodeLimits::default())
+            .is_err()
+    );
+    let changed = document(
+        &[encode(DynamicImage::new_rgba8(2, 1), ImageFormat::Png)],
+        Some("image/png"),
+    );
+    let different = cache
+        .decode(changed.image(0).unwrap(), ImageDecodeLimits::default())
+        .unwrap();
+    assert!(!Arc::ptr_eq(&first, &different));
+    assert_eq!(different.as_bytes(0).unwrap(), [0; 8]);
+    assert_eq!(cache.len(), 2);
+    assert_eq!(cache.cached_bytes(), 16);
+    assert!(cache.invalidate(same.image(0).unwrap()));
+    assert!(!cache.invalidate(same.image(0).unwrap()));
+    let decoded = cache
+        .decode(same.image(0).unwrap(), ImageDecodeLimits::default())
+        .unwrap();
+    assert!(!Arc::ptr_eq(&first, &decoded));
+    cache.clear();
+    assert!(cache.is_empty());
+    assert_eq!(cache.cached_bytes(), 0);
+    assert_eq!(first.as_bytes(0).unwrap(), [30, 20, 10, 128, 60, 50, 40, 0]);
+}
+
+#[test]
+fn cached_pixels_obey_current_decode_limits_and_lru_retention() {
+    use gpui_3d_gltf::{ImageCache, ImageCacheLimits};
+    use std::sync::Arc;
+
+    let first_source = document(&[png()], None);
+    let second_source = document(
+        &[encode(DynamicImage::new_rgba8(2, 1), ImageFormat::Png)],
+        None,
+    );
+    let first_image = first_source.image(0).unwrap();
+    let second_image = second_source.image(0).unwrap();
+    let cache = ImageCache::new(ImageCacheLimits {
+        bytes: 16,
+        entries: 2,
+    });
+    let defaults = ImageDecodeLimits::default();
+    let first = cache.decode(first_image, defaults).unwrap();
+    for limits in [
+        ImageDecodeLimits {
+            max_dimension: 1,
+            ..defaults
+        },
+        ImageDecodeLimits {
+            max_pixels: 1,
+            ..defaults
+        },
+        ImageDecodeLimits {
+            output_bytes: 7,
+            ..defaults
+        },
+        ImageDecodeLimits {
+            working_bytes: first_image.bytes().len() as u64 + 15,
+            ..defaults
+        },
+    ] {
+        assert!(cache.decode(first_image, limits).is_err());
+        assert_eq!(cache.len(), 1);
+    }
+    let hit = cache
+        .decode(
+            first_image,
+            ImageDecodeLimits {
+                max_dimension: 2,
+                max_pixels: 2,
+                output_bytes: 8,
+                working_bytes: first_image.bytes().len() as u64 + 16,
+            },
+        )
+        .unwrap();
+    assert!(Arc::ptr_eq(&first, &hit));
+    let second = cache.decode(second_image, defaults).unwrap();
+    let weak = Arc::downgrade(&second);
+    drop(second);
+    cache.decode(first_image, defaults).unwrap();
+    cache.set_limits(ImageCacheLimits {
+        bytes: 8,
+        entries: 2,
+    });
+    assert!(weak.upgrade().is_none());
+    assert_eq!(cache.cached_bytes(), 8);
+    assert!(Arc::ptr_eq(
+        &first,
+        &cache.decode(first_image, defaults).unwrap()
+    ));
+    cache.set_limits(ImageCacheLimits {
+        bytes: 7,
+        entries: 2,
+    });
+    assert!(cache.is_empty());
+    let oversized = cache.decode(first_image, defaults).unwrap();
+    assert!(cache.is_empty());
+    assert!(!Arc::ptr_eq(&first, &oversized));
+    cache.set_limits(ImageCacheLimits {
+        bytes: 16,
+        entries: 0,
+    });
+    cache.decode(first_image, defaults).unwrap();
+    assert!(cache.is_empty());
+}
+
+#[test]
 fn embedded_glb_scene_decoding_charges_unique_images_across_materials() {
     let positions: Vec<_> = [[0_f32, 0., 0.], [1., 0., 0.], [0., 1., 0.]]
         .into_iter()
@@ -244,11 +385,20 @@ fn embedded_glb_scene_decoding_charges_unique_images_across_materials() {
         2
     );
     let worker_definition = definition.clone();
-    let decoded = std::thread::spawn(move || worker_definition.decode_resources(limits))
-        .join()
-        .unwrap()
-        .unwrap();
+    let cache = gpui_3d_gltf::ImageCache::default();
+    let warmed = definition.decode_resources_cached(&cache, limits).unwrap();
+    let worker_cache = cache.clone();
+    let decoded = std::thread::spawn(move || {
+        worker_definition.decode_resources_cached(&worker_cache, limits)
+    })
+    .join()
+    .unwrap()
+    .unwrap();
     assert_eq!(decoded.definition().index(), definition.index());
+    assert!(std::sync::Arc::ptr_eq(
+        warmed.image(0).unwrap(),
+        decoded.image(0).unwrap()
+    ));
     assert_eq!(
         decoded.image(0).unwrap().as_bytes(0).unwrap(),
         [30, 20, 10, 128, 60, 50, 40, 0]
@@ -279,6 +429,29 @@ fn embedded_glb_scene_decoding_charges_unique_images_across_materials() {
     source["materials"][1]["occlusionTexture"]["index"] = json!(1);
     let document = prepare(&source);
     let definition = document.scene(None, SceneOptions::default()).unwrap();
+    assert!(definition.decode_resources_cached(&cache, limits).is_err());
+    assert!(
+        document
+            .material(Some(1))
+            .unwrap()
+            .decode_images_cached(&cache, limits)
+            .is_err()
+    );
+    let shared_indices = definition
+        .decode_resources_cached(
+            &cache,
+            ImageDecodeLimits {
+                output_bytes: 16,
+                ..limits
+            },
+        )
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        shared_indices.image(0).unwrap(),
+        shared_indices.image(1).unwrap()
+    ));
+    assert_eq!(cache.len(), 1);
+    assert_eq!(cache.cached_bytes(), 8);
     let error = format!("{:#}", definition.decode_images(limits).err().unwrap());
     assert!(
         error.contains("image 1") && error.contains("output byte limit"),

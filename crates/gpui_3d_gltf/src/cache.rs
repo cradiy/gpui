@@ -20,8 +20,8 @@ impl Default for ResourceCacheLimits {
     }
 }
 
-struct State<K> {
-    entries: IndexMap<K, Arc<[u8]>>,
+pub(crate) struct Retention<K, V> {
+    entries: IndexMap<K, (V, usize)>,
     bytes: usize,
     limits: ResourceCacheLimits,
     epoch: Arc<()>,
@@ -31,7 +31,7 @@ struct State<K> {
 /// entries and limits. Keys must identify both the resource location and revision;
 /// URI resolution, freshness detection, I/O and scheduling remain caller-owned.
 pub struct ResourceCache<K = String> {
-    state: Arc<Mutex<State<K>>>,
+    state: Arc<Mutex<Retention<K, Arc<[u8]>>>>,
 }
 
 impl<K> Clone for ResourceCache<K> {
@@ -51,12 +51,7 @@ impl<K: Eq + Hash> Default for ResourceCache<K> {
 impl<K: Eq + Hash> ResourceCache<K> {
     pub fn new(limits: ResourceCacheLimits) -> Self {
         Self {
-            state: Arc::new(Mutex::new(State {
-                entries: IndexMap::new(),
-                bytes: 0,
-                limits,
-                epoch: Arc::new(()),
-            })),
+            state: Arc::new(Mutex::new(Retention::new(limits))),
         }
     }
 
@@ -82,19 +77,7 @@ impl<K: Eq + Hash> ResourceCache<K> {
     /// Either zero limit disables retention. In-flight loads cannot repopulate
     /// the cache across a limit change.
     pub fn set_limits(&self, limits: ResourceCacheLimits) {
-        let mut state = self.state.lock();
-        if state.limits == limits {
-            return;
-        }
-        state.limits = limits;
-        state.epoch = Arc::new(());
-        while !state.entries.is_empty()
-            && (limits.bytes == 0
-                || state.bytes > limits.bytes
-                || state.entries.len() > limits.entries)
-        {
-            state.evict();
-        }
+        self.state.lock().set_limits(limits);
     }
 
     /// Promotes and returns a retained payload without loading. The caller must
@@ -106,23 +89,13 @@ impl<K: Eq + Hash> ResourceCache<K> {
     /// Removes one key. Also prevents every currently in-flight cache load from
     /// inserting on completion, including when this key has no retained entry.
     pub fn invalidate(&self, key: &K) -> bool {
-        let mut state = self.state.lock();
-        state.epoch = Arc::new(());
-        if let Some(bytes) = state.entries.shift_remove(key) {
-            state.bytes -= bytes.len();
-            true
-        } else {
-            false
-        }
+        self.state.lock().invalidate(key)
     }
 
     /// Releases all cache entries and prevents in-flight loads from reinserting.
     /// Returned payloads and prepared documents remain valid.
     pub fn clear(&self) {
-        let mut state = self.state.lock();
-        state.entries = IndexMap::new();
-        state.bytes = 0;
-        state.epoch = Arc::new(());
+        self.state.lock().clear();
     }
 
     /// Returns a hit or awaits a caller-provided loader without holding a lock.
@@ -140,7 +113,7 @@ impl<K: Eq + Hash> ResourceCache<K> {
     {
         let epoch = {
             let mut state = self.state.lock();
-            if let Some(bytes) = state.entries.get(&key) {
+            if let Some(bytes) = state.peek(&key) {
                 ensure!(
                     bytes.len() <= byte_limit,
                     "cached resource exceeds request byte limit {byte_limit}"
@@ -155,36 +128,98 @@ impl<K: Eq + Hash> ResourceCache<K> {
             "resource exceeds request byte limit {byte_limit}"
         );
         let bytes: Arc<[u8]> = bytes.into();
-        let mut state = self.state.lock();
-        if Arc::ptr_eq(&epoch, &state.epoch)
-            && !state.entries.contains_key(&key)
-            && state.limits.entries > 0
-            && state.limits.bytes > 0
-            && bytes.len() <= state.limits.bytes
-        {
-            while state.entries.len() >= state.limits.entries
-                || state.bytes > state.limits.bytes - bytes.len()
-            {
-                state.evict();
-            }
-            state.bytes += bytes.len();
-            state.entries.insert(key, bytes.clone());
-        }
+        self.state
+            .lock()
+            .insert(key, bytes.clone(), bytes.len(), &epoch);
         Ok(bytes)
     }
 }
 
-impl<K: Eq + Hash> State<K> {
-    fn get(&mut self, key: &K) -> Option<Arc<[u8]>> {
+impl<K: Eq + Hash, V: Clone> Retention<K, V> {
+    pub(crate) fn new(limits: ResourceCacheLimits) -> Self {
+        Self {
+            entries: IndexMap::new(),
+            bytes: 0,
+            limits,
+            epoch: Arc::new(()),
+        }
+    }
+
+    pub(crate) fn limits(&self) -> ResourceCacheLimits {
+        self.limits
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
+    }
+    pub(crate) fn epoch(&self) -> Arc<()> {
+        self.epoch.clone()
+    }
+
+    pub(crate) fn peek(&self, key: &K) -> Option<&V> {
+        self.entries.get(key).map(|(value, _)| value)
+    }
+
+    pub(crate) fn set_limits(&mut self, limits: ResourceCacheLimits) {
+        if self.limits == limits {
+            return;
+        }
+        self.limits = limits;
+        self.epoch = Arc::new(());
+        while !self.entries.is_empty()
+            && (limits.bytes == 0
+                || self.bytes > limits.bytes
+                || self.entries.len() > limits.entries)
+        {
+            self.evict();
+        }
+    }
+
+    pub(crate) fn invalidate(&mut self, key: &K) -> bool {
+        self.epoch = Arc::new(());
+        if let Some((_, bytes)) = self.entries.shift_remove(key) {
+            self.bytes -= bytes;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries = IndexMap::new();
+        self.bytes = 0;
+        self.epoch = Arc::new(());
+    }
+
+    pub(crate) fn insert(&mut self, key: K, value: V, bytes: usize, epoch: &Arc<()>) {
+        if Arc::ptr_eq(epoch, &self.epoch)
+            && !self.entries.contains_key(&key)
+            && self.limits.entries > 0
+            && self.limits.bytes > 0
+            && bytes <= self.limits.bytes
+        {
+            while self.entries.len() >= self.limits.entries
+                || self.bytes > self.limits.bytes - bytes
+            {
+                self.evict();
+            }
+            self.bytes += bytes;
+            self.entries.insert(key, (value, bytes));
+        }
+    }
+
+    pub(crate) fn get(&mut self, key: &K) -> Option<V> {
         let index = self.entries.get_index_of(key)?;
-        let bytes = self.entries.get_index(index)?.1.clone();
+        let value = self.entries.get_index(index)?.1.0.clone();
         self.entries.move_index(index, self.entries.len() - 1);
-        Some(bytes)
+        Some(value)
     }
 
     fn evict(&mut self) {
-        if let Some((_, bytes)) = self.entries.shift_remove_index(0) {
-            self.bytes -= bytes.len();
+        if let Some((_, (_, bytes))) = self.entries.shift_remove_index(0) {
+            self.bytes -= bytes;
         }
     }
 }

@@ -3018,6 +3018,7 @@ dependencies = [
  "indexmap",
  "parking_lot",
  "serde_json",
+ "sha2",
  "tempfile",
  "url",
 ]

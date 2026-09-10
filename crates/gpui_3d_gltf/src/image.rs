@@ -5,7 +5,7 @@ use gpui::RenderImage;
 use gpui_3d::Material;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 
-use crate::{EncodedImage, MaterialDefinition, SceneAsset, SceneDefinition};
+use crate::{EncodedImage, ImageCache, MaterialDefinition, SceneAsset, SceneDefinition};
 
 /// Admission limits for PNG/JPEG decoding. Output counts are strict; the codec's
 /// internal allocation limit is best-effort and is not a process-memory quota.
@@ -48,6 +48,16 @@ impl MaterialDefinition {
         let mut output_bytes = 0;
         self.resolve_images(|_, encoded| decode(encoded, limits, &mut output_bytes))
     }
+
+    /// Uses a shared pixel cache while enforcing this material's aggregate budget.
+    pub fn decode_images_cached(
+        &self,
+        cache: &ImageCache,
+        limits: ImageDecodeLimits,
+    ) -> Result<Material> {
+        let mut output_bytes = 0;
+        self.resolve_images(|_, encoded| cache.decode_counted(encoded, limits, &mut output_bytes))
+    }
 }
 
 impl SceneDefinition {
@@ -61,22 +71,41 @@ impl SceneDefinition {
     /// output budget. No GPUI materials or scene graph are constructed.
     pub fn decode_resources(&self, limits: ImageDecodeLimits) -> Result<DecodedScene> {
         let mut output_bytes = 0;
+        self.decode_resources_with(|encoded| decode(encoded, limits, &mut output_bytes))
+    }
+
+    /// Reuses decoded pixels across calls. Every active image index is charged
+    /// once against this call's budget, including indices sharing a cache entry.
+    pub fn decode_resources_cached(
+        &self,
+        cache: &ImageCache,
+        limits: ImageDecodeLimits,
+    ) -> Result<DecodedScene> {
+        let mut output_bytes = 0;
+        self.decode_resources_with(|encoded| {
+            cache.decode_counted(encoded, limits, &mut output_bytes)
+        })
+    }
+
+    fn decode_resources_with(
+        &self,
+        mut decode: impl FnMut(&EncodedImage) -> Result<Arc<RenderImage>>,
+    ) -> Result<DecodedScene> {
         let mut images = HashMap::new();
         for material in self.materials() {
             for texture in material.textures() {
                 if let std::collections::hash_map::Entry::Vacant(entry) =
                     images.entry(texture.image_index())
                 {
-                    let image =
-                        decode(texture.image(), limits, &mut output_bytes).with_context(|| {
-                            format!(
-                                "scene {} material {:?} {:?} image {}",
-                                self.index(),
-                                material.index(),
-                                texture.slot(),
-                                texture.image_index()
-                            )
-                        })?;
+                    let image = decode(texture.image()).with_context(|| {
+                        format!(
+                            "scene {} material {:?} {:?} image {}",
+                            self.index(),
+                            material.index(),
+                            texture.slot(),
+                            texture.image_index()
+                        )
+                    })?;
                     entry.insert(image);
                 }
             }
@@ -124,6 +153,78 @@ fn decode(
     limits: ImageDecodeLimits,
     used: &mut u64,
 ) -> Result<Arc<RenderImage>> {
+    Ok(decode_image(encoded, limits, used)?.image)
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedImage {
+    pub(crate) image: Arc<RenderImage>,
+    info: ImageInfo,
+}
+
+impl CachedImage {
+    pub(crate) fn admit(&self, limits: ImageDecodeLimits, used: u64) -> Result<u64> {
+        self.info.admit(limits, used)
+    }
+
+    pub(crate) fn bytes(&self) -> usize {
+        self.image.as_bytes(0).unwrap().len()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ImageInfo {
+    width: u32,
+    height: u32,
+    encoded_bytes: u64,
+    native_bytes: u64,
+}
+
+impl ImageInfo {
+    fn admit(self, limits: ImageDecodeLimits, used: u64) -> Result<u64> {
+        let Self {
+            width,
+            height,
+            encoded_bytes,
+            native_bytes,
+        } = self;
+        ensure!(width > 0 && height > 0, "empty image dimensions");
+        ensure!(
+            width <= limits.max_dimension && height <= limits.max_dimension,
+            "image {width}x{height} exceeds dimension limit"
+        );
+        let pixels = u64::from(width) * u64::from(height);
+        ensure!(
+            pixels <= limits.max_pixels,
+            "image {width}x{height} exceeds pixel limit"
+        );
+        let output = pixels.checked_mul(4).context("BGRA byte size overflow")?;
+        let total = used
+            .checked_add(output)
+            .context("aggregate image byte size overflow")?;
+        ensure!(
+            total <= limits.output_bytes,
+            "decoded images require {total} bytes, exceeding output byte limit {}",
+            limits.output_bytes
+        );
+        let working = encoded_bytes
+            .checked_add(native_bytes)
+            .and_then(|bytes| bytes.checked_add(output))
+            .context("image working byte size overflow")?;
+        ensure!(
+            working <= limits.working_bytes,
+            "image buffers require {working} bytes, exceeding working byte limit {}",
+            limits.working_bytes
+        );
+        Ok(total)
+    }
+}
+
+pub(crate) fn decode_image(
+    encoded: &EncodedImage,
+    limits: ImageDecodeLimits,
+    used: &mut u64,
+) -> Result<CachedImage> {
     let bytes = encoded.bytes();
     let encoded_bytes = u64::try_from(bytes.len()).context("encoded image size")?;
     ensure!(
@@ -155,30 +256,13 @@ fn decode(
         .into_decoder()
         .context("image header or decoder limits")?;
     let (width, height) = decoder.dimensions();
-    ensure!(width > 0 && height > 0, "empty image dimensions");
-    let pixels = u64::from(width) * u64::from(height);
-    ensure!(
-        pixels <= limits.max_pixels,
-        "image {width}x{height} exceeds pixel limit"
-    );
-    let output = pixels.checked_mul(4).context("BGRA byte size overflow")?;
-    let total = used
-        .checked_add(output)
-        .context("aggregate image byte size overflow")?;
-    ensure!(
-        total <= limits.output_bytes,
-        "decoded images require {total} bytes, exceeding output byte limit {}",
-        limits.output_bytes
-    );
-    let working = encoded_bytes
-        .checked_add(decoder.total_bytes())
-        .and_then(|bytes| bytes.checked_add(output))
-        .context("image working byte size overflow")?;
-    ensure!(
-        working <= limits.working_bytes,
-        "image buffers require {working} bytes, exceeding working byte limit {}",
-        limits.working_bytes
-    );
+    let info = ImageInfo {
+        width,
+        height,
+        encoded_bytes,
+        native_bytes: decoder.total_bytes(),
+    };
+    let total = info.admit(limits, *used)?;
     let mut rgba = DynamicImage::from_decoder(decoder)
         .context("image pixels")?
         .into_rgba8();
@@ -187,5 +271,8 @@ fn decode(
     }
     let result = Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]));
     *used = total;
-    Ok(result)
+    Ok(CachedImage {
+        image: result,
+        info,
+    })
 }

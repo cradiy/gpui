@@ -10,7 +10,9 @@ The built-in decoder accepts PNG and JPEG from retained encoded resources.
 The material and scene methods share decoding by original image index. An image
 used by several slots or materials is decoded and charged once per call. Separate
 indices are charged separately even when they reference identical encoded bytes.
-There is no persistent cache or filesystem/network access. Calls are synchronous.
+These methods do not retain a cross-call cache or perform filesystem/network
+access. Calls are synchronous. Use an explicit [image cache](image_cache.md) to
+reuse decoded pixels across calls.
 
 ```rust
 use gpui_3d_gltf::{ImageDecodeLimits, PreparedDocument, SceneAsset, SceneOptions};

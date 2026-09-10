@@ -160,6 +160,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Asynchronous URI preparation**: Executor-independent glTF loaders, remaining-byte request budgets, shared synchronous/asynchronous validation, drop-based cancellation, and retryable partial-resource cleanup.
   - [x] **Scene load publication**: Per-slot request identity, supersession and cancellation, retained successful assets, transferable decoded resources, owner-thread resolution, and rejection of stale or foreign completions.
   - [x] **Encoded resource retention**: Caller-keyed shared payloads, byte/entry LRU limits, per-request admission on hits, explicit invalidation, in-flight insertion isolation, and consumer-preserving eviction.
+  - [x] **Decoded image retention**: Content/MIME-keyed PNG/JPEG pixels, shared byte/entry LRU limits, per-call image admission and aggregate budgets on hits, worker transfer, and consumer-preserving release without retaining encoded buffers.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.
 - [ ] **Animation import and playback**: File-format clips, playback state, looping, pause, and seeking feeding core pose, transform, and deformation inputs.
 - [ ] **Material presets**: Matte, metal, plastic, and emissive configurations built on core material parameters.

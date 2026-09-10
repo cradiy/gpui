@@ -53,9 +53,34 @@ impl TextureBinding {
 #[derive(Clone)]
 pub struct MaterialDefinition {
     index: Option<usize>,
-    base: Material,
+    base: MaterialParameters,
     textures: Vec<TextureBinding>,
     tex_coord_set: Option<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct MaterialParameters {
+    color: Rgba,
+    pbr: PbrMaterial,
+    cutoff: f32,
+    alpha_mode: AlphaMode,
+    double_sided: bool,
+    unlit: bool,
+    normal_scale: f32,
+    occlusion_strength: f32,
+}
+
+impl MaterialParameters {
+    fn resolve(self) -> Material {
+        Material::color(self.color)
+            .pbr(self.pbr)
+            .alpha_cutoff(self.cutoff)
+            .alpha_mode(self.alpha_mode)
+            .double_sided(self.double_sided)
+            .unlit(self.unlit)
+            .normal_scale(self.normal_scale)
+            .occlusion_strength(self.occlusion_strength)
+    }
 }
 
 impl MaterialDefinition {
@@ -106,7 +131,7 @@ impl MaterialDefinition {
         mut decode: impl FnMut(usize, &EncodedImage) -> Result<Arc<RenderImage>>,
     ) -> Result<Material> {
         let mut images = HashMap::new();
-        let mut material = self.base.clone();
+        let mut material = self.base.resolve();
         for binding in &self.textures {
             let result = (|| -> Result<()> {
                 if let std::collections::hash_map::Entry::Vacant(entry) =
@@ -198,12 +223,16 @@ impl PreparedDocument {
             b: srgb(base_color[2]),
             a: base_color[3],
         };
-        let mut base = Material::color(color)
-            .pbr(parameters)
-            .alpha_cutoff(cutoff)
-            .alpha_mode(alpha_mode)
-            .double_sided(source.double_sided)
-            .unlit(unlit);
+        let mut base = MaterialParameters {
+            color,
+            pbr: parameters,
+            cutoff,
+            alpha_mode,
+            double_sided: source.double_sided,
+            unlit,
+            normal_scale: 1.,
+            occlusion_strength: 1.,
+        };
         let mut textures = Vec::new();
         let mut add = |slot, info: &Info| -> Result<()> {
             textures.push(
@@ -236,7 +265,7 @@ impl PreparedDocument {
                     info.scale.is_finite() && info.scale >= 0.,
                     "unsupported normal scale"
                 );
-                base = base.normal_scale(info.scale);
+                base.normal_scale = info.scale;
                 if info.scale != 0. {
                     let transform = transform_extension(
                         info.extensions
@@ -261,7 +290,7 @@ impl PreparedDocument {
                     strength.is_finite() && (0. ..=1.).contains(&strength),
                     "invalid occlusion strength"
                 );
-                base = base.occlusion_strength(strength);
+                base.occlusion_strength = strength;
                 if strength != 0. {
                     let transform = transform_extension(
                         info.extensions

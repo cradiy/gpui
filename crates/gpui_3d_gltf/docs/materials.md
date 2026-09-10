@@ -96,6 +96,7 @@ fallback behavior and are not interpreted as supported features.
 ## Resource ownership
 
 Definitions retain encoded image payloads independently of the prepared document.
+Definitions are `Send + Sync`; core materials are created during image resolution.
 Each image index is decoded at most once per `resolve_images` call, even when used
 by several slots with different color-space or sampling semantics. The resulting
 material retains shared decoded images. Only the first frame is used; empty first

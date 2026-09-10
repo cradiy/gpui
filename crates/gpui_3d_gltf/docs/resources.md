@@ -99,6 +99,21 @@ absolute, nonnegative seconds, with zero as the default. Animation tracks outsid
 the selected scene are skipped and counted. Repeated times are sampled using the
 same instance; a changed pose/geometry fingerprint returns an error. Fingerprints
 are diagnostic values within a run, not portable asset IDs or visual comparisons.
+They cover deformed positions, normals, coordinate sets, tangent bases, vertex
+colors, indices, and evaluated node transforms. The summary distinguishes Skin
+and Morph bindings from primitives that use both.
+
+`--weights NODE:W0,W1,...` sets a complete Morph weight vector for an original
+glTF node index. It overrides that node's animated or default weights at every
+sample without changing bone animation. Repeat the option for different nodes;
+duplicate nodes, nodes outside the selected scene, missing Morph targets,
+non-finite weights, and incorrect weight counts return errors. Signed weights
+are neither clamped nor normalized.
+
+```sh
+cargo run -p gpui_3d_gltf --example inspect -- /path/to/model.glb \
+  --animation 0 --weights 3:0.25,0.75 --time 0 --time 1 --time 0
+```
 
 The example uses the default admission limits, including 16 MiB for the complete
 document or GLB container. Resource files must be regular files within the asset's

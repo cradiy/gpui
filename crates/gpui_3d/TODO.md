@@ -145,7 +145,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Animation tracks**: Document-local node bindings, absolute-time TRS and Morph weight channels, Step/Linear/CubicSpline conversion, normalized integer rotation/weight inputs, authored base poses, bounded CPU definitions, and explicit caller-owned instance mapping.
   - [x] **Skeletal skins**: Consecutive joint/weight sets, generated-vertex correspondence, ordered inverse binds, shared primitive bindings, selected-scene hierarchy validation, authored initial deformation, and explicit per-instance final-pose skinning with aggregate admission.
   - [x] **Morph geometry**: Position/normal/tangent deltas, sparse inputs, authored weights, fixed generated-vertex correspondence, direction regeneration, and per-instance Morph-before-Skin evaluation with bounded shared inputs and initial output admission.
-  - [x] **CPU asset inspection**: Local glTF/GLB conversion, image decoding, absolute-time scene deformation, repeated-time fingerprints, world bounds, and restricted relative-file resolution in one command-line example.
+  - [x] **CPU asset inspection**: Local glTF/GLB conversion, image decoding, absolute-time deformation, per-node Morph overrides, combined-binding counts, full vertex-attribute fingerprints, world bounds, and restricted relative-file resolution in one command-line example.
   - [ ] **Asset compatibility**:
     - [x] **Degenerate-UV tangents**: Reported base-mesh repairs, matching Morph evaluation policy, preserved primitive/vertex mappings, and CPU inspection diagnostics.
     - [x] **Multiple active UV sets**: Independent material-slot coordinate sets shared by rendering, tangent generation, and alpha queries.

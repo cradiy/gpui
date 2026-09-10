@@ -1,6 +1,6 @@
 # Scene hierarchy
 
-[3D viewports](viewport.md)
+[3D viewports](../viewport.md)
 
 ## Scene hierarchy
 

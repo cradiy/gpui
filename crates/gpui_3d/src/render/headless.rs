@@ -1,4 +1,4 @@
-#![doc = include_str!("../../docs/headless.md")]
+#![doc = include_str!("../../docs/topics/headless.md")]
 
 mod coverage;
 pub use coverage::{CoverageError, FrameCoverage, ObjectCoverage};

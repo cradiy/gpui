@@ -1,6 +1,6 @@
 # Cameras
 
-[3D viewports](viewport.md)
+[3D viewports](../viewport.md)
 
 ## Camera projection and queries
 

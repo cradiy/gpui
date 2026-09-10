@@ -174,7 +174,7 @@ Use `gpui_wgpu::WgpuTextureEffect` to run image shaders on owned GPU textures
 without UI capture or CPU readback. Input sampling and premultiplied alpha are
 configured per texture; float output formats preserve HDR values. These shaders
 do not infer depth or HDR data from a display-color subtree capture. See
-[GPU texture effects](../../gpui_3d/docs/headless.md#gpu-texture-effects) for a
+[GPU texture effects](../../gpui_3d/docs/topics/headless.md#gpu-texture-effects) for a
 depth-fog and display-mapping pipeline.
 
 ## Configuration

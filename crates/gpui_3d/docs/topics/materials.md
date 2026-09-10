@@ -1,6 +1,6 @@
 # Materials and textures
 
-[3D viewports](viewport.md)
+[3D viewports](../viewport.md)
 
 ## Materials and light
 

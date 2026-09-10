@@ -1,6 +1,6 @@
 # UI textures and interaction
 
-[3D viewports](viewport.md)
+[3D viewports](../viewport.md)
 
 ## UI texture
 

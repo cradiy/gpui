@@ -1,6 +1,6 @@
 # Geometry
 
-[3D viewports](viewport.md)
+[3D viewports](../viewport.md)
 
 ## Coordinates and geometry
 

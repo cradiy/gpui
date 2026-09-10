@@ -29,17 +29,17 @@ The viewport does not schedule animation frames itself.
 
 | Topic | Content |
 | --- | --- |
-| [Geometry](geometry.md) | Coordinates, mesh construction, primitives, normals, and vertex updates. |
-| [Scenes](scenes.md) | Node hierarchy, identities, reusable subtrees, cameras, and light nodes. |
-| [Cameras](camera.md) | Projection, optics, framing, Orbit controls, and damping. |
-| [Animation](animation.md) | Transform and weight tracks, pose blending, Morph, and skinning. |
-| [Constraints](constraints.md) | Follow, Aim, and two-bone IK. |
-| [Materials](materials.md) | PBR, transparency, texture sampling, tangent frames, and color output. |
-| [Lighting](lighting.md) | Direct lights, shadows, HDR backgrounds, and diffuse/specular environments. |
-| [Queries](queries.md) | Rays, bounds, spatial indices, filtering, and object picking. |
-| [UI textures](ui.md) | Captured UI sizing, pointer routing, and interaction limits. |
-| [Rendering](rendering.md) | Resource preparation, batching, quality, effects, caches, and measurements. |
-| [Headless output](headless.md) | Output channels, GPU ownership, readback, and resource limits. |
+| [Geometry](topics/geometry.md) | Coordinates, mesh construction, primitives, normals, and vertex updates. |
+| [Scenes](topics/scenes.md) | Node hierarchy, identities, reusable subtrees, cameras, and light nodes. |
+| [Cameras](topics/camera.md) | Projection, optics, framing, Orbit controls, and damping. |
+| [Animation](topics/animation.md) | Transform and weight tracks, pose blending, Morph, and skinning. |
+| [Constraints](topics/constraints.md) | Follow, Aim, and two-bone IK. |
+| [Materials](topics/materials.md) | PBR, transparency, texture sampling, tangent frames, and color output. |
+| [Lighting](topics/lighting.md) | Direct lights, shadows, HDR backgrounds, and diffuse/specular environments. |
+| [Queries](topics/queries.md) | Rays, bounds, spatial indices, filtering, and object picking. |
+| [UI textures](topics/ui.md) | Captured UI sizing, pointer routing, and interaction limits. |
+| [Rendering](topics/rendering.md) | Resource preparation, batching, quality, effects, caches, and measurements. |
+| [Headless output](topics/headless.md) | Output channels, GPU ownership, readback, and resource limits. |
 
 ## Backend support
 
@@ -84,7 +84,7 @@ The optional `wgpu` feature provides `HeadlessRenderer` for the same scenes with
 a native window or UI layout. It accepts solid and decoded-image materials and
 returns independently selectable display-color, linear-HDR, object-ID, linear-depth, and world-normal
 textures with a frame-local identity map and bounded
-nonblocking CPU readback. See [Headless rendering](headless.md) for formats,
+nonblocking CPU readback. See [Headless rendering](topics/headless.md) for formats,
 coverage, resource readiness, and ownership.
 
 ## Examples

@@ -1,6 +1,6 @@
 # Rendering and resources
 
-[3D viewports](viewport.md)
+[3D viewports](../viewport.md)
 
 ## Instanced draws
 

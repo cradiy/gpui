@@ -1,6 +1,6 @@
 # Spatial queries and picking
 
-[3D viewports](viewport.md)
+[3D viewports](../viewport.md)
 
 `Ray::new(origin, direction)` accepts arbitrary world rays and normalizes their
 direction. `Scene::raycast(ray)` ignores the camera and its clipping planes,

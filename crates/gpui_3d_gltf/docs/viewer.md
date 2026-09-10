@@ -30,7 +30,9 @@ geometry or continuously reset the camera.
 - Click a surface to see its original node, mesh, primitive and material indices,
   node/material names, base color, metallic/roughness factors and alpha settings.
 
-The example uses the renderer's default inspection lighting and does not edit the asset.
+The example uses imported node lights when present, otherwise the renderer's
+default inspection source. Default ambient illumination is retained. It does not
+edit the asset. See [punctual lights](lights.md) for supported parameters and limits.
 Models use the same importer support and limits as [scene conversion](scenes.md).
 An unavailable 3D backend is reported in the window.
 

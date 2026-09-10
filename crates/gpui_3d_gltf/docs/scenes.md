@@ -80,6 +80,8 @@ asset. Retained evaluated scenes preserve their previous state.
 
 - `node_limit` counts the synthetic root, original nodes and every primitive
   occurrence, including repeated mesh instances.
+- `light_limit` counts light-bearing nodes, including shared light definitions;
+  its default is eight. See [punctual lights](lights.md) for rendering limits.
 - `vertex_limit` and `index_limit` apply across unique converted mesh primitives,
   including vertices split by normal or tangent generation. Repeated occurrences
   do not consume additional geometry quota.
@@ -128,6 +130,9 @@ Scene assets do not own animation playback, asset catalogs, file watching, loadi
 queues or image/GPU cache policies.
 
 ## Cameras
+
+Node-attached [punctual lights](lights.md) use the same hierarchy and instance
+mapping. A node may contain both a camera and a light.
 
 `PreparedDocument::camera(index)` returns a core camera in local coordinates:
 eye at the origin, looking down -Z with +Y up. Scene conversion attaches this

@@ -29,7 +29,8 @@ Light positions and directions are world-space values, independent of object
 transforms. A directional vector points **toward the source**. A spot vector
 points **outward along the beam**. Directions need not be normalized, but must be
 finite and nonzero. Point lights ignore direction. All positions must be finite.
-The core does not attach lights to scene nodes or load lighting from asset files.
+`Node::light` attaches a local-space source to the scene hierarchy; evaluation
+produces its world-space pose. Asset-file conversion belongs to external importers.
 
 `color` is sRGB RGB in `[0, 1]` with alpha ignored. `intensity` is a finite linear
 multiplier in `[0, 65504]`, defaulting to one. Direct illumination is summed in

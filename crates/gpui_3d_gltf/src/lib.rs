@@ -11,6 +11,7 @@ mod geometry;
 mod image;
 mod image_cache;
 mod instance;
+mod light;
 mod load_queue;
 mod loading;
 mod material;

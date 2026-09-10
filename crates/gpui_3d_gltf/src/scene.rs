@@ -2,7 +2,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use gpui::RenderImage;
-use gpui_3d::{AffineTransform, Camera, Node, NodeHandle, SceneGraph, SceneSubtree, Skin};
+use gpui_3d::{
+    AffineTransform, Camera, Node, NodeHandle, PunctualLight, SceneGraph, SceneSubtree, Skin,
+};
 
 use crate::{
     EncodedImage, GeometryOptions, MaterialDefinition, PreparedDocument, PrimitiveGeometry,
@@ -14,6 +16,8 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 pub struct SceneOptions {
     pub node_limit: usize,
+    /// Light-bearing nodes in the selected scene, including shared definitions.
+    pub light_limit: usize,
     pub vertex_limit: usize,
     /// Retained coordinate pairs across unique primitives; also bounds each
     /// primitive's input and corner-expanded coordinate workspace.
@@ -33,6 +37,7 @@ impl Default for SceneOptions {
     fn default() -> Self {
         Self {
             node_limit: 100_000,
+            light_limit: gpui_3d::MAX_PUNCTUAL_LIGHTS,
             vertex_limit: 4_194_304,
             tex_coord_limit: 16_777_216,
             index_limit: 12_582_912,
@@ -52,6 +57,7 @@ struct DefinitionNode {
     parent: Option<usize>,
     local: AffineTransform,
     camera: Option<(usize, Camera)>,
+    light: Option<(usize, PunctualLight)>,
     skin: Option<usize>,
     weights: Arc<[f32]>,
     primitives: Vec<usize>,
@@ -85,6 +91,7 @@ pub struct SceneNode {
     pub name: Option<String>,
     pub handle: NodeHandle,
     pub camera_index: Option<usize>,
+    pub light_index: Option<usize>,
     pub skin_index: Option<usize>,
 }
 
@@ -187,12 +194,16 @@ impl SceneDefinition {
             if let Some((_, camera)) = source.camera {
                 node = node.camera(camera);
             }
+            if let Some((_, light)) = source.light {
+                node = node.light(light);
+            }
             let handle = graph.insert(Some(parent), node)?;
             nodes.push(SceneNode {
                 index: source.index,
                 name: source.name.clone(),
                 handle,
                 camera_index: source.camera.map(|(index, _)| index),
+                light_index: source.light.map(|(index, _)| index),
                 skin_index: source.skin,
             });
             for &index in &source.primitives {
@@ -329,6 +340,7 @@ impl PreparedDocument {
         let mut primitives = HashMap::new();
         let mut materials = HashMap::new();
         let mut node_count = 1usize;
+        let mut light_count = 0usize;
         let mut vertices_left = options.vertex_limit;
         let mut tex_coords_left = options.tex_coord_limit;
         let mut indices_left = options.index_limit;
@@ -367,6 +379,16 @@ impl PreparedDocument {
                     } => AffineTransform::from_trs(translation, rotation, scale)?,
                 };
                 let world = parent_world.compose(local)?;
+                let light = source
+                    .light()
+                    .map(|source| {
+                        ensure!(light_count < options.light_limit, "light limit exceeded");
+                        let light = self.light(source.index())?;
+                        light.transformed(world).context("light world transform")?;
+                        light_count += 1;
+                        Ok::<_, anyhow::Error>((source.index(), light))
+                    })
+                    .transpose()?;
                 let camera = source
                     .camera()
                     .map(|source| {
@@ -468,6 +490,7 @@ impl PreparedDocument {
                     parent,
                     local,
                     camera,
+                    light,
                     skin,
                     weights,
                     primitives: node_primitives,

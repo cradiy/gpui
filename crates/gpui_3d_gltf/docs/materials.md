@@ -96,8 +96,8 @@ and that the tangent basis matches the normal map's selected set. Implicit
 zero-filled coordinates do not satisfy an authored-set requirement.
 It allows material overrides and does not require matching source material
 indices. Image decoding does not generate or modify tangents.
-Required extensions other than `KHR_materials_unlit` and
-`KHR_texture_transform` return errors; unknown optional extensions use core glTF
+Required extensions other than `KHR_materials_unlit`, `KHR_texture_transform` and
+[`KHR_lights_punctual`](lights.md) return errors; unknown optional extensions use core glTF
 fallback behavior and are not interpreted as supported features.
 
 ## Resource ownership

@@ -423,7 +423,7 @@ fn sampling(
     })
 }
 
-fn srgb(linear: f32) -> f32 {
+pub(crate) fn srgb(linear: f32) -> f32 {
     if linear <= 0.0031308 {
         12.92 * linear
     } else {

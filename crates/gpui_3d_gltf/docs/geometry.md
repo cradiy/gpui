@@ -55,9 +55,9 @@ removed. Flat normal generation requires nonzero geometric area; tangent
 generation uses the repair policy described below.
 
 Interleaved, sparse, and zero-initialized accessors are supported. Required
-extensions other than `KHR_materials_unlit` and `KHR_texture_transform` are
-rejected. Accepting those material extensions here does not apply their effects;
-the caller still converts materials and sampling state separately.
+extensions other than `KHR_materials_unlit`, `KHR_texture_transform` and
+[`KHR_lights_punctual`](lights.md) are rejected. Geometry conversion does not apply
+material or lighting effects; those inputs are converted separately.
 
 ## Normal and tangent generation
 

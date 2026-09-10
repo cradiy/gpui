@@ -363,3 +363,168 @@ fn orbit_pan_dolly_and_optical_zoom_retain_the_shifted_principal_point() {
         }
     }
 }
+
+#[test]
+fn fixed_aspect_preserves_projection_queries_and_pointer_pan_across_output_sizes() {
+    for projection in projections() {
+        let camera = Camera {
+            aspect_ratio: Some(2.),
+            ..camera(projection, [0.3, -0.2])
+        };
+        let matrix = camera.projection_matrix(1.).unwrap();
+        assert_eq!(matrix, camera.projection_matrix(3.).unwrap());
+        let world = [1., 0.5, -4.];
+        let mut previous_ndc = None;
+        for aspect in [0.5, 1., 3.] {
+            let rect = viewport(aspect, 1.5);
+            let projected = camera.world_to_screen(rect, world).unwrap().unwrap();
+            if let Some(ndc) = previous_ndc {
+                assert_eq!(projected.ndc, ndc);
+            }
+            previous_ndc = Some(projected.ndc);
+            let restored = camera
+                .screen_to_world(rect, projected.position, projected.depth)
+                .unwrap();
+            for i in 0..3 {
+                close(restored[i], world[i]);
+            }
+            let ray = camera.screen_to_ray(rect, projected.position).unwrap();
+            let distance = (world[2] - ray.origin()[2]) / ray.direction()[2];
+            for (actual, expected) in ray.at(distance).into_iter().zip(world) {
+                close(actual, expected);
+            }
+            let mut orbit = OrbitController::new(camera).unwrap();
+            let before = camera
+                .world_to_screen(rect, camera.target)
+                .unwrap()
+                .unwrap()
+                .position;
+            orbit.pan_by(rect, point(px(20.), px(-10.))).unwrap();
+            let after = orbit
+                .camera()
+                .world_to_screen(rect, camera.target)
+                .unwrap()
+                .unwrap()
+                .position;
+            close(f32::from(after.x - before.x), 20.);
+            close(f32::from(after.y - before.y), -10.);
+            assert_eq!(orbit.camera().aspect_ratio, Some(2.));
+        }
+    }
+}
+
+#[test]
+fn fixed_aspect_framing_contains_all_bounds_in_both_projection_modes() {
+    let bounds = Aabb::new([-5., -1., -2.], [3., 2., 1.]).unwrap();
+    for projection in projections() {
+        for aspect in [0.25, 4.] {
+            let camera = Camera {
+                aspect_ratio: Some(aspect),
+                ..camera(projection, [0.4, 0.1])
+            };
+            let framed = camera.frame_bounds(bounds, 1., 1.2).unwrap();
+            assert_eq!(framed.aspect_ratio, Some(aspect));
+            for corner in 0..8 {
+                let p = std::array::from_fn(|i| {
+                    if corner & (1 << i) == 0 {
+                        bounds.min()[i]
+                    } else {
+                        bounds.max()[i]
+                    }
+                });
+                let hit = framed
+                    .world_to_screen(viewport(1., 1.), p)
+                    .unwrap()
+                    .unwrap();
+                assert!(hit.in_frustum, "{hit:?}");
+                assert!(hit.ndc[0].abs() <= 1. / 1.19 && hit.ndc[1].abs() <= 1. / 1.19);
+            }
+        }
+    }
+}
+
+#[test]
+fn infinite_perspective_has_finite_matrices_and_unbounded_ray_and_frustum_depth() {
+    let camera = Camera {
+        far: f32::INFINITY,
+        aspect_ratio: Some(1.),
+        ..camera(
+            Projection::Perspective {
+                vertical_fov: std::f32::consts::FRAC_PI_2,
+            },
+            [0.; 2],
+        )
+    };
+    let matrix = camera.projection_matrix(2.).unwrap();
+    assert!(matrix.iter().flatten().all(|value| value.is_finite()));
+    let rect = viewport(2., 1.);
+    for depth in [0.1, 1., 100., 1e6] {
+        let p = [depth * 0.2, 0., -depth];
+        let projected = camera.world_to_screen(rect, p).unwrap().unwrap();
+        close(projected.ndc[2], 1. - camera.near / depth);
+        assert!(projected.in_frustum);
+        let restored = camera
+            .screen_to_world(rect, projected.position, depth)
+            .unwrap();
+        assert!((restored[0] - p[0]).abs() <= depth * 1e-5);
+    }
+    let bounds = Aabb::new([-10., -10., -10010.], [10., 10., -10000.]).unwrap();
+    let frustum = camera.frustum(2.).unwrap();
+    assert!(frustum.intersects(bounds));
+    let projected = frustum.project_bounds(rect, bounds).unwrap().unwrap();
+    assert!(projected.contains(&rect.center()));
+    let behind = Aabb::new([-1., -1., 1.], [1., 1., 2.]).unwrap();
+    assert!(!frustum.intersects(behind));
+    assert!(
+        Camera {
+            far: 100.,
+            ..camera
+        }
+        .project_bounds(rect, bounds)
+        .unwrap()
+        .is_none()
+    );
+    let scene = Scene::new().camera(camera).object(
+        Object::new(Mesh::plane(), Material::color(rgb(0xffffff))).transform(gpui_3d::Transform {
+            position: [0., 0., -10000.],
+            ..Default::default()
+        }),
+    );
+    assert!(scene.pick(rect, rect.center()).is_some());
+    let prepared = scene
+        .prepare(2., None, |_| Ok(TextureState::Ready(ResolvedTexture::None)))
+        .unwrap();
+    assert_eq!(prepared.frame().objects.len(), 1);
+    assert_eq!(
+        prepared.frame().view_projection,
+        camera.view_projection(2.).unwrap()
+    );
+}
+
+#[test]
+fn invalid_fixed_aspects_and_nonperspective_infinite_depth_are_rejected() {
+    for aspect in [0., -1., f32::INFINITY, f32::NAN] {
+        let camera = Camera {
+            aspect_ratio: Some(aspect),
+            ..Default::default()
+        };
+        assert!(camera.projection_matrix(1.).is_err());
+        assert!(OrbitController::new(camera).is_err());
+    }
+    let camera = Camera {
+        far: f32::INFINITY,
+        ..Default::default()
+    };
+    assert!(camera.projection_matrix(0.).is_err());
+    for far in [f32::NAN, f32::NEG_INFINITY, 0.] {
+        assert!(Camera { far, ..camera }.projection_matrix(1.).is_err());
+    }
+    assert!(
+        Camera {
+            projection: Projection::Orthographic { vertical_size: 2. },
+            ..camera
+        }
+        .projection_matrix(1.)
+        .is_err()
+    );
+}

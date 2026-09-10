@@ -219,20 +219,22 @@ fn projected_rectangles_contain_clipped_ray_hits_across_camera_poses() {
         Aabb::new([2., -3., -4.], [4., 3., 2.]).unwrap(),
         Aabb::new([-20.; 3], [20.; 3]).unwrap(),
     ];
-    for projection in [
-        camera().projection,
-        Projection::Orthographic { vertical_size: 8. },
+    for (projection, far) in [
+        (camera().projection, 20.),
+        (Projection::Orthographic { vertical_size: 8. }, 20.),
+        (camera().projection, f32::INFINITY),
     ] {
         for (eye, up) in [([3., 2., 6.], [0., 1., 0.]), ([-4., 3., 1.], [1., 1., 0.])] {
             for lens_shift in [[0.; 2], [0.7, -0.4]] {
                 let camera = Camera {
+                    aspect_ratio: None,
                     eye,
                     target: [0.; 3],
                     up,
                     projection,
                     lens_shift,
                     near: 0.5,
-                    far: 20.,
+                    far,
                 };
                 let forward = camera.axes().unwrap()[2].map(|v| -f64::from(v));
                 for aspect in [0.5, 1.5, 3.] {

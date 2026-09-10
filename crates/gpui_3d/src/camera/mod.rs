@@ -10,7 +10,7 @@ use crate::{
 use gpui::{Bounds, Pixels, Point, point, px};
 use std::fmt;
 
-/// Projection scale. Aspect ratio is supplied by the output viewport;
+/// Projection scale. Aspect ratio defaults to the output viewport;
 /// `Camera::lens_shift` positions the projection center.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Projection {
@@ -30,7 +30,7 @@ impl Default for Projection {
 
 impl Projection {
     /// Converts focal length and sensor height in matching units (for example mm)
-    /// to vertical perspective FOV. Viewport aspect determines horizontal coverage.
+    /// to vertical perspective FOV. The camera's effective aspect determines horizontal coverage.
     pub fn from_focal_length(focal_length: f32, sensor_height: f32) -> Result<Self, CameraError> {
         if ![focal_length, sensor_height]
             .iter()
@@ -154,11 +154,16 @@ pub struct Camera {
     pub target: [f32; 3],
     pub up: [f32; 3],
     pub projection: Projection,
+    /// Fixed projection width/height, or None to use the output viewport ratio.
+    /// Output pixels still cover the whole viewport; letterboxing is caller-owned.
+    pub aspect_ratio: Option<f32>,
     /// Projection-center offset in half-viewport spans. Positive X/Y moves
     /// coverage right/up in camera space; the optical axis projects to -shift NDC.
     /// Applies to perspective and orthographic views. Any finite value is valid.
     pub lens_shift: [f32; 2],
     pub near: f32,
+    /// Exclusive far depth for queries. Positive infinity is valid for perspective
+    /// projection; orthographic projection requires a finite value.
     pub far: f32,
 }
 impl Default for Camera {
@@ -168,6 +173,7 @@ impl Default for Camera {
             target: [0.; 3],
             up: [0., 1., 0.],
             projection: Projection::default(),
+            aspect_ratio: None,
             lens_shift: [0.; 2],
             near: 0.05,
             far: 100.,
@@ -271,8 +277,12 @@ impl Camera {
         if !aspect.is_finite() || aspect <= 0. {
             return Err(CameraError::InvalidViewport);
         }
+        let aspect = self.aspect_ratio.unwrap_or(aspect);
+        if !aspect.is_finite() || aspect <= 0. {
+            return Err(CameraError::InvalidProjection);
+        }
         if !self.near.is_finite()
-            || !self.far.is_finite()
+            || self.far.is_nan()
             || self.near <= 0.
             || self.far <= self.near
             || !self.lens_shift.iter().all(|v| v.is_finite())
@@ -289,7 +299,11 @@ impl Camera {
                     return Err(CameraError::InvalidProjection);
                 }
                 let f = 1. / (vertical_fov * 0.5).tan();
-                let z = self.far / range;
+                let z = if self.far == f32::INFINITY {
+                    -1.
+                } else {
+                    self.far / range
+                };
                 [
                     [f / aspect, 0., 0., 0.],
                     [0., f, 0., 0.],
@@ -298,7 +312,7 @@ impl Camera {
                 ]
             }
             Projection::Orthographic { vertical_size } => {
-                if !vertical_size.is_finite() || vertical_size <= 0. {
+                if !vertical_size.is_finite() || vertical_size <= 0. || !self.far.is_finite() {
                     return Err(CameraError::InvalidProjection);
                 }
                 [
@@ -460,7 +474,7 @@ impl Camera {
     }
 
     /// Frames all AABB corners while preserving viewing direction, up, and projection
-    /// kind and lens shift. Centers the bounds in the shifted image; target may
+    /// kind, aspect setting and lens shift. Centers the bounds in the shifted image; target may
     /// differ from the bounds center. Adjusts eye, target, clip planes, and
     /// orthographic size. Margin is a multiplicative screen-space factor >= 1.
     /// Does not change scene geometry.
@@ -471,6 +485,7 @@ impl Camera {
         margin: f32,
     ) -> Result<Self, CameraError> {
         let projection = self.projection_matrix(aspect)?;
+        let aspect = self.aspect_ratio.unwrap_or(aspect);
         let [right, up, backward] = self.axes()?;
         if !margin.is_finite() || margin < 1. {
             return Err(CameraError::InvalidFraming);

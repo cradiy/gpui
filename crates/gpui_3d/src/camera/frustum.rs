@@ -24,7 +24,8 @@ pub struct Frustum {
 }
 
 impl Camera {
-    /// Prepares a clip-volume snapshot at this aspect ratio. Later camera changes
+    /// Prepares a clip-volume snapshot, using the fixed camera aspect when set.
+    /// Otherwise uses the supplied output aspect. Later camera changes
     /// do not alter it. Numerically singular projection matrices are rejected.
     pub fn frustum(self, aspect: f32) -> Result<Frustum, CameraError> {
         let matrix = self
@@ -40,7 +41,8 @@ impl Camera {
     }
 
     /// Screen rectangle of a world AABB after clipping against all six camera planes.
-    /// Uses the viewport's aspect ratio and top-left origin. `None` means the bounds
+    /// Uses the camera's effective aspect ratio and the viewport's top-left origin.
+    /// `None` means the bounds
     /// miss the clip volume; boundary contact may return a zero-area rectangle.
     /// This does not establish that the bounded geometry is unoccluded or draws pixels.
     pub fn project_bounds(

@@ -113,6 +113,8 @@ rendering or intersection results.
 Object transforms apply scale, X/Y/Z Euler rotation, then translation. Normals
 use inverse-transpose transforms for nonuniform scale. Scale components must be
 finite and nonzero. Camera clip distances must satisfy `0 < near < far`.
+Perspective cameras allow positive infinity for `far`; orthographic cameras
+require a finite far distance.
 
 ### Primitive meshes
 
@@ -421,6 +423,19 @@ animation playback, and pose caching remain caller-owned.
 or `Projection::Orthographic { vertical_size }` in scene units. Orthographic size
 is the full vertical span; horizontal span is `vertical_size * aspect`. Perspective
 objects shrink with distance; orthographic objects keep their projected size.
+`aspect_ratio: None` uses the output width/height. `Some(ratio)` fixes the projection
+aspect independently of output dimensions; the ratio must be finite and positive.
+Pixels still span the full output, so a mismatched output ratio stretches the
+image. Letterboxing or matching output dimensions is caller-owned. Projection,
+ray, depth-reconstruction, background and framing calculations use the same ratio.
+
+Perspective `far: f32::INFINITY` uses an infinite projection with finite matrix
+coefficients. Near clipping remains active. Depth and ray queries have no finite
+far limit, while hardware depth precision still limits distinguishable distant
+surfaces. Frustum and clipped-bounds queries support this unbounded volume.
+`frame_bounds` preserves the aspect setting but fits finite near/far distances
+to the supplied bounds.
+
 `up` controls camera roll. A nearly parallel up vector uses a deterministic
 world-axis fallback so exact top and bottom views remain defined.
 

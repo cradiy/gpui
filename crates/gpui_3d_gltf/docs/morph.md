@@ -43,28 +43,27 @@ the last sampled weights. Unknown nodes, duplicate overrides, missing snapshot
 nodes, and invalid values return errors without mutating the graph.
 
 ```no_run
-use gpui_3d::{EvaluatedScene, NodeHandle, SceneGraph, SubtreeInstance};
+use gpui_3d::{AffineTransform, EvaluatedScene, NodeHandle, SceneGraph, SubtreeInstance};
 use gpui_3d_gltf::SceneAsset;
 
 fn deform(
-    graph: &mut SceneGraph,
+    graph: &SceneGraph,
     asset: &SceneAsset,
     instance: &SubtreeInstance,
-    poses: &EvaluatedScene,
+    transforms: &[(NodeHandle, AffineTransform)],
     weights: &[(NodeHandle, Vec<f32>)],
-) -> anyhow::Result<()> {
-    let replacements = asset.deform(instance, poses, weights)?;
-    for (node, mesh) in replacements {
-        graph.set_mesh(node, mesh)?;
-    }
-    Ok(())
+) -> anyhow::Result<EvaluatedScene> {
+    let poses = graph.evaluate_with_transforms(transforms.iter().copied())?;
+    let replacements = asset.deform(instance, &poses, weights)?;
+    Ok(graph.evaluate_with_overrides(transforms.iter().copied(), replacements)?)
 }
 ```
 
-Evaluate the graph again with the same pose/constraint inputs after applying
-replacements. Use that final snapshot for rendering, bounds, and picking.
-For several instances, compute all replacements before applying any of them.
-Graph edits between pose sampling and replacement require resampling.
+Use the final snapshot for rendering, bounds, and picking. For several instances,
+compute their poses and replacements before evaluating the final scene. The
+authored graph remains unchanged. Graph edits between pose sampling and final
+evaluation require resampling. See
+[Scene evaluation](../../gpui_3d/docs/topics/evaluation.md) for override semantics.
 
 ### Validation and limits
 

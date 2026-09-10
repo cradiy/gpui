@@ -228,4 +228,5 @@ light-selection policy, or animation clock inside the graph.
 
 ## Related topics
 
-[Animation and deformation](animation.md).
+[Animation and deformation](animation.md). See [Scene evaluation](evaluation.md)
+for nonmutating local-transform and mesh replacements.

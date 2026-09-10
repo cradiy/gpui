@@ -69,7 +69,8 @@ unchanged; callback side effects are not rolled back.
 inputs against the instance's final pose snapshot. Weight targets use destination
 group handles, obtainable with `node(index)`. Omitted weights use authored
 defaults. The method returns primitive mesh replacements without modifying the
-graph; apply them with `SceneGraph::set_mesh`. See [Morph](morph.md) and
+graph; pass them to `SceneGraph::evaluate_with_overrides` with the same local
+transforms used for the pose snapshot. See [Morph](morph.md) and
 [Skin](skin.md) for evaluation and admission constraints.
 
 The graph owns nodes. Dropping an instance does not remove its subtree, and

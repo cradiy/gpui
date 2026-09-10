@@ -267,12 +267,11 @@ fn inspect(options: Options) -> Result<()> {
         let replacements = instance.deform(&poses, &weights)?;
         let mut fingerprint = DefaultHasher::new();
         let mut vertices = 0;
-        for (node, mesh) in replacements {
+        for (_, mesh) in &replacements {
             vertices += mesh.vertex_count();
-            hash_mesh(&mesh, &mut fingerprint);
-            graph.set_mesh(node, mesh)?;
+            hash_mesh(mesh, &mut fingerprint);
         }
-        let evaluated = graph.evaluate_with_transforms(transforms)?;
+        let evaluated = graph.evaluate_with_overrides(transforms, replacements)?;
         for node in evaluated.nodes() {
             for value in node.world.matrix().into_iter().flatten() {
                 value.to_bits().hash(&mut fingerprint);

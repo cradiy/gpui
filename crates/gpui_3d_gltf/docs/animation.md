@@ -55,10 +55,7 @@ fn evaluate(document: &PreparedDocument, time: Duration) -> anyhow::Result<()> {
     let pose = Pose::new(locals)?;
     let transforms = graph.evaluate_with_transforms(pose.transforms())?;
     let meshes = asset.deform(&instance, &transforms, &weights)?;
-    for (handle, mesh) in meshes {
-        graph.set_mesh(handle, mesh)?;
-    }
-    let evaluated = graph.evaluate_with_transforms(pose.transforms())?;
+    let evaluated = graph.evaluate_with_overrides(pose.transforms(), meshes)?;
     // Use evaluated cameras, meshes, and queries from the same snapshot.
     let _ = evaluated;
     Ok(())

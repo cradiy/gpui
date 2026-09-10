@@ -141,10 +141,9 @@ impl Model {
             .graph
             .evaluate_with_transforms(transforms.iter().copied())?;
         let replacements = self.instance.deform(&poses, &weights)?;
-        for (node, mesh) in replacements {
-            self.graph.set_mesh(node, mesh)?;
-        }
-        let evaluated = self.graph.evaluate_with_transforms(transforms)?;
+        let evaluated = self
+            .graph
+            .evaluate_with_overrides(transforms, replacements)?;
         self.evaluated = evaluated;
         self.skipped_tracks = skipped;
         Ok(())

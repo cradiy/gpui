@@ -41,9 +41,9 @@ tangent bases return an error.
 
 `evaluate` is synchronous and CPU-only, returning an ordinary immutable `Mesh`
 with shared index storage and an independent lazy query index. Use the result in
-`Object::new` or `SceneGraph::set_mesh`, then evaluate the graph for current world
-bounds. The same vertex snapshot is used by viewport/headless rendering and ray
-queries. Zero weights return the shared base mesh. Keep a sampled mesh while its
+`Object::new` or pass it to `SceneGraph::evaluate_with_overrides` for evaluated
+world bounds. The same vertex snapshot is used by viewport/headless rendering
+and ray queries. Zero weights return the shared base mesh. Keep a sampled mesh while its
 weights are unchanged; the evaluator has no history, internal cache, or clock.
 Work scales with vertex count and the number of nonzero targets.
 
@@ -96,9 +96,9 @@ by its inverse bind matrix before per-vertex linear blending. `evaluate_world`
 instead accepts `mesh_world` and current world-space joint transforms, computing
 `inverse(mesh_world) * joint_world * inverse_bind`. Supply the complete joint
 array in binding order. With `SceneGraph`, first evaluate the joint hierarchy,
-collect each joint's `EvaluatedNode::world`, sample the skin, then assign the
-result with `set_mesh` and evaluate the scene again. Render under the same
-`mesh_world` used for sampling.
+collect each joint's `EvaluatedNode::world`, sample the skin, then pass the
+result to `evaluate_with_overrides` with the same local transforms. Render under
+the same `mesh_world` used for sampling.
 
 Positions use the blended affine transform. Normals use its inverse transpose
 and are normalized; zero source normals remain zero without tangents. Tangent XYZ
@@ -181,6 +181,10 @@ normal matrices, bounds, rendering, and queries use the same evaluated pose.
 Each evaluation has its own spatial index; previous snapshots remain unchanged.
 The evaluated revision identifies source graph edits, not the sampled time or
 overrides, so equal revisions do not imply equal poses.
+
+For combined local-transform and mesh replacements, use
+[`evaluate_with_overrides`](evaluation.md). The final snapshot uses the supplied
+geometry for rendering, bounds, and picking without editing the graph.
 
 The caller owns the clock, time origin, looping, pause, and seek policy. Sample
 all channels before evaluating a snapshot. Additive or relative motion can be

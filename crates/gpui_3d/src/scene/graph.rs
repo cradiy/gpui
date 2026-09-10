@@ -1,3 +1,7 @@
+mod evaluation;
+#[cfg(test)]
+mod evaluation_tests;
+
 use crate::{
     Aabb, AffineTransform, AimError, Camera, CameraError, ConstraintStatus, LightError, Material,
     Mesh, Object, ObjectId, PickBehavior, PunctualLight, Scene, TransformError,
@@ -119,6 +123,7 @@ pub enum SceneError {
     InvalidHandle(NodeHandle),
     DuplicateId(ObjectId),
     DuplicateTransform(NodeHandle),
+    DuplicateMesh(NodeHandle),
     DuplicateConstraint(NodeHandle),
     InvalidConstraintTarget {
         node: NodeHandle,
@@ -153,6 +158,7 @@ impl fmt::Display for SceneError {
             Self::DuplicateTransform(node) => {
                 write!(f, "duplicate local transform for node {node:?}")
             }
+            Self::DuplicateMesh(node) => write!(f, "duplicate mesh override for node {node:?}"),
             Self::DuplicateConstraint(node) => write!(f, "duplicate constraint for node {node:?}"),
             Self::InvalidConstraintTarget { node, target } => {
                 write!(
@@ -596,153 +602,6 @@ impl SceneGraph {
         }
         self.revision += 1;
         Ok(removed)
-    }
-
-    /// Resolves world matrices, cameras, lights, visibility, and bounds in parent-first order.
-    /// No playback history, window, layout, or GPU work is required.
-    pub fn evaluate(&self) -> Result<EvaluatedScene, SceneError> {
-        self.evaluate_with_transforms([])
-    }
-
-    /// Evaluates replacement local transforms without changing the graph or its revision.
-    /// Omitted nodes use their authored transforms. Duplicate, foreign, and expired
-    /// handles are rejected. Each result owns independent world bounds and query indices.
-    pub fn evaluate_with_transforms(
-        &self,
-        transforms: impl IntoIterator<Item = (NodeHandle, AffineTransform)>,
-    ) -> Result<EvaluatedScene, SceneError> {
-        let mut locals = HashMap::new();
-        for (handle, transform) in transforms {
-            let key = self.key(handle)?;
-            if locals.insert(key, transform).is_some() {
-                return Err(SceneError::DuplicateTransform(handle));
-            }
-        }
-        self.evaluate_using(|handle, parent| {
-            parent
-                .compose(
-                    locals
-                        .get(&handle.key)
-                        .copied()
-                        .unwrap_or(self.nodes[handle.key].node.local),
-                )
-                .map_err(|source| SceneError::InvalidTransform {
-                    node: handle,
-                    source,
-                })
-        })
-    }
-
-    pub(super) fn evaluate_using(
-        &self,
-        mut world_transform: impl FnMut(
-            NodeHandle,
-            AffineTransform,
-        ) -> Result<AffineTransform, SceneError>,
-    ) -> Result<EvaluatedScene, SceneError> {
-        let mut evaluated = EvaluatedScene {
-            preparation_revision: Arc::new(()),
-            revision: self.revision,
-            nodes: Vec::with_capacity(self.len()),
-            indices: HashMap::with_capacity(self.len()),
-            objects: Vec::new(),
-            lights: None,
-            bounds: None,
-            spatial_index: Arc::default(),
-            spatial_source: Arc::default(),
-            constraint_status: HashMap::new(),
-        };
-        let mut spatial_source = Vec::new();
-        let mut pending = self
-            .roots
-            .iter()
-            .rev()
-            .map(|key| (*key, None))
-            .collect::<Vec<_>>();
-        while let Some((key, parent_index)) = pending.pop() {
-            let entry = &self.nodes[key];
-            let node = &entry.node;
-            let handle = self.handle(key);
-            let parent: Option<&EvaluatedNode> = parent_index.map(|i| &evaluated.nodes[i]);
-            let world = world_transform(
-                handle,
-                parent.map_or(AffineTransform::IDENTITY, |parent| parent.world),
-            )?;
-            let visible = !node.hidden && parent.is_none_or(|parent| parent.visible);
-            let camera = node
-                .camera
-                .map(|camera| camera.transformed(world))
-                .transpose()
-                .map_err(|source| SceneError::InvalidCamera {
-                    node: handle,
-                    source,
-                })?;
-            let light = node
-                .light
-                .map(|light| light.transformed(world))
-                .transpose()
-                .map_err(|source| SceneError::InvalidLight {
-                    node: handle,
-                    source,
-                })?;
-            if let Some(light) = light {
-                let lights = evaluated.lights.get_or_insert_with(Vec::new);
-                if visible {
-                    lights.push((handle, light));
-                }
-            }
-            let bounds = node
-                .bounds
-                .map(|bounds| bounds.transformed(world))
-                .transpose()
-                .map_err(|source| SceneError::InvalidTransform {
-                    node: handle,
-                    source,
-                })?;
-            if let Some(local_bounds) = node.bounds {
-                spatial_source.push(crate::spatial::bvh::IndexObject::node(
-                    handle,
-                    local_bounds,
-                    world,
-                    visible.then_some(evaluated.objects.len()),
-                ));
-            }
-            if visible && let Some((mesh, material)) = &node.surface {
-                let mut object = Object::new(mesh.clone(), material.clone());
-                object.id = node.id.clone();
-                object.node = Some(handle);
-                object.world = Some(world);
-                object.pick_behavior = node.picking;
-                object.cast_shadows = !node.no_shadow_cast;
-                object.receive_shadows = !node.no_shadow_receive;
-                evaluated.objects.push(object);
-                evaluated.bounds = union(evaluated.bounds, bounds);
-            }
-            let index = evaluated.nodes.len();
-            evaluated.indices.insert(handle, index);
-            evaluated.nodes.push(EvaluatedNode {
-                handle,
-                id: node.id.clone(),
-                parent: entry.parent.map(|key| self.handle(key)),
-                world,
-                visible,
-                camera,
-                light,
-                bounds,
-                subtree_bounds: bounds,
-            });
-            pending.extend(entry.children.iter().rev().map(|key| (*key, Some(index))));
-        }
-        for i in (0..evaluated.nodes.len()).rev() {
-            let node = &evaluated.nodes[i];
-            if let Some(parent) = node.parent {
-                let bounds = node.subtree_bounds;
-                let parent = &mut evaluated.nodes[evaluated.indices[&parent]];
-                parent.subtree_bounds = union(parent.subtree_bounds, bounds);
-            }
-        }
-        evaluated.spatial_source = Arc::new(spatial_source);
-        Ok(evaluated)
     }
 }
 

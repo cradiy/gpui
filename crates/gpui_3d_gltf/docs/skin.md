@@ -41,17 +41,14 @@ use gpui_3d::{EvaluatedScene, Pose, SceneGraph, SubtreeInstance};
 use gpui_3d_gltf::SceneAsset;
 
 fn evaluate(
-    graph: &mut SceneGraph,
+    graph: &SceneGraph,
     asset: &SceneAsset,
     instance: &SubtreeInstance,
     pose: &Pose,
 ) -> anyhow::Result<EvaluatedScene> {
     let transforms = graph.evaluate_with_transforms(pose.transforms())?;
     let replacements = asset.deform(instance, &transforms, &[])?;
-    for (handle, mesh) in replacements {
-        graph.set_mesh(handle, mesh)?;
-    }
-    Ok(graph.evaluate_with_transforms(pose.transforms())?)
+    Ok(graph.evaluate_with_overrides(pose.transforms(), replacements)?)
 }
 ```
 

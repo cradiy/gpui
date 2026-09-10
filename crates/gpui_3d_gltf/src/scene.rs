@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use gpui::RenderImage;
-use gpui_3d::{AffineTransform, Node, NodeHandle, SceneGraph, SceneSubtree};
+use gpui_3d::{AffineTransform, Camera, Node, NodeHandle, SceneGraph, SceneSubtree};
 
 use crate::{
     EncodedImage, GeometryOptions, MaterialDefinition, PreparedDocument, PrimitiveGeometry,
@@ -33,6 +33,7 @@ struct DefinitionNode {
     name: Option<String>,
     parent: Option<usize>,
     local: AffineTransform,
+    camera: Option<(usize, Camera)>,
     primitives: Vec<usize>,
 }
 
@@ -61,6 +62,7 @@ pub struct SceneNode {
     pub index: usize,
     pub name: Option<String>,
     pub handle: NodeHandle,
+    pub camera_index: Option<usize>,
 }
 
 /// One primitive occurrence beneath an original glTF node.
@@ -139,11 +141,16 @@ impl SceneDefinition {
         let mut primitives = Vec::new();
         for source in &self.0.nodes {
             let parent = source.parent.map_or(root, |index| nodes[index].handle);
-            let handle = graph.insert(Some(parent), Node::new().transform(source.local))?;
+            let mut node = Node::new().transform(source.local);
+            if let Some((_, camera)) = source.camera {
+                node = node.camera(camera);
+            }
+            let handle = graph.insert(Some(parent), node)?;
             nodes.push(SceneNode {
                 index: source.index,
                 name: source.name.clone(),
                 handle,
+                camera_index: source.camera.map(|(index, _)| index),
             });
             for &index in &source.primitives {
                 let primitive = &self.0.primitives[index];
@@ -232,10 +239,6 @@ impl PreparedDocument {
                 let raw = &self.gltf().as_json().nodes[source_index];
                 ensure!(source.skin().is_none(), "skin conversion is unsupported");
                 ensure!(
-                    source.camera().is_none(),
-                    "camera conversion is unsupported"
-                );
-                ensure!(
                     raw.weights.is_none(),
                     "morph weight conversion is unsupported"
                 );
@@ -257,6 +260,16 @@ impl PreparedDocument {
                     } => AffineTransform::from_trs(translation, rotation, scale)?,
                 };
                 let world = parent_world.compose(local)?;
+                let camera = source
+                    .camera()
+                    .map(|source| {
+                        let camera = self.camera(source.index())?;
+                        camera
+                            .transformed(world)
+                            .context("camera world transform")?;
+                        Ok::<_, anyhow::Error>((source.index(), camera))
+                    })
+                    .transpose()?;
                 ensure!(node_count < options.node_limit, "node limit exceeded");
                 node_count += 1;
                 let mut node_primitives = Vec::new();
@@ -342,6 +355,7 @@ impl PreparedDocument {
                     name: source.name().map(str::to_owned),
                     parent,
                     local,
+                    camera,
                     primitives: node_primitives,
                 });
                 let start = pending.len();

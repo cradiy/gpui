@@ -12,6 +12,7 @@
 #[doc = include_str!("../docs/images.md")]
 pub mod guide {}
 
+mod camera;
 mod geometry;
 mod image;
 mod material;

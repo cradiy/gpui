@@ -50,6 +50,17 @@ pub(crate) fn schema(document: &gltf::Document) -> Result<()> {
     if let Some((path, error)) = failure {
         anyhow::bail!("invalid glTF: {path}: {error}");
     }
+    for (index, camera) in root.cameras.iter().enumerate() {
+        use gltf::json::camera::Type;
+        let valid = match camera.type_.unwrap() {
+            Type::Perspective => camera.perspective.is_some() && camera.orthographic.is_none(),
+            Type::Orthographic => camera.orthographic.is_some() && camera.perspective.is_none(),
+        };
+        ensure!(
+            valid,
+            "camera {index}: projection properties must match camera type"
+        );
+    }
     Ok(())
 }
 

@@ -93,9 +93,51 @@ Duplicate roots, multiply referenced nodes within the selected scene, hierarchy
 cycles, combined matrix/TRS properties and singular transforms return contextual
 errors. Traversal is iterative. Different scenes may reference the same node.
 
-Skins, morph targets/weights and camera nodes are not converted and return errors
+Skins and morph targets/weights are not converted and return errors
 when encountered. Animation clips are not sampled: ordinary transform-animated
 nodes use their declared base transforms. Required unsupported extensions are
 rejected; optional unknown extensions retain only their core glTF fallback.
 Scene assets do not own animation playback, asset catalogs, file watching, loading
 queues or image/GPU cache policies.
+
+## Cameras
+
+`PreparedDocument::camera(index)` returns a core camera in local coordinates:
+eye at the origin, looking down -Z with +Y up. Scene conversion attaches this
+camera to its original node. `SceneNode::camera_index` retains the source camera
+index; several nodes may reference the same camera while keeping independent
+world poses and instance overrides. Camera nodes add no renderable primitive or
+Object ID coverage. Camera selection is explicit.
+
+```rust
+use anyhow::Context;
+use gpui_3d::{Scene, SceneGraph};
+use gpui_3d_gltf::SceneAsset;
+
+fn camera_view(asset: &SceneAsset, camera_index: usize) -> anyhow::Result<Scene> {
+    let source = asset.nodes().iter()
+        .find(|node| node.camera_index == Some(camera_index))
+        .context("camera is not present in the selected scene")?;
+    let mut graph = SceneGraph::new();
+    let instance = graph.instantiate(None, asset.subtree())?;
+    let handle = instance.node(source.handle).context("missing instance camera")?;
+    Ok(graph.evaluate()?.scene_from_camera(handle)?)
+}
+```
+
+Perspective `yfov` maps to the vertical field of view without changing units.
+An explicit `aspectRatio` fixes the core projection ratio; otherwise the output
+width/height determines it. An absent `zfar` becomes positive infinity. Explicit
+clip parameters must be finite and satisfy the core camera's range requirements.
+
+Orthographic `ymag` gives half the full vertical span. The fixed aspect is
+`xmag / ymag`, preserving both authored magnitudes independently of output shape.
+Magnitudes must be positive and finite. The core requires positive near depth,
+so orthographic `znear = 0` is unsupported and returns an error. No clip distance
+is substituted silently.
+
+Node/world transforms use the core camera transform contract: eye, viewing
+direction and up follow the hierarchy; projection and clip distances are not
+scaled. Invalid world camera poses are rejected during scene conversion before
+image decoding. A fixed-ratio camera still fills the output rectangle; use a
+matching viewport/output ratio or caller-owned letterboxing to avoid stretching.

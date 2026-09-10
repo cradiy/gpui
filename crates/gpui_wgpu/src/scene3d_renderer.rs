@@ -402,8 +402,8 @@ impl WgpuScene3dRenderer {
                     || object.pbr.is_none()
                     || object.unlit
                     || object.normal_scale == 0.
-                    || object.mesh.tangents().is_some(),
-                "3D object {}: normal maps require mesh tangents",
+                    || object.mesh.tangent_uv_set() == Some(0),
+                "3D object {}: normal maps require mesh tangents for UV set 0",
                 object.output_id
             );
             ensure!(

@@ -207,12 +207,16 @@ change sampled locations, not the tangent frame or the decoded vector axes.
 mesh with shared vertex/index storage and unchanged geometry queries. XYZ is
 orthogonalized against the vertex normal and normalized; W is exactly -1 or +1.
 The bitangent is `cross(normal, tangent.xyz) * tangent.w`. Read the resulting
-data with `mesh.tangents()`.
+data with `mesh.tangents()`. `with_tangents(data)` associates the basis with set
+zero. Use `with_tangents_for_uv_set(set, data)` to supply frames for another
+existing coordinate set. `tangent_uv_set()` returns the associated identifier,
+or `None` when no tangents exist. Morph, Skin and fixed-topology vertex updates
+preserve this association when supplying replacement tangents.
 
 Invalid counts, non-finite or undefined bases, zero vertex normals, and mixed W
 signs within a triangle return `TangentError`. Split vertices at tangent-space
 seams before supplying data. Rendering does not generate missing tangent bases.
-Rendering an active normal map without mesh tangents returns an error.
+Rendering an active normal map requires a tangent basis for set zero.
 
 `Mesh::generate_tangents()` generates MikkTSpace frames synchronously and returns
 `GeneratedTangents`. It uses normalized copies of indexed normals and preserves
@@ -220,6 +224,12 @@ the stored positions, normals, and UVs. Shared vertices split when face-corner
 tangent frames differ, including mirrored UV seams. Triangle order and winding
 are unchanged, preserving triangle IDs for queries and per-triangle metadata.
 Existing tangents are replaced without modifying the source mesh.
+
+`generate_tangents_for_uv_set(set, mode)` uses the requested coordinate set for
+validation, MikkTSpace and any repairs. It preserves all coordinate sets and
+records the selected identifier in `tangent_uv_set()`. Missing sets return
+`TangentGenerationError::MissingUvSet`. The default generation methods use set
+zero. A mesh holds one tangent basis at a time.
 
 ```rust
 use gpui_3d::Mesh;

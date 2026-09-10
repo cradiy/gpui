@@ -69,6 +69,8 @@ impl GeneratedTangents {
 /// Tangent generation failure. Triangle, corner, and source vertex offsets are zero-based.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TangentGenerationError {
+    /// The requested coordinate set is absent.
+    MissingUvSet { set: u32 },
     /// An indexed vertex has a zero normal.
     InvalidNormal { vertex: usize },
     /// A triangle has zero geometric area.
@@ -88,6 +90,7 @@ pub enum TangentGenerationError {
 impl fmt::Display for TangentGenerationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingUvSet { set } => write!(f, "missing UV set {set} for tangent generation"),
             Self::InvalidNormal { vertex } => write!(f, "zero normal at vertex {vertex}"),
             Self::DegenerateGeometry { triangle } => {
                 write!(f, "zero geometric area at triangle {triangle}")
@@ -139,6 +142,21 @@ impl Mesh {
         &self,
         mode: TangentGenerationMode,
     ) -> Result<GeneratedTangents, TangentGenerationError> {
+        self.generate_tangents_for_uv_set(0, mode)
+    }
+
+    /// Generates MikkTSpace frames using an existing coordinate set and records
+    /// that set on the result. All coordinate sets and the original `Vertex::uv`
+    /// are preserved through vertex splitting. Error policy matches
+    /// [`Self::generate_tangents_with_mode`].
+    pub fn generate_tangents_for_uv_set(
+        &self,
+        set: u32,
+        mode: TangentGenerationMode,
+    ) -> Result<GeneratedTangents, TangentGenerationError> {
+        if self.uv_at(set, 0).is_none() {
+            return Err(TangentGenerationError::MissingUvSet { set });
+        }
         if self.index_count() > u32::MAX as usize || self.triangle_count() > usize::MAX / 4 {
             return Err(TangentGenerationError::TooLarge);
         }
@@ -151,7 +169,7 @@ impl Mesh {
                 }
             }
             validate_triangle(
-                std::array::from_fn(|i| self.vertices()[indices[i] as usize]),
+                std::array::from_fn(|i| vertex_with_uv(self, indices[i] as usize, set)),
                 triangle,
                 mode,
             )?;
@@ -159,6 +177,7 @@ impl Mesh {
 
         let mut geometry = TangentGeometry {
             mesh: self,
+            uv_set: set,
             corners: vec![None; self.index_count()],
         };
         // The dependency's error type is uninhabited.
@@ -173,7 +192,7 @@ impl Mesh {
                 .zip(geometry.corners.chunks_exact_mut(3))
                 .enumerate()
             {
-                let vertices = std::array::from_fn(|i| self.vertices()[face[i] as usize]);
+                let vertices = std::array::from_fn(|i| vertex_with_uv(self, face[i] as usize, set));
                 let derivative = triangle_derivative(vertices);
                 let handedness = corners
                     .iter()
@@ -234,10 +253,10 @@ impl Mesh {
             });
             indices.push(index);
         }
-        let mesh = Mesh::new(vertices, indices)
-            .with_tangents(tangents)
+        let mesh = self
+            .remap_uv_sets(Mesh::new(vertices, indices), &source_vertices)
+            .with_tangents_for_uv_set(set, tangents)
             .map_err(TangentGenerationError::Tangents)?;
-        let mesh = self.remap_uv_sets(mesh, &source_vertices);
         Ok(GeneratedTangents {
             mesh,
             source_vertices,
@@ -248,13 +267,24 @@ impl Mesh {
 
 struct TangentGeometry<'a> {
     mesh: &'a Mesh,
+    uv_set: u32,
     corners: Vec<Option<[f32; 4]>>,
 }
 
 impl TangentGeometry<'_> {
     fn vertex(&self, face: usize, corner: usize) -> Vertex {
-        self.mesh.vertices()[self.mesh.indices()[face * 3 + corner] as usize]
+        vertex_with_uv(
+            self.mesh,
+            self.mesh.indices()[face * 3 + corner] as usize,
+            self.uv_set,
+        )
     }
+}
+
+fn vertex_with_uv(mesh: &Mesh, index: usize, set: u32) -> Vertex {
+    let mut vertex = mesh.vertices()[index];
+    vertex.uv = mesh.uv_at(set, index).expect("validated coordinate set");
+    vertex
 }
 
 impl Geometry for TangentGeometry<'_> {

@@ -104,8 +104,8 @@ impl Scene {
                     .material
                     .lighting_textures()
                     .any(|(slot, _)| slot == TextureSlot::Normal)
-                    || object.mesh.tangents().is_some(),
-                "object {index}: normal maps require mesh tangents"
+                    || object.mesh.tangent_uv_set() == Some(0),
+                "object {index}: normal maps require mesh tangents for UV set 0"
             );
             let transform = object.transform;
             ensure!(

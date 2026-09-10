@@ -43,8 +43,8 @@ impl Mesh3d {
     }
 
     /// Attaches or replaces finite coordinates without changing positions or topology.
-    /// Set identifiers may be sparse. Replacing set zero removes existing tangents;
-    /// other sets retain them. Snapshots share unchanged attribute storage.
+    /// Set identifiers may be sparse. Replacing the tangent basis's coordinate set
+    /// removes tangents; other sets retain them. Snapshots share unchanged storage.
     pub fn with_uv_set(
         &self,
         set: u32,
@@ -70,6 +70,7 @@ impl Mesh3d {
             vertices: self.vertices.clone(),
             indices: self.indices.clone(),
             tangents: self.tangents.clone(),
+            tangent_uv_set: self.tangent_uv_set,
             uv_sets: self.uv_sets.clone(),
             bounds: self.bounds,
         };
@@ -79,9 +80,12 @@ impl Mesh3d {
                 vertex.uv = uv;
             }
             mesh.vertices = vertices.into();
-            mesh.tangents = None;
         } else {
             mesh.uv_sets.insert(set, coordinates.into());
+        }
+        if self.tangent_uv_set() == Some(set) {
+            mesh.tangents = None;
+            mesh.tangent_uv_set = 0;
         }
         Ok(Arc::new(mesh))
     }

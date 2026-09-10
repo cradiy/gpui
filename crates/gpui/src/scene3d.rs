@@ -208,6 +208,7 @@ pub struct Mesh3d {
     vertices: Arc<[MeshVertex3d]>,
     indices: Arc<[u32]>,
     tangents: Option<Arc<[[f32; 4]]>>,
+    tangent_uv_set: u32,
     uv_sets: BTreeMap<u32, Arc<[[f32; 2]]>>,
     bounds: [[f32; 3]; 2],
 }
@@ -234,6 +235,12 @@ pub enum MeshUpdateError3d {
 /// Invalid tangent data. Offsets are zero-based.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TangentError3d {
+    /// The tangent basis references an absent coordinate set.
+    #[error("missing UV set {set} for tangent basis")]
+    MissingUvSet {
+        /// Required coordinate-set identifier.
+        set: u32,
+    },
     /// Every vertex, including unused vertices, requires a tangent.
     #[error("expected {expected} tangents, received {actual}")]
     Count {
@@ -346,6 +353,7 @@ impl Mesh3d {
             vertices: vertices.into(),
             indices: indices.into(),
             tangents: None,
+            tangent_uv_set: 0,
             uv_sets: BTreeMap::new(),
         }))
     }
@@ -372,6 +380,7 @@ impl Mesh3d {
     /// Replaces fixed-count vertex attributes while sharing triangle index storage.
     /// The source and its snapshots remain unchanged. Tangents must be supplied
     /// for the new normals, or `None` explicitly removes them.
+    /// Replacement tangents use the source tangent set, or set zero if absent.
     pub fn with_vertices(
         &self,
         vertices: Vec<MeshVertex3d>,
@@ -389,10 +398,11 @@ impl Mesh3d {
             vertices: vertices.into(),
             indices: self.indices.clone(),
             tangents: None,
+            tangent_uv_set: 0,
             uv_sets: self.uv_sets.clone(),
         };
         Ok(match tangents {
-            Some(tangents) => mesh.with_tangents(tangents)?,
+            Some(tangents) => mesh.with_tangents_for_uv_set(self.tangent_uv_set, tangents)?,
             None => Arc::new(mesh),
         })
     }
@@ -411,10 +421,28 @@ impl Mesh3d {
         self.tangents.as_deref()
     }
 
+    /// Coordinate set used by the tangent basis, or `None` if no tangents exist.
+    pub fn tangent_uv_set(&self) -> Option<u32> {
+        self.tangents.as_ref().map(|_| self.tangent_uv_set)
+    }
+
     /// Creates a mesh sharing vertex/index storage with validated tangent data.
     /// XYZ is orthogonalized against the vertex normal and normalized. W must be
     /// -1 or +1 and constant within each triangle. The source mesh is unchanged.
-    pub fn with_tangents(&self, mut tangents: Vec<[f32; 4]>) -> Result<Arc<Self>, TangentError3d> {
+    pub fn with_tangents(&self, tangents: Vec<[f32; 4]>) -> Result<Arc<Self>, TangentError3d> {
+        self.with_tangents_for_uv_set(0, tangents)
+    }
+
+    /// Attaches validated tangents for an existing coordinate set. Validation and
+    /// storage sharing match `with_tangents`; the caller supplies the correct UV basis.
+    pub fn with_tangents_for_uv_set(
+        &self,
+        set: u32,
+        mut tangents: Vec<[f32; 4]>,
+    ) -> Result<Arc<Self>, TangentError3d> {
+        if self.uv_at(set, 0).is_none() {
+            return Err(TangentError3d::MissingUvSet { set });
+        }
         if tangents.len() != self.vertices.len() {
             return Err(TangentError3d::Count {
                 expected: self.vertices.len(),
@@ -455,6 +483,7 @@ impl Mesh3d {
             vertices: self.vertices.clone(),
             indices: self.indices.clone(),
             tangents: Some(tangents.into()),
+            tangent_uv_set: set,
             uv_sets: self.uv_sets.clone(),
         }))
     }

@@ -34,7 +34,8 @@ impl Mesh {
         self.0.uv_at(set, vertex)
     }
     /// Attaches or replaces a finite coordinate for every vertex, including unused ones.
-    /// Set zero replaces `Vertex::uv` and removes tangents. Other sets retain them.
+    /// Set zero replaces `Vertex::uv`. Replacing the tangent basis's coordinate set
+    /// removes tangents; other sets retain them.
     /// Unchanged attributes and the spatial index remain shared with the source mesh.
     pub fn with_uv_set(&self, set: u32, coordinates: Vec<[f32; 2]>) -> Result<Self, UvSetError> {
         self.0
@@ -61,6 +62,21 @@ impl Mesh {
     pub fn tangents(&self) -> Option<&[[f32; 4]]> {
         self.0.tangents()
     }
+    /// Coordinate set used by the tangent basis, or `None` if no tangents exist.
+    pub fn tangent_uv_set(&self) -> Option<u32> {
+        self.0.tangent_uv_set()
+    }
+    /// Attaches validated tangents for an existing coordinate set, preserving the
+    /// source mesh and shared spatial index. The caller supplies the correct UV basis.
+    pub fn with_tangents_for_uv_set(
+        &self,
+        set: u32,
+        tangents: Vec<[f32; 4]>,
+    ) -> Result<Self, TangentError> {
+        self.0
+            .with_tangents_for_uv_set(set, tangents)
+            .map(|mesh| Self(mesh, self.1.clone()))
+    }
     /// Attaches validated tangents without changing geometry, triangle identities
     /// or the source mesh. XYZ is normalized and orthogonalized against normals;
     /// W must be -1 or +1, constant within each triangle.
@@ -74,6 +90,7 @@ impl Mesh {
     /// Supply tangents for the replacement normals, or `None` to omit them.
     /// The new snapshot has independent bounds and a fresh lazy query index.
     /// Additional coordinate sets remain shared with the source mesh.
+    /// Replacement tangents use the source tangent set, or set zero if absent.
     pub fn with_vertices(
         &self,
         vertices: Vec<Vertex>,

@@ -31,6 +31,151 @@ fn near(a: [f32; 4], b: [f32; 4]) {
 }
 
 #[test]
+fn selected_uv_frames_preserve_primary_coordinates_and_mirrored_seams() {
+    for mirrored in [false, true] {
+        let reference = quad(mirrored);
+        let uv: Vec<_> = reference
+            .vertices()
+            .iter()
+            .map(|v| [v.uv[1], v.uv[0]])
+            .collect();
+        let reference = reference
+            .with_uv_set(0, uv.clone())
+            .unwrap()
+            .generate_tangents()
+            .unwrap();
+        let source = quad(false)
+            .with_uv_set(0, vec![[0.; 2]; 4])
+            .unwrap()
+            .with_uv_set(7, uv)
+            .unwrap();
+        for mode in [
+            TangentGenerationMode::Strict,
+            TangentGenerationMode::Inherit,
+            TangentGenerationMode::Repair,
+        ] {
+            let generated = source.generate_tangents_for_uv_set(7, mode).unwrap();
+            assert_eq!(generated.mesh().tangent_uv_set(), Some(7));
+            assert_eq!(generated.source_vertices(), reference.source_vertices());
+            assert_eq!(generated.mesh().indices(), reference.mesh().indices());
+            for (vertex, &index) in generated.source_vertices().iter().enumerate() {
+                assert_eq!(generated.mesh().uv_at(0, vertex), Some([0.; 2]));
+                assert_eq!(
+                    generated.mesh().uv_at(7, vertex),
+                    source.uv_at(7, index as usize)
+                );
+                near(
+                    generated.mesh().tangents().unwrap()[vertex],
+                    reference.mesh().tangents().unwrap()[vertex],
+                );
+            }
+            assert!(generated.repairs().is_empty());
+        }
+        assert!(matches!(
+            source.generate_tangents(),
+            Err(TangentGenerationError::DegenerateUv { .. })
+        ));
+        assert_eq!(
+            source
+                .generate_tangents_for_uv_set(6, TangentGenerationMode::Repair)
+                .unwrap_err(),
+            TangentGenerationError::MissingUvSet { set: 6 }
+        );
+    }
+}
+
+#[test]
+fn selected_uv_repairs_use_the_selected_derivative_and_report_degeneracy() {
+    let source = quad(false).with_uv_set(5, vec![[0.; 2]; 4]).unwrap();
+    assert_eq!(
+        source
+            .generate_tangents_for_uv_set(5, TangentGenerationMode::Strict)
+            .unwrap_err(),
+        TangentGenerationError::DegenerateUv { triangle: 0 }
+    );
+    let selected = source
+        .generate_tangents_for_uv_set(5, TangentGenerationMode::Repair)
+        .unwrap();
+    let reference = source
+        .with_uv_set(0, vec![[0.; 2]; 4])
+        .unwrap()
+        .generate_tangents_with_mode(TangentGenerationMode::Repair)
+        .unwrap();
+    assert_eq!(selected.repairs(), reference.repairs());
+    assert!(!selected.repairs().is_empty());
+    assert_eq!(selected.mesh().tangents(), reference.mesh().tangents());
+    assert_eq!(selected.mesh().tangent_uv_set(), Some(5));
+}
+
+#[test]
+fn tangent_set_associations_survive_deformation_and_invalidate_only_matching_uv_edits() {
+    let base = quad(false).with_uv_set(7, vec![[0., 1.]; 4]).unwrap();
+    let base = base
+        .with_tangents_for_uv_set(7, vec![[0., 1., 0., -1.]; 4])
+        .unwrap();
+    assert!(matches!(
+        base.with_tangents_for_uv_set(8, vec![[1., 0., 0., 1.]; 4]),
+        Err(gpui_3d::TangentError::MissingUvSet { set: 8 })
+    ));
+    assert_eq!(
+        base.with_uv_set(0, vec![[2.; 2]; 4])
+            .unwrap()
+            .tangent_uv_set(),
+        Some(7)
+    );
+    assert_eq!(
+        base.with_uv_set(7, vec![[2.; 2]; 4])
+            .unwrap()
+            .tangent_uv_set(),
+        None
+    );
+    assert_eq!(base.tangent_uv_set(), Some(7));
+    let morph = MorphTargets::new(
+        base.clone(),
+        vec![MorphTarget {
+            positions: Some(vec![[0., 0., 0.25]; 4].into()),
+            ..Default::default()
+        }],
+    )
+    .unwrap()
+    .evaluate(&[1.])
+    .unwrap();
+    let skin = Skin::new(
+        vec![AffineTransform::IDENTITY],
+        vec![
+            vec![SkinInfluence {
+                joint: 0,
+                weight: 1.
+            }];
+            4
+        ],
+    )
+    .unwrap();
+    let result = skin
+        .evaluate(
+            &morph,
+            &[AffineTransform::from_translation([0., 0., 1.]).unwrap()],
+        )
+        .unwrap();
+    assert_eq!(morph.tangent_uv_set(), Some(7));
+    assert_eq!(result.tangent_uv_set(), Some(7));
+    for vertex in 0..4 {
+        assert_eq!(result.uv_at(7, vertex), base.uv_at(7, vertex));
+        near(
+            result.tangents().unwrap()[vertex],
+            base.tangents().unwrap()[vertex],
+        );
+        assert!((result.vertices()[vertex].position[2] - 1.25).abs() < 1e-6);
+    }
+    assert_eq!(
+        base.with_vertices(base.vertices().to_vec(), None)
+            .unwrap()
+            .tangent_uv_set(),
+        None
+    );
+}
+
+#[test]
 fn shared_planar_tangents_match_analytic_frames_and_replace_existing_data() {
     for mesh in [quad(false), Mesh::plane(), Mesh::cube()] {
         let generated = mesh.generate_tangents().unwrap();
@@ -179,6 +324,23 @@ fn shared_corners_receive_an_angle_weighted_frame() {
 
 #[test]
 fn generated_frames_satisfy_normal_map_preparation_and_preserve_normal_magnitude() {
+    let source = quad(false);
+    let coordinates = source.vertices().iter().map(|v| v.uv).collect();
+    let selected = source
+        .with_uv_set(7, coordinates)
+        .unwrap()
+        .generate_tangents_for_uv_set(7, TangentGenerationMode::Strict)
+        .unwrap();
+    let material = Material::color(gpui::white())
+        .pbr(PbrMaterial::default())
+        .normal_texture(MaterialTexture::new("normal.png"));
+    let scene = Scene::new().object(Object::new(selected.mesh().clone(), material));
+    let error = scene
+        .prepare(1., None, |_| {
+            panic!("invalid basis must fail before resource resolution")
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("tangents for UV set 0"));
     for scale in [1e-30, 1., 1e30] {
         let source = quad(false);
         let vertices = source

@@ -66,13 +66,15 @@ outside `[0, 1]` are accepted. Invalid counts or non-finite components return
 
 `uv_sets()` enumerates stored identifiers in ascending order, starting with zero.
 `uv_at(set, vertex)` returns `None` for an absent set or an out-of-range vertex.
-Snapshots share unchanged storage. Replacing set zero removes existing tangents;
-attaching other sets preserves them. Normal and tangent generation remap all
-coordinate sets when splitting vertices. Fixed-topology updates, Morph and Skin
+Snapshots share unchanged storage. Replacing the coordinate set identified by
+`tangent_uv_set()` removes existing tangents; editing other sets preserves them.
+Normal and tangent generation remap all coordinate sets when splitting vertices.
+Fixed-topology updates, Morph and Skin
 preserve additional coordinate sets.
 
-Rendering, tangent generation and alpha queries use set zero. Additional sets
-are available as mesh data, without per-material selection.
+`generate_tangents_for_uv_set(set, mode)` generates a basis for a selected set
+without changing set zero. Rendering and alpha queries use set zero, without
+per-material selection.
 
 ## Primitive meshes
 

@@ -167,8 +167,16 @@ impl Frustum {
             origin[1] + (1. - min[1]) * f64::from(height) * 0.5,
         ];
         let lower = lower.map(round_down);
-        let extent = std::array::from_fn::<_, 2, _>(|i| round_up(upper[i] - f64::from(lower[i])));
-        if !lower.iter().chain(&extent).all(|v| v.is_finite()) {
+        let upper = upper.map(round_up);
+        let extent =
+            std::array::from_fn::<_, 2, _>(|i| round_up(f64::from(upper[i]) - f64::from(lower[i])));
+        if !lower
+            .iter()
+            .chain(&upper)
+            .chain(&extent)
+            .all(|v| v.is_finite())
+            || (0..2).any(|i| !(lower[i] + extent[i]).is_finite())
+        {
             return Err(CameraError::Unrepresentable);
         }
         Ok(Some(Bounds::new(

@@ -408,6 +408,8 @@ These APIs require no `Window`, layout, or GPU:
 | `world_to_screen(viewport, point)` | Screen position, NDC, linear forward depth, and frustum membership |
 | `screen_to_ray(viewport, position)` | Normalized world-space ray |
 | `screen_to_world(viewport, position, depth)` | World position from positive linear camera-forward depth |
+| `frustum(aspect)` | Owned camera clip-volume snapshot for repeated world-AABB queries |
+| `project_bounds(viewport, bounds)` | Screen rectangle of the clipped world AABB, or `None` for an empty intersection |
 
 Screen coordinates use a top-left origin and include the viewport offset. Use
 logical viewport bounds and logical input positions for GPUI handlers. The math
@@ -557,6 +559,50 @@ Matrices, picking rays, frustum culling, environment backgrounds, and captured U
 mapping use the same shifted projection. Orthographic background directions stay
 parallel. Orbit, pan, dolly, and zoom retain the shift; optical zoom remains
 centered around the shifted principal point rather than the viewport center.
+
+### Projecting bounds
+
+```rust
+use gpui::{Bounds, point, px, size};
+use gpui_3d::{Aabb, Camera};
+
+let camera = Camera::default();
+let viewport = Bounds::new(point(px(20.), px(40.)), size(px(800.), px(600.)));
+let bounds = Aabb::new([-1.; 3], [1.; 3]).unwrap();
+let frustum = camera.frustum(800. / 600.)?;
+if frustum.intersects(bounds) {
+    let screen_bounds = frustum.project_bounds(viewport, bounds)?;
+    // Use the optional rectangle for a screen-space annotation or region query.
+    assert!(screen_bounds.is_some());
+}
+# Ok::<(), gpui_3d::CameraError>(())
+```
+
+`Frustum::intersects` conservatively tests an AABB against six camera planes.
+Boundary contacts and numerically uncertain separation remain candidates; a box
+near a frustum corner can pass this test without intersecting the clip volume.
+It is a broad-phase query, not a mesh intersection or an occlusion result.
+
+`project_bounds` clips the box against the camera volume before projection. It
+handles bounds crossing the eye or near plane, and bounds enclosing the entire
+frustum. Empty intersections return `None`; boundary contacts can produce a
+zero-area rectangle. Both clip endpoints are included, unlike the far-exclusive
+point membership reported by `world_to_screen`. Numerical plane comparisons use
+a conservative tolerance relative to the rendered matrix's precision.
+
+Coordinates use the viewport's top-left origin and the same pixel units as its
+bounds. Rectangle endpoints are rounded outward to representable values, so they
+can extend slightly beyond the viewport. A projected rectangle does not establish
+that the mesh occupies all of that area or that any of it is unoccluded. It does
+not account for material alpha, hidden nodes, or other objects.
+
+`Camera::project_bounds` derives the aspect ratio from the viewport. A reusable
+`Frustum` retains the view-projection matrix at creation; later camera edits do
+not change it. `Frustum::project_bounds` only scales its normalized image into the
+supplied viewport and does not replace the snapshot's aspect ratio. Recreate the
+frustum when the camera or rendering aspect changes. Invalid viewports and camera
+parameters return `CameraError`; singular rendered matrices and unrepresentable
+screen bounds return `CameraError::Unrepresentable`.
 
 ### Framing bounds
 

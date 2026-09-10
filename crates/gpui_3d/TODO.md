@@ -43,6 +43,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Mesh resource interfaces**: Fallible geometry construction with structured errors, borrowed vertex/index inspection, counts, local bounds, and shared immutable storage.
 - [x] **Renderer resource interfaces**: Public scene preparation with typed texture requests, ready/pending states, contextual resource failures, renderer-local atlas references, and owned frame/identity outputs for external resource managers.
 - [x] **Camera extensions**: Orthographic projection, explicit up vectors, public view/projection matrices, viewport rays, world-to-screen projection, and framing from object bounds.
+- [x] **Bounds projection and frustum queries**: Reusable camera clip-volume snapshots, conservative world-AABB candidates, clipped screen rectangles across camera planes, viewport offsets and lens shifts, and outward-rounded pixel extents without occlusion claims.
 - [x] **World-ray queries**: Normalized arbitrary rays with camera-independent geometric intersection and stable node identities.
 - [x] **Mesh query acceleration**: Shared lazy CPU BVHs, explicit preparation, conservative transformed bounds, and original triangle identities for picking and world rays.
 - [x] **Scene query acceleration**: Lazy object BVHs shared by scene clones and camera views of evaluated states, fresh indices after graph evaluation or object insertion, and preserved snapshot queries.

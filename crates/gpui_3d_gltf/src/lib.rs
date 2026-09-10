@@ -9,15 +9,18 @@
 #[doc = include_str!("../docs/geometry.md")]
 #[doc = include_str!("../docs/materials.md")]
 #[doc = include_str!("../docs/scenes.md")]
+#[doc = include_str!("../docs/images.md")]
 pub mod guide {}
 
 mod geometry;
+mod image;
 mod material;
 mod resources;
 mod scene;
 mod validation;
 
 pub use geometry::{GeometryOptions, PrimitiveGeometry};
+pub use image::ImageDecodeLimits;
 pub use material::{MaterialDefinition, TextureBinding};
 pub use resources::{Document, EncodedImage, Limits, PreparedDocument};
 pub use scene::{SceneAsset, SceneDefinition, SceneNode, SceneOptions, ScenePrimitive};

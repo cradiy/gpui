@@ -12,8 +12,6 @@ gpui.workspace = true
 gpui_3d.workspace = true
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "extensions", "KHR_materials_unlit", "KHR_texture_transform"] }
 serde_json.workspace = true
-
-[dev-dependencies]
 image.workspace = true
 
 [lints]

@@ -102,7 +102,8 @@ by several slots with different color-space or sampling semantics. The resulting
 material retains shared decoded images. Only the first frame is used; empty first
 frames are rejected.
 
-Definitions own no decoder, filesystem policy, global image cache, or GPU upload.
+`decode_images(limits)` provides built-in PNG/JPEG decoding. Definitions own no
+filesystem policy, global image cache, or GPU upload.
 The callback must enforce decoded dimensions, pixel counts, allocation budgets,
 and supported formats before allocating. It may use caller-managed background
 work and caches. A failed resolution returns no partial material and can be

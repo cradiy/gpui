@@ -79,3 +79,30 @@ preparation does not create a `gpui_3d` scene, interpret materials, sample
 animation, or claim support for an extension merely because its resources were
 resolved. Scene conversion and decoded-image handling consume this prepared data
 separately.
+
+## Local inspection
+
+The `inspect` example converts a local asset, decodes active images, instantiates
+its selected scene, samples an optional animation, and prepares CPU spatial
+indices. It prints resource counts, deformation counts, and world bounds without
+opening a window or creating a GPU device.
+
+```sh
+cargo run -p gpui_3d_gltf --example inspect -- /path/to/model.glb
+cargo run -p gpui_3d_gltf --example inspect -- /path/to/model.gltf \
+  --scene 0 --animation 0 --time 0 --time 1.5 --time 3 --time 1.5
+```
+
+Without `--scene`, the file must declare a default scene. Animation selection is
+explicit; omitting it evaluates authored transforms and Morph weights. Times are
+absolute, nonnegative seconds, with zero as the default. Animation tracks outside
+the selected scene are skipped and counted. Repeated times are sampled using the
+same instance; a changed pose/geometry fingerprint returns an error. Fingerprints
+are diagnostic values within a run, not portable asset IDs or visual comparisons.
+
+The example uses the default admission limits, including 16 MiB for the complete
+document or GLB container. Resource files must be regular files within the asset's
+canonical parent directory. Relative paths and percent-encoded filenames are
+accepted; network/absolute URIs, query strings, fragments, and resolved directory
+escapes are rejected. Use trusted local asset directories; this example does not
+provide an operating-system sandbox against concurrent filesystem changes.

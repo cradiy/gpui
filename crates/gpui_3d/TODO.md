@@ -143,6 +143,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Animation tracks**: Document-local node bindings, absolute-time TRS and Morph weight channels, Step/Linear/CubicSpline conversion, normalized integer rotation/weight inputs, authored base poses, bounded CPU definitions, and explicit caller-owned instance mapping.
   - [x] **Skeletal skins**: Consecutive joint/weight sets, generated-vertex correspondence, ordered inverse binds, shared primitive bindings, selected-scene hierarchy validation, authored initial deformation, and explicit per-instance final-pose skinning with aggregate admission.
   - [x] **Morph geometry**: Position/normal/tangent deltas, sparse inputs, authored weights, fixed generated-vertex correspondence, direction regeneration, and per-instance Morph-before-Skin evaluation with bounded shared inputs and initial output admission.
+  - [x] **CPU asset inspection**: Local glTF/GLB conversion, image decoding, absolute-time scene deformation, repeated-time fingerprints, world bounds, and restricted relative-file resolution in one command-line example.
+  - [ ] **Asset compatibility**: Independent magnification/minification filters, degenerate-UV tangent handling, multiple active UV sets, and vertex colors.
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.

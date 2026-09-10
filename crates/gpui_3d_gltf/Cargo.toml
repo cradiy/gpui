@@ -14,5 +14,9 @@ gltf = { version = "1.4.1", default-features = false, features = ["utils", "name
 serde_json.workspace = true
 image.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+url.workspace = true
+
 [lints]
 workspace = true

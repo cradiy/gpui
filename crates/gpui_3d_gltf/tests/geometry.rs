@@ -102,6 +102,64 @@ fn error(document: &PreparedDocument, options: GeometryOptions) -> String {
 }
 
 #[test]
+fn coordinate_admission_bounds_all_sets_and_split_workspace() {
+    let mut fixture = triangle();
+    fixture.attribute("TEXCOORD_7", &[[0., 0.], [1., 0.], [0., 1.]]);
+    fixture.indices(&[0, 1, 2, 0, 1, 2], 5121);
+    let document = fixture.prepare();
+    let options = GeometryOptions {
+        tex_coord_limit: 12,
+        ..Default::default()
+    };
+    let mesh = document.geometry(0, 0, options).unwrap();
+    assert_eq!(mesh.tex_coord_sets(), [7]);
+    assert_eq!(mesh.mesh().uv_sets().collect::<Vec<_>>(), [0, 7]);
+    assert_eq!(mesh.tex_coord_count(), 6);
+    assert!(
+        error(
+            &document,
+            GeometryOptions {
+                tex_coord_limit: 11,
+                ..options
+            }
+        )
+        .contains("texture coordinate limit")
+    );
+    let mut fixture = triangle();
+    fixture.attribute("TEXCOORD_0", &[[0.; 2]; 3]);
+    fixture.attribute("TEXCOORD_9", &[[0., 0.], [f32::NAN, 0.], [0., 1.]]);
+    assert!(error(&fixture.prepare(), GeometryOptions::default()).contains("TEXCOORD_9"));
+}
+
+#[test]
+fn authored_tangents_keep_normal_map_coordinate_association() {
+    let mut fixture = triangle();
+    fixture.attribute("NORMAL", &[[0., 0., 1.]; 3]);
+    fixture.attribute("TEXCOORD_7", &[[0., 0.], [0., 1.], [1., 0.]]);
+    let tangents = [[0., 1., 0., -1.]; 3];
+    fixture.attribute("TANGENT", &tangents);
+    let image = fixture.view(&[0], None);
+    fixture.json["images"] = json!([{"bufferView":image,"mimeType":"image/png"}]);
+    fixture.json["textures"] = json!([{"source":0}]);
+    fixture.json["materials"][0]["normalTexture"] = json!({"index":0,"texCoord":7});
+    fixture.json["scenes"] = json!([{"nodes":[0]}]);
+    fixture.json["nodes"] = json!([{"mesh":0}]);
+    let document = fixture.prepare();
+    let scene = document.scene(Some(0), Default::default()).unwrap();
+    let geometry = scene.geometries().next().unwrap();
+    assert_eq!(geometry.tex_coord_sets(), [7]);
+    assert_eq!(geometry.mesh().tangent_uv_set(), Some(7));
+    assert_eq!(geometry.mesh().tangents().unwrap(), tangents);
+    assert_eq!(geometry.mesh().uv_at(0, 1), Some([0., 0.]));
+    assert_eq!(geometry.mesh().uv_at(7, 1), Some([0., 1.]));
+    document
+        .material(Some(0))
+        .unwrap()
+        .validate_geometry(geometry)
+        .unwrap();
+}
+
+#[test]
 fn indexed_and_nonindexed_meshes_preserve_identity_and_support_world_queries() {
     for component in [None, Some(5121), Some(5123), Some(5125)] {
         let mut fixture = triangle();
@@ -120,7 +178,7 @@ fn indexed_and_nonindexed_meshes_preserve_identity_and_support_world_queries() {
             ),
             (0, 0, Some(0))
         );
-        assert_eq!(converted.tex_coord_set(), Some(0));
+        assert_eq!(converted.tex_coord_sets(), [0]);
         assert_eq!(converted.source_vertices(), [0, 1, 2]);
         assert_eq!(converted.mesh().indices(), [0, 1, 2]);
         let scene = Scene::new().object(Object::new(
@@ -263,20 +321,25 @@ fn interleaved_attributes_and_normalized_uv_sets_are_decoded_without_flipping() 
                 0,
                 0,
                 GeometryOptions {
-                    tex_coord_set: 1,
+                    tangent_uv_set: 1,
                     generate_tangents: true,
                     ..Default::default()
                 },
             )
             .unwrap();
-        for (vertex, &source) in converted
+        for (index, (vertex, &source)) in converted
             .mesh()
             .vertices()
             .iter()
             .zip(converted.source_vertices())
+            .enumerate()
         {
             assert_eq!(vertex.position, positions[source as usize]);
-            assert_eq!(vertex.uv, [[0., 0.], [1., 0.], [0., 1.]][source as usize]);
+            assert_eq!(vertex.uv, [0.5, 0.5]);
+            assert_eq!(
+                converted.mesh().uv_at(1, index),
+                Some([[0., 0.], [1., 0.], [0., 1.]][source as usize])
+            );
         }
         let first = document.geometry(0, 0, GeometryOptions::default()).unwrap();
         assert!(
@@ -290,11 +353,12 @@ fn interleaved_attributes_and_normalized_uv_sets_are_decoded_without_flipping() 
             error(
                 &document,
                 GeometryOptions {
-                    tex_coord_set: 2,
+                    tangent_uv_set: 2,
+                    generate_tangents: true,
                     ..Default::default()
                 }
             )
-            .contains("TEXCOORD_2 is unavailable")
+            .contains("requires TEXCOORD_2")
         );
     }
 }
@@ -456,7 +520,7 @@ fn malformed_attributes_and_indices_report_primitive_context() {
                 ..Default::default()
             }
         )
-        .contains("requires texture coordinates")
+        .contains("requires TEXCOORD_0")
     );
     assert!(plain.geometry(0, 1, GeometryOptions::default()).is_err());
     assert!(plain.geometry(1, 0, GeometryOptions::default()).is_err());

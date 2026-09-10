@@ -34,7 +34,7 @@ fn convert(
         && (primitive.get(&gltf::Semantic::Tangents).is_none()
             || primitive.get(&gltf::Semantic::Normals).is_none());
     let geometry = prepared.geometry(mesh_index, primitive_index, GeometryOptions {
-        tex_coord_set: definition.tex_coord_set().unwrap_or(0),
+        tangent_uv_set: definition.normal_tex_coord_set().unwrap_or(0),
         generate_tangents,
         ..Default::default()
     })?;
@@ -81,15 +81,19 @@ magnification/minification texel filters are preserved independently through
 
 `KHR_texture_transform` applies scale, rotation and offset to each slot's sampling
 coordinates. Its `texCoord` overrides the texture's original set, including for
-normal and occlusion maps. The core mesh has one UV set, so all active bindings
-must use the same set. Different per-slot affine transforms are supported;
-different active UV sets return an error.
+normal and occlusion maps. Each active slot retains its own set identifier and
+affine transform. Several slots may share an image while sampling different
+coordinate sets.
 
-`tex_coord_set()` and `requires_tangents()` expose geometry requirements.
-`validate_geometry()` verifies those requirements against a converted primitive.
+`tex_coord_sets()` lists distinct active coordinate requirements in ascending
+order. `normal_tex_coord_set()` identifies the active normal map's tangent basis;
+`requires_tangents()` reports whether that map is active.
+`validate_geometry()` verifies that every active set was authored in the primitive
+and that the tangent basis matches the normal map's selected set. Implicit
+zero-filled coordinates do not satisfy an authored-set requirement.
 It allows material overrides and does not require matching source material
-indices. Tangents use the selected mesh UVs; image decoding does not generate or
-modify them. Required extensions other than `KHR_materials_unlit` and
+indices. Image decoding does not generate or modify tangents.
+Required extensions other than `KHR_materials_unlit` and
 `KHR_texture_transform` return errors; unknown optional extensions use core glTF
 fallback behavior and are not interpreted as supported features.
 

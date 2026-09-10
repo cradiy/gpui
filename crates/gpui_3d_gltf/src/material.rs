@@ -55,7 +55,7 @@ pub struct MaterialDefinition {
     index: Option<usize>,
     base: MaterialParameters,
     textures: Vec<TextureBinding>,
-    tex_coord_set: Option<u32>,
+    tex_coord_sets: Vec<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -91,9 +91,16 @@ impl MaterialDefinition {
     pub fn textures(&self) -> &[TextureBinding] {
         &self.textures
     }
-    /// The UV set required by every active map, or None for untextured materials.
-    pub fn tex_coord_set(&self) -> Option<u32> {
-        self.tex_coord_set
+    /// Distinct active coordinate-set requirements in ascending order.
+    pub fn tex_coord_sets(&self) -> &[u32] {
+        &self.tex_coord_sets
+    }
+    /// Coordinate set required by the active normal map, if present.
+    pub fn normal_tex_coord_set(&self) -> Option<u32> {
+        self.textures
+            .iter()
+            .find(|texture| texture.slot == TextureSlot::Normal)
+            .map(|texture| texture.tex_coord_set)
     }
     pub fn requires_tangents(&self) -> bool {
         self.textures
@@ -104,21 +111,25 @@ impl MaterialDefinition {
     /// Checks active-map UV and tangent requirements without resolving images.
     /// Material overrides are allowed; source material indices need not match.
     pub fn validate_geometry(&self, geometry: &PrimitiveGeometry) -> Result<()> {
+        for texture in &self.textures {
+            ensure!(
+                geometry.tex_coord_sets().contains(&texture.tex_coord_set),
+                "material {:?}: mesh {} primitive {} {:?} requires TEXCOORD_{}",
+                self.index,
+                geometry.mesh_index(),
+                geometry.primitive_index(),
+                texture.slot,
+                texture.tex_coord_set
+            );
+        }
         ensure!(
-            self.tex_coord_set.is_none() || self.tex_coord_set == geometry.tex_coord_set(),
-            "material {:?}: mesh {} primitive {} has UV set {:?}, expected {:?}",
+            self.normal_tex_coord_set().is_none()
+                || self.normal_tex_coord_set() == geometry.mesh().tangent_uv_set(),
+            "material {:?}: mesh {} primitive {} requires tangents for UV set {:?}",
             self.index,
             geometry.mesh_index(),
             geometry.primitive_index(),
-            geometry.tex_coord_set(),
-            self.tex_coord_set
-        );
-        ensure!(
-            !self.requires_tangents() || geometry.mesh().tangents().is_some(),
-            "material {:?}: mesh {} primitive {} requires tangents",
-            self.index,
-            geometry.mesh_index(),
-            geometry.primitive_index()
+            self.normal_tex_coord_set()
         );
         Ok(())
     }
@@ -154,7 +165,9 @@ impl MaterialDefinition {
                 )
             })?;
             let image = images[&binding.image_index].clone();
-            let texture = MaterialTexture::new(image).sampling(binding.sampling);
+            let texture = MaterialTexture::new(image)
+                .sampling(binding.sampling)
+                .uv_set(binding.tex_coord_set);
             material = match binding.slot {
                 TextureSlot::BaseColor => material.base_color_texture(texture),
                 TextureSlot::MetallicRoughness => material.metallic_roughness_texture(texture),
@@ -310,21 +323,17 @@ impl PreparedDocument {
                 }
             }
         }
-        let tex_coord_set = textures.first().map(|binding| binding.tex_coord_set);
-        for binding in &textures {
-            ensure!(
-                Some(binding.tex_coord_set) == tex_coord_set,
-                "{:?} requires TEXCOORD_{} but other maps require TEXCOORD_{}; multiple active UV sets are unsupported",
-                binding.slot,
-                binding.tex_coord_set,
-                tex_coord_set.unwrap()
-            );
-        }
+        let mut tex_coord_sets: Vec<_> = textures
+            .iter()
+            .map(|binding| binding.tex_coord_set)
+            .collect();
+        tex_coord_sets.sort_unstable();
+        tex_coord_sets.dedup();
         Ok(MaterialDefinition {
             index,
             base,
             textures,
-            tex_coord_set,
+            tex_coord_sets,
         })
     }
 

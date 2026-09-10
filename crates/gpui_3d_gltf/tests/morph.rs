@@ -207,6 +207,49 @@ fn authored_direction_deltas_keep_signed_weights_and_tangent_handedness() {
 }
 
 #[test]
+fn morph_regeneration_preserves_coordinate_sets_and_selected_tangent_basis() {
+    let mut fixture = Fixture::new();
+    let uv = fixture.floats("VEC2", &[0., 0., 0., 1., 1., 1., 1., 0.]);
+    fixture.attribute("TEXCOORD_7", uv);
+    let document = fixture.prepare().unwrap();
+    let geometry = document
+        .geometry(
+            0,
+            0,
+            GeometryOptions {
+                generate_tangents: true,
+                tangent_uv_set: 7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let morph = geometry.morph().unwrap();
+    for weight in [1., -0.5, 0., 1.] {
+        let mesh = morph.evaluate(&[weight]).unwrap();
+        assert_eq!(mesh.tangent_uv_set(), Some(7));
+        let reference = mesh
+            .generate_tangents_for_uv_set(7, gpui_3d::TangentGenerationMode::Repair)
+            .unwrap();
+        for (vertex, &source) in reference.source_vertices().iter().enumerate() {
+            let actual = mesh.tangents().unwrap()[source as usize];
+            let expected = reference.mesh().tangents().unwrap()[vertex];
+            near(
+                [actual[0], actual[1], actual[2]],
+                [expected[0], expected[1], expected[2]],
+            );
+            assert_eq!(actual[3], expected[3]);
+            for set in [0, 7] {
+                assert_eq!(
+                    mesh.uv_at(set, source as usize),
+                    geometry.mesh().uv_at(set, source as usize)
+                );
+            }
+        }
+        assert_ne!(mesh.uv_at(0, 1), mesh.uv_at(7, 1));
+    }
+}
+
+#[test]
 fn sparse_and_zero_initialized_targets_preserve_unmodified_vertices() {
     let mut fixture = Fixture::new();
     let delta = fixture.json["meshes"][0]["primitives"][0]["targets"][0]["POSITION"]

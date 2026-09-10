@@ -32,8 +32,12 @@ fn pixels() -> Arc<RenderImage> {
 }
 
 fn frame(material: Material) -> Scene3dFrame {
+    frame_with_mesh(material, Mesh::plane())
+}
+
+fn frame_with_mesh(material: Material, mesh: Mesh) -> Scene3dFrame {
     Scene::new()
-        .object(Object::new(Mesh::plane(), material))
+        .object(Object::new(mesh, material))
         .prepare(1., None, |request| {
             Ok(TextureState::Ready(match request.source {
                 TextureSource::Solid => ResolvedTexture::None,
@@ -130,7 +134,7 @@ fn five_map_materials_share_decoding_and_preserve_per_slot_sampling() {
     value["textures"][0]["sampler"] = json!(0);
     let document = prepare(value);
     let definition = document.material(Some(0)).unwrap();
-    assert_eq!(definition.tex_coord_set(), Some(1));
+    assert_eq!(definition.tex_coord_sets(), [1]);
     assert!(definition.requires_tangents());
     assert_eq!(definition.textures().len(), 5);
     for binding in definition.textures() {
@@ -163,7 +167,13 @@ fn five_map_materials_share_decoding_and_preserve_per_slot_sampling() {
         .unwrap();
     assert_eq!(calls, 1);
     drop(document);
-    let prepared = frame(material);
+    let mesh = Mesh::plane();
+    let mesh = mesh
+        .with_uv_set(1, mesh.vertices().iter().map(|v| v.uv).collect())
+        .unwrap()
+        .with_tangents_for_uv_set(1, mesh.tangents().unwrap().to_vec())
+        .unwrap();
+    let prepared = frame_with_mesh(material, mesh);
     let object = &prepared.objects[0];
     assert_eq!(object.alpha_mode, AlphaMode::Blend);
     assert!(!object.double_sided);
@@ -237,7 +247,7 @@ fn inactive_maps_do_not_require_uvs_tangents_or_decoding() {
         let document = prepare(textured(material));
         let definition = document.material(Some(0)).unwrap();
         assert!(definition.textures().is_empty());
-        assert_eq!(definition.tex_coord_set(), None);
+        assert!(definition.tex_coord_sets().is_empty());
         assert!(!definition.requires_tangents());
         let material = definition
             .resolve_images(|_, _| panic!("inactive image decoded"))
@@ -247,7 +257,7 @@ fn inactive_maps_do_not_require_uvs_tangents_or_decoding() {
 }
 
 #[test]
-fn malformed_factors_transforms_and_uv_conflicts_are_recoverable() {
+fn malformed_factors_and_transforms_are_recoverable() {
     for material in [
         json!({"pbrMetallicRoughness":{"baseColorFactor":[-1.,0.,0.,1.]}}),
         json!({"pbrMetallicRoughness":{"metallicFactor":2.}}),
@@ -265,7 +275,8 @@ fn malformed_factors_transforms_and_uv_conflicts_are_recoverable() {
     let value = textured(
         json!({"pbrMetallicRoughness":{"baseColorTexture":{"index":0}},"occlusionTexture":{"index":0,"texCoord":1}}),
     );
-    assert!(error(&prepare(value)).contains("multiple active UV sets"));
+    let definition = prepare(value).material(Some(0)).unwrap();
+    assert_eq!(definition.tex_coord_sets(), [0, 1]);
 }
 
 #[test]
@@ -356,7 +367,7 @@ fn material_geometry_checks_require_matching_uvs_and_active_tangents() {
             0,
             0,
             GeometryOptions {
-                tex_coord_set: 1,
+                tangent_uv_set: 1,
                 ..Default::default()
             },
         )
@@ -370,18 +381,29 @@ fn material_geometry_checks_require_matching_uvs_and_active_tangents() {
             0,
             0,
             GeometryOptions {
-                tex_coord_set: 1,
+                tangent_uv_set: 1,
                 generate_tangents: true,
                 ..Default::default()
             },
         )
         .unwrap();
     definition.validate_geometry(&geometry).unwrap();
+    let base_color = prepare(textured(json!({
+        "pbrMetallicRoughness":{"baseColorTexture":{"index":0}}
+    })))
+    .material(Some(0))
+    .unwrap();
+    assert_eq!(geometry.mesh().uv_at(0, 1), Some([0., 0.]));
+    assert!(
+        format!("{:#}", base_color.validate_geometry(&geometry).unwrap_err())
+            .contains("requires TEXCOORD_0")
+    );
     value["meshes"][0]["primitives"][0]["attributes"] = json!({"POSITION":0,"NORMAL":1});
     let geometry = geometry_document(&value)
         .geometry(0, 0, GeometryOptions::default())
         .unwrap();
     assert!(
-        format!("{:#}", definition.validate_geometry(&geometry).unwrap_err()).contains("UV set")
+        format!("{:#}", definition.validate_geometry(&geometry).unwrap_err())
+            .contains("requires TEXCOORD_1")
     );
 }

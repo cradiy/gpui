@@ -148,11 +148,11 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **CPU asset inspection**: Local glTF/GLB conversion, image decoding, absolute-time scene deformation, repeated-time fingerprints, world bounds, and restricted relative-file resolution in one command-line example.
   - [ ] **Asset compatibility**:
     - [x] **Degenerate-UV tangents**: Reported base-mesh repairs, matching Morph evaluation policy, preserved primitive/vertex mappings, and CPU inspection diagnostics.
-    - [ ] **Multiple active UV sets**: Independent material-slot coordinate sets shared by rendering, tangent generation, and alpha queries.
+    - [x] **Multiple active UV sets**: Independent material-slot coordinate sets shared by rendering, tangent generation, and alpha queries.
       - [x] **Mesh coordinate storage**: Validated sparse coordinate sets, immutable snapshots, and preservation through vertex splitting, Morph and Skin.
       - [x] **Selected-set tangents**: MikkTSpace and repair policies use the selected set, with preserved UV data, basis associations, and deformation propagation.
       - [x] **Coordinate selection**: Per-slot GPU coordinates and gradients, UV-aware geometry caching and batching, matching alpha coverage across outputs, and image-alpha queries.
-      - [ ] **glTF coordinate bindings**: Preserve active coordinate sets and bind each material slot to its authored set.
+      - [x] **glTF coordinate bindings**: Preserve authored coordinate sets, bind each material slot independently, retain selected tangent bases through Morph, and bound coordinate admission.
     - [ ] **Vertex colors**: Linear color/alpha attributes shared by material shading, deformation mappings, and geometry-output visibility.
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.

@@ -260,7 +260,91 @@ fn untextured_primitives_preserve_available_uvs_without_requiring_set_zero() {
     let frame = scene
         .prepare(1., None, |_| Ok(TextureState::Ready(ResolvedTexture::None)))
         .unwrap();
-    assert_eq!(frame.frame().objects[0].mesh.vertices()[1].uv, [1., 0.]);
+    assert_eq!(frame.frame().objects[0].mesh.vertices()[1].uv, [0., 0.]);
+    assert_eq!(frame.frame().objects[0].mesh.uv_at(2, 1), Some([1., 0.]));
+}
+
+#[test]
+fn independent_material_coordinates_survive_scene_conversion_and_resource_resolution() {
+    let mut value = source();
+    for primitive in value["meshes"][0]["primitives"].as_array_mut().unwrap() {
+        for set in [2, 3, 7, 9] {
+            primitive["attributes"][format!("TEXCOORD_{set}")] = json!(2);
+        }
+    }
+    let material = json!({
+        "pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicRoughnessTexture":{"index":0,"texCoord":2}},
+        "emissiveTexture":{"index":0,"texCoord":3},
+        "emissiveFactor":[1,1,1],
+        "normalTexture":{"index":0,"extensions":{"KHR_texture_transform":{"texCoord":7}}},
+        "occlusionTexture":{"index":0,"texCoord":9}
+    });
+    value["materials"] = json!([material, material]);
+    value["textures"] = json!([{"source":0}]);
+    value["images"] = json!([{"uri":"map.png","mimeType":"image/png"}]);
+    value["extensionsUsed"] = json!(["KHR_texture_transform"]);
+    let document = prepared(value);
+    let options = SceneOptions {
+        tex_coord_limit: 30,
+        ..Default::default()
+    };
+    let definition = document.scene(None, options).unwrap();
+    assert_eq!(
+        definition
+            .geometries()
+            .map(|g| g.tex_coord_count())
+            .sum::<usize>(),
+        30
+    );
+    for geometry in definition.geometries() {
+        assert_eq!(geometry.tex_coord_sets(), [0, 2, 3, 7, 9]);
+        assert_eq!(geometry.mesh().tangent_uv_set(), Some(7));
+    }
+    assert!(
+        document
+            .scene(
+                None,
+                SceneOptions {
+                    tex_coord_limit: 29,
+                    ..options
+                }
+            )
+            .is_err()
+    );
+    let mut decoded = 0;
+    let asset = definition
+        .resolve_images(|_, _| {
+            decoded += 1;
+            Ok(Arc::new(RenderImage::new(vec![image::Frame::new(
+                image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4])),
+            )])))
+        })
+        .unwrap();
+    assert_eq!(decoded, 1);
+    let mut graph = SceneGraph::new();
+    graph.instantiate(None, asset.subtree()).unwrap();
+    let scene = graph.evaluate().unwrap().scene(Camera::default());
+    let frame = scene
+        .prepare(1., None, |_| {
+            Ok(TextureState::Ready(ResolvedTexture::Image(AtlasTile {
+                texture_id: AtlasTextureId {
+                    index: 0,
+                    kind: AtlasTextureKind::Polychrome,
+                },
+                tile_id: TileId(0),
+                padding: 0,
+                bounds: Bounds::new(
+                    point(DevicePixels(0), DevicePixels(0)),
+                    size(DevicePixels(1), DevicePixels(1)),
+                ),
+            })))
+        })
+        .unwrap();
+    assert_eq!(frame.frame().objects.len(), 4);
+    for draw in frame.frame().objects.iter() {
+        assert_eq!(draw.texture_uv_sets(), [0, 2, 3, 7, 9]);
+        assert_eq!(draw.mesh.tangent_uv_set(), Some(7));
+    }
 }
 
 #[test]

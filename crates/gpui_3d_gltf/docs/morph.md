@@ -14,6 +14,8 @@ Missing normals are generated as flat face normals from the weighted geometry.
 Authored tangents and tangent deltas are ignored when base normals are absent.
 When tangent generation is requested, MikkTSpace uses the weighted positions,
 normals, and selected UVs with the same repair policy as base-mesh conversion.
+All coordinate sets and the selected tangent-set identifier remain unchanged
+across samples.
 These generation policies use fixed triangle-corner vertices, preserving
 correspondence with skin influences across all samples. Base-mesh repair reports
 do not describe subsequent Morph samples. Flat normal generation still requires

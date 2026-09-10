@@ -15,6 +15,9 @@ use crate::{
 pub struct SceneOptions {
     pub node_limit: usize,
     pub vertex_limit: usize,
+    /// Retained coordinate pairs across unique primitives; also bounds each
+    /// primitive's input and corner-expanded coordinate workspace.
+    pub tex_coord_limit: usize,
     pub index_limit: usize,
     /// Total retained geometry influence slots and unique skin-binding slots.
     pub influence_limit: usize,
@@ -31,6 +34,7 @@ impl Default for SceneOptions {
         Self {
             node_limit: 100_000,
             vertex_limit: 4_194_304,
+            tex_coord_limit: 16_777_216,
             index_limit: 12_582_912,
             influence_limit: 33_554_432,
             joint_limit: 65_536,
@@ -326,6 +330,7 @@ impl PreparedDocument {
         let mut materials = HashMap::new();
         let mut node_count = 1usize;
         let mut vertices_left = options.vertex_limit;
+        let mut tex_coords_left = options.tex_coord_limit;
         let mut indices_left = options.index_limit;
         let mut influences_left = options.influence_limit;
         let mut morph_targets_left = options.morph_target_limit;
@@ -416,23 +421,8 @@ impl PreparedDocument {
                                     key.0,
                                     key.1,
                                     GeometryOptions {
-                                        tex_coord_set: binding.tex_coord_set().unwrap_or_else(
-                                            || {
-                                                primitive
-                                                    .attributes()
-                                                    .filter_map(|(semantic, _)| {
-                                                        if let gltf::Semantic::TexCoords(set) =
-                                                            semantic
-                                                        {
-                                                            Some(set)
-                                                        } else {
-                                                            None
-                                                        }
-                                                    })
-                                                    .min()
-                                                    .unwrap_or(0)
-                                            },
-                                        ),
+                                        tangent_uv_set: binding.normal_tex_coord_set().unwrap_or(0),
+                                        tex_coord_limit: tex_coords_left,
                                         generate_tangents: binding.requires_tangents()
                                             && (primitive.get(&gltf::Semantic::Tangents).is_none()
                                                 || primitive
@@ -447,6 +437,7 @@ impl PreparedDocument {
                                 )?;
                                 binding.validate_geometry(&geometry)?;
                                 vertices_left -= geometry.mesh().vertex_count();
+                                tex_coords_left -= geometry.tex_coord_count();
                                 indices_left -= geometry.mesh().index_count();
                                 influences_left -= geometry.influence_count();
                                 if let Some(morph) = geometry.morph() {

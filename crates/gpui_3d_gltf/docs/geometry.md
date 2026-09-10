@@ -27,10 +27,11 @@ Bounds are computed from converted vertices, not accessor min/max metadata.
 - `TANGENT` accepts unnormalized float VEC4, with a finite nonzero tangent basis
   and handedness of exactly -1 or 1. Handedness must agree within each triangle.
 - Texture coordinates accept unnormalized float VEC2 or normalized unsigned-byte
-  and unsigned-short VEC2. `tex_coord_set` chooses the set copied into the mesh;
-  UVs are not flipped or transformed. When no sets exist, vertices use zero UVs
-  and the result reports `tex_coord_set() == None`. When sets exist but the
-  requested set does not, conversion returns an error.
+  and unsigned-short VEC2. All sets retain their original identifiers and values;
+  UVs are not flipped or transformed. `tex_coord_sets()` lists authored set IDs
+  in ascending order. `Mesh::uv_at(set, vertex)` reads any retained set, while
+  `Vertex::uv` contains set zero. If set zero is absent, it is filled with zeros
+  without adding it to the authored-set list.
 - Skin attributes retain consecutive `JOINTS_n`/`WEIGHTS_n` pairs. Joint indices
   use unsigned-byte/unsigned-short VEC4; weights use float or normalized
   unsigned-byte/unsigned-short VEC4. Weights must be finite and nonnegative, with
@@ -57,10 +58,12 @@ the caller still converts materials and sampling state separately.
 ## Normal and tangent generation
 
 Missing normals produce flat face normals and invalidate authored tangents.
-Set `generate_tangents` to generate MikkTSpace tangents from the selected UV set,
+Set `generate_tangents` to generate MikkTSpace tangents from `tangent_uv_set`,
 replacing authored tangents. This requires texture coordinates and nonzero
 normals. The UV set must correspond to the intended normal
 texture; conversion does not infer it from the material or apply UV transforms.
+`tangent_uv_set` also identifies the basis of retained authored tangents.
+Generating tangents requires that set to exist in the source primitive.
 
 Generation uses `TangentGenerationMode::Repair`: neighboring MikkTSpace frames
 are inherited where available, undefined corners use a triangle derivative when
@@ -75,7 +78,8 @@ before image decoding. `into_parts()` discards repair diagnostics along with
 deformation inputs.
 
 Generation preserves triangle identities and composes vertex mappings across
-normal and tangent splits. Unreferenced vertices are omitted when generation
+normal and tangent splits, retaining every UV set through the same mapping.
+Unreferenced vertices are omitted when generation
 runs. Without generation they remain in the mesh and contribute to its bounds.
 Morph primitives use a fixed triangle-corner layout when generating normals or
 tangents. `MorphGeometry::evaluate` recomputes generated directions from the
@@ -94,6 +98,11 @@ separately from the core mesh and is discarded by `into_parts()`.
 Morph limits default to 1,024 targets and 16,777,216 VEC3 attribute elements per
 primitive. Both input and mapped output attribute counts must fit the latter
 limit. `into_parts()` also discards Morph inputs.
+`tex_coord_limit` defaults to 16,777,216 coordinate pairs across all sets,
+including implicit set zero. It bounds input and worst-case triangle-corner
+workspace before attribute decoding. When generating normals or tangents, the
+larger of input vertex count and expanded index count is charged per set, even
+if the final mesh can share vertices.
 These are element limits, not an exact process-memory budget. Resource
 byte limits remain independent and apply during document preparation.
 

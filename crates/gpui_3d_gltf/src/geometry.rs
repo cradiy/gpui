@@ -11,8 +11,11 @@ use crate::{MorphGeometry, PreparedDocument};
 /// Per-primitive geometry conversion and element admission.
 #[derive(Clone, Copy, Debug)]
 pub struct GeometryOptions {
-    /// UV set copied into the core mesh. A primitive without any UVs uses zero UVs.
-    pub tex_coord_set: u32,
+    /// Coordinate set for authored or generated tangents. All UV sets retain their IDs.
+    pub tangent_uv_set: u32,
+    /// Maximum coordinate pairs in input or corner-expanded generation workspace,
+    /// including the implicit zero-filled set zero when absent from the source.
+    pub tex_coord_limit: usize,
     /// Generate MikkTSpace tangents from the selected UVs, replacing authored tangents.
     pub generate_tangents: bool,
     /// Maximum input and final output vertices. Generation workspace is index-bounded.
@@ -29,7 +32,8 @@ pub struct GeometryOptions {
 impl Default for GeometryOptions {
     fn default() -> Self {
         Self {
-            tex_coord_set: 0,
+            tangent_uv_set: 0,
+            tex_coord_limit: 16_777_216,
             generate_tangents: false,
             vertex_limit: 4_194_304,
             index_limit: 12_582_912,
@@ -48,7 +52,7 @@ pub struct PrimitiveGeometry {
     mesh_index: usize,
     primitive_index: usize,
     material_index: Option<usize>,
-    tex_coord_set: Option<u32>,
+    tex_coord_sets: Vec<u32>,
     pub(crate) influences: Option<crate::skin::VertexInfluences>,
     morph: Option<MorphGeometry>,
     tangent_repairs: Vec<gpui_3d::TangentRepair>,
@@ -71,9 +75,13 @@ impl PrimitiveGeometry {
     pub fn material_index(&self) -> Option<usize> {
         self.material_index
     }
-    /// None when the primitive has no texture coordinates.
-    pub fn tex_coord_set(&self) -> Option<u32> {
-        self.tex_coord_set
+    /// Authored coordinate-set identifiers in ascending order, excluding implicit UVs.
+    pub fn tex_coord_sets(&self) -> &[u32] {
+        &self.tex_coord_sets
+    }
+    /// Retained coordinate pairs across all sets, including implicit set zero.
+    pub fn tex_coord_count(&self) -> usize {
+        self.mesh.uv_sets().count() * self.mesh.vertex_count()
     }
     /// Joint indices address a skin's joint array, not document node indices.
     /// Each slice belongs to one output vertex, after normal/tangent splitting.
@@ -143,8 +151,7 @@ impl PreparedDocument {
         );
         let normals = primitive.get(&Semantic::Normals);
         let tangents = primitive.get(&Semantic::Tangents);
-        let uv = primitive.get(&Semantic::TexCoords(options.tex_coord_set));
-        let mut has_uvs = false;
+        let mut tex_coord_sets = Vec::new();
         for (semantic, accessor) in primitive.attributes() {
             ensure!(
                 accessor.count() == count,
@@ -154,8 +161,8 @@ impl PreparedDocument {
             let valid = match semantic {
                 Semantic::Positions | Semantic::Normals => float(&accessor, Dimensions::Vec3),
                 Semantic::Tangents => float(&accessor, Dimensions::Vec4),
-                Semantic::TexCoords(_) => {
-                    has_uvs = true;
+                Semantic::TexCoords(set) => {
+                    tex_coord_sets.push(set);
                     accessor.dimensions() == Dimensions::Vec2
                         && match accessor.data_type() {
                             DataType::F32 => !accessor.normalized(),
@@ -184,14 +191,11 @@ impl PreparedDocument {
                 accessor.index()
             );
         }
+        tex_coord_sets.sort_unstable();
         ensure!(
-            !has_uvs || uv.is_some(),
-            "TEXCOORD_{} is unavailable",
-            options.tex_coord_set
-        );
-        ensure!(
-            !options.generate_tangents || uv.is_some(),
-            "tangent generation requires texture coordinates"
+            !options.generate_tangents || tex_coord_sets.contains(&options.tangent_uv_set),
+            "tangent generation requires TEXCOORD_{}",
+            options.tangent_uv_set
         );
 
         let index_accessor = primitive.indices();
@@ -218,6 +222,18 @@ impl PreparedDocument {
         ensure!(
             expanded_count <= options.index_limit && expanded_count <= u32::MAX as usize,
             "expanded index count {expanded_count} exceeds index limit"
+        );
+        let coordinate_set_count = tex_coord_sets.len() + usize::from(!tex_coord_sets.contains(&0));
+        let coordinate_vertices = if normals.is_none() || options.generate_tangents {
+            count.max(expanded_count)
+        } else {
+            count
+        };
+        ensure!(
+            coordinate_set_count
+                .checked_mul(coordinate_vertices)
+                .is_some_and(|count| count <= options.tex_coord_limit),
+            "texture coordinate limit exceeded"
         );
         if let Some(accessor) = &index_accessor {
             ensure!(
@@ -283,17 +299,19 @@ impl PreparedDocument {
             .as_ref()
             .map(|accessor| collect(accessor, reader.read_normals()))
             .transpose()?;
-        let uv_values = uv
-            .as_ref()
-            .map(|accessor| {
-                collect(
-                    accessor,
-                    reader
-                        .read_tex_coords(options.tex_coord_set)
-                        .map(|v| v.into_f32()),
-                )
-            })
-            .transpose()?;
+        let mut uv_values = std::collections::BTreeMap::new();
+        for &set in &tex_coord_sets {
+            let accessor = primitive.get(&Semantic::TexCoords(set)).unwrap();
+            let values = collect(&accessor, reader.read_tex_coords(set).map(|v| v.into_f32()))?;
+            for (vertex, uv) in values.iter().enumerate() {
+                ensure!(
+                    uv.iter().all(|v| v.is_finite()),
+                    "TEXCOORD_{set} accessor {} vertex {vertex} has non-finite coordinates",
+                    accessor.index()
+                );
+            }
+            uv_values.insert(set, values);
+        }
         let mut vertices = Vec::with_capacity(count);
         for (index, position) in position_values.into_iter().enumerate() {
             let normal = match &normal_values {
@@ -311,7 +329,7 @@ impl PreparedDocument {
             vertices.push(Vertex {
                 position,
                 normal,
-                uv: uv_values.as_ref().map_or([0.; 2], |values| values[index]),
+                uv: uv_values.get(&0).map_or([0.; 2], |values| values[index]),
             });
         }
         let mut source_vertices: Vec<u32> = (0..count as u32).collect();
@@ -328,6 +346,20 @@ impl PreparedDocument {
             indices = (0..vertices.len() as u32).collect();
         }
         let mut mesh = Mesh::try_new(vertices, indices).context("mesh attributes")?;
+        for (&set, values) in &uv_values {
+            if set != 0 {
+                mesh = mesh
+                    .with_uv_set(
+                        set,
+                        source_vertices
+                            .iter()
+                            .map(|&i| values[i as usize])
+                            .collect(),
+                    )
+                    .with_context(|| format!("TEXCOORD_{set}"))?;
+            }
+        }
+        drop(uv_values);
         if normals.is_none() {
             let (generated, mapping) = mesh
                 .generate_normals(NormalMode::Flat)
@@ -342,13 +374,19 @@ impl PreparedDocument {
             && let Some(accessor) = &tangents
         {
             mesh = mesh
-                .with_tangents(collect(accessor, reader.read_tangents())?)
+                .with_tangents_for_uv_set(
+                    options.tangent_uv_set,
+                    collect(accessor, reader.read_tangents())?,
+                )
                 .context("authored tangents")?;
         }
         let mut tangent_repairs = Vec::new();
         if options.generate_tangents {
             let generated = mesh
-                .generate_tangents_with_mode(gpui_3d::TangentGenerationMode::Repair)
+                .generate_tangents_for_uv_set(
+                    options.tangent_uv_set,
+                    gpui_3d::TangentGenerationMode::Repair,
+                )
                 .context("tangent generation")?;
             tangent_repairs.extend_from_slice(generated.repairs());
             let (generated, mapping) = generated.into_parts();
@@ -385,7 +423,7 @@ impl PreparedDocument {
             mesh_index,
             primitive_index,
             material_index: primitive.material().index(),
-            tex_coord_set: uv.map(|_| options.tex_coord_set),
+            tex_coord_sets,
             influences,
             morph,
             tangent_repairs,

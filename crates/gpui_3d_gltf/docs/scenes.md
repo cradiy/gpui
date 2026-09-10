@@ -77,6 +77,10 @@ asset. Retained evaluated scenes preserve their previous state.
 - `vertex_limit` and `index_limit` apply across unique converted mesh primitives,
   including vertices split by normal or tangent generation. Repeated occurrences
   do not consume additional geometry quota.
+- `tex_coord_limit` counts retained coordinate pairs across all sets of unique
+  primitives, including implicit set zero. Each primitive's input and worst-case
+  normal/tangent generation workspace must fit the remaining quota. Its default
+  is 16,777,216 pairs.
 - `influence_limit` counts retained geometry joint/weight slots and each unique
   `(skin, primitive)` binding's slots, including zero weights.
 - `joint_limit` counts joints in each unique skin definition and each unique
@@ -94,9 +98,11 @@ limits and callback-owned decoded-image limits remain separate. Conversion may
 allocate bounded temporary attribute arrays; counts do not represent exact peak
 bytes. Core instantiation into a destination graph has its own caller-owned policy.
 
-Each active material determines its primitive's UV set. Untextured primitives
-retain their lowest available UV set, or zero UVs if none exists. Missing normals are
-generated, and active normal maps generate tangents when required. Material and
+Primitives retain every authored UV set under its original identifier, including
+sets unused by active materials. Missing set zero is filled with zero UVs.
+Each material slot uses its selected set; the active normal map determines the
+tangent basis. Missing normals are generated, and active normal maps generate
+tangents when required. Material and
 geometry compatibility is checked before image decoding. Local/world transforms
 and world mesh bounds must be representable by the core.
 

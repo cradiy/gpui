@@ -552,6 +552,56 @@ is outside the timed routine; the routine includes preparation and snapshot rele
 Invalid camera, viewport, and point inputs return `CameraError` from the public
 matrix/projection/query methods. Invalid rays return `RayError`.
 
+### Bounds overlap and distance
+
+`Aabb::intersects(other)` tests closed axis-aligned boxes. Touching faces, edges,
+and corners count as intersections, including boxes with zero extent.
+`intersection(other)` returns their shared box or `None`. `distance(other)` is
+the minimum Euclidean distance between the closed boxes: zero for overlap or
+contact, never a signed penetration depth. It returns f64 to keep distances
+finite across the full valid f32 coordinate range. These operations compare
+bounds, not the meshes they enclose. Points can be represented as zero-extent
+boxes through `Aabb::new(point, point)`.
+
+`Scene::bounds_candidates(region)` returns objects whose conservative world AABBs
+overlap the supplied world-space region. It uses the shared object BVH and tests
+individual object bounds after branch pruning; it neither builds nor traverses
+mesh triangle indices. Bounds enclose all mesh vertices, including unreferenced
+vertices, with padding for transform arithmetic. Results can include empty parts
+of a mesh's AABB or small gaps within that padding. Objects without computable
+finite bounds remain candidates. This query does not validate flat-object
+transforms; their normal construction requirements still apply.
+
+```rust
+use gpui_3d::{Aabb, Material, Mesh, Object, PickBehavior, Scene};
+
+let scene = Scene::new()
+    .object(Object::new(Mesh::cube(), Material::color(gpui::rgb(0x80a0c0)))
+        .id("crate").position([2., 0., 0.]));
+let region = Aabb::new([1., -1., -1.], [3., 1., 1.]).unwrap();
+let candidates = scene.bounds_candidates_where(region, |object| {
+    object.pick_behavior != PickBehavior::Ignore
+});
+for object in candidates {
+    let identity = (object.node, object.object_id, object.object_index);
+    # let _ = identity;
+}
+```
+
+Results are borrowed `QueryObject` identities in scene object order, not distance
+order. `bounds_candidates_where` invokes its predicate exactly once for each
+candidate in that order. Use node handles or application IDs for persistent
+identity; scene-local indices can change after evaluation. Filtering does not
+change rendering or other queries.
+
+The camera, occlusion, material alpha, image availability, and `PickBehavior` do
+not restrict bounds candidates. Apply picking policy explicitly in the predicate
+if appropriate. Scenes from hierarchy evaluation contain only mesh nodes with
+inherited visibility enabled; group bounds are not additional results. Updated
+transforms or deformed meshes require a new evaluated scene. Spatial refitting
+and retained snapshots follow the same rules as ray queries. Candidates establish
+neither precise mesh contact nor confirmed screen visibility.
+
 ### Focal length and lens shift
 
 `Projection::from_focal_length(focal_length, sensor_height)` constructs a

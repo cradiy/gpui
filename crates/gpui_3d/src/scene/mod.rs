@@ -212,4 +212,10 @@ impl Scene {
             .get_or_init(|| bvh::ObjectIndex::build_from(&self.index_source()))
             .visit(ray, visit);
     }
+
+    pub(crate) fn visit_bounds(&self, bounds: crate::Aabb, visit: impl FnMut(usize)) {
+        self.spatial_index
+            .get_or_init(|| bvh::ObjectIndex::build_from(&self.index_source()))
+            .visit_bounds(bounds, visit);
+    }
 }

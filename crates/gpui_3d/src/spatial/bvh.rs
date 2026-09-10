@@ -14,6 +14,12 @@ struct Bounds {
 }
 
 impl Bounds {
+    fn intersects(self, region: Aabb) -> bool {
+        (0..3).all(|i| {
+            self.min[i] <= f64::from(region.max()[i]) && f64::from(region.min()[i]) <= self.max[i]
+        })
+    }
+
     fn union(self, other: Self) -> Self {
         Self {
             min: std::array::from_fn(|i| self.min[i].min(other.min[i])),
@@ -187,14 +193,18 @@ impl Bvh {
         result
     }
 
-    fn visit(&self, model: Matrix, ray: Ray, mut visit: impl FnMut(usize)) {
+    fn visit(&self, model: Matrix, ray: Ray, visit: impl FnMut(usize)) {
+        self.visit_matching(|bounds| bounds.overlaps(model, ray), visit);
+    }
+
+    fn visit_matching(&self, overlaps: impl Fn(Bounds) -> bool, mut visit: impl FnMut(usize)) {
         if self.topology.branches.is_empty() {
             return;
         }
         let mut pending = vec![0];
         while let Some(index) = pending.pop() {
             let branch = &self.topology.branches[index];
-            if !self.bounds[index].is_some_and(|bounds| bounds.overlaps(model, ray)) {
+            if !self.bounds[index].is_some_and(&overlaps) {
                 continue;
             }
             if let Some([left, right]) = branch.children {
@@ -323,6 +333,25 @@ pub(crate) struct ObjectIndex {
 }
 
 impl ObjectIndex {
+    pub(crate) fn visit_bounds(&self, region: Aabb, mut visit: impl FnMut(usize)) {
+        self.tree.visit_matching(
+            |bounds| bounds.intersects(region),
+            |index| {
+                let entry = self.entries[self.objects[index]];
+                if let Some(object) = entry.object
+                    && entry.bounds.is_some_and(|bounds| bounds.intersects(region))
+                {
+                    visit(object);
+                }
+            },
+        );
+        for &index in self.unbounded.iter() {
+            if let Some(object) = self.entries[index].object {
+                visit(object);
+            }
+        }
+    }
+
     pub(crate) fn build_from(entries: &[IndexObject]) -> Self {
         let mut bounds = Vec::new();
         let mut indexed = Vec::new();
@@ -434,6 +463,37 @@ impl Mesh {
 mod tests {
     use super::*;
     use crate::{Camera, Material, Node, ReparentMode, Scene, SceneGraph};
+
+    #[test]
+    fn volume_traversal_prunes_distant_branches_and_keeps_closed_contact() {
+        let bounds: Vec<_> = (0..1024)
+            .map(|i| Bounds {
+                min: [f64::from(i) * 4., -0.5, 0.],
+                max: [f64::from(i) * 4. + 1., 0.5, 0.],
+            })
+            .collect();
+        let tree = Bvh::from_bounds(&bounds);
+        let region = Aabb::new([401., 0., 0.], [401., 0., 0.]).unwrap();
+        let checks = std::cell::Cell::new(0);
+        let mut candidates = Vec::new();
+        tree.visit_matching(
+            |bounds| {
+                checks.set(checks.get() + 1);
+                bounds.intersects(region)
+            },
+            |index| candidates.push(index),
+        );
+        assert!(checks.get() < 32, "visited {} branches", checks.get());
+        assert!(candidates.len() <= LEAF_SIZE);
+        assert!(candidates.contains(&100));
+        assert_eq!(
+            candidates
+                .into_iter()
+                .filter(|&i| bounds[i].intersects(region))
+                .collect::<Vec<_>>(),
+            vec![100]
+        );
+    }
 
     fn plane() -> Object {
         Object::new(Mesh::plane(), Material::color(gpui::rgb(0xffffff)))
@@ -653,11 +713,19 @@ mod tests {
         let mut candidates = Vec::new();
         unbounded.visit(ray(100.), |i| candidates.push(i));
         assert_eq!(candidates, [0]);
+        let distant_region = Aabb::new([100.; 3], [101.; 3]).unwrap();
+        let mut candidates = Vec::new();
+        unbounded.visit_bounds(distant_region, |i| candidates.push(i));
+        assert_eq!(candidates, [0]);
+        finite.visit_bounds(distant_region, |_| panic!("distant finite bound visited"));
         finite.visit(ray(100.), |_| panic!("distant finite object visited"));
 
         entries[0].object = None;
         let hidden = unbounded.refit(&entries);
         hidden.visit(ray(0.1), |_| panic!("hidden unbounded object visited"));
+        hidden.visit_bounds(distant_region, |_| {
+            panic!("hidden unbounded object visited")
+        });
         let restored = hidden.refit(&IndexObject::flat(&[plane()]));
         let mut candidates = Vec::new();
         restored.visit(ray(0.1), |i| candidates.push(i));

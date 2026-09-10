@@ -1,7 +1,7 @@
 use gpui::{Bounds, Pixels, point, px, rgb, rgba, size};
 use gpui_3d::{
-    AffineTransform, Camera, Material, Mesh, Node, Object, ObjectId, PickBehavior, Projection, Ray,
-    ReparentMode, Scene, SceneGraph,
+    Aabb, AffineTransform, Camera, Material, Mesh, Node, Object, ObjectId, PickBehavior,
+    Projection, Ray, ReparentMode, Scene, SceneGraph,
 };
 use std::collections::HashSet;
 
@@ -15,6 +15,157 @@ fn ray() -> Ray {
 
 fn viewport() -> Bounds<Pixels> {
     Bounds::new(point(px(30.), px(50.)), size(px(600.), px(400.)))
+}
+
+#[test]
+fn bounds_candidates_are_camera_independent_and_do_not_apply_surface_policy() {
+    let scene = Scene::new()
+        .object(plane().id("ignored").pick_behavior(PickBehavior::Ignore))
+        .object(Object::new(Mesh::plane(), Material::color(rgba(0xffffff00))).id("transparent"))
+        .object(plane().id("occluder").pick_behavior(PickBehavior::Occlude))
+        .object(plane().position([50., 0., 0.]));
+    let region = Aabb::new([0.; 3], [0.; 3]).unwrap();
+    let result = scene.bounds_candidates(region);
+    assert_eq!(
+        result
+            .iter()
+            .map(|object| object.object_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(result[0].pick_behavior, PickBehavior::Ignore);
+    assert_eq!(result[1].object_id, Some(&ObjectId::from("transparent")));
+    assert!(result.iter().all(|object| object.node.is_none()));
+    let mut visited = Vec::new();
+    let filtered = scene.bounds_candidates_where(region, |object| {
+        visited.push(object.object_index);
+        object.object_id == Some(&ObjectId::from("transparent"))
+    });
+    assert_eq!(visited, vec![0, 1, 2]);
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].object_index, 1);
+    let other = scene.clone().camera(Camera {
+        eye: [100., 100., 100.],
+        target: [101., 100., 100.],
+        ..Camera::default()
+    });
+    assert_eq!(other.bounds_candidates(region).len(), 3);
+    assert!(scene.raycast(ray()).is_none());
+    assert!(Scene::new().bounds_candidates(region).is_empty());
+}
+
+#[test]
+fn conservative_bounds_do_not_claim_triangle_contact() {
+    let mut graph = SceneGraph::new();
+    graph
+        .insert(
+            None,
+            Node::new()
+                .mesh(Mesh::plane(), Material::color(rgb(0xffffff)))
+                .transform(
+                    AffineTransform::from_trs(
+                        [0.; 3],
+                        [
+                            0.,
+                            0.,
+                            (std::f32::consts::FRAC_PI_8).sin(),
+                            (std::f32::consts::FRAC_PI_8).cos(),
+                        ],
+                        [1.; 3],
+                    )
+                    .unwrap(),
+                ),
+        )
+        .unwrap();
+    let scene = graph.evaluate().unwrap().scene(Camera::default());
+    let empty_corner = Aabb::new([0.6, 0.6, 0.], [0.6, 0.6, 0.]).unwrap();
+    assert_eq!(scene.bounds_candidates(empty_corner).len(), 1);
+    assert!(
+        scene
+            .raycast(Ray::new([0.6, 0.6, 1.], [0., 0., -1.]).unwrap())
+            .is_none()
+    );
+    let outside = Aabb::new([0.8, 0.8, 0.], [0.8, 0.8, 0.]).unwrap();
+    assert!(scene.bounds_candidates(outside).is_empty());
+}
+
+#[test]
+fn bounds_refits_follow_visibility_order_and_deformation_without_changing_old_states() {
+    let mut graph = SceneGraph::new();
+    let material = Material::color(rgb(0xffffff));
+    let a = graph
+        .insert(None, Node::new().mesh(Mesh::plane(), material.clone()))
+        .unwrap();
+    let root = graph.insert(None, Node::new()).unwrap();
+    let mesh = Mesh::plane();
+    let b = graph
+        .insert(
+            Some(root),
+            Node::new().id("moving").mesh(mesh.clone(), material),
+        )
+        .unwrap();
+    let region = Aabb::new([-1.; 3], [1.; 3]).unwrap();
+    let before = graph.evaluate().unwrap().scene(Camera::default());
+    before.prepare_spatial_index();
+    assert_eq!(
+        before
+            .bounds_candidates(region)
+            .iter()
+            .map(|object| object.node)
+            .collect::<Vec<_>>(),
+        vec![Some(a), Some(b)]
+    );
+    graph.set_visible(a, false).unwrap();
+    graph.reparent(b, None, ReparentMode::KeepLocal).unwrap();
+    let mut vertices = mesh.vertices().to_vec();
+    for vertex in &mut vertices {
+        vertex.position[0] += 10.;
+    }
+    graph
+        .set_mesh(
+            b,
+            mesh.with_vertices(vertices, mesh.tangents().map(<[_]>::to_vec))
+                .unwrap(),
+        )
+        .unwrap();
+    let changed = graph.evaluate().unwrap().scene(Camera::default());
+    changed.prepare_spatial_index_from(&before);
+    assert!(changed.bounds_candidates(region).is_empty());
+    let moved_region = Aabb::new([9., -1., -1.], [11., 1., 1.]).unwrap();
+    let moved = changed.bounds_candidates(moved_region);
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].node, Some(b));
+    assert_eq!(moved[0].object_index, 0);
+    assert_eq!(moved[0].object_id, Some(&ObjectId::from("moving")));
+    assert_eq!(before.bounds_candidates(region).len(), 2);
+    assert!(before.bounds_candidates(moved_region).is_empty());
+    graph.remove_subtree(b).unwrap();
+    let removed = graph.evaluate().unwrap().scene(Camera::default());
+    removed.prepare_spatial_index_from(&changed);
+    assert!(removed.bounds_candidates(moved_region).is_empty());
+    assert_eq!(changed.bounds_candidates(moved_region).len(), 1);
+}
+
+#[test]
+fn bounds_filters_only_visit_overlapping_objects_in_original_order() {
+    let mut scene = Scene::new();
+    for i in (0..1024).rev() {
+        scene = scene.object(plane().position([i as f32 * 4., 0., 0.]));
+    }
+    let region = Aabb::new([400., -0.1, 0.], [412., 0.1, 0.]).unwrap();
+    let mut seen = Vec::new();
+    let result = scene.bounds_candidates_where(region, |object| {
+        seen.push(object.object_index);
+        object.object_index % 2 == 0
+    });
+    assert_eq!(seen, vec![920, 921, 922, 923]);
+    assert_eq!(
+        result
+            .iter()
+            .map(|object| object.object_index)
+            .collect::<Vec<_>>(),
+        vec![920, 922]
+    );
 }
 
 #[test]

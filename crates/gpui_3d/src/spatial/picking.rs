@@ -17,7 +17,7 @@ pub enum PickBehavior {
     Ignore,
 }
 
-/// Borrowed object identity passed to a scene query's candidate filter.
+/// Borrowed object identity returned by bounds queries or passed to query filters.
 #[derive(Clone, Copy, Debug)]
 pub struct QueryObject<'a> {
     /// Index in this scene's flattened list, not a persistent identity.
@@ -26,7 +26,7 @@ pub struct QueryObject<'a> {
     pub node: Option<crate::NodeHandle>,
     /// Application identity; unnamed objects have no ID.
     pub object_id: Option<&'a ObjectId>,
-    /// Authored picking behavior, which still applies to accepted candidates.
+    /// Authored picking behavior. Ray and screen queries apply it; bounds queries do not.
     pub pick_behavior: PickBehavior,
 }
 
@@ -136,6 +136,16 @@ pub struct Hit {
 }
 
 impl Scene {
+    pub(crate) fn query_object(&self, object_index: usize) -> QueryObject<'_> {
+        let object = &self.objects[object_index];
+        QueryObject {
+            object_index,
+            node: object.node,
+            object_id: object.id.as_ref(),
+            pick_behavior: object.pick_behavior,
+        }
+    }
+
     /// Finds the nearest geometric surface at a logical window position.
     ///
     /// Both faces are tested. Unnamed objects still occlude other objects.
@@ -227,13 +237,7 @@ impl Scene {
             alpha,
             |visit| {
                 self.visit_objects(ray, |object_index| {
-                    let object = &self.objects[object_index];
-                    if filter(QueryObject {
-                        object_index,
-                        node: object.node,
-                        object_id: object.id.as_ref(),
-                        pick_behavior: object.pick_behavior,
-                    }) {
+                    if filter(self.query_object(object_index)) {
                         visit(object_index);
                     }
                 });

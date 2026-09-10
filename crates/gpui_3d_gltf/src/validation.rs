@@ -1,6 +1,16 @@
 use anyhow::{Context, Result, ensure};
 use gltf::{Accessor, accessor::Dimensions, buffer::View};
 
+pub(crate) fn supported_extensions(document: &gltf::Document) -> Result<()> {
+    for extension in document.extensions_required() {
+        ensure!(
+            matches!(extension, "KHR_materials_unlit" | "KHR_texture_transform"),
+            "unsupported required extension {extension}"
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn schema(document: &gltf::Document) -> Result<()> {
     use gltf::json::{
         Path,

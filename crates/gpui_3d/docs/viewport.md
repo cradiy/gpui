@@ -1541,6 +1541,8 @@ multi-chain ordering and any conflicting pose overrides.
 - `Material::ui()` samples the viewport's captured UI without lighting.
 - `.unlit(true)` disables lighting for any material.
 - `.tint(color)` sets an sRGB tint, decoded before multiplication; its alpha multiplies texture alpha.
+- `.base_color_texture(texture)` replaces the base image and sampling without
+  resetting tint, image encoding, lighting, other maps, alpha mode, or face visibility.
 - `.alpha_mode(mode)` selects `AlphaMode::Opaque`, `Mask`, or `Blend`.
 - `.alpha_cutoff(value)` selects `Mask` and preserves a finite nonnegative threshold.
   Zero accepts every alpha value; values above one discard the entire surface.

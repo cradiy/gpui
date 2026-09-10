@@ -3013,6 +3013,7 @@ dependencies = [
  "gltf",
  "gpui",
  "gpui_3d",
+ "image",
  "serde_json",
 ]
 

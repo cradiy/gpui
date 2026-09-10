@@ -118,6 +118,13 @@ impl Material {
         self.image_color_space = color_space;
         self
     }
+    /// Sets the base-color image and sampling while preserving tint, alpha,
+    /// lighting, face visibility, other maps, and image RGB encoding.
+    pub fn base_color_texture(mut self, texture: MaterialTexture) -> Self {
+        self.texture = Texture::Image(texture.image);
+        self.sampling = texture.sampling;
+        self
+    }
     /// Enables metallic-roughness shading, preserving the base color, texture and cutoff.
     /// Rendering rejects invalid parameters. Unlit mode bypasses PBR, including emission.
     pub fn pbr(mut self, parameters: PbrMaterial) -> Self {

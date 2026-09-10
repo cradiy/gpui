@@ -88,12 +88,7 @@ impl PreparedDocument {
         primitive_index: usize,
         options: GeometryOptions,
     ) -> Result<PrimitiveGeometry> {
-        for extension in self.gltf().extensions_required() {
-            ensure!(
-                matches!(extension, "KHR_materials_unlit" | "KHR_texture_transform"),
-                "unsupported required extension {extension}"
-            );
-        }
+        crate::validation::supported_extensions(self.gltf())?;
         let source_mesh = self
             .gltf()
             .meshes()

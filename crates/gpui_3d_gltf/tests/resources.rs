@@ -8,6 +8,44 @@ fn parse(value: &Value) -> Document {
     Document::from_slice(&serde_json::to_vec(value).unwrap(), Limits::default()).unwrap()
 }
 
+#[test]
+fn zero_initialized_accessors_preserve_schema_and_reference_validation() {
+    let value = json!({"asset":{"version":"2.0"},
+        "accessors":[{"componentType":5126,"count":3,"type":"VEC3"}]});
+    let document = parse(&value);
+    let prepared = document
+        .prepare(|_| panic!("no resources to resolve"))
+        .unwrap();
+    assert_eq!(prepared.resource_bytes(), 0);
+    for (field, invalid) in [
+        ("componentType", json!(9999)),
+        ("type", json!("BAD")),
+        ("bufferView", json!(8)),
+        ("byteOffset", json!(4)),
+        ("count", json!(0)),
+    ] {
+        let mut invalid_document = value.clone();
+        invalid_document["accessors"][0][field] = invalid;
+        assert!(
+            Document::from_slice(
+                &serde_json::to_vec(&invalid_document).unwrap(),
+                Limits::default()
+            )
+            .is_err(),
+            "{field}"
+        );
+    }
+    let mut invalid_mesh = value;
+    invalid_mesh["meshes"] = json!([{"primitives":[{"attributes":{"POSITION":7}}]}]);
+    assert!(
+        Document::from_slice(
+            &serde_json::to_vec(&invalid_mesh).unwrap(),
+            Limits::default()
+        )
+        .is_err()
+    );
+}
+
 fn binary(json: &Value, bytes: &[u8]) -> Vec<u8> {
     let mut json = serde_json::to_vec(json).unwrap();
     json.resize(json.len().next_multiple_of(4), b' ');

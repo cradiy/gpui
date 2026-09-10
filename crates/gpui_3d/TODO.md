@@ -131,6 +131,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 - [ ] **glTF / GLB importer**: A separate `gpui_3d_gltf` crate translating file nodes, primitives, materials, and images into core data, with explicit unsupported-feature errors.
   - [x] **Document resources**: Bounded JSON/GLB parsing, caller-owned URI resolution, shared binary/image payloads, checked accessor layouts and sparse indices, encoded-byte admission, and retryable preparation without I/O or GPU policy.
+  - [x] **Primitive geometry**: Indexed/non-indexed triangles, strips and fans, interleaved/sparse/zero-initialized accessors, selected normalized UV sets, flat normal and MikkTSpace tangent generation, source-vertex mappings, and bounded conversion into core meshes with explicit unsupported-attribute errors.
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.

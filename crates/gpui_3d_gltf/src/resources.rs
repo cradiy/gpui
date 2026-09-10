@@ -43,7 +43,8 @@ impl Document {
     pub fn from_slice(bytes: &[u8], limits: Limits) -> Result<Self> {
         admit("document bytes", bytes.len(), limits.document_bytes)?;
         super::validation::container(bytes)?;
-        let gltf = gltf::Gltf::from_slice(bytes).context("glTF document")?;
+        let gltf = gltf::Gltf::from_slice_without_validation(bytes).context("glTF document")?;
+        crate::validation::schema(&gltf.document).context("glTF document")?;
         admit("buffers", gltf.buffers().len(), limits.buffers)?;
         admit("images", gltf.images().len(), limits.images)?;
         admit("accessors", gltf.accessors().len(), limits.accessors)?;

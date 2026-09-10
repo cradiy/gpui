@@ -3011,6 +3011,8 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "gltf",
+ "gpui",
+ "gpui_3d",
  "serde_json",
 ]
 

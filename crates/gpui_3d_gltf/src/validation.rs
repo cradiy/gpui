@@ -1,6 +1,48 @@
 use anyhow::{Context, Result, ensure};
 use gltf::{Accessor, accessor::Dimensions, buffer::View};
 
+pub(crate) fn schema(document: &gltf::Document) -> Result<()> {
+    use gltf::json::{
+        Path,
+        validation::{Error, Validate},
+    };
+
+    let root = document.as_json();
+    for (mesh_index, mesh) in root.meshes.iter().enumerate() {
+        for (primitive_index, primitive) in mesh.primitives.iter().enumerate() {
+            for (semantic, accessor) in &primitive.attributes {
+                ensure!(
+                    accessor.value() < root.accessors.len(),
+                    "mesh {mesh_index} primitive {primitive_index}: {semantic:?} accessor {} is out of range",
+                    accessor.value()
+                );
+            }
+        }
+    }
+    let mut failure = None;
+    root.validate(root, Path::new, &mut |path, error| {
+        let path = path();
+        // Accessors without buffer views represent zero-initialized data.
+        let zero_initialized = error == Error::Missing
+            && path
+                .as_str()
+                .strip_prefix("accessors[")
+                .and_then(|path| path.strip_suffix("].bufferView"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .and_then(|index| root.accessors.get(index))
+                .is_some_and(|accessor| {
+                    accessor.buffer_view.is_none() && accessor.sparse.is_none()
+                });
+        if !zero_initialized && failure.is_none() {
+            failure = Some((path, error));
+        }
+    });
+    if let Some((path, error)) = failure {
+        anyhow::bail!("invalid glTF: {path}: {error}");
+    }
+    Ok(())
+}
+
 pub(crate) fn container(bytes: &[u8]) -> Result<()> {
     if !bytes.starts_with(b"glTF") {
         return Ok(());

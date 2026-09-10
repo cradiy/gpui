@@ -22,6 +22,10 @@ Bounds are computed from converted vertices, not accessor min/max metadata.
 
 ## Attributes and topology
 
+The formats below are the base glTF formats.
+[`KHR_mesh_quantization`](quantization.md) also supports integer positions,
+signed normal/tangent data, extended UV formats and signed Morph deltas.
+
 - `POSITION` is required as unnormalized float VEC3.
 - `NORMAL` accepts unnormalized float VEC3. Finite nonzero normals are normalized.
 - `TANGENT` accepts unnormalized float VEC4, with a finite nonzero tangent basis
@@ -55,8 +59,9 @@ removed. Flat normal generation requires nonzero geometric area; tangent
 generation uses the repair policy described below.
 
 Interleaved, sparse, and zero-initialized accessors are supported. Required
-extensions other than `KHR_materials_unlit`, `KHR_texture_transform` and
-[`KHR_lights_punctual`](lights.md) are rejected. Geometry conversion does not apply
+extensions other than `KHR_materials_unlit`, `KHR_texture_transform`,
+[`KHR_lights_punctual`](lights.md) and [`KHR_mesh_quantization`](quantization.md)
+are rejected. Geometry conversion does not apply
 material or lighting effects; those inputs are converted separately.
 
 ## Normal and tangent generation

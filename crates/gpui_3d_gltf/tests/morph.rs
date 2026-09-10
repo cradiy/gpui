@@ -643,7 +643,7 @@ fn invalid_target_metadata_and_data_are_rejected_without_consuming_resources() {
             .geometry(0, 0, GeometryOptions::default())
             .unwrap_err();
         let expected = match kind {
-            "count" => "float VEC3",
+            "count" => "expected 4 VEC3 values",
             "base" => "no base attribute",
             "bounds" => "requires min and max",
             "bounds_order" => "invalid POSITION morph bounds",

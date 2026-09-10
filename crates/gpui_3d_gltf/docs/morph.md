@@ -5,6 +5,10 @@ retains float VEC3 position, normal, and tangent deltas mapped to the converted
 mesh's vertex order. Tangent deltas contain XYZ only; authored handedness is
 preserved. Weights are finite, signed, and neither clamped nor normalized.
 
+Inputs may use float accessors or the signed integer formats defined by
+[`KHR_mesh_quantization`](quantization.md). Retained deltas are floating-point
+values in the same coordinate space as the decoded base geometry.
+
 `evaluate(weights)` returns a mesh without changing its inputs. Weight count
 must equal target count. Zero weights share the base mesh; other results retain
 its index storage. Evaluation starts from the base on every call, independently

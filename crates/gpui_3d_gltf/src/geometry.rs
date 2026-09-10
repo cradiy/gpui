@@ -151,6 +151,7 @@ impl PreparedDocument {
         );
         let normals = primitive.get(&Semantic::Normals);
         let tangents = primitive.get(&Semantic::Tangents);
+        let quantized = crate::validation::quantization(self.gltf());
         let mut tex_coord_sets = Vec::new();
         for (semantic, accessor) in primitive.attributes() {
             ensure!(
@@ -159,8 +160,9 @@ impl PreparedDocument {
                 accessor.index()
             );
             let valid = match semantic {
-                Semantic::Positions | Semantic::Normals => float(&accessor, Dimensions::Vec3),
-                Semantic::Tangents => float(&accessor, Dimensions::Vec4),
+                Semantic::Positions | Semantic::Normals | Semantic::Tangents => {
+                    crate::attribute::format(&accessor, &semantic, false, quantized)
+                }
                 Semantic::Colors(0) => {
                     matches!(accessor.dimensions(), Dimensions::Vec3 | Dimensions::Vec4)
                         && match accessor.data_type() {
@@ -171,12 +173,7 @@ impl PreparedDocument {
                 }
                 Semantic::TexCoords(set) => {
                     tex_coord_sets.push(set);
-                    accessor.dimensions() == Dimensions::Vec2
-                        && match accessor.data_type() {
-                            DataType::F32 => !accessor.normalized(),
-                            DataType::U8 | DataType::U16 => accessor.normalized(),
-                            _ => false,
-                        }
+                    crate::attribute::format(&accessor, &semantic, false, quantized)
                 }
                 Semantic::Joints(_) => {
                     accessor.dimensions() == Dimensions::Vec4
@@ -198,6 +195,18 @@ impl PreparedDocument {
                 "unsupported {semantic:?} accessor {} format",
                 accessor.index()
             );
+            if quantized
+                && matches!(
+                    semantic,
+                    Semantic::Positions
+                        | Semantic::Normals
+                        | Semantic::Tangents
+                        | Semantic::TexCoords(_)
+                )
+                && accessor.data_type() != DataType::F32
+            {
+                crate::attribute::alignment(&accessor)?;
+            }
         }
         tex_coord_sets.sort_unstable();
         ensure!(
@@ -302,15 +311,15 @@ impl PreparedDocument {
                 indices
             }
         };
-        let position_values = collect(&positions, reader.read_positions())?;
+        let position_values = self.vector::<3>(&positions)?;
         let normal_values = normals
             .as_ref()
-            .map(|accessor| collect(accessor, reader.read_normals()))
+            .map(|accessor| self.vector::<3>(accessor))
             .transpose()?;
         let mut uv_values = std::collections::BTreeMap::new();
         for &set in &tex_coord_sets {
             let accessor = primitive.get(&Semantic::TexCoords(set)).unwrap();
-            let values = collect(&accessor, reader.read_tex_coords(set).map(|v| v.into_f32()))?;
+            let values = self.vector::<2>(&accessor)?;
             for (vertex, uv) in values.iter().enumerate() {
                 ensure!(
                     uv.iter().all(|v| v.is_finite()),
@@ -401,10 +410,7 @@ impl PreparedDocument {
             && let Some(accessor) = &tangents
         {
             mesh = mesh
-                .with_tangents_for_uv_set(
-                    options.tangent_uv_set,
-                    collect(accessor, reader.read_tangents())?,
-                )
+                .with_tangents_for_uv_set(options.tangent_uv_set, self.vector::<4>(accessor)?)
                 .context("authored tangents")?;
         }
         let mut tangent_repairs = Vec::new();
@@ -456,12 +462,6 @@ impl PreparedDocument {
             tangent_repairs,
         })
     }
-}
-
-fn float(accessor: &Accessor<'_>, dimensions: Dimensions) -> bool {
-    accessor.data_type() == DataType::F32
-        && accessor.dimensions() == dimensions
-        && !accessor.normalized()
 }
 
 pub(crate) fn collect<T: Default + Clone>(

@@ -148,6 +148,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Morph geometry**: Position/normal/tangent deltas, sparse inputs, authored weights, fixed generated-vertex correspondence, direction regeneration, and per-instance Morph-before-Skin evaluation with bounded shared inputs and initial output admission.
   - [x] **CPU asset inspection**: Local glTF/GLB conversion, image decoding, absolute-time deformation, per-node Morph overrides, combined-binding counts, full vertex-attribute fingerprints, world bounds, and restricted relative-file resolution in one command-line example.
   - [ ] **Asset compatibility**:
+    - [x] **Quantized geometry**: KHR_mesh_quantization integer positions, signed normal/tangent data, extended UV formats and signed Morph deltas, with normalized/interleaved/sparse decoding, declaration and alignment checks, preserved node/texture/skin dequantization, and decoded-element admission.
     - [x] **Degenerate-UV tangents**: Reported base-mesh repairs, matching Morph evaluation policy, preserved primitive/vertex mappings, and CPU inspection diagnostics.
     - [x] **Multiple active UV sets**: Independent material-slot coordinate sets shared by rendering, tangent generation, and alpha queries.
       - [x] **Mesh coordinate storage**: Validated sparse coordinate sets, immutable snapshots, and preservation through vertex splitting, Morph and Skin.

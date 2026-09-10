@@ -4,15 +4,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use gltf::{
-    Semantic,
-    accessor::{DataType, Dimensions},
-};
+use gltf::{Semantic, accessor::DataType};
 use gpui_3d::{
     EvaluatedScene, Mesh, MorphTarget, MorphTargets, NodeHandle, NormalMode, SubtreeInstance,
 };
 
-use crate::{PreparedDocument, SceneAsset, ScenePrimitive, SceneSkin, geometry::collect};
+use crate::{PreparedDocument, SceneAsset, ScenePrimitive, SceneSkin};
 
 pub(crate) fn unsupported_attributes(bytes: &[u8]) -> Result<HashMap<(usize, usize), String>> {
     let json = if bytes.starts_with(b"glTF") {
@@ -350,10 +347,13 @@ pub(crate) fn convert(
                 }
                 ensure!(
                     accessor.count() == count
-                        && accessor.dimensions() == Dimensions::Vec3
-                        && accessor.data_type() == DataType::F32
-                        && !accessor.normalized(),
-                    "{semantic:?} accessor {} must contain {count} float VEC3 values",
+                        && crate::attribute::format(
+                            &accessor,
+                            &semantic,
+                            true,
+                            crate::validation::quantization(document.gltf())
+                        ),
+                    "{semantic:?} accessor {} has an unsupported format or count; expected {count} VEC3 values",
                     accessor.index()
                 );
                 input_count = input_count
@@ -369,12 +369,10 @@ pub(crate) fn convert(
                         "morph output attributes exceed limit"
                     );
                 }
-                let values = collect(
-                    &accessor,
-                    gltf::accessor::Iter::<[f32; 3]>::new(accessor.clone(), |buffer| {
-                        document.buffer(buffer.index())
-                    }),
-                )?;
+                if accessor.data_type() != DataType::F32 {
+                    crate::attribute::alignment(&accessor)?;
+                }
+                let values = document.vector::<3>(&accessor)?;
                 ensure!(
                     values.iter().flatten().all(|value| value.is_finite()),
                     "{semantic:?} contains nonfinite morph deltas"

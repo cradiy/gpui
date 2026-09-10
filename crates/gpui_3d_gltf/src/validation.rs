@@ -1,12 +1,23 @@
 use anyhow::{Context, Result, ensure};
 use gltf::{Accessor, accessor::Dimensions, buffer::View};
 
+const QUANTIZATION: &str = "KHR_mesh_quantization";
+
+pub(crate) fn quantization(document: &gltf::Document) -> bool {
+    document
+        .extensions_required()
+        .any(|name| name == QUANTIZATION)
+}
+
 pub(crate) fn supported_extensions(document: &gltf::Document) -> Result<()> {
     for extension in document.extensions_required() {
         ensure!(
             matches!(
                 extension,
-                "KHR_materials_unlit" | "KHR_texture_transform" | "KHR_lights_punctual"
+                "KHR_materials_unlit"
+                    | "KHR_texture_transform"
+                    | "KHR_lights_punctual"
+                    | QUANTIZATION
             ),
             "unsupported required extension {extension}"
         );
@@ -21,6 +32,20 @@ pub(crate) fn schema(document: &gltf::Document) -> Result<()> {
     };
 
     let root = document.as_json();
+    let quantization_path = root
+        .extensions_required
+        .iter()
+        .position(|name| name == QUANTIZATION)
+        .map(|index| {
+            Path::new()
+                .field("extensionsRequired")
+                .index(index)
+                .value_str(QUANTIZATION)
+        });
+    ensure!(
+        document.extensions_used().any(|name| name == QUANTIZATION) == quantization_path.is_some(),
+        "KHR_mesh_quantization must be declared in both extensionsUsed and extensionsRequired"
+    );
     for (mesh_index, mesh) in root.meshes.iter().enumerate() {
         for (primitive_index, primitive) in mesh.primitives.iter().enumerate() {
             for (semantic, accessor) in &primitive.attributes {
@@ -46,7 +71,11 @@ pub(crate) fn schema(document: &gltf::Document) -> Result<()> {
                 .is_some_and(|accessor| {
                     accessor.buffer_view.is_none() && accessor.sparse.is_none()
                 });
-        if !zero_initialized && failure.is_none() {
+        let imported_extension = error == Error::Unsupported
+            && quantization_path
+                .as_ref()
+                .is_some_and(|expected| expected.as_str() == path.as_str());
+        if !zero_initialized && !imported_extension && failure.is_none() {
             failure = Some((path, error));
         }
     });

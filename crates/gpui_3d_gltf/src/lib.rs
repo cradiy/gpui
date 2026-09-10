@@ -5,6 +5,7 @@
 //! the caller. Prepared resources preserve glTF indices for scene conversion.
 
 mod animation;
+mod attribute;
 mod cache;
 mod camera;
 mod geometry;

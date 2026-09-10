@@ -57,7 +57,7 @@ impl ReadFrame {
     pub fn label_image(
         &self,
         pixel_limit: usize,
-        mut assign: impl FnMut(&RenderObject) -> u32,
+        assign: impl FnMut(&RenderObject) -> u32,
     ) -> Result<FrameLabels, LabelError> {
         let ids = self
             .pixels
@@ -85,13 +85,7 @@ impl ReadFrame {
         pixels
             .try_reserve_exact(ids.len())
             .map_err(|_| LabelError::AllocationFailed)?;
-        let mut labels = Vec::new();
-        labels
-            .try_reserve_exact(self.objects.len())
-            .map_err(|_| LabelError::AllocationFailed)?;
-        for object in self.objects.iter() {
-            labels.push(assign(object));
-        }
+        let labels = assign_labels(&self.objects, assign)?;
         for (index, &output_id) in ids.iter().enumerate() {
             let label = if output_id == 0 {
                 0
@@ -116,6 +110,20 @@ impl ReadFrame {
             objects: self.objects.clone(),
         })
     }
+}
+
+pub(super) fn assign_labels(
+    objects: &[RenderObject],
+    mut assign: impl FnMut(&RenderObject) -> u32,
+) -> Result<Vec<u32>, LabelError> {
+    let mut labels = Vec::new();
+    labels
+        .try_reserve_exact(objects.len())
+        .map_err(|_| LabelError::AllocationFailed)?;
+    for object in objects {
+        labels.push(assign(object));
+    }
+    Ok(labels)
 }
 
 impl FrameLabels {

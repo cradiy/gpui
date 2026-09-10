@@ -1,6 +1,6 @@
 # Frame labels
 
-[Headless output](headless.md)
+[Headless output](headless.md) · [GPU labels](gpu_labels.md)
 
 With the `wgpu` feature, `ReadFrame::label_image(pixel_limit, assign)` remaps an
 available Object ID image to caller-defined `u32` labels. Multiple source objects

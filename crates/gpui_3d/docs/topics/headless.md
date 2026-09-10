@@ -1,5 +1,7 @@
 # Headless rendering
 
+[CPU label images](labels.md) · [GPU labels](gpu_labels.md)
+
 Enable the `wgpu` feature to render 3D scenes without a native window, `App`,
 or UI layout. `HeadlessRenderer` uses the same scene preparation, mesh pass,
 lighting, and alpha-mode shaders as GPUI viewports.

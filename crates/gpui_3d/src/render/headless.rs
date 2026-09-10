@@ -2,9 +2,11 @@
 
 mod coverage;
 mod depth;
+mod gpu_labels;
 mod labels;
 pub use coverage::{CoverageError, FrameCoverage, ObjectCoverage};
 pub use depth::{DepthComparison, DepthQueryError, DepthRelation};
+pub use gpu_labels::RenderedLabels;
 pub use labels::{FrameLabels, LabelError};
 
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
@@ -19,9 +21,9 @@ pub use crate::RenderObject;
 use crate::{Camera, CameraError, PreparationCache, Scene, TextureSource, TextureState};
 
 pub use gpui_wgpu::{
-    Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities, Scene3dDrawStatistics,
-    Scene3dFormatCapabilities, Scene3dOutputConfig, Scene3dPixels, Scene3dTargetMemory,
-    WgpuContext,
+    IdRemapConfig, Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities,
+    Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dOutputConfig, Scene3dPixels,
+    Scene3dTargetMemory, WgpuContext, WgpuIdRemapper,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load

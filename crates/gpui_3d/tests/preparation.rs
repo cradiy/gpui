@@ -94,6 +94,12 @@ fn sampling_validation_precedes_resource_resolution_and_preserves_active_configu
             filter: TextureFilter::Nearest,
             ..Default::default()
         },
+        TextureSampling {
+            max_anisotropy: 4,
+            mip_filter: TextureMipFilter::Linear,
+            mag_filter: Some(TextureFilter::Nearest),
+            ..Default::default()
+        },
     ] {
         for material in [
             Material::image("base.png").image_sampling(sampling),

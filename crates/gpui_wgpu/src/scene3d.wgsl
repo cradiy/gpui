@@ -87,17 +87,21 @@ fn sample_image(source: texture_2d<f32>, source_sampler: sampler, config: ImageP
     let mapped = vec2<f32>(dot(config.uv_u.xyz, vec3<f32>(uv, 1.0)),
         dot(config.uv_v.xyz, vec3<f32>(uv, 1.0)));
     if (!all(abs(mapped) <= vec2<f32>(3.402823466e+38))) { return vec4<f32>(0.0); }
+    let dx = vec2<f32>(dot(config.uv_u.xy, gradients[0]), dot(config.uv_v.xy, gradients[0]));
+    let dy = vec2<f32>(dot(config.uv_u.xy, gradients[1]), dot(config.uv_v.xy, gradients[1]));
+    if (!all(abs(dx) <= vec2<f32>(3.402823466e+38)) || !all(abs(dy) <= vec2<f32>(3.402823466e+38))) { return vec4<f32>(0.0); }
     if (config.uv_u.w > 0.5) {
-        let dx = vec2<f32>(dot(config.uv_u.xy, gradients[0]), dot(config.uv_v.xy, gradients[0]));
-        let dy = vec2<f32>(dot(config.uv_u.xy, gradients[1]), dot(config.uv_v.xy, gradients[1]));
-        if (!all(abs(dx) <= vec2<f32>(3.402823466e+38)) || !all(abs(dy) <= vec2<f32>(3.402823466e+38))) { return vec4<f32>(0.0); }
         return textureSampleGrad(source, source_sampler, mapped, dx, dy);
     }
     let addressed = vec2<f32>(address_coordinate(mapped.x, config.sampling.x),
         address_coordinate(mapped.y, config.sampling.y));
     let extent = max(vec2<i32>(config.rect.zw), vec2<i32>(1));
     let pixel = addressed * vec2<f32>(extent) - vec2<f32>(0.5);
-    if (config.sampling.z == 0u) {
+    let texel_dx = dx * vec2<f32>(extent);
+    let texel_dy = dy * vec2<f32>(extent);
+    let magnified = max(dot(texel_dx, texel_dx), dot(texel_dy, texel_dy)) <= 1.0;
+    let texel_filter = select(config.sampling.z & 1u, (config.sampling.z >> 1u) & 1u, magnified);
+    if (texel_filter == 0u) {
         return image_texel(source, config, vec2<i32>(floor(pixel + vec2<f32>(0.5))), extent);
     }
     let low = vec2<i32>(floor(pixel));

@@ -96,8 +96,10 @@ pub struct TextureSampling3d {
     pub address_u: TextureAddressMode3d,
     /// Vertical addressing.
     pub address_v: TextureAddressMode3d,
-    /// Used for magnification and filtering within each mip level.
+    /// Minification texel filter, also used for magnification unless overridden.
     pub filter: TextureFilter3d,
+    /// Optional magnification filter. `None` uses `filter`.
+    pub mag_filter: Option<TextureFilter3d>,
     /// Defaults to `None`; other modes generate an independent image mip chain.
     pub mip_filter: TextureMipFilter3d,
     /// Maximum anisotropic sample ratio, from 1 through 16. Values above 1
@@ -113,6 +115,7 @@ impl Default for TextureSampling3d {
             address_u: Default::default(),
             address_v: Default::default(),
             filter: Default::default(),
+            mag_filter: None,
             mip_filter: Default::default(),
             max_anisotropy: 1,
         }
@@ -120,11 +123,16 @@ impl Default for TextureSampling3d {
 }
 
 impl TextureSampling3d {
+    /// Magnification filter after applying the optional override.
+    pub fn magnification_filter(self) -> TextureFilter3d {
+        self.mag_filter.unwrap_or(self.filter)
+    }
     /// Whether anisotropy and the selected filtering modes form a supported configuration.
     pub fn is_valid(self) -> bool {
         (1..=16).contains(&self.max_anisotropy)
             && (self.max_anisotropy == 1
                 || self.filter == TextureFilter3d::Linear
+                    && self.magnification_filter() == TextureFilter3d::Linear
                     && self.mip_filter == TextureMipFilter3d::Linear)
     }
 }

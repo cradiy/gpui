@@ -95,7 +95,7 @@ fn image_alpha(image: &RenderImage, uv: [f32; 2], sampling: crate::TextureSampli
         let y = texel(y, height, sampling.address_v) as usize;
         f32::from(bytes[(y * width as usize + x) * 4 + 3]) / 255.
     };
-    if sampling.filter == TextureFilter::Nearest {
+    if sampling.magnification_filter() == TextureFilter::Nearest {
         return alpha((x + 0.5).floor() as i32, (y + 0.5).floor() as i32);
     }
     let x0 = x.floor() as i32;
@@ -1029,6 +1029,14 @@ mod tests {
         let hit = snapshot.pick(point).unwrap();
         assert_eq!(hit.object_id, Some("front".into()));
         assert_eq!(hit.uv, [0.5, 0.5]);
+        snapshot.scene.objects[1].material.sampling.mag_filter = Some(TextureFilter::Linear);
+        assert_eq!(snapshot.pick(point).unwrap().object_id, Some("rear".into()));
+        snapshot.scene.objects[1].material.sampling.filter = TextureFilter::Linear;
+        snapshot.scene.objects[1].material.sampling.mag_filter = Some(TextureFilter::Nearest);
+        assert_eq!(
+            snapshot.pick(point).unwrap().object_id,
+            Some("front".into())
+        );
     }
 
     #[test]

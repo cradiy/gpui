@@ -29,7 +29,7 @@ pub(super) struct Image {
 pub(super) struct ImageCache {
     pipeline: Option<wgpu::RenderPipeline>,
     images: HashMap<Key, Entry>,
-    samplers: HashMap<[u32; 5], wgpu::Sampler>,
+    samplers: HashMap<[u32; 6], wgpu::Sampler>,
 }
 
 impl ImageCache {
@@ -86,6 +86,7 @@ impl ImageCache {
             sampling.address_u as u32,
             sampling.address_v as u32,
             sampling.filter as u32,
+            sampling.magnification_filter() as u32,
             sampling.mip_filter as u32,
             u32::from(sampling.max_anisotropy),
         ];
@@ -146,13 +147,17 @@ fn tile_key(tile: AtlasTile, srgb: bool) -> (gpui::AtlasTextureId, u32, [i32; 4]
     )
 }
 
+pub(super) fn filter_flags(sampling: TextureSampling3d) -> u32 {
+    sampling.filter as u32 | ((sampling.magnification_filter() as u32) << 1)
+}
+
 fn sampler_descriptor(sampling: TextureSampling3d) -> wgpu::SamplerDescriptor<'static> {
     let address = |value| match value {
         TextureAddressMode3d::Clamp => wgpu::AddressMode::ClampToEdge,
         TextureAddressMode3d::Repeat => wgpu::AddressMode::Repeat,
         TextureAddressMode3d::Mirror => wgpu::AddressMode::MirrorRepeat,
     };
-    let filter = match sampling.filter {
+    let filter = |value| match value {
         TextureFilter3d::Nearest => wgpu::FilterMode::Nearest,
         TextureFilter3d::Linear => wgpu::FilterMode::Linear,
     };
@@ -160,8 +165,8 @@ fn sampler_descriptor(sampling: TextureSampling3d) -> wgpu::SamplerDescriptor<'s
         label: Some("scene3d_image"),
         address_mode_u: address(sampling.address_u),
         address_mode_v: address(sampling.address_v),
-        mag_filter: filter,
-        min_filter: filter,
+        mag_filter: filter(sampling.magnification_filter()),
+        min_filter: filter(sampling.filter),
         mipmap_filter: match sampling.mip_filter {
             TextureMipFilter3d::Linear => wgpu::MipmapFilterMode::Linear,
             _ => wgpu::MipmapFilterMode::Nearest,
@@ -420,41 +425,60 @@ mod tests {
                 TextureAddressMode3d::Mirror,
             ] {
                 for filter in [TextureFilter3d::Nearest, TextureFilter3d::Linear] {
-                    for mip_filter in [
-                        TextureMipFilter3d::None,
-                        TextureMipFilter3d::Nearest,
-                        TextureMipFilter3d::Linear,
+                    for mag_filter in [
+                        None,
+                        Some(TextureFilter3d::Nearest),
+                        Some(TextureFilter3d::Linear),
                     ] {
-                        for max_anisotropy in [1, 2, 4, 8, 16] {
-                            let sampling = TextureSampling3d {
-                                address_u,
-                                address_v,
-                                filter,
-                                mip_filter,
-                                max_anisotropy,
-                                ..Default::default()
-                            };
-                            if !sampling.is_valid() {
-                                continue;
+                        for mip_filter in [
+                            TextureMipFilter3d::None,
+                            TextureMipFilter3d::Nearest,
+                            TextureMipFilter3d::Linear,
+                        ] {
+                            for max_anisotropy in [1, 2, 4, 8, 16] {
+                                let sampling = TextureSampling3d {
+                                    address_u,
+                                    address_v,
+                                    filter,
+                                    mag_filter,
+                                    mip_filter,
+                                    max_anisotropy,
+                                    ..Default::default()
+                                };
+                                if !sampling.is_valid() {
+                                    continue;
+                                }
+                                let descriptor = sampler_descriptor(sampling);
+                                let address = |value| match value {
+                                    TextureAddressMode3d::Clamp => wgpu::AddressMode::ClampToEdge,
+                                    TextureAddressMode3d::Repeat => wgpu::AddressMode::Repeat,
+                                    TextureAddressMode3d::Mirror => wgpu::AddressMode::MirrorRepeat,
+                                };
+                                assert_eq!(descriptor.address_mode_u, address(address_u));
+                                assert_eq!(descriptor.address_mode_v, address(address_v));
+                                assert_eq!(descriptor.anisotropy_clamp, max_anisotropy);
+                                assert_eq!(
+                                    descriptor.mag_filter == wgpu::FilterMode::Linear,
+                                    mag_filter.unwrap_or(filter) == TextureFilter3d::Linear
+                                );
+                                assert_eq!(
+                                    descriptor.min_filter == wgpu::FilterMode::Linear,
+                                    filter == TextureFilter3d::Linear
+                                );
+                                let flags = filter_flags(sampling);
+                                assert_eq!(
+                                    flags & 1 != 0,
+                                    descriptor.min_filter == wgpu::FilterMode::Linear
+                                );
+                                assert_eq!(
+                                    flags & 2 != 0,
+                                    descriptor.mag_filter == wgpu::FilterMode::Linear
+                                );
+                                assert_eq!(
+                                    descriptor.mipmap_filter == wgpu::MipmapFilterMode::Linear,
+                                    mip_filter == TextureMipFilter3d::Linear
+                                );
                             }
-                            let descriptor = sampler_descriptor(sampling);
-                            let address = |value| match value {
-                                TextureAddressMode3d::Clamp => wgpu::AddressMode::ClampToEdge,
-                                TextureAddressMode3d::Repeat => wgpu::AddressMode::Repeat,
-                                TextureAddressMode3d::Mirror => wgpu::AddressMode::MirrorRepeat,
-                            };
-                            assert_eq!(descriptor.address_mode_u, address(address_u));
-                            assert_eq!(descriptor.address_mode_v, address(address_v));
-                            assert_eq!(descriptor.anisotropy_clamp, max_anisotropy);
-                            assert_eq!(
-                                descriptor.mag_filter == wgpu::FilterMode::Linear,
-                                filter == TextureFilter3d::Linear
-                            );
-                            assert_eq!(descriptor.min_filter, descriptor.mag_filter);
-                            assert_eq!(
-                                descriptor.mipmap_filter == wgpu::MipmapFilterMode::Linear,
-                                mip_filter == TextureMipFilter3d::Linear
-                            );
                         }
                     }
                 }

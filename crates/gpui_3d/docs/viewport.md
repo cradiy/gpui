@@ -2168,6 +2168,7 @@ let sampling = TextureSampling {
     filter: TextureFilter::Linear,
     mip_filter: TextureMipFilter::Linear,
     max_anisotropy: 8,
+    mag_filter: None,
 };
 let material = Material::image("tile.png").image_sampling(sampling);
 # Ok(())
@@ -2189,11 +2190,16 @@ are independent. Image UVs describe texel edges: texel `i` is centered at
 `(i + 0.5) / extent`. Nearest selects one texel and Linear interpolates four
 neighbors. Sampling remains inside the image, without accessing neighboring atlas tiles.
 
+`filter` selects minification filtering within a level. `mag_filter` optionally
+selects a different magnification filter; `None` uses `filter` for both. GPU
+sampling chooses between them from the transformed UV footprint, including when
+mipmaps are disabled.
+
 `mip_filter` selects `None`, `Nearest`, or `Linear`: the original image only,
 the nearest mip level, or interpolation between adjacent levels. With mipmaps
 enabled, `max_anisotropy` controls the maximum sampling ratio for oblique surfaces,
-from 1 through 16. Values above 1 require both `filter` and `mip_filter` to be
-`Linear`. Invalid combinations return a scene-preparation error before resource
+from 1 through 16. Values above 1 require linear minification, magnification, and
+mip filtering. Invalid combinations return a scene-preparation error before resource
 resolution. Each material-map slot has its own sampling configuration.
 Actual anisotropic filtering is backend-dependent; WGPU uses isotropic sampling
 on devices without anisotropic-filtering support.
@@ -2216,9 +2222,9 @@ maps; use an appropriate cutoff and texture content for distant masked surfaces.
 These settings apply only to image materials. Captured UI textures retain their
 identity UV mapping and linear edge-clamped sampling, including pointer routing.
 `Hit::uv` always contains the original mesh UVs. Viewport image-alpha picking
-applies the material's UV transform, addressing, and texel filter at level zero
+applies the material's UV transform, addressing, and magnification filter at level zero
 before evaluating its alpha mode. CPU ray queries do not have a screen-space
-sampling footprint, so mipmapped alpha masks can differ from GPU visibility
+sampling footprint, so these alpha queries can differ from GPU visibility
 during minification. Interpolation near a cutoff can also differ at floating-point
 precision boundaries between CPU and GPU.
 

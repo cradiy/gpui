@@ -389,11 +389,6 @@ fn sampling(
             TextureMipFilter::Linear,
         ),
     };
-    ensure!(
-        mag.is_none_or(|mag| mag == filter),
-        "sampler {:?}: differing magnification/minification texel filters are unsupported",
-        sampler.index()
-    );
     let address = |mode| match mode {
         WrappingMode::ClampToEdge => TextureAddressMode::Clamp,
         WrappingMode::Repeat => TextureAddressMode::Repeat,
@@ -413,6 +408,7 @@ fn sampling(
         address_u: address(sampler.wrap_s()),
         address_v: address(sampler.wrap_t()),
         filter,
+        mag_filter: mag,
         mip_filter,
         max_anisotropy: 1,
     })

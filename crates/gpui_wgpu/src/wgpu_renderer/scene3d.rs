@@ -299,7 +299,7 @@ impl ImageParams {
             sampling: [
                 sampling.address_u as u32,
                 sampling.address_v as u32,
-                sampling.filter as u32,
+                images::filter_flags(sampling),
                 color_space as u32,
             ],
         }
@@ -1110,7 +1110,7 @@ impl Scene3dRenderer {
                 sampling: [
                     object.sampling.address_u as u32,
                     object.sampling.address_v as u32,
-                    object.sampling.filter as u32,
+                    images::filter_flags(object.sampling),
                     object.image_color_space as u32,
                 ],
                 view: [
@@ -2305,6 +2305,9 @@ mod tests {
         variants.push(changed);
         let mut changed = source.clone();
         changed.sampling.filter = gpui::TextureFilter3d::Nearest;
+        variants.push(changed);
+        let mut changed = source.clone();
+        changed.sampling.mag_filter = Some(gpui::TextureFilter3d::Nearest);
         variants.push(changed);
         let mut changed = source.clone();
         changed.sampling.mip_filter = gpui::TextureMipFilter3d::Linear;

@@ -181,7 +181,7 @@ fn five_map_materials_share_decoding_and_preserve_per_slot_sampling() {
 }
 
 #[test]
-fn sampler_modes_are_exact_and_incompatible_filters_are_reported() {
+fn sampler_modes_preserve_independent_minification_and_magnification() {
     for (min, filter, mip) in [
         (9728, TextureFilter::Nearest, TextureMipFilter::None),
         (9729, TextureFilter::Linear, TextureMipFilter::None),
@@ -198,12 +198,17 @@ fn sampler_modes_are_exact_and_incompatible_filters_are_reported() {
         let sampling = definition.textures()[0].sampling();
         assert_eq!((sampling.filter, sampling.mip_filter), (filter, mip));
         assert_eq!(sampling.address_u, TextureAddressMode::Repeat);
-        value["samplers"][0]["magFilter"] = json!(if filter == TextureFilter::Linear {
-            9728
-        } else {
-            9729
-        });
-        assert!(error(&prepare(value)).contains("differing magnification/minification"));
+        assert_eq!(sampling.magnification_filter(), filter);
+        for (mag, expected) in [
+            (9728, TextureFilter::Nearest),
+            (9729, TextureFilter::Linear),
+        ] {
+            value["samplers"][0]["magFilter"] = json!(mag);
+            let definition = prepare(value.clone()).material(Some(0)).unwrap();
+            let sampling = definition.textures()[0].sampling();
+            assert_eq!((sampling.filter, sampling.mip_filter), (filter, mip));
+            assert_eq!(sampling.magnification_filter(), expected);
+        }
     }
     let document = prepare(textured(
         json!({"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}),

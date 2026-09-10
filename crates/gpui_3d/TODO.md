@@ -58,6 +58,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Geometry primitives**: Configurable UV spheres, capped/open cylinders and cones, and subdivided XY planes; bounded generation, outward winding, split seams/tips/caps, analytic normal/tangent frames, mesh bounds, and shared query/render storage.
 - [x] **Image sampling**: Affine UV transforms, independent Clamp/Repeat/Mirror addressing, Nearest/Linear filtering, atlas-local interpolation, and matching alpha-aware picking.
 - [x] **Texture sampling extensions**: Independent linear-space image mip chains, area-weighted odd-size reduction, per-map nearest/trilinear level selection, 1–16× anisotropy, UV-gradient sampling, allocation-aware cache invalidation, and shared color/geometry-output alpha sampling. CPU ray alpha queries use level zero.
+  - [x] **Independent texel filters**: Separate magnification overrides and minification filters for atlas and mipmapped images, sampler/cache identity, material batching, and explicit level-zero magnification filtering in CPU alpha queries.
 
 ## Phase 3: Materials and Lighting
 
@@ -144,7 +145,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Skeletal skins**: Consecutive joint/weight sets, generated-vertex correspondence, ordered inverse binds, shared primitive bindings, selected-scene hierarchy validation, authored initial deformation, and explicit per-instance final-pose skinning with aggregate admission.
   - [x] **Morph geometry**: Position/normal/tangent deltas, sparse inputs, authored weights, fixed generated-vertex correspondence, direction regeneration, and per-instance Morph-before-Skin evaluation with bounded shared inputs and initial output admission.
   - [x] **CPU asset inspection**: Local glTF/GLB conversion, image decoding, absolute-time scene deformation, repeated-time fingerprints, world bounds, and restricted relative-file resolution in one command-line example.
-  - [ ] **Asset compatibility**: Independent magnification/minification filters, degenerate-UV tangent handling, multiple active UV sets, and vertex colors.
+  - [ ] **Asset compatibility**: Degenerate-UV tangent handling, multiple active UV sets, and vertex colors.
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.

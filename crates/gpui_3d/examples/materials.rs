@@ -138,6 +138,7 @@ impl Materials {
                 emissive,
             });
             let sampling = TextureSampling {
+                mag_filter: None,
                 transform: UvTransform::from_scale_rotation_translation(
                     [self.density; 2],
                     0.,
@@ -184,6 +185,7 @@ impl Materials {
             );
         }
         let sampling = TextureSampling {
+            mag_filter: None,
             transform: UvTransform::from_scale_rotation_translation(
                 [self.density; 2],
                 0.2,

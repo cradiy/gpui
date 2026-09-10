@@ -76,8 +76,8 @@ mapped explicitly. With no specified filters, conversion uses linear texel and
 trilinear mip filtering. If only magnification is specified, its texel filter is
 also used for minification with linear mip interpolation. If only minification
 is specified, magnification uses the same texel filter. Explicitly different
-magnification/minification texel filters are unsupported by the core sampler and
-return an error. Anisotropy is one.
+magnification/minification texel filters are preserved independently through
+`filter` and `mag_filter`. Anisotropy is one.
 
 `KHR_texture_transform` applies scale, rotation and offset to each slot's sampling
 coordinates. Its `texCoord` overrides the texture's original set, including for

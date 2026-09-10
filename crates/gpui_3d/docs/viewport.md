@@ -167,6 +167,53 @@ collapse a generated triangle in f32 coordinates return `PrimitiveError::Degener
 with its triangle index. Primitive generation does not emit zero-area pole or
 tip triangles.
 
+### Normal generation
+
+`Mesh::generate_normals(mode)` returns a `GeneratedNormals` mesh and an
+output-to-source vertex map. Normals come from indexed positions and
+counterclockwise winding, independently of existing normal values or UVs.
+
+- `NormalMode::Flat` assigns each face's unit normal, splitting shared source
+  vertices where the generated face normals differ. Coplanar faces can reuse
+  vertices.
+- `NormalMode::Smooth` sums face cross products at each shared source index and
+  normalizes the sum, giving area-weighted smoothing. It does not weld coincident
+  positions or smooth across separate source indices. There is no implicit
+  crease-angle threshold.
+
+```rust
+use gpui_3d::{Mesh, NormalMode, Vertex};
+
+let vertices = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]]
+    .map(|position| Vertex { position, normal: [0.; 3], uv: [0.; 2] });
+let source = Mesh::try_new(vertices.to_vec(), vec![0, 1, 2])?;
+let generated = source.generate_normals(NormalMode::Flat)?;
+let mesh = generated.mesh();
+let source_index = generated.source_vertices()[0];
+# let _ = (mesh, source_index);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Triangle order, winding, positions, and UVs remain unchanged. Output vertices
+follow first use, omit unreferenced vertices, and do not merge distinct source
+indices. Output bounds exclude omitted positions. Existing normals are replaced
+and tangents are removed. Generate tangents from the resulting normals and UVs
+when required by the material.
+
+`NormalGenerationError` identifies zero-area triangles and undefined smooth
+normals caused by cancelling incident faces. Generation returns an error instead
+of removing triangles or choosing an arbitrary normal. Cross products and smooth
+sums use f64; output normals are normalized f32 vectors. The source mesh remains
+unchanged on success and failure.
+
+`source_vertices()[output_index]` maps generated vertices to source attributes.
+Use it to remap skin influences, position deltas, and external data. If tangent
+generation also splits vertices, compose its map with the normal-generation map.
+Vertex correspondence does not convert normal or tangent deltas to a new basis;
+recompute those deltas when replacing their authored basis. To derive normals
+from deformed positions, generate after evaluating the position deformation.
+Generation is explicit CPU work, not an automatic rendering step.
+
 ### Fixed-topology updates
 
 `Mesh::with_vertices(vertices, tangents)` returns an immutable snapshot with new

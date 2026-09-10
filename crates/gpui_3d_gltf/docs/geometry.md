@@ -46,7 +46,8 @@ indices. Non-indexed primitives use accessor order. Triangle lists retain their
 index order; strips and fans expand to triangle lists with the original winding
 and triangle sequence. Lines and points return errors. Out-of-range indices and
 reserved primitive-restart values are rejected. Degenerate triangles are not
-removed; normal or tangent generation reports them as errors.
+removed. Flat normal generation requires nonzero geometric area; tangent
+generation uses the repair policy described below.
 
 Interleaved, sparse, and zero-initialized accessors are supported. Required
 extensions other than `KHR_materials_unlit` and `KHR_texture_transform` are
@@ -57,9 +58,21 @@ the caller still converts materials and sampling state separately.
 
 Missing normals produce flat face normals and invalidate authored tangents.
 Set `generate_tangents` to generate MikkTSpace tangents from the selected UV set,
-replacing authored tangents. This requires texture coordinates and nondegenerate
-geometry and UV triangles. The UV set must correspond to the intended normal
+replacing authored tangents. This requires texture coordinates and nonzero
+normals. The UV set must correspond to the intended normal
 texture; conversion does not infer it from the material or apply UV transforms.
+
+Generation uses `TangentGenerationMode::Repair`: neighboring MikkTSpace frames
+are inherited where available, undefined corners use a triangle derivative when
+possible, and otherwise receive a deterministic normal-orthogonal basis.
+`tangent_repairs()` reports base-mesh triangle/corner positions and repair kinds;
+triangle indices refer to the expanded triangle list. A synthesized orthonormal
+basis does not recover an undefined authored UV direction. Callers requiring
+that fidelity can reject the reported repairs. Invalid normals, numerical range
+failures, and incompatible triangle handedness remain errors.
+`SceneDefinition::geometries()` exposes unique primitives and these diagnostics
+before image decoding. `into_parts()` discards repair diagnostics along with
+deformation inputs.
 
 Generation preserves triangle identities and composes vertex mappings across
 normal and tangent splits. Unreferenced vertices are omitted when generation

@@ -4,11 +4,44 @@ use bevy_mikktspace::{Geometry, TangentSpace};
 
 use crate::{Mesh, TangentError, Vertex};
 
+/// Handling of degenerate triangles and undefined tangent frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TangentGenerationMode {
+    /// Reject zero-area triangles and undefined frames.
+    #[default]
+    Strict,
+    /// Let MikkTSpace inherit neighboring tangent frames. Corners without a usable
+    /// inherited frame still return an error; no default basis is substituted.
+    Inherit,
+    /// Inherit neighboring frames, then repair undefined corners using a triangle
+    /// derivative or a deterministic normal-orthogonal basis. Repairs are reported.
+    Repair,
+}
+
+/// Source of a repaired corner's tangent direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TangentRepairKind {
+    /// The triangle's position/UV derivative, projected against the vertex normal.
+    TriangleDerivative,
+    /// The least-aligned coordinate axis, projected against the vertex normal.
+    /// This is a convention, not a recovered UV direction.
+    OrthonormalBasis,
+}
+
+/// A repaired corner, addressed in the original triangle order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TangentRepair {
+    pub triangle: usize,
+    pub corner: usize,
+    pub kind: TangentRepairKind,
+}
+
 /// A tangent-bearing mesh and its output-to-source vertex mapping.
 #[derive(Clone, Debug)]
 pub struct GeneratedTangents {
     mesh: Mesh,
     source_vertices: Vec<u32>,
+    repairs: Vec<TangentRepair>,
 }
 
 impl GeneratedTangents {
@@ -20,6 +53,12 @@ impl GeneratedTangents {
     /// vertex attributes, morph deltas, and skin influences before deformation.
     pub fn source_vertices(&self) -> &[u32] {
         &self.source_vertices
+    }
+
+    /// Corners whose undefined MikkTSpace result required explicit repair.
+    /// Neighbor-inherited MikkTSpace results are not repairs.
+    pub fn repairs(&self) -> &[TangentRepair] {
+        &self.repairs
     }
 
     pub fn into_parts(self) -> (Mesh, Vec<u32>) {
@@ -89,6 +128,17 @@ impl Mesh {
     /// Zero geometric/UV area and unrepresentable f32 intermediates return errors;
     /// triangles are never silently dropped and no arbitrary basis is substituted.
     pub fn generate_tangents(&self) -> Result<GeneratedTangents, TangentGenerationError> {
+        self.generate_tangents_with_mode(TangentGenerationMode::Strict)
+    }
+
+    /// Generates tangents with explicit handling of degenerate inputs and frames.
+    /// Retains every triangle and the same output-to-source mapping contract as
+    /// [`Self::generate_tangents`]. Invalid normals, unrepresentable calculations,
+    /// and incompatible triangle handedness remain errors in every mode.
+    pub fn generate_tangents_with_mode(
+        &self,
+        mode: TangentGenerationMode,
+    ) -> Result<GeneratedTangents, TangentGenerationError> {
         if self.index_count() > u32::MAX as usize || self.triangle_count() > usize::MAX / 4 {
             return Err(TangentGenerationError::TooLarge);
         }
@@ -103,6 +153,7 @@ impl Mesh {
             validate_triangle(
                 std::array::from_fn(|i| self.vertices()[indices[i] as usize]),
                 triangle,
+                mode,
             )?;
         }
 
@@ -113,6 +164,48 @@ impl Mesh {
         // The dependency's error type is uninhabited.
         bevy_mikktspace::generate_tangents(&mut geometry)
             .expect("MikkTSpace returned an uninhabited error");
+
+        let mut repairs = Vec::new();
+        if mode == TangentGenerationMode::Repair {
+            for (triangle, (face, corners)) in self
+                .indices()
+                .chunks_exact(3)
+                .zip(geometry.corners.chunks_exact_mut(3))
+                .enumerate()
+            {
+                let vertices = std::array::from_fn(|i| self.vertices()[face[i] as usize]);
+                let derivative = triangle_derivative(vertices);
+                let handedness = corners
+                    .iter()
+                    .zip(vertices)
+                    .find_map(|(&t, v)| t.and_then(|t| orthogonalized(t, v.normal)))
+                    .map(|t| t[3])
+                    .unwrap_or_else(|| derivative.map_or(1., |t| t[3]));
+                for (corner, (tangent, vertex)) in corners.iter_mut().zip(vertices).enumerate() {
+                    if tangent
+                        .and_then(|t| orthogonalized(t, vertex.normal))
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    let (mut repaired, kind) =
+                        match derivative.and_then(|t| orthogonalized(t, vertex.normal)) {
+                            Some(t) => (t, TangentRepairKind::TriangleDerivative),
+                            None => (
+                                normal_basis(vertex.normal),
+                                TangentRepairKind::OrthonormalBasis,
+                            ),
+                        };
+                    repaired[3] = handedness;
+                    *tangent = Some(repaired);
+                    repairs.push(TangentRepair {
+                        triangle,
+                        corner,
+                        kind,
+                    });
+                }
+            }
+        }
 
         let mut vertices = Vec::new();
         let mut tangents = Vec::new();
@@ -147,6 +240,7 @@ impl Mesh {
         Ok(GeneratedTangents {
             mesh,
             source_vertices,
+            repairs,
         })
     }
 }
@@ -215,7 +309,41 @@ fn orthogonalized(tangent: [f32; 4], normal: [f32; 3]) -> Option<[f32; 4]> {
     ])
 }
 
-fn validate_triangle(vertices: [Vertex; 3], triangle: usize) -> Result<(), TangentGenerationError> {
+fn triangle_derivative(vertices: [Vertex; 3]) -> Option<[f32; 4]> {
+    let uv: [[f64; 2]; 2] = [1, 2].map(|v| {
+        std::array::from_fn(|i| f64::from(vertices[v].uv[i]) - f64::from(vertices[0].uv[i]))
+    });
+    let determinant = uv[0][0] * uv[1][1] - uv[0][1] * uv[1][0];
+    if determinant == 0. {
+        return None;
+    }
+    let direction: [f64; 3] = std::array::from_fn(|i| {
+        ((f64::from(vertices[1].position[i]) - f64::from(vertices[0].position[i])) * uv[1][1]
+            - (f64::from(vertices[2].position[i]) - f64::from(vertices[0].position[i])) * uv[0][1])
+            * determinant.signum()
+    });
+    let length = direction.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if length == 0. {
+        return None;
+    }
+    let t = direction.map(|v| (v / length) as f32);
+    Some([t[0], t[1], t[2], determinant.signum() as f32])
+}
+
+fn normal_basis(normal: [f32; 3]) -> [f32; 4] {
+    let axis = (0..3)
+        .min_by(|&a, &b| normal[a].abs().total_cmp(&normal[b].abs()))
+        .unwrap();
+    let mut tangent = [0., 0., 0., 1.];
+    tangent[axis] = 1.;
+    orthogonalized(tangent, normal).expect("nonzero normal and least-aligned axis")
+}
+
+fn validate_triangle(
+    vertices: [Vertex; 3],
+    triangle: usize,
+    mode: TangentGenerationMode,
+) -> Result<(), TangentGenerationError> {
     let edges: [[f64; 3]; 2] = [1, 2].map(|v| {
         std::array::from_fn(|i| {
             f64::from(vertices[v].position[i]) - f64::from(vertices[0].position[i])
@@ -225,13 +353,15 @@ fn validate_triangle(vertices: [Vertex; 3], triangle: usize) -> Result<(), Tange
         edges[0][(i + 1) % 3] * edges[1][(i + 2) % 3]
             - edges[0][(i + 2) % 3] * edges[1][(i + 1) % 3]
     });
-    if area == [0.; 3] {
+    let zero_geometry = area == [0.; 3];
+    if zero_geometry && mode == TangentGenerationMode::Strict {
         return Err(TangentGenerationError::DegenerateGeometry { triangle });
     }
     let uv: [[f64; 2]; 2] = [1, 2].map(|v| {
         std::array::from_fn(|i| f64::from(vertices[v].uv[i]) - f64::from(vertices[0].uv[i]))
     });
-    if uv[0][0] * uv[1][1] - uv[0][1] * uv[1][0] == 0. {
+    let zero_uv = uv[0][0] * uv[1][1] - uv[0][1] * uv[1][0] == 0.;
+    if zero_uv && mode == TangentGenerationMode::Strict {
         return Err(TangentGenerationError::DegenerateUv { triangle });
     }
     let edges = edges.map(|v| v.map(|v| v as f32));
@@ -241,14 +371,18 @@ fn validate_triangle(vertices: [Vertex; 3], triangle: usize) -> Result<(), Tange
     let t: [f32; 3] = std::array::from_fn(|i| edges[1][i] * uv[0][0] - edges[0][i] * uv[1][0]);
     let opposite: [f32; 3] =
         std::array::from_fn(|i| vertices[2].position[i] - vertices[1].position[i]);
-    let valid = determinant.is_normal()
-        && edges
-            .into_iter()
-            .chain([opposite])
-            .all(|v| v.iter().map(|v| v * v).sum::<f32>().is_normal())
+    let inherited = zero_geometry || zero_uv;
+    let valid = (determinant.is_normal() || (zero_uv && determinant == 0.))
+        && edges.into_iter().chain([opposite]).all(|v| {
+            v.iter().map(|v| v * v).sum::<f32>().is_normal() || (inherited && v == [0.; 3])
+        })
         && [s, t].into_iter().all(|v| {
             let squared = v.iter().map(|v| v * v).sum::<f32>();
-            squared.is_normal() && (squared.sqrt() / determinant.abs()).is_finite()
+            if inherited {
+                squared.is_normal() || v == [0.; 3]
+            } else {
+                squared.is_normal() && (squared.sqrt() / determinant.abs()).is_finite()
+            }
         });
     if !valid {
         return Err(TangentGenerationError::Unrepresentable { triangle });

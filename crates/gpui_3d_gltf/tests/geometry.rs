@@ -300,6 +300,57 @@ fn interleaved_attributes_and_normalized_uv_sets_are_decoded_without_flipping() 
 }
 
 #[test]
+fn degenerate_uv_repairs_retain_triangles_and_scene_diagnostics() {
+    let mut fixture = Fixture::new();
+    let positions = [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]];
+    let uv = [[0., 0.], [1., 0.], [1., 1.], [0., 0.]];
+    fixture.attribute("POSITION", &positions);
+    fixture.attribute("NORMAL", &[[0., 0., 1.]; 4]);
+    fixture.attribute("TEXCOORD_0", &uv);
+    fixture.indices(&[0, 1, 2, 0, 2, 3], 5121);
+    let normal_image = fixture.view(&[0], None);
+    fixture.json["images"] = json!([{"bufferView":normal_image,"mimeType":"image/png"}]);
+    fixture.json["textures"] = json!([{"source":0}]);
+    fixture.json["materials"][0]["normalTexture"] = json!({"index":0});
+    fixture.json["scenes"] = json!([{"nodes":[0,1]}]);
+    fixture.json["nodes"] = json!([{"mesh":0},{"mesh":0}]);
+    let document = fixture.prepare();
+    let geometry = document
+        .geometry(
+            0,
+            0,
+            GeometryOptions {
+                generate_tangents: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(geometry.mesh().triangle_count(), 2);
+    assert_eq!(
+        geometry.tangent_repairs(),
+        &[gpui_3d::TangentRepair {
+            triangle: 1,
+            corner: 2,
+            kind: gpui_3d::TangentRepairKind::OrthonormalBasis
+        }]
+    );
+    for (vertex, &index) in geometry
+        .mesh()
+        .vertices()
+        .iter()
+        .zip(geometry.source_vertices())
+    {
+        assert_eq!(vertex.position, positions[index as usize]);
+        assert_eq!(vertex.uv, uv[index as usize]);
+    }
+    let scene = document.scene(Some(0), Default::default()).unwrap();
+    assert_eq!(scene.geometries().len(), 1);
+    let scene_geometry = scene.geometries().next().unwrap();
+    assert_eq!(scene_geometry.tangent_repairs(), geometry.tangent_repairs());
+    assert_eq!(scene_geometry.source_vertices(), geometry.source_vertices());
+}
+
+#[test]
 fn sparse_positions_and_zero_initialized_accessors_use_bounded_conversion() {
     let mut fixture = Fixture::new();
     let indices = fixture.view(&[1, 2], None);
@@ -325,15 +376,23 @@ fn sparse_positions_and_zero_initialized_accessors_use_bounded_conversion() {
             .iter()
             .all(|v| v.normal == [0., 0., 1.] && v.uv == [0.; 2])
     );
-    assert!(
-        error(
-            &document,
+    let generated = document
+        .geometry(
+            0,
+            0,
             GeometryOptions {
                 generate_tangents: true,
                 ..Default::default()
-            }
+            },
         )
-        .contains("UV area")
+        .unwrap();
+    assert_eq!(generated.mesh().indices(), converted.mesh().indices());
+    assert_eq!(generated.tangent_repairs().len(), 3);
+    assert!(
+        generated
+            .tangent_repairs()
+            .iter()
+            .all(|repair| repair.kind == gpui_3d::TangentRepairKind::OrthonormalBasis)
     );
 
     let mut huge = Fixture::new();

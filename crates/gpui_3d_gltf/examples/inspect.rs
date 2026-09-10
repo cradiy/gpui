@@ -105,6 +105,23 @@ fn inspect(options: Options) -> Result<()> {
         image_count,
         resources.resource_bytes()
     );
+    for geometry in definition.geometries() {
+        let repairs = geometry.tangent_repairs();
+        if !repairs.is_empty() {
+            let orthonormal = repairs
+                .iter()
+                .filter(|repair| repair.kind == gpui_3d::TangentRepairKind::OrthonormalBasis)
+                .count();
+            println!(
+                "Mesh {} primitive {} · Tangent repairs: {} derivative, {} orthonormal · First corners: {:?}",
+                geometry.mesh_index(),
+                geometry.primitive_index(),
+                repairs.len() - orthonormal,
+                orthonormal,
+                &repairs[..repairs.len().min(8)]
+            );
+        }
+    }
     let asset = definition.decode_images(ImageDecodeLimits::default())?;
     let clip = options
         .animation

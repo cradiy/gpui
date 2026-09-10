@@ -17,5 +17,8 @@ pub use morph::{MorphAttribute, MorphError, MorphTarget, MorphTargets};
 pub use normals::{GeneratedNormals, NormalGenerationError, NormalMode};
 pub use primitives::{ConeOptions, CylinderOptions, PlaneOptions, PrimitiveError, SphereOptions};
 pub use skin::{Skin, SkinError, SkinInfluence};
-pub use tangents::{GeneratedTangents, TangentGenerationError};
+pub use tangents::{
+    GeneratedTangents, TangentGenerationError, TangentGenerationMode, TangentRepair,
+    TangentRepairKind,
+};
 pub use transform::{AffineTransform, Transform, TransformError};

@@ -70,6 +70,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **PBR factor textures**: Linear G/B metallic-roughness and sRGB emissive maps, factor multiplication, independent UV sampling, and shared viewport/headless resource resolution.
 - [x] **Normal textures and tangent inputs**: Validated optional tangent data, built-in plane/cube tangents, linear RGB normal maps with independent sampling and XY strength, and reflection-aware world-space tangent frames.
 - [x] **Tangent generation**: MikkTSpace face-corner frames, mirrored UV seam splitting, output-to-source vertex mapping for external attributes and deformation data, preserved triangle identities, and explicit degenerate/numerical input errors.
+  - [x] **Degenerate tangent policies**: Strict validation, neighbor inheritance, and explicit derivative/orthonormal repairs with corner diagnostics, retained geometry, and consistent triangle handedness.
 - [x] **Occlusion textures**: Linear R ambient occlusion maps, independent UV sampling and strength, indirect-only attenuation for basic and PBR materials, shared viewport/headless resource handling, and material controls.
 - [x] **Light types**: Up to eight world-space directional, point, and spot lights; intensity, finite range, inverse-square distance clamping, soft cone controls, shared viewport/headless shading, and pointer-driven lighting controls.
 - [x] **Directional shadows**: One selected directional source, explicit camera-independent coverage, 256–4096 shadow maps, PCF filtering, depth/normal bias, opaque/masked casting, per-mesh cast/receive controls, and shared viewport/headless shading.
@@ -145,7 +146,10 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Skeletal skins**: Consecutive joint/weight sets, generated-vertex correspondence, ordered inverse binds, shared primitive bindings, selected-scene hierarchy validation, authored initial deformation, and explicit per-instance final-pose skinning with aggregate admission.
   - [x] **Morph geometry**: Position/normal/tangent deltas, sparse inputs, authored weights, fixed generated-vertex correspondence, direction regeneration, and per-instance Morph-before-Skin evaluation with bounded shared inputs and initial output admission.
   - [x] **CPU asset inspection**: Local glTF/GLB conversion, image decoding, absolute-time scene deformation, repeated-time fingerprints, world bounds, and restricted relative-file resolution in one command-line example.
-  - [ ] **Asset compatibility**: Degenerate-UV tangent handling, multiple active UV sets, and vertex colors.
+  - [ ] **Asset compatibility**:
+    - [x] **Degenerate-UV tangents**: Reported base-mesh repairs, matching Morph evaluation policy, preserved primitive/vertex mappings, and CPU inspection diagnostics.
+    - [ ] **Multiple active UV sets**: Independent material-slot coordinate sets shared by rendering, tangent generation, and alpha queries.
+    - [ ] **Vertex colors**: Linear color/alpha attributes shared by material shading, deformation mappings, and geometry-output visibility.
 - [ ] **Model assets and instances**: Asset/instance/primitive ownership and instance-level overrides built on shared resources and subtree mappings.
 - [ ] **Asynchronous asset management**: File resolution, decoding, background loading, caches, retries, and release policies outside the core renderer.
 - [ ] **Model viewer**: Local model loading, automatic framing, viewpoint switching, and node/material inspection as an extension example or application.

@@ -1,7 +1,8 @@
 use gpui_3d::{
     AffineTransform, Material, MaterialTexture, Mesh, MorphTarget, MorphTargets, Object,
     PbrMaterial, Ray, ResolvedTexture, Scene, Skin, SkinInfluence, SphereOptions,
-    TangentGenerationError, TextureSlot, TextureState, Vertex,
+    TangentGenerationError, TangentGenerationMode, TangentRepairKind, TextureSlot, TextureState,
+    Vertex,
 };
 
 fn quad(mirrored: bool) -> Mesh {
@@ -354,10 +355,16 @@ fn degenerate_inputs_report_locations_without_mutating_the_source() {
                 })
                 .collect();
             let mesh = Mesh::new(vertices, mesh.indices().to_vec());
-            assert_eq!(
-                mesh.generate_tangents().unwrap_err(),
-                TangentGenerationError::Unrepresentable { triangle: 0 }
-            );
+            for mode in [
+                TangentGenerationMode::Strict,
+                TangentGenerationMode::Inherit,
+                TangentGenerationMode::Repair,
+            ] {
+                assert_eq!(
+                    mesh.generate_tangents_with_mode(mode).unwrap_err(),
+                    TangentGenerationError::Unrepresentable { triangle: 0 }
+                );
+            }
         }
     }
     let source = quad(false);
@@ -376,5 +383,184 @@ fn degenerate_inputs_report_locations_without_mutating_the_source() {
             triangle: 0,
             corner: 0
         }
+    );
+}
+
+#[test]
+fn inherited_degenerate_faces_preserve_good_frames_and_source_correspondence() {
+    let vertices: Vec<_> = [
+        ([0., 0., 0.], [0., 0.]),
+        ([1., 0., 0.], [1., 0.]),
+        ([1., 1., 0.], [1., 1.]),
+        ([0., 1., 0.], [2., 2.]),
+        ([-1., 0., 0.], [-1., 0.]),
+    ]
+    .map(|(position, uv)| Vertex {
+        position,
+        uv,
+        normal: [0., 0., 1.],
+    })
+    .to_vec();
+    let good = Mesh::new(vertices.clone(), vec![0, 1, 2, 0, 3, 4]);
+    let baseline = good.generate_tangents().unwrap();
+    for faces in [
+        vec![0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 0, 2],
+        vec![0, 0, 2, 0, 3, 4, 0, 2, 3, 0, 1, 2],
+    ] {
+        let mesh = Mesh::new(vertices.clone(), faces.clone());
+        for mode in [
+            TangentGenerationMode::Inherit,
+            TangentGenerationMode::Repair,
+        ] {
+            let output = mesh.generate_tangents_with_mode(mode).unwrap();
+            assert!(output.repairs().is_empty());
+            assert_eq!(output.mesh().index_count(), faces.len());
+            for (&output_index, &source) in output.mesh().indices().iter().zip(&faces) {
+                assert_eq!(output.source_vertices()[output_index as usize], source);
+                let actual = output.mesh().vertices()[output_index as usize];
+                let expected = vertices[source as usize];
+                assert_eq!(
+                    (actual.position, actual.normal, actual.uv),
+                    (expected.position, expected.normal, expected.uv)
+                );
+                let base_index = baseline
+                    .source_vertices()
+                    .iter()
+                    .position(|&i| i == source)
+                    .unwrap();
+                near(
+                    output.mesh().tangents().unwrap()[output_index as usize],
+                    baseline.mesh().tangents().unwrap()[base_index],
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn repairs_recover_skinny_triangle_derivatives_without_replacing_valid_frames() {
+    let mesh = Mesh::new(
+        [
+            ([0., 0., 0.], [0., 0.]),
+            ([1., 0., 0.], [1., 0.]),
+            ([2., 1e-5, 0.], [2., 1.]),
+        ]
+        .map(|(position, uv)| Vertex {
+            position,
+            uv,
+            normal: [0., 0., 1.],
+        })
+        .to_vec(),
+        vec![0, 1, 2],
+    );
+    assert!(matches!(
+        mesh.generate_tangents(),
+        Err(TangentGenerationError::InvalidBasis { .. })
+    ));
+    let output = mesh
+        .generate_tangents_with_mode(TangentGenerationMode::Repair)
+        .unwrap();
+    assert_eq!(output.repairs().len(), 2);
+    assert!(
+        output
+            .repairs()
+            .iter()
+            .all(|repair| repair.triangle == 0
+                && repair.kind == TangentRepairKind::TriangleDerivative)
+    );
+    for &tangent in output.mesh().tangents().unwrap() {
+        near(tangent, [1., 0., 0., 1.]);
+    }
+    assert_eq!(output.source_vertices(), [0, 1, 2]);
+    assert!(mesh.tangents().is_none());
+}
+
+#[test]
+fn undefined_uv_islands_report_deterministic_orthonormal_repairs() {
+    for normal in [[1., 2., 3.], [0., 0., -1.], [1e-30, 0., 0.], [0., 1e30, 0.]] {
+        let mesh = quad(false);
+        let vertices: Vec<_> = mesh
+            .vertices()
+            .iter()
+            .map(|v| Vertex {
+                normal,
+                uv: [0.5; 2],
+                ..*v
+            })
+            .collect();
+        let mesh = Mesh::new(vertices, mesh.indices().to_vec());
+        assert!(matches!(
+            mesh.generate_tangents_with_mode(TangentGenerationMode::Inherit),
+            Err(TangentGenerationError::InvalidBasis { .. })
+        ));
+        let output = mesh
+            .generate_tangents_with_mode(TangentGenerationMode::Repair)
+            .unwrap();
+        assert_eq!(output.mesh().indices(), mesh.indices());
+        for (actual, expected) in output.mesh().vertices().iter().zip(mesh.vertices()) {
+            assert_eq!(
+                (actual.position, actual.normal, actual.uv),
+                (expected.position, expected.normal, expected.uv)
+            );
+        }
+        assert_eq!(output.repairs().len(), mesh.index_count());
+        let length = normal
+            .iter()
+            .map(|&v| f64::from(v).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        for (offset, repair) in output.repairs().iter().enumerate() {
+            assert_eq!((repair.triangle, repair.corner), (offset / 3, offset % 3));
+            assert_eq!(repair.kind, TangentRepairKind::OrthonormalBasis);
+        }
+        for tangent in output.mesh().tangents().unwrap() {
+            let dot = normal
+                .iter()
+                .zip(tangent)
+                .map(|(&n, &t)| f64::from(n) / length * f64::from(t))
+                .sum::<f64>();
+            assert!(dot.abs() < 1e-6);
+            assert!((tangent[..3].iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 1e-6);
+            assert_eq!(tangent[3], 1.);
+        }
+        let repeat = mesh
+            .generate_tangents_with_mode(TangentGenerationMode::Repair)
+            .unwrap();
+        assert_eq!(repeat.mesh().tangents(), output.mesh().tangents());
+    }
+}
+
+#[test]
+fn repaired_corners_keep_inherited_mirrored_handedness() {
+    let mesh = quad(false);
+    let vertices = mesh
+        .vertices()
+        .iter()
+        .enumerate()
+        .map(|(i, v)| Vertex {
+            uv: if i == 3 { [0.; 2] } else { [-v.uv[0], v.uv[1]] },
+            ..*v
+        })
+        .collect();
+    let mesh = Mesh::new(vertices, mesh.indices().to_vec());
+    let output = mesh
+        .generate_tangents_with_mode(TangentGenerationMode::Repair)
+        .unwrap();
+    assert_eq!(output.repairs().len(), 1);
+    assert_eq!(
+        (output.repairs()[0].triangle, output.repairs()[0].corner),
+        (1, 2)
+    );
+    assert_eq!(
+        output.repairs()[0].kind,
+        TangentRepairKind::OrthonormalBasis
+    );
+    assert!(
+        output
+            .mesh()
+            .tangents()
+            .unwrap()
+            .iter()
+            .all(|t| t[3] == -1.)
     );
 }

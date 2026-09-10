@@ -2105,10 +2105,29 @@ deltas, and skin influences before constructing deformation inputs. Distinct
 source vertices are not merged even when all their mesh attributes match.
 
 `TangentGenerationError` identifies zero indexed normals, zero geometric or UV
-area, unrepresentable f32 intermediates, and undefined output frames. Degenerate
-triangles are rejected, not removed or assigned arbitrary tangents. Finite UVs
-outside `[0, 1]` are supported. Generate during asset preparation and share the
-result across objects; generation is not part of per-frame rendering.
+area, unrepresentable f32 intermediates, and undefined output frames. The default
+`generate_tangents()` uses `TangentGenerationMode::Strict`. Select another mode
+with `generate_tangents_with_mode(mode)`:
+
+- `Strict` rejects zero-area triangles and undefined frames.
+- `Inherit` lets MikkTSpace inherit frames from neighboring primitives. A corner
+  without a usable inherited frame remains an error.
+- `Repair` keeps usable MikkTSpace frames and repairs undefined corners with the
+  triangle's position/UV derivative projected against the vertex normal. If no
+  usable derivative exists, it projects the least-aligned coordinate axis to
+  create a deterministic orthonormal basis. Handedness follows a usable corner
+  of the same triangle, otherwise the UV orientation, otherwise positive one.
+
+`GeneratedTangents::repairs()` reports repaired triangle/corner positions and
+`TangentRepairKind`. Neighbor inheritance is not counted as a repair. An
+`OrthonormalBasis` is a convention for undefined UV directions, not a recovery
+of authored normal-map orientation. Callers can reject such repairs when asset
+fidelity requires a defined UV basis. Conflicting triangle handedness, invalid
+normals, and unrepresentable calculations remain errors in every mode. No mode
+removes triangles or changes positions, normals, UVs, or source correspondence.
+
+Finite UVs outside `[0, 1]` are supported. Generate during asset preparation and
+share the result across objects; generation is not part of per-frame rendering.
 
 Tangents follow the model transform; normals use the inverse transpose. Shading
 reorthogonalizes the world-space frame, adjusts handedness for reflected transforms,

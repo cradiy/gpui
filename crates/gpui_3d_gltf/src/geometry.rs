@@ -51,6 +51,7 @@ pub struct PrimitiveGeometry {
     tex_coord_set: Option<u32>,
     pub(crate) influences: Option<crate::skin::VertexInfluences>,
     morph: Option<MorphGeometry>,
+    tangent_repairs: Vec<gpui_3d::TangentRepair>,
 }
 
 impl PrimitiveGeometry {
@@ -86,6 +87,10 @@ impl PrimitiveGeometry {
     }
     pub fn morph(&self) -> Option<&MorphGeometry> {
         self.morph.as_ref()
+    }
+    /// Repaired corners in the base mesh, in expanded triangle order.
+    pub fn tangent_repairs(&self) -> &[gpui_3d::TangentRepair] {
+        &self.tangent_repairs
     }
     /// Returns base geometry and vertex correspondence, discarding deformation inputs.
     pub fn into_parts(self) -> (Mesh, Vec<u32>) {
@@ -340,11 +345,13 @@ impl PreparedDocument {
                 .with_tangents(collect(accessor, reader.read_tangents())?)
                 .context("authored tangents")?;
         }
+        let mut tangent_repairs = Vec::new();
         if options.generate_tangents {
-            let (generated, mapping) = mesh
-                .generate_tangents()
-                .context("tangent generation")?
-                .into_parts();
+            let generated = mesh
+                .generate_tangents_with_mode(gpui_3d::TangentGenerationMode::Repair)
+                .context("tangent generation")?;
+            tangent_repairs.extend_from_slice(generated.repairs());
+            let (generated, mapping) = generated.into_parts();
             source_vertices = mapping
                 .iter()
                 .map(|&index| source_vertices[index as usize])
@@ -381,6 +388,7 @@ impl PreparedDocument {
             tex_coord_set: uv.map(|_| options.tex_coord_set),
             influences,
             morph,
+            tangent_repairs,
         })
     }
 }

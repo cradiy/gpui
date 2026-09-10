@@ -27,7 +27,8 @@ pub use geometry::{
     CylinderOptions, GeneratedNormals, GeneratedTangents, IkReach, Mesh, MorphAttribute,
     MorphError, MorphTarget, MorphTargets, NormalGenerationError, NormalMode, PlaneOptions,
     PrimitiveError, Skin, SkinError, SkinInfluence, SphereOptions, TangentGenerationError,
-    Transform, TransformError, TwoBoneIkError, TwoBoneIkResult, TwoBoneIkSettings,
+    TangentGenerationMode, TangentRepair, TangentRepairKind, Transform, TransformError,
+    TwoBoneIkError, TwoBoneIkResult, TwoBoneIkSettings,
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

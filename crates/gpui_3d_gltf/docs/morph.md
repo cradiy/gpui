@@ -13,10 +13,13 @@ of previous samples. Clones share target arrays and base geometry.
 Missing normals are generated as flat face normals from the weighted geometry.
 Authored tangents and tangent deltas are ignored when base normals are absent.
 When tangent generation is requested, MikkTSpace uses the weighted positions,
-normals, and selected UVs. These generation policies use fixed triangle-corner
-vertices, preserving correspondence with skin influences across all samples.
-Degenerate geometry, invalid tangent bases, or unrepresentable results return
-errors rather than changing topology or dropping triangles.
+normals, and selected UVs with the same repair policy as base-mesh conversion.
+These generation policies use fixed triangle-corner vertices, preserving
+correspondence with skin influences across all samples. Base-mesh repair reports
+do not describe subsequent Morph samples. Flat normal generation still requires
+nonzero geometric area. Invalid normals, incompatible tangent handedness, or
+unrepresentable results return errors without changing topology or dropping
+triangles.
 
 ### Scene weights and deformation
 

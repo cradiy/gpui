@@ -140,6 +140,15 @@ impl SceneDefinition {
         &self.0.materials
     }
 
+    /// Unique primitive geometries in first-use order, including source mappings
+    /// and base-mesh tangent repair diagnostics.
+    pub fn geometries(&self) -> impl ExactSizeIterator<Item = &PrimitiveGeometry> {
+        self.0
+            .primitives
+            .iter()
+            .map(|primitive| &primitive.geometry)
+    }
+
     /// Decodes each active image index at most once across the entire scene.
     /// The callback has the same BGRA and allocation contract as
     /// `MaterialDefinition::resolve_images`. Failure leaves this definition usable.

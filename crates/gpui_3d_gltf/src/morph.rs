@@ -98,7 +98,8 @@ impl MorphGeometry {
             mesh = generated.into_parts().0;
         }
         if self.generated_tangents {
-            let generated = mesh.generate_tangents()?;
+            let generated =
+                mesh.generate_tangents_with_mode(gpui_3d::TangentGenerationMode::Repair)?;
             ensure!(
                 generated
                     .source_vertices()

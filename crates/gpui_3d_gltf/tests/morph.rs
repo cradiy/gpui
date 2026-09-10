@@ -336,6 +336,51 @@ fn regenerated_tangents_use_changed_positions_with_authored_normal_deltas() {
 }
 
 #[test]
+fn morph_tangent_repairs_preserve_correspondence_and_random_access() {
+    let mut fixture = Fixture::new();
+    fixture.normals();
+    let uv = fixture.floats("VEC2", &[0., 0., 1., 0., 1., 1., 0., 0.]);
+    fixture.attribute("TEXCOORD_0", uv);
+    let document = fixture.prepare().unwrap();
+    let geometry = document
+        .geometry(
+            0,
+            0,
+            GeometryOptions {
+                generate_tangents: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(geometry.source_vertices(), [0, 1, 2, 0, 2, 3]);
+    assert_eq!(geometry.tangent_repairs().len(), 1);
+    let morph = geometry.morph().unwrap();
+    let first = morph.evaluate(&[0.5]).unwrap();
+    for weight in [1., -0.25, 0., 0.5] {
+        let mesh = morph.evaluate(&[weight]).unwrap();
+        assert_eq!(mesh.vertex_count(), 6);
+        assert_eq!(mesh.indices(), geometry.mesh().indices());
+        for (index, vertex) in mesh.vertices().iter().enumerate() {
+            near(
+                vertex.position,
+                [
+                    geometry.mesh().vertices()[index].position[0],
+                    geometry.mesh().vertices()[index].position[1],
+                    if geometry.source_vertices()[index] == 3 {
+                        weight
+                    } else {
+                        0.
+                    },
+                ],
+            );
+        }
+    }
+    let repeated = morph.evaluate(&[0.5]).unwrap();
+    assert_eq!(first.tangents(), repeated.tangents());
+    assert_eq!(geometry.mesh().vertices()[5].position, [0., 1., 0.]);
+}
+
+#[test]
 fn weight_animation_deforms_before_skinning_and_keeps_instances_independent() {
     let mut fixture = Fixture::new();
     fixture.normals();

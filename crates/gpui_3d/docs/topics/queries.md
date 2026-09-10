@@ -2,6 +2,8 @@
 
 [3D viewports](../viewport.md)
 
+For comparisons against rendered samples, see [Frame depth comparisons](depth_queries.md).
+
 `Ray::new(origin, direction)` accepts arbitrary world rays and normalizes their
 direction. `Scene::raycast(ray)` ignores the camera and its clipping planes,
 while respecting mesh geometry, material/vertex alpha, and picking behavior.

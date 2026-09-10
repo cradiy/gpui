@@ -1,7 +1,9 @@
 #![doc = include_str!("../../docs/topics/headless.md")]
 
 mod coverage;
+mod depth;
 pub use coverage::{CoverageError, FrameCoverage, ObjectCoverage};
+pub use depth::{DepthComparison, DepthQueryError, DepthRelation};
 
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
 

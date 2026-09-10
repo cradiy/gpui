@@ -332,6 +332,9 @@ or automatically execute compound `EffectStage` pipelines.
 
 ### Geometry channels
 
+[Frame depth comparisons](depth_queries.md) classify world points against an
+available depth channel without further rendering or readback.
+
 `Scene::background` fills uncovered color pixels with a decoded HDR environment.
 The background is opaque, including at zero intensity. It participates in linear
 composition beneath transparent objects and appears in both color outputs;

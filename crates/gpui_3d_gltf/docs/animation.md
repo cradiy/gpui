@@ -39,18 +39,19 @@ fn evaluate(document: &PreparedDocument, time: Duration) -> anyhow::Result<()> {
         .map(|node| (node.index, instance.node(node.handle).unwrap()))
         .collect();
     let mut locals = Vec::new();
+    let mut weights = Vec::new();
     for animation in clip.nodes() {
-        if let (Some(&handle), Some(track)) =
-            (bindings.get(&animation.node_index()), animation.transform())
-        {
+        let Some(&handle) = bindings.get(&animation.node_index()) else { continue; };
+        if let Some(track) = animation.transform() {
             locals.push((handle, track.sample(time)?));
+        }
+        if let Some(track) = animation.weights() {
+            weights.push((handle, track.sample(time)?));
         }
     }
     let pose = Pose::new(locals)?;
     let transforms = graph.evaluate_with_transforms(pose.transforms())?;
-    let meshes = asset.skins().iter()
-        .map(|skin| skin.evaluate(&instance, &transforms))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let meshes = asset.deform(&instance, &transforms, &weights)?;
     for (handle, mesh) in meshes {
         graph.set_mesh(handle, mesh)?;
     }

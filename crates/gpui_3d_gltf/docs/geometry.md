@@ -36,8 +36,10 @@ Bounds are computed from converted vertices, not accessor min/max metadata.
   unsigned-byte/unsigned-short VEC4. Weights must be finite and nonnegative, with
   a positive total per vertex. `skin_influences()` exposes output-vertex slices
   after normal/tangent splitting. Indices address a skin's joint array.
-- All attribute counts must match POSITION. Vertex colors, custom attributes,
-  and morph targets are unsupported and return errors.
+- Morph targets retain float VEC3 position, normal, and tangent deltas through
+  `morph()`. Target data follows the generated vertex correspondence.
+- All attribute counts must match POSITION. Vertex colors and custom attributes
+  are unsupported and return errors.
 
 Indexed primitives accept unsigned-byte, unsigned-short, or unsigned-int scalar
 indices. Non-indexed primitives use accessor order. Triangle lists retain their
@@ -62,8 +64,10 @@ texture; conversion does not infer it from the material or apply UV transforms.
 Generation preserves triangle identities and composes vertex mappings across
 normal and tangent splits. Unreferenced vertices are omitted when generation
 runs. Without generation they remain in the mesh and contribute to its bounds.
-Vertex correspondence does not itself transform external normal/tangent deltas
-into a regenerated basis.
+Morph primitives use a fixed triangle-corner layout when generating normals or
+tangents. `MorphGeometry::evaluate` recomputes generated directions from the
+weighted geometry without changing its topology. Authored direction deltas are
+used when their corresponding directions are not generated.
 
 ## Limits and failures
 
@@ -74,6 +78,9 @@ generation storage is bounded by admitted index counts, not the final vertex
 limit. `influence_limit` bounds both input and output joint/weight slots,
 including zero weights; its default is 16,777,216. Skin metadata is retained
 separately from the core mesh and is discarded by `into_parts()`.
+Morph limits default to 1,024 targets and 16,777,216 VEC3 attribute elements per
+primitive. Both input and mapped output attribute counts must fit the latter
+limit. `into_parts()` also discards Morph inputs.
 These are element limits, not an exact process-memory budget. Resource
 byte limits remain independent and apply during document preparation.
 

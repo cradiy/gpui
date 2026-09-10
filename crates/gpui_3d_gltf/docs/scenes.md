@@ -82,8 +82,12 @@ asset. Retained evaluated scenes preserve their previous state.
 - `joint_limit` counts joints in each unique skin definition and each unique
   `(skin, primitive)` binding. Repeated occurrences share bindings and do not
   consume additional joint/influence quota.
-- `deformed_vertex_limit` counts initial skinned output vertices per primitive
+- `deformed_vertex_limit` counts initial Morph/Skin output vertices per primitive
   occurrence, including repeated meshes. Its default is 4,194,304.
+- `morph_target_limit` and `morph_attribute_limit` bound aggregate target and
+  retained VEC3 attribute counts across unique primitives. Defaults are 8,192
+  targets and 16,777,216 attribute elements. Each primitive's input attributes
+  must also fit the remaining attribute quota.
 
 These are conversion limits, not device-memory quotas. Document/encoded-resource
 limits and callback-owned decoded-image limits remain separate. Conversion may
@@ -101,8 +105,9 @@ cycles, combined matrix/TRS properties and singular transforms return contextual
 errors. Traversal is iterative. Different scenes may reference the same node.
 
 Skin bindings retain joint order and initialize mesh geometry from the authored
-joint pose. `skins()` exposes bindings for subsequent instance-pose evaluation.
-Morph targets/weights return errors when encountered. Animation clips are not
+joint pose after applying default Morph weights. Node weights override mesh
+weights; omitted mesh weights are zero. `skins()` and `morphs()` expose shared
+deformation inputs, and `deform()` evaluates them for an instance. Animation clips are not
 sampled during scene conversion: ordinary transform-animated
 nodes use their declared base transforms. `PreparedDocument::animation` converts
 tracks separately for explicit instance-pose evaluation. Required unsupported

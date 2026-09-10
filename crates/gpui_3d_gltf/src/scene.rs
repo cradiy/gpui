@@ -6,7 +6,7 @@ use gpui_3d::{AffineTransform, Camera, Node, NodeHandle, SceneGraph, SceneSubtre
 
 use crate::{
     EncodedImage, GeometryOptions, MaterialDefinition, PreparedDocument, PrimitiveGeometry,
-    SceneSkin, SkinDefinition, SkinOptions,
+    SceneMorph, SceneSkin, SkinDefinition, SkinOptions,
 };
 
 /// Aggregate limits for one selected scene. Geometry is charged once per unique
@@ -20,8 +20,10 @@ pub struct SceneOptions {
     pub influence_limit: usize,
     /// Total joints in unique skin definitions and unique primitive bindings.
     pub joint_limit: usize,
-    /// Initial skinned output vertices, charged per primitive occurrence.
+    /// Initial Morph/Skin output vertices, charged per primitive occurrence.
     pub deformed_vertex_limit: usize,
+    pub morph_target_limit: usize,
+    pub morph_attribute_limit: usize,
 }
 
 impl Default for SceneOptions {
@@ -33,6 +35,8 @@ impl Default for SceneOptions {
             influence_limit: 33_554_432,
             joint_limit: 65_536,
             deformed_vertex_limit: 4_194_304,
+            morph_target_limit: 8192,
+            morph_attribute_limit: 16_777_216,
         }
     }
 }
@@ -45,6 +49,7 @@ struct DefinitionNode {
     local: AffineTransform,
     camera: Option<(usize, Camera)>,
     skin: Option<usize>,
+    weights: Arc<[f32]>,
     primitives: Vec<usize>,
 }
 
@@ -99,6 +104,7 @@ pub struct SceneAsset {
     nodes: Arc<[SceneNode]>,
     primitives: Arc<[ScenePrimitive]>,
     skins: Arc<[SceneSkin]>,
+    morphs: Arc<[SceneMorph]>,
 }
 
 impl SceneAsset {
@@ -118,6 +124,9 @@ impl SceneAsset {
     /// Primitive bindings in scene order, retaining undeformed base geometry.
     pub fn skins(&self) -> &[SceneSkin] {
         &self.skins
+    }
+    pub fn morphs(&self) -> &[SceneMorph] {
+        &self.morphs
     }
 }
 
@@ -210,11 +219,21 @@ impl SceneDefinition {
             })
             .collect();
         let mut skins = Vec::new();
+        let mut morphs = Vec::new();
         let mut primitive_cursor = 0;
         for source in &self.0.nodes {
             for &geometry_index in &source.primitives {
                 let primitive = &primitives[primitive_cursor];
                 primitive_cursor += 1;
+                if let Some(geometry) = self.0.primitives[geometry_index].geometry.morph() {
+                    morphs.push(SceneMorph {
+                        node_index: source.index,
+                        node: node_handles[&source.index],
+                        primitive: primitive.handle,
+                        geometry: geometry.clone(),
+                        weights: source.weights.clone(),
+                    });
+                }
                 if let Some(index) = source.skin {
                     skins.push(SceneSkin {
                         index,
@@ -226,12 +245,9 @@ impl SceneDefinition {
                 }
             }
         }
-        if !skins.is_empty() {
+        if !skins.is_empty() || !morphs.is_empty() {
             let poses = graph.evaluate()?;
-            let meshes = skins
-                .iter()
-                .map(|skin| skin.evaluate_using(Some, &poses))
-                .collect::<Result<Vec<_>>>()?;
+            let meshes = crate::morph::deform(&primitives, &skins, &morphs, Some, &poses, &[])?;
             for (handle, mesh) in meshes {
                 graph.set_mesh(handle, mesh)?;
             }
@@ -242,6 +258,7 @@ impl SceneDefinition {
             nodes: nodes.into(),
             primitives: primitives.into(),
             skins: skins.into(),
+            morphs: morphs.into(),
         })
     }
 }
@@ -302,6 +319,9 @@ impl PreparedDocument {
         let mut vertices_left = options.vertex_limit;
         let mut indices_left = options.index_limit;
         let mut influences_left = options.influence_limit;
+        let mut morph_targets_left = options.morph_target_limit;
+        let mut morph_attributes_left = options.morph_attribute_limit;
+        let mut mesh_weights = HashMap::<usize, Arc<[f32]>>::new();
         while let Some((source, parent, parent_world)) = pending.pop() {
             let source_index = source.index();
             let convert = (|| -> Result<()> {
@@ -312,8 +332,8 @@ impl PreparedDocument {
                     "skin node requires a mesh"
                 );
                 ensure!(
-                    raw.weights.is_none(),
-                    "morph weight conversion is unsupported"
+                    raw.weights.is_none() || source.mesh().is_some(),
+                    "morph weight node requires a mesh"
                 );
                 ensure!(
                     raw.matrix.is_none()
@@ -346,11 +366,22 @@ impl PreparedDocument {
                 ensure!(node_count < options.node_limit, "node limit exceeded");
                 node_count += 1;
                 let mut node_primitives = Vec::new();
+                let mut weights = Arc::from([]);
                 if let Some(mesh) = source.mesh() {
-                    ensure!(
-                        mesh.weights().is_none(),
-                        "mesh morph weights are unsupported"
-                    );
+                    weights = if let Some(weights) = source.weights() {
+                        crate::morph::default_weights(
+                            &mesh,
+                            Some(weights),
+                            options.morph_target_limit,
+                        )?
+                    } else if let Some(weights) = mesh_weights.get(&mesh.index()) {
+                        weights.clone()
+                    } else {
+                        let weights =
+                            crate::morph::default_weights(&mesh, None, options.morph_target_limit)?;
+                        mesh_weights.insert(mesh.index(), weights.clone());
+                        weights
+                    };
                     for primitive in mesh.primitives() {
                         ensure!(
                             node_count < options.node_limit,
@@ -401,12 +432,18 @@ impl PreparedDocument {
                                         vertex_limit: vertices_left,
                                         index_limit: indices_left,
                                         influence_limit: influences_left,
+                                        morph_target_limit: morph_targets_left,
+                                        morph_attribute_limit: morph_attributes_left,
                                     },
                                 )?;
                                 binding.validate_geometry(&geometry)?;
                                 vertices_left -= geometry.mesh().vertex_count();
                                 indices_left -= geometry.mesh().index_count();
                                 influences_left -= geometry.influence_count();
+                                if let Some(morph) = geometry.morph() {
+                                    morph_targets_left -= morph.targets().len();
+                                    morph_attributes_left -= morph.attribute_vertex_count();
+                                }
                                 let index = definition.primitives.len();
                                 definition
                                     .primitives
@@ -432,6 +469,7 @@ impl PreparedDocument {
                     local,
                     camera,
                     skin,
+                    weights,
                     primitives: node_primitives,
                 });
                 let start = pending.len();
@@ -472,6 +510,14 @@ impl PreparedDocument {
         let mut joints_left = options.joint_limit;
         let mut deformed_vertices_left = options.deformed_vertex_limit;
         for node in &definition.nodes {
+            for &geometry_index in &node.primitives {
+                let geometry = &definition.primitives[geometry_index].geometry;
+                if node.skin.is_some() || geometry.morph().is_some() {
+                    deformed_vertices_left = deformed_vertices_left
+                        .checked_sub(geometry.mesh().vertex_count())
+                        .context("initial deformed vertices exceed deformed vertex limit")?;
+                }
+            }
             let Some(index) = node.skin else {
                 continue;
             };
@@ -515,14 +561,6 @@ impl PreparedDocument {
                 }
                 let skin = &definition.skins[&index];
                 for &geometry_index in &node.primitives {
-                    deformed_vertices_left = deformed_vertices_left
-                        .checked_sub(
-                            definition.primitives[geometry_index]
-                                .geometry
-                                .mesh()
-                                .vertex_count(),
-                        )
-                        .context("initial skinned vertices exceed deformed vertex limit")?;
                     if let std::collections::hash_map::Entry::Vacant(entry) =
                         definition.bindings.entry((index, geometry_index))
                     {

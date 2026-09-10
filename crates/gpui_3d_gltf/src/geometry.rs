@@ -6,7 +6,7 @@ use gltf::{
 };
 use gpui_3d::{Mesh, NormalMode, SkinInfluence, Vertex};
 
-use crate::PreparedDocument;
+use crate::{MorphGeometry, PreparedDocument};
 
 /// Per-primitive geometry conversion and element admission.
 #[derive(Clone, Copy, Debug)]
@@ -21,6 +21,9 @@ pub struct GeometryOptions {
     pub index_limit: usize,
     /// Maximum input and final joint/weight slots, including zero weights.
     pub influence_limit: usize,
+    pub morph_target_limit: usize,
+    /// Maximum input and retained VEC3 attribute elements across morph targets.
+    pub morph_attribute_limit: usize,
 }
 
 impl Default for GeometryOptions {
@@ -31,6 +34,8 @@ impl Default for GeometryOptions {
             vertex_limit: 4_194_304,
             index_limit: 12_582_912,
             influence_limit: 16_777_216,
+            morph_target_limit: 1024,
+            morph_attribute_limit: 16_777_216,
         }
     }
 }
@@ -45,6 +50,7 @@ pub struct PrimitiveGeometry {
     material_index: Option<usize>,
     tex_coord_set: Option<u32>,
     pub(crate) influences: Option<crate::skin::VertexInfluences>,
+    morph: Option<MorphGeometry>,
 }
 
 impl PrimitiveGeometry {
@@ -78,7 +84,10 @@ impl PrimitiveGeometry {
     pub fn influence_count(&self) -> usize {
         self.influences.as_ref().map_or(0, |data| data.values.len())
     }
-    /// Returns base geometry and vertex correspondence, discarding skin inputs.
+    pub fn morph(&self) -> Option<&MorphGeometry> {
+        self.morph.as_ref()
+    }
+    /// Returns base geometry and vertex correspondence, discarding deformation inputs.
     pub fn into_parts(self) -> (Mesh, Vec<u32>) {
         (self.mesh, self.source_vertices)
     }
@@ -113,9 +122,11 @@ impl PreparedDocument {
             .primitives()
             .nth(primitive_index)
             .context("primitive index out of range")?;
+        let morph_count = crate::morph::target_count(&source_mesh)?;
+        self.validate_morph_attributes(mesh_index, primitive_index)?;
         ensure!(
-            primitive.morph_targets().next().is_none(),
-            "morph target conversion is unsupported"
+            morph_count <= options.morph_target_limit,
+            "morph target limit exceeded"
         );
         let positions = primitive
             .get(&Semantic::Positions)
@@ -243,7 +254,7 @@ impl PreparedDocument {
         } else {
             (0..count as u32).collect()
         };
-        let indices = match primitive.mode() {
+        let mut indices = match primitive.mode() {
             Mode::Triangles => sequence,
             mode => {
                 let mut indices = Vec::with_capacity(expanded_count);
@@ -298,13 +309,30 @@ impl PreparedDocument {
                 uv: uv_values.as_ref().map_or([0.; 2], |values| values[index]),
             });
         }
-        let mut mesh = Mesh::try_new(vertices, indices).context("mesh attributes")?;
         let mut source_vertices: Vec<u32> = (0..count as u32).collect();
+        if morph_count > 0 && (normals.is_none() || options.generate_tangents) {
+            ensure!(
+                indices.len() <= options.vertex_limit,
+                "morph corner vertices exceed vertex limit"
+            );
+            vertices = indices
+                .iter()
+                .map(|&index| vertices[index as usize])
+                .collect();
+            source_vertices = indices;
+            indices = (0..vertices.len() as u32).collect();
+        }
+        let mut mesh = Mesh::try_new(vertices, indices).context("mesh attributes")?;
         if normals.is_none() {
-            (mesh, source_vertices) = mesh
+            let (generated, mapping) = mesh
                 .generate_normals(NormalMode::Flat)
                 .context("flat normal generation")?
                 .into_parts();
+            source_vertices = mapping
+                .iter()
+                .map(|&index| source_vertices[index as usize])
+                .collect();
+            mesh = generated;
         } else if !options.generate_tangents
             && let Some(accessor) = &tangents
         {
@@ -335,6 +363,15 @@ impl PreparedDocument {
             &source_vertices,
             options.influence_limit,
         )?;
+        let morph = crate::morph::convert(
+            self,
+            &primitive,
+            &mesh,
+            &source_vertices,
+            normals.is_none(),
+            options.generate_tangents,
+            options.morph_attribute_limit,
+        )?;
         Ok(PrimitiveGeometry {
             mesh,
             source_vertices,
@@ -343,6 +380,7 @@ impl PreparedDocument {
             material_index: primitive.material().index(),
             tex_coord_set: uv.map(|_| options.tex_coord_set),
             influences,
+            morph,
         })
     }
 }

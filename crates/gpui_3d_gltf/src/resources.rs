@@ -34,6 +34,7 @@ impl Default for Limits {
 #[derive(Clone, Debug)]
 pub struct Document {
     document: Arc<gltf::Document>,
+    unsupported_morphs: Arc<HashMap<(usize, usize), String>>,
     binary: Option<Arc<[u8]>>,
     limits: Limits,
 }
@@ -50,6 +51,7 @@ impl Document {
         admit("accessors", gltf.accessors().len(), limits.accessors)?;
         admit("nodes", gltf.nodes().len(), limits.nodes)?;
         super::validation::layout(&gltf.document)?;
+        let unsupported_morphs = Arc::new(crate::morph::unsupported_attributes(bytes)?);
         for buffer in gltf.buffers() {
             if let gltf::buffer::Source::Bin = buffer.source() {
                 ensure!(
@@ -71,6 +73,7 @@ impl Document {
         }
         Ok(Self {
             document: Arc::new(gltf.document),
+            unsupported_morphs,
             binary: gltf.blob.map(Arc::from),
             limits,
         })
@@ -175,6 +178,7 @@ impl Document {
         }
         Ok(PreparedDocument {
             document: self.document.clone(),
+            unsupported_morphs: self.unsupported_morphs.clone(),
             buffers,
             images,
             resource_bytes: used,
@@ -216,12 +220,19 @@ impl EncodedImage {
 #[derive(Clone, Debug)]
 pub struct PreparedDocument {
     document: Arc<gltf::Document>,
+    unsupported_morphs: Arc<HashMap<(usize, usize), String>>,
     buffers: Vec<Buffer>,
     images: Vec<EncodedImage>,
     resource_bytes: usize,
 }
 
 impl PreparedDocument {
+    pub(crate) fn validate_morph_attributes(&self, mesh: usize, primitive: usize) -> Result<()> {
+        if let Some(reason) = self.unsupported_morphs.get(&(mesh, primitive)) {
+            bail!("{reason}");
+        }
+        Ok(())
+    }
     pub fn gltf(&self) -> &gltf::Document {
         &self.document
     }

@@ -114,9 +114,9 @@ impl SceneSkin {
         &self.base
     }
 
-    /// Samples one instance from final world poses without mutating its graph.
-    /// The result is local to the returned primitive node. Morph evaluation, when
-    /// supplied by the caller, precedes `Skin::evaluate_world` using the same binding.
+    /// Skins the undeformed base from final world poses without mutating the graph.
+    /// The result is local to the returned primitive node. Use `SceneAsset::deform`
+    /// to apply imported Morph targets before Skin.
     pub fn evaluate(
         &self,
         instance: &SubtreeInstance,
@@ -129,6 +129,15 @@ impl SceneSkin {
         &self,
         map: impl Fn(NodeHandle) -> Option<NodeHandle>,
         poses: &EvaluatedScene,
+    ) -> Result<(NodeHandle, Mesh)> {
+        self.evaluate_mesh_using(map, poses, &self.base)
+    }
+
+    pub(crate) fn evaluate_mesh_using(
+        &self,
+        map: impl Fn(NodeHandle) -> Option<NodeHandle>,
+        poses: &EvaluatedScene,
+        mesh: &Mesh,
     ) -> Result<(NodeHandle, Mesh)> {
         let evaluate = (|| -> Result<_> {
             let primitive = map(self.primitive).context("primitive is absent from the instance")?;
@@ -149,8 +158,7 @@ impl SceneSkin {
                 .collect::<Result<Vec<_>>>()?;
             Ok((
                 primitive,
-                self.binding
-                    .evaluate_world(&self.base, mesh_world, &joints)?,
+                self.binding.evaluate_world(mesh, mesh_world, &joints)?,
             ))
         })();
         evaluate.with_context(|| format!("skin {} primitive {:?}", self.index, self.primitive))

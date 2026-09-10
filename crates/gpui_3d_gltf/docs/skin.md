@@ -21,14 +21,16 @@ image decoding. Core failures while evaluating the initial pose are returned by
 
 ### Instances and pose evaluation
 
-`SceneAsset::subtree()` contains geometry evaluated at the authored joint pose.
+`SceneAsset::subtree()` contains geometry evaluated at the authored joint pose
+and default Morph weights.
 `SceneAsset::skins()` retains undeformed base meshes and shared bindings for
 subsequent evaluation. Each `SceneSkin` identifies its original skin index,
 source primitive handle, and source joint handles. `SceneNode::skin_index` and
 `ScenePrimitive::skin_index` retain file-level associations.
 
 `SceneSkin::evaluate(instance, poses)` maps the source handles into one instance
-and evaluates the binding from that snapshot's world transforms. It returns a
+and evaluates its undeformed base mesh from that snapshot's world transforms.
+It does not apply Morph targets. It returns a
 primitive handle and a replacement local mesh without mutating the graph. The
 mesh-node transform is canceled during skinning; rendering under that same
 transform applies only the joint transforms to the final surface. Transforms on
@@ -45,9 +47,7 @@ fn evaluate(
     pose: &Pose,
 ) -> anyhow::Result<EvaluatedScene> {
     let transforms = graph.evaluate_with_transforms(pose.transforms())?;
-    let replacements = asset.skins().iter()
-        .map(|skin| skin.evaluate(instance, &transforms))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let replacements = asset.deform(instance, &transforms, &[])?;
     for (handle, mesh) in replacements {
         graph.set_mesh(handle, mesh)?;
     }
@@ -62,10 +62,11 @@ replacements from the same pose snapshot before applying them. Graph mutations
 between sampling and replacement require the caller to resample; missing or
 foreign handles return errors.
 
-Always deform `base_mesh()`, not the previously skinned result. For caller-owned
-Morph data, evaluate Morph first, then use `binding().evaluate_world` with the
-same instance-space mapping. Morph file conversion is not included. Evaluation
-is synchronous CPU work; callers own scheduling and time selection.
+`SceneAsset::deform` evaluates imported Morph targets before Skin, using authored
+weights unless overridden. Always deform source geometry, not the previously
+skinned result. For caller-owned Morph data, evaluate Morph first, then use
+`binding().evaluate_world` with the same instance-space mapping. Evaluation is
+synchronous CPU work; callers own scheduling and time selection.
 
 ### Limits
 

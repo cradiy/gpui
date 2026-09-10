@@ -12,6 +12,7 @@
 #[doc = include_str!("../docs/images.md")]
 #[doc = include_str!("../docs/animation.md")]
 #[doc = include_str!("../docs/skin.md")]
+#[doc = include_str!("../docs/morph.md")]
 pub mod guide {}
 
 mod animation;
@@ -19,6 +20,7 @@ mod camera;
 mod geometry;
 mod image;
 mod material;
+mod morph;
 mod resources;
 mod scene;
 mod skin;
@@ -28,6 +30,7 @@ pub use animation::{AnimationClip, AnimationOptions, NodeAnimation};
 pub use geometry::{GeometryOptions, PrimitiveGeometry};
 pub use image::ImageDecodeLimits;
 pub use material::{MaterialDefinition, TextureBinding};
+pub use morph::{MorphGeometry, SceneMorph};
 pub use resources::{Document, EncodedImage, Limits, PreparedDocument};
 pub use scene::{SceneAsset, SceneDefinition, SceneNode, SceneOptions, ScenePrimitive};
 pub use skin::{SceneSkin, SkinDefinition, SkinOptions};

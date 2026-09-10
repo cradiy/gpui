@@ -271,6 +271,7 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         occlusion_strength: 1.,
         unlit: true,
         alpha_cutoff: 0.5,
+        double_sided: true,
         alpha_mode: gpui::AlphaMode3d::Mask,
         sort_depth: 0.,
     }

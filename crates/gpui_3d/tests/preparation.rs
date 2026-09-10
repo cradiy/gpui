@@ -24,6 +24,38 @@ fn tile() -> AtlasTile {
     }
 }
 
+#[test]
+fn material_face_updates_preserve_retained_frames_and_mesh_sharing() {
+    let mut graph = SceneGraph::new();
+    let mesh = Mesh::plane();
+    let material = Material::color(rgb(0xffffff));
+    let node = graph
+        .insert(None, Node::new().mesh(mesh, material.clone()))
+        .unwrap();
+    let old = graph.evaluate().unwrap().scene(Camera::default());
+    let mut cache = PreparationCache::new();
+    let prepared_old = cache
+        .prepare(&old, 1., None, |_| {
+            Ok(TextureState::Ready(ResolvedTexture::None))
+        })
+        .unwrap();
+    graph
+        .set_material(node, material.double_sided(false))
+        .unwrap();
+    let current = graph.evaluate().unwrap().scene(Camera::default());
+    let prepared_new = cache
+        .prepare(&current, 1., None, |_| {
+            Ok(TextureState::Ready(ResolvedTexture::None))
+        })
+        .unwrap();
+    assert!(prepared_old.frame().objects[0].double_sided);
+    assert!(!prepared_new.frame().objects[0].double_sided);
+    assert!(Arc::ptr_eq(
+        &prepared_old.frame().objects[0].mesh,
+        &prepared_new.frame().objects[0].mesh
+    ));
+}
+
 fn layered_material() -> Material {
     Material::image("base.png")
         .pbr(PbrMaterial::default())

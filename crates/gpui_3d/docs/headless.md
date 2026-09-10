@@ -4,6 +4,12 @@ Enable the `wgpu` feature to render 3D scenes without a native window, `App`,
 or UI layout. `HeadlessRenderer` uses the same scene preparation, mesh pass,
 lighting, and alpha-mode shaders as GPUI viewports.
 
+Material face visibility applies to every requested channel and directional
+shadow casting. Single-sided materials preserve local front faces under reflected
+transforms. Mask thresholds are finite and nonnegative: zero keeps all samples,
+including zero-alpha samples, and values above one discard all samples. Opaque
+and Blend ignore the cutoff.
+
 ```toml
 gpui_3d = { path = "../gpui/crates/gpui_3d", features = ["wgpu"] }
 ```

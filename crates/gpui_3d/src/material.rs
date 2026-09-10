@@ -54,6 +54,7 @@ pub struct Material {
     pub(crate) unlit: bool,
     pub(crate) alpha_cutoff: f32,
     pub(crate) alpha_mode: AlphaMode,
+    pub(crate) double_sided: bool,
     pub(crate) sampling: TextureSampling,
     pub(crate) image_color_space: TextureColorSpace,
     pub(crate) pbr: Option<PbrMaterial>,
@@ -73,6 +74,7 @@ impl Material {
             unlit: false,
             alpha_cutoff: 0.5,
             alpha_mode: AlphaMode::Mask,
+            double_sided: true,
             sampling: TextureSampling::default(),
             image_color_space: TextureColorSpace::default(),
             pbr: None,
@@ -200,10 +202,18 @@ impl Material {
         self.alpha_mode = mode;
         self
     }
-    /// Sets the Mask threshold in [0.001, 1] and selects Mask mode.
+    /// Enables both faces for rendering and ray queries. Defaults to true.
+    /// Single-sided materials keep the mesh's local counterclockwise front face,
+    /// including under reflected node transforms.
+    pub fn double_sided(mut self, double_sided: bool) -> Self {
+        self.double_sided = double_sided;
+        self
+    }
+    /// Sets a finite nonnegative Mask threshold and selects Mask mode.
+    /// Zero accepts all alpha values; values above one reject the entire surface.
     pub fn alpha_cutoff(mut self, cutoff: f32) -> Self {
-        assert!(cutoff.is_finite());
-        self.alpha_cutoff = cutoff.clamp(0.001, 1.);
+        assert!(cutoff.is_finite() && cutoff >= 0.);
+        self.alpha_cutoff = cutoff;
         self.alpha_mode = AlphaMode::Mask;
         self
     }

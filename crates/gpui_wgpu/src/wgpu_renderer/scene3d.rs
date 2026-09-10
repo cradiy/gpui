@@ -1089,12 +1089,17 @@ impl Scene3dRenderer {
                 light_count: [light_count, 0, 0, 0],
                 texture_rect,
                 flags: [
-                    object.alpha_cutoff.clamp(0.001, 1.),
+                    object.alpha_cutoff,
                     f32::from(object.unlit),
                     premultiplied,
                     f32::from(matches!(object.texture, MeshTexture3d::Image(_))),
                 ],
-                ids: [0, object.alpha_mode as u32, 0, 0],
+                ids: [
+                    0,
+                    object.alpha_mode as u32,
+                    u32::from(object.double_sided),
+                    0,
+                ],
                 uv_u: [
                     rows[0][0],
                     rows[0][1],
@@ -1765,6 +1770,7 @@ mod tests {
             occlusion_strength: 1.,
             unlit: true,
             alpha_cutoff: 0.5,
+            double_sided: true,
             alpha_mode: gpui::AlphaMode3d::Opaque,
             sort_depth: 0.,
         }
@@ -2216,6 +2222,7 @@ mod tests {
         push(|v| v.mesh = object().mesh);
         push(|v| v.alpha_mode = Mask);
         push(|v| v.alpha_cutoff = 0.9);
+        push(|v| v.double_sided = false);
         push(|v| v.cast_shadows = false);
         push(|v| v.receive_shadows = false);
         push(|v| v.unlit = false);

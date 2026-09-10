@@ -148,7 +148,7 @@ impl Scene {
 
     /// Finds the nearest geometric surface at a logical window position.
     ///
-    /// Both faces are tested. Unnamed objects still occlude other objects.
+    /// Material face visibility is respected. Unnamed objects still occlude other objects.
     /// Constant material alpha is respected; texture alpha, image availability,
     /// ancestor clipping, and effect deformation are not sampled by this query.
     /// Viewport callbacks also sample prepared image alpha and use GPUI hitbox routing.
@@ -157,7 +157,7 @@ impl Scene {
     }
 
     /// Geometric world-ray query, independent of the scene camera and its clip range.
-    /// Respects material alpha and picking behavior, but does not resolve image alpha.
+    /// Respects material face visibility, alpha and picking behavior, but does not resolve image alpha.
     pub fn raycast(&self, ray: crate::Ray) -> Option<Hit> {
         self.raycast_where(ray, |_| true)
     }
@@ -264,6 +264,13 @@ impl Scene {
                 return;
             }
             let (model, normal_matrix) = object.matrices();
+            let [a, b, c]: [[f64; 3]; 3] = std::array::from_fn(|column| {
+                std::array::from_fn(|row| f64::from(model[column][row]))
+            });
+            let mirrored = a[0] * (b[1] * c[2] - b[2] * c[1])
+                + a[1] * (b[2] * c[0] - b[0] * c[2])
+                + a[2] * (b[0] * c[1] - b[1] * c[0])
+                < 0.;
             let mut visit = |triangle_index: usize| {
                 let indices = &object.mesh.indices()[triangle_index * 3..][..3];
                 let vertices: [_; 3] =
@@ -277,6 +284,10 @@ impl Scene {
                 else {
                     return;
                 };
+                let front = front != mirrored;
+                if !object.material.double_sided && !front {
+                    return;
+                }
                 if closest.as_ref().is_some_and(|hit| {
                     distance > hit.distance
                         || (distance == hit.distance
@@ -1060,8 +1071,9 @@ mod tests {
             assert!((hit.uv[0] - 0.71).abs() < 1e-4);
             assert!((hit.uv[1] - 0.67).abs() < 1e-4);
             let n = transform(normals, [0., 0., 1., 0.]);
-            let expected = unit([n[0], n[1], n[2]]).map(|n| if scale[0] < 0. { -n } else { n });
+            let expected = unit([n[0], n[1], n[2]]);
             assert!(dot(hit.normal, expected) > 0.9999);
+            assert!(dot(hit.normal, sub(camera.eye, hit.position)) > 0.);
             assert!((hit.barycentric.iter().sum::<f32>() - 1.).abs() < 1e-5);
         }
     }

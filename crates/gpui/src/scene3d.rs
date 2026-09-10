@@ -645,8 +645,11 @@ pub struct MeshDraw3d {
     /// Finite camera-space forward depth for back-to-front Blend sorting.
     /// Equal-depth objects retain submission order. Ignored by other modes.
     pub sort_depth: f64,
-    /// Mask alpha threshold; ignored in Opaque and Blend modes.
+    /// Finite nonnegative Mask alpha threshold; ignored in Opaque and Blend modes.
     pub alpha_cutoff: f32,
+    /// Render both faces. When false, retain local counterclockwise front faces;
+    /// negative-determinant model transforms reverse the raster winding convention.
+    pub double_sided: bool,
     /// Bypass directional lighting.
     pub unlit: bool,
     /// Cast opaque or alpha-masked shadows. Blend materials never cast shadows.

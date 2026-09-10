@@ -59,6 +59,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 
 ## Phase 3: Materials and Lighting
 
+- [x] **Material face visibility**: Explicit single/double-sided surfaces, reflection-aware local front faces, shared color/shadow/geometry-channel rejection, matching screen/world-ray queries, and independent material batching.
+- [x] **Mask thresholds**: Finite nonnegative alpha cutoffs without clamping, including zero-alpha opaque coverage at zero and fully discarded masks above one, shared by rendering and queries.
 - [x] **Transparent materials**: Opaque, Mask, and Blend modes; linear premultiplied blending, bounds-center object sorting, depth-write control, and alpha-aware picking/IDs. Intersecting and self-overlapping transparent surfaces require separate ordering solutions.
 - [x] **Color pipeline**: sRGB and linear image inputs, linear filtering and lighting, RGBA16Float intermediate results, exposure, None/Reinhard tone mapping, and premultiplied display composition shared by viewport and headless rendering.
 - [x] **PBR material factors**: Optional metallic-roughness shading, GGX/Smith/Schlick direct lighting, linear emissive radiance, and perspective/orthographic viewing directions shared by viewport and headless rendering.

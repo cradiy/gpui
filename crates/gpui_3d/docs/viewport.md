@@ -1542,7 +1542,16 @@ multi-chain ordering and any conflicting pose overrides.
 - `.unlit(true)` disables lighting for any material.
 - `.tint(color)` sets an sRGB tint, decoded before multiplication; its alpha multiplies texture alpha.
 - `.alpha_mode(mode)` selects `AlphaMode::Opaque`, `Mask`, or `Blend`.
-- `.alpha_cutoff(value)` selects `Mask` and sets its threshold, clamped to `[0.001, 1]`.
+- `.alpha_cutoff(value)` selects `Mask` and preserves a finite nonnegative threshold.
+  Zero accepts every alpha value; values above one discard the entire surface.
+- `.double_sided(false)` discards back faces in color, shadow, depth, normal and
+  ID outputs, and in screen/world-ray queries. Materials are double-sided by default.
+
+Front faces use local counterclockwise triangle winding. A negative-determinant
+world transform reverses the raster winding convention, preserving the authored
+front side under mirrored instances. Shading and queried normals face the visible
+side of double-sided surfaces. Bounds and frustum queries remain conservative
+and do not apply face visibility.
 
 `Light` supplies a world-space direction toward the light, color, intensity and
 ambient strength. Materials use basic diffuse shading unless `.pbr(parameters)`
@@ -2329,7 +2338,7 @@ let viewport = viewport3d("world", Scene::new().object(cover)).size_full();
 world-space shading normal, UV, barycentric weights, and distance from the ray
 origin. With a perspective camera this is distance from the eye; with an
 orthographic camera it is forward distance from the eye plane.
-Both faces are pickable; backface normals follow the renderer's flipped shading
+Material face visibility controls picking; backface normals follow the renderer's flipped shading
 normal convention. Hits respect the camera's near and far clip planes. Equal-depth
 ties use scene insertion order.
 

@@ -18,6 +18,126 @@ fn viewport() -> Bounds<Pixels> {
 }
 
 #[test]
+fn material_faces_match_rays_and_screen_picks_under_reflected_hierarchies() {
+    for scale in [[1., 1., 1.], [-1., 1., 1.], [1., 1., -1.], [-1., 1., -1.]] {
+        for double_sided in [false, true] {
+            let mut graph = SceneGraph::new();
+            let parent = graph
+                .insert(
+                    None,
+                    Node::new().transform(
+                        AffineTransform::from_trs([0.; 3], [0., 0., 0., 1.], scale).unwrap(),
+                    ),
+                )
+                .unwrap();
+            let surface = graph
+                .insert(
+                    Some(parent),
+                    Node::new().id("surface").mesh(
+                        Mesh::plane(),
+                        Material::color(rgb(0xffffff)).double_sided(double_sided),
+                    ),
+                )
+                .unwrap();
+            let evaluated = graph.evaluate().unwrap();
+            for side in [-1., 1.] {
+                let camera = Camera {
+                    eye: [0., 0., side * 6.],
+                    target: [0.; 3],
+                    ..Default::default()
+                };
+                let scene = evaluated.scene(camera);
+                let ray = Ray::new(camera.eye, [0., 0., -side]).unwrap();
+                let point = camera
+                    .world_to_screen(viewport(), [0.; 3])
+                    .unwrap()
+                    .unwrap()
+                    .position;
+                for hit in [scene.raycast(ray), scene.pick(viewport(), point)] {
+                    assert_eq!(
+                        hit.is_some(),
+                        double_sided || side == scale[2],
+                        "{scale:?}, side {side}"
+                    );
+                    if let Some(hit) = hit {
+                        assert_eq!(hit.node, Some(surface));
+                        assert_eq!(hit.normal, [0., 0., side]);
+                        assert_eq!(hit.position, [0.; 3]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn back_face_occluders_do_not_block_single_sided_queries() {
+    let object = |double_sided| {
+        Object::new(
+            Mesh::plane(),
+            Material::color(rgb(0xffffff)).double_sided(double_sided),
+        )
+        .scale([1., 1., -1.])
+        .position([0., 0., 1.])
+        .pick_behavior(PickBehavior::Occlude)
+    };
+    let scene = Scene::new()
+        .object(object(false))
+        .object(plane().id("target"));
+    assert_eq!(
+        scene.raycast(ray()).unwrap().object_id,
+        Some(ObjectId::from("target"))
+    );
+    let opaque = Scene::new()
+        .object(object(true))
+        .object(plane().id("target"));
+    assert!(opaque.raycast(ray()).is_none());
+    assert_eq!(
+        scene
+            .bounds_candidates(Aabb::new([-1.; 3], [1.; 3]).unwrap())
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn alpha_cutoffs_preserve_zero_small_values_and_fully_hidden_masks() {
+    use gpui_3d::{AlphaMode, ResolvedTexture, TextureState};
+    for (alpha, cutoff, visible) in [
+        (0., 0., true),
+        (0., 0.0005, false),
+        (0.0006, 0.0005, true),
+        (1., 1., true),
+        (1., 1.01, false),
+    ] {
+        let material = Material::color(gpui::Rgba {
+            r: 1.,
+            g: 1.,
+            b: 1.,
+            a: alpha,
+        })
+        .alpha_cutoff(cutoff);
+        for mode in [AlphaMode::Mask, AlphaMode::Opaque, AlphaMode::Blend] {
+            let scene = Scene::new().object(Object::new(
+                Mesh::plane(),
+                material.clone().alpha_mode(mode),
+            ));
+            let expected = match mode {
+                AlphaMode::Mask => visible,
+                AlphaMode::Opaque => true,
+                AlphaMode::Blend => alpha > 0.,
+            };
+            assert_eq!(scene.raycast(ray()).is_some(), expected);
+            let prepared = scene
+                .prepare(1., None, |_| Ok(TextureState::Ready(ResolvedTexture::None)))
+                .unwrap();
+            assert_eq!(prepared.frame().objects[0].alpha_cutoff, cutoff);
+            assert_eq!(prepared.frame().objects[0].alpha_mode, mode);
+        }
+    }
+}
+
+#[test]
 fn bounds_candidates_are_camera_independent_and_do_not_apply_surface_policy() {
     let scene = Scene::new()
         .object(plane().id("ignored").pick_behavior(PickBehavior::Ignore))

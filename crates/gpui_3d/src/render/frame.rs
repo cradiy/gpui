@@ -91,6 +91,10 @@ impl Scene {
                 "object {index} has invalid normal scale"
             );
             ensure!(
+                object.material.alpha_cutoff >= 0.,
+                "object {index} has a negative alpha cutoff"
+            );
+            ensure!(
                 object.material.occlusion_strength.is_finite()
                     && (0. ..=1.).contains(&object.material.occlusion_strength),
                 "object {index} has invalid occlusion strength"
@@ -216,6 +220,7 @@ impl Scene {
                 occlusion_texture,
                 occlusion_strength: object.material.occlusion_strength,
                 alpha_cutoff: object.material.alpha_cutoff,
+                double_sided: object.material.double_sided,
                 alpha_mode: object.material.alpha_mode,
                 sort_depth,
                 unlit: object.material.unlit,

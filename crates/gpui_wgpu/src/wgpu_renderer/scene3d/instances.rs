@@ -213,6 +213,7 @@ fn compatible(a: &MeshDraw3d, b: &MeshDraw3d) -> bool {
         && Arc::ptr_eq(&a.mesh, &b.mesh)
         && a.alpha_mode == b.alpha_mode
         && a.alpha_cutoff == b.alpha_cutoff
+        && a.double_sided == b.double_sided
         && a.cast_shadows == b.cast_shadows
         && a.receive_shadows == b.receive_shadows
         && a.unlit == b.unlit

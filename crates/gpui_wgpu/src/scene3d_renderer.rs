@@ -429,6 +429,11 @@ impl WgpuScene3dRenderer {
                 object.output_id
             );
             ensure!(
+                object.alpha_cutoff >= 0.,
+                "3D object {} has a negative alpha cutoff",
+                object.output_id
+            );
+            ensure!(
                 object.output_id != 0 || !config.channels.ids(),
                 "zero is reserved for the ID background"
             );

@@ -94,15 +94,21 @@ disable and re-enable GPU deformation to rebuild its resources. Reloaded models
 start in CPU mode.
 
 The example uses default per-source deformation limits, a 256 MiB aggregate
-deformation-source limit before upload, a 256 MiB limit per render source,
+deformation-source limit before upload, a 256 MiB limit for the complete batch of
+packing sources plus one packed result per primitive,
 separate 256 MiB limits for complete primitive-batch evaluation and render
 preparation, and a 256 MiB pick-target budget. Evaluation counts new weights,
 palettes, stage outputs, and tangent scratch storage before dispatching primitives.
-Render sources are reused only for matching node, texture-coordinate selections,
-and mesh allocation. Replacement sources do not invalidate the displayed batch.
+The packing cache retains one current source per node. Matching mesh allocations
+and texture-coordinate selections reuse the source; changes rebind its packing
+kernels and release obsolete cache entries. Batch admission checks the complete
+payload and coordinate selections before uploads, including reused sources.
+Replacements become current only after all sources and preparation requests are
+created successfully. Retained displayed geometry remains independent of the cache.
 Preparation includes each primitive's packed vertices, indirect/validation storage,
 and 96 bytes for bounds reduction and both staging buffers. Existing sources and driver
-overhead are excluded. These limits are not an aggregate GPU residency budget.
+overhead are excluded. Replacement can temporarily coexist with previous sources
+and displayed outputs. These limits are not an aggregate GPU residency budget.
 
 ## Loading and resources
 

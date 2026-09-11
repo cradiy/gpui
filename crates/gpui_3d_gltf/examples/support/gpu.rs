@@ -4,16 +4,19 @@ use anyhow::{Context as _, Result, ensure};
 use gpui::Window;
 use gpui_3d::{
     Aabb, Camera, EvaluatedScene, GpuDeformationBounds, GpuDeformationLimits,
-    GpuGeometryBatchPreparation, Mesh, NodeHandle, PreparedGpuGeometry, Scene, Scene3dGpuDraw,
-    Viewport3d, WgpuContext, WgpuScene3dGeometry, viewport3d,
+    GpuGeometryBatchPreparation, NodeHandle, PreparedGpuGeometry, Scene, Scene3dGpuDraw,
+    Viewport3d, WgpuContext, viewport3d,
 };
 use gpui_3d_gltf::{GpuSceneDeformation, SceneInstance};
+
+#[path = "packing.rs"]
+mod packing;
 
 pub(super) struct Deformation {
     context: WgpuContext,
     source: GpuSceneDeformation,
     bounds: GpuDeformationBounds,
-    packing: HashMap<(NodeHandle, [u32; 5]), (Mesh, WgpuScene3dGeometry)>,
+    packing: packing::Sources,
     pending: Option<Pending>,
     ready: Option<Ready>,
     failed: Option<(u64, String)>,
@@ -169,39 +172,26 @@ impl Deformation {
                     let uv_sets = *coordinates
                         .get(node)
                         .context("GPU primitive is absent from its evaluated scene")?;
-                    let key = (*node, uv_sets);
-                    if self
-                        .packing
-                        .get(&key)
-                        .is_none_or(|(mesh, _)| !mesh.ptr_eq(output.base_mesh()))
-                    {
-                        let source = match self.packing.get(&key) {
-                            Some((_, source)) => output.rebind_render_source(
-                                source,
-                                uv_sets,
-                                Some(256 * 1024 * 1024),
-                            )?,
-                            None => output.render_source(uv_sets, Some(256 * 1024 * 1024))?,
-                        };
-                        self.packing
-                            .insert(key, (output.base_mesh().clone(), source));
-                    }
-                    Ok(key)
+                    Ok((*node, output, uv_sets))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let inputs: Vec<_> = outputs
+            let packing = packing::prepare(&self.packing, &entries, 256 * 1024 * 1024)?;
+            let inputs: Vec<_> = entries
                 .iter()
-                .zip(&entries)
-                .map(|((_, output), key)| (output, &self.packing[key].1))
+                .map(|(node, output, _)| (*output, &packing[node].1))
                 .collect();
             let request =
                 GpuGeometryBatchPreparation::new(&inputs, &self.bounds, Some(256 * 1024 * 1024))?;
             self.pending = Some(Pending {
                 revision,
                 poses,
-                entries,
+                entries: entries
+                    .into_iter()
+                    .map(|(node, _, sets)| (node, sets))
+                    .collect(),
                 request,
             });
+            self.packing = packing;
         }
         Ok(())
     }

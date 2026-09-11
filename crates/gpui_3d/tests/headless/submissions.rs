@@ -2,11 +2,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gpui_3d::{
-    AffineTransform, AlphaMode, Camera, GpuDeformationBounds, GpuDeformationLimits, GpuMorph,
-    HeadlessRenderer, Material, Mesh, MeshPass, MeshPassBlend, MeshPassExpansion, MeshPassSpace,
-    MeshPassState, MorphTarget, MorphTargets, Node, ObjectUpdate, Projection, Scene3dChannels,
-    Scene3dMaterialProgram, Scene3dMaterialSource, Scene3dMaterialValue, Scene3dOutputConfig,
-    Scene3dVertexAttribute, Scene3dVertexStreamValue, SceneGraph,
+    AffineTransform, AlphaMode, Camera, GpuDeformationBounds, GpuDeformationLimits,
+    GpuDeformationOutput, GpuMorph, HeadlessRenderer, Material, Mesh, MeshPass, MeshPassBlend,
+    MeshPassExpansion, MeshPassSpace, MeshPassState, MorphTarget, MorphTargets, Node, ObjectUpdate,
+    Projection, Scene3dChannels, Scene3dMaterialProgram, Scene3dMaterialSource,
+    Scene3dMaterialValue, Scene3dOutputConfig, Scene3dVertexAttribute, Scene3dVertexStreamValue,
+    Scene3dVertexUpdate, SceneGraph,
 };
 use gpui_wgpu::wgpu;
 
@@ -16,8 +17,9 @@ fn program() -> Result<Scene3dMaterialProgram> {
         struct Parameters { value: vec4<f32> }
         @group(1) @binding(0) var<uniform> parameters: Parameters;
         fn material_surface(input: SurfaceInput, gradients: mat2x2<f32>) -> vec4<f32> {
-            let alpha = select(0.0, 1.0, input.attributes.gate >= parameters.value.w);
-            return vec4<f32>(parameters.value.xyz, alpha);
+            let alpha = select(0.0, 1.0,
+                input.attributes.gate >= parameters.value.w && input.uv.x >= 0.5);
+            return vec4<f32>(parameters.value.xyz * input.color.rgb, alpha * input.color.a);
         }
         fn material_shading(base: vec3<f32>, input: SurfaceInput,
             gradients: SurfaceGradients, face_sign: f32) -> vec3<f32> { return base; }
@@ -63,7 +65,7 @@ fn submitted_deformation_materials_and_passes_retain_coverage_and_picking() -> R
         GpuDeformationLimits::default(),
     )?;
     let bounds = GpuDeformationBounds::new(context.clone())?;
-    let source = Scene3dMaterialSource::new(context, program()?)?;
+    let source = Scene3dMaterialSource::new(context.clone(), program()?)?;
     let values = |value: [f32; 4]| {
         [(
             0,
@@ -89,9 +91,81 @@ fn submitted_deformation_materials_and_passes_retain_coverage_and_picking() -> R
     let mut packing = None;
     for revision in 0..2 {
         let output = morph.evaluate(&[revision as f32])?;
+        let output = if revision == 0 {
+            output
+        } else {
+            let producer = context.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("deformation input"),
+                size: output.buffer().size(),
+                usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let mut encoder = context.device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(output.buffer(), 0, &producer, 0, producer.size());
+            context.queue.submit([encoder.finish()]);
+            let output = GpuDeformationOutput::copy_from_buffer(
+                context.clone(),
+                base.clone(),
+                &producer,
+                GpuDeformationLimits::default(),
+            )?;
+            context
+                .queue
+                .write_buffer(&producer, 0, &vec![0; producer.size() as usize]);
+            context.queue.submit([]);
+            output
+        };
         if packing.is_none() {
             packing = Some(output.render_source([0; 5], None)?);
         }
+        let geometry_source = packing.as_ref().unwrap();
+        let updated = if revision == 0 {
+            geometry_source.with_attributes(
+                &[Scene3dVertexUpdate::Uv {
+                    set: 0,
+                    coordinates: &vec![[0.75, 0.]; base.vertex_count()],
+                }],
+                None,
+            )?
+        } else {
+            let uv: Vec<_> = base
+                .vertices()
+                .iter()
+                .map(|vertex| [vertex.uv[1], 0.])
+                .collect();
+            let colors: Vec<_> = base
+                .vertices()
+                .iter()
+                .map(|vertex| [0.5, 0.5, 0.5, vertex.position[0] + 0.5])
+                .collect();
+            let buffer = |label, bytes: &[u8]| {
+                context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytes,
+                    usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                })
+            };
+            let uv_buffer = buffer("UV input", bytemuck::cast_slice(&uv));
+            let color_buffer = buffer("color input", bytemuck::cast_slice(&colors));
+            let updated = geometry_source.with_attributes(
+                &[
+                    Scene3dVertexUpdate::UvBuffer {
+                        set: 0,
+                        buffer: &uv_buffer,
+                    },
+                    Scene3dVertexUpdate::ColorBuffer(&color_buffer),
+                ],
+                None,
+            )?;
+            for buffer in [&uv_buffer, &color_buffer] {
+                context
+                    .queue
+                    .write_buffer(buffer, 0, &vec![0; buffer.size() as usize]);
+            }
+            context.queue.submit([]);
+            updated
+        };
+        packing = Some(updated);
         let mut preparation =
             output.prepare_render_geometry(packing.as_ref().unwrap(), &bounds, None)?;
         let prepared = read(|| preparation.try_read())?;
@@ -171,7 +245,7 @@ fn submitted_deformation_materials_and_passes_retain_coverage_and_picking() -> R
     assert_ne!(first.frame_id(), repeated.frame_id());
     renderer.clear_caches();
     drop((
-        renderer, scenes, scene, graph, morph, bounds, source, initial, packing,
+        renderer, scenes, scene, graph, morph, bounds, source, initial, packing, context,
     ));
 
     let mut retained_pixels = None;
@@ -185,6 +259,7 @@ fn submitted_deformation_materials_and_passes_retain_coverage_and_picking() -> R
                 let world_x = (x as f32 + 0.5) / 16. - 2.;
                 let world_y = 2. - (y as f32 + 0.5) / 16.;
                 let inside = world_y.abs() < 0.5
+                    && (revision == 0 || (world_y < 0. && world_x >= 0.75))
                     && if revision == 0 {
                         (-1.25..-0.25).contains(&world_x)
                     } else {
@@ -215,11 +290,11 @@ fn submitted_deformation_materials_and_passes_retain_coverage_and_picking() -> R
                 );
                 let mut expected = [0.; 4];
                 if covered {
-                    expected[revision] = 1.;
+                    expected[revision] = if revision == 0 { 1. } else { 0.5 };
                     expected[3] = 1.;
                 }
                 if inside && revision == 1 {
-                    expected[2] = 0.25;
+                    expected[2] = 0.125;
                     expected[3] = 1.;
                 }
                 for (actual, expected) in pixels.linear_rgba.as_ref().unwrap()[index]
@@ -240,7 +315,7 @@ fn submitted_deformation_materials_and_passes_retain_coverage_and_picking() -> R
                 retained_pixels = pixels.linear_rgba.clone();
             }
         }
-        let pixel = if revision == 0 { [23, 32] } else { [43, 32] };
+        let pixel = if revision == 0 { [23, 32] } else { [45, 32] };
         let mut picking = frame.pick(pixel)?;
         let picked = read(|| picking.try_read())?;
         assert_eq!(picked.frame_id(), frame.frame_id());

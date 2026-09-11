@@ -205,7 +205,11 @@ fn same_map(a: Option<MaterialTexture3d>, b: Option<MaterialTexture3d>) -> bool 
 }
 
 fn compatible(a: &MeshDraw3d, b: &MeshDraw3d) -> bool {
-    a.render_bounds.is_none()
+    (match (&a.custom_material, &b.custom_material) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.same_snapshot(b),
+        _ => false,
+    }) && a.render_bounds.is_none()
         && b.render_bounds.is_none()
         && a.gpu_geometry.is_none()
         && b.gpu_geometry.is_none()
@@ -329,6 +333,28 @@ mod tests {
         cache.entries[&PlanKey::new(frame, color, limit)]
             .plan
             .clone()
+    }
+
+    #[test]
+    fn scene3d_batches_keep_material_snapshots_separate() {
+        let mut first = object();
+        let mut second = first.clone();
+        assert!(compatible(&first, &second));
+        first.custom_material = Some(gpui::MeshMaterial3d::new(Arc::new(())));
+        assert!(!compatible(&first, &second));
+        second.custom_material = first.custom_material.clone();
+        assert!(compatible(&first, &second));
+        let retained = second.clone();
+        second.custom_material = Some(gpui::MeshMaterial3d::new(Arc::new(())));
+        assert!(!compatible(&first, &second));
+        assert!(compatible(&first, &retained));
+        for color in [false, true] {
+            let input = frame(&[first.clone(), retained.clone(), second.clone()]);
+            let plan = BatchPlan::new(&input, color, 1024);
+            assert_eq!(plan.batches.len(), 2);
+            assert_eq!(plan.batches[0].len(), 2);
+            assert_eq!(plan.batches[1].len(), 1);
+        }
     }
 
     #[test]

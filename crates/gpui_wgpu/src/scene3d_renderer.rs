@@ -588,7 +588,7 @@ impl WgpuScene3dRenderer {
                 ));
             }
             let renderer = &mut self.color.as_mut().unwrap().1;
-            renderer.prepare_frames(device, queue, [frame], [config.size]);
+            renderer.prepare_frames(device, queue, [frame], [config.size])?;
             draw_statistics += renderer.draw_statistics(frame);
             let texture = config
                 .channels
@@ -634,7 +634,7 @@ impl WgpuScene3dRenderer {
             if let Some(source) = resource_source {
                 renderer.reuse_resources_from(source);
             }
-            renderer.prepare_frames(device, queue, [frame], [config.size]);
+            renderer.prepare_frames(device, queue, [frame], [config.size])?;
             draw_statistics += renderer.draw_statistics(frame);
             let texture = output_texture(device, config.size, kind.format());
             renderer.encode_frame(

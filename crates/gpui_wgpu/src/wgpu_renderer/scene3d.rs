@@ -7,6 +7,7 @@ mod draw;
 mod geometry;
 mod images;
 mod instances;
+mod materials;
 mod output_cache;
 mod picking;
 mod specular;
@@ -483,6 +484,8 @@ struct Targets {
 }
 
 pub(crate) struct Scene3dRenderer {
+    #[cfg(not(target_family = "wasm"))]
+    materials: materials::MaterialCache,
     specular: Option<specular::SpecularRenderer>,
     background: Option<background::BackgroundRenderer>,
     pipeline: wgpu::RenderPipeline,
@@ -539,113 +542,11 @@ impl Scene3dRenderer {
                 | wgpu::TextureFormat::R32Float
                 | wgpu::TextureFormat::Rgba32Float
         );
-        let fragment = match format {
-            wgpu::TextureFormat::R32Uint => "object_id",
-            wgpu::TextureFormat::R32Float => "linear_depth",
-            wgpu::TextureFormat::Rgba32Float => "world_normal",
-            _ => "fragment",
-        };
-        let mesh_format = if data_output {
-            format
-        } else {
-            wgpu::TextureFormat::Rgba16Float
-        };
-        let bindings = material_bindings(data_output);
-        let shadow_pipeline = (!data_output).then(|| {
-            let material = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("scene3d_shadow_material"),
-                entries: &bindings
-                    .iter()
-                    .filter(|binding| binding.binding <= 2)
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("scene3d_shadow"),
-                bind_group_layouts: &[Some(&material)],
-                immediate_size: 0,
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("scene3d_shadow"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("shadow_vertex"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(Vertex::layout()), Some(Instance::layout())],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("shadow_fragment"),
-                    compilation_options: Default::default(),
-                    targets: &[],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        });
-        let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scene3d_material"),
-            entries: &bindings,
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("scene3d"),
-            bind_group_layouts: &[Some(&material_layout)],
-            immediate_size: 0,
-        });
-        let create_pipeline = |blend: bool| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("scene3d"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vertex"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(Vertex::layout()), Some(Instance::layout())],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fragment),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: mesh_format,
-                        blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(!blend),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let pipeline = create_pipeline(false);
-        let blend_pipeline = (!data_output).then(|| create_pipeline(true));
+        let create_pipeline =
+            |pass| materials::create_pipeline(device, &shader, None, format, samples, pass);
+        let pipeline = create_pipeline(materials::Pass::Opaque);
+        let blend_pipeline = (!data_output).then(|| create_pipeline(materials::Pass::Blend));
+        let shadow_pipeline = (!data_output).then(|| create_pipeline(materials::Pass::Shadow));
         let display_pipeline = (!data_output).then(|| {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("scene3d_display"),
@@ -706,6 +607,8 @@ impl Scene3dRenderer {
             white.size(),
         );
         Self {
+            #[cfg(not(target_family = "wasm"))]
+            materials: Default::default(),
             specular: (!data_output).then(|| specular::SpecularRenderer::new(device)),
             background: (!data_output)
                 .then(|| background::BackgroundRenderer::new(device, samples)),
@@ -748,7 +651,7 @@ impl Scene3dRenderer {
         width: u32,
         height: u32,
         capabilities: gpui::Scene3dViewportCapabilities,
-    ) {
+    ) -> anyhow::Result<()> {
         self.offsets.clear();
         self.regions.clear();
         let mut frames = Vec::new();
@@ -782,12 +685,13 @@ impl Scene3dRenderer {
         });
         let sizes: Vec<_> = self.regions.values().map(|region| region.size).collect();
         let references: Vec<_> = frames.iter().map(AsRef::as_ref).collect();
-        self.prepare_frame_resources(device, queue, &references, sizes);
+        self.prepare_frame_resources(device, queue, &references, sizes)?;
         let mut slot_count = 0;
         for (layer, frame) in layers.into_iter().zip(&frames) {
             self.offsets.insert(layer, slot_count);
             slot_count += self.plan(frame).batches.len();
         }
+        Ok(())
     }
 
     fn plan(&self, frame: &gpui::Scene3dFrame) -> &instances::BatchPlan {
@@ -857,12 +761,12 @@ impl Scene3dRenderer {
         queue: &wgpu::Queue,
         frames: impl IntoIterator<Item = &'a gpui::Scene3dFrame>,
         sizes: impl IntoIterator<Item = [u32; 2]>,
-    ) {
+    ) -> anyhow::Result<()> {
         let frames: Vec<_> = frames.into_iter().collect();
         self.images
             .lock()
             .retain(frames.iter().flat_map(|frame| frame.objects.iter()));
-        self.prepare_frame_resources(device, queue, &frames, sizes);
+        self.prepare_frame_resources(device, queue, &frames, sizes)
     }
 
     fn prepare_frame_resources(
@@ -871,7 +775,18 @@ impl Scene3dRenderer {
         queue: &wgpu::Queue,
         frames: &[&gpui::Scene3dFrame],
         sizes: impl IntoIterator<Item = [u32; 2]>,
-    ) {
+    ) -> anyhow::Result<()> {
+        #[cfg(not(target_family = "wasm"))]
+        self.materials
+            .prepare(device, frames, self.format, self.samples)?;
+        #[cfg(target_family = "wasm")]
+        anyhow::ensure!(
+            frames.iter().all(|frame| frame
+                .objects
+                .iter()
+                .all(|object| object.custom_material.is_none())),
+            "custom 3D materials require a native renderer"
+        );
         self.plans.prepare(
             frames.iter().copied(),
             self.blend_pipeline.is_some(),
@@ -958,7 +873,7 @@ impl Scene3dRenderer {
         }
         if !has_frame {
             self.targets.clear();
-            return;
+            return Ok(());
         }
         let sizes: HashSet<_> = sizes.into_iter().collect();
         self.targets.retain(|size, _| sizes.contains(size));
@@ -1009,6 +924,7 @@ impl Scene3dRenderer {
                 },
             );
         }
+        Ok(())
     }
 
     pub(crate) fn reuse_resources_from(&mut self, other: &Self) {
@@ -1445,7 +1361,7 @@ impl Scene3dRenderer {
                 entries: &entries,
             }));
         }
-        if let (Some(pipeline), Some(view)) = (&self.shadow_pipeline, &shadow_view) {
+        if let (Some(_), Some(view)) = (&self.shadow_pipeline, &shadow_view) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene3d_shadow"),
                 color_attachments: &[],
@@ -1459,12 +1375,12 @@ impl Scene3dRenderer {
                 }),
                 ..Default::default()
             });
-            pass.set_pipeline(pipeline);
             for (index, batch) in plan.batches.iter().enumerate() {
                 let object = &frame.objects[plan.order[batch.start]];
                 if !plan.passes[batch.start].shadow {
                     continue;
                 }
+                self.bind_material_pipeline(&mut pass, object, true);
                 pass.set_bind_group(0, &shadow_groups[index], &[]);
                 pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
                 self.draw_geometry(&mut pass, object, batch.len() as u32);
@@ -1529,12 +1445,7 @@ impl Scene3dRenderer {
                 }
                 let object = &frame.objects[plan.order[batch.start]];
                 let group = &groups[index];
-                let pipeline = if object.alpha_mode == gpui::AlphaMode3d::Blend {
-                    self.blend_pipeline.as_ref().unwrap_or(&self.pipeline)
-                } else {
-                    &self.pipeline
-                };
-                pass.set_pipeline(pipeline);
+                self.bind_material_pipeline(&mut pass, object, false);
                 pass.set_bind_group(0, group, &[]);
                 pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
                 self.draw_geometry(&mut pass, object, batch.len() as u32);
@@ -1904,6 +1815,7 @@ pub(crate) mod tests {
 
     pub(crate) fn object() -> gpui::MeshDraw3d {
         gpui::MeshDraw3d {
+            custom_material: None,
             gpu_geometry: None,
             render_bounds: None,
             cast_shadows: true,
@@ -1998,7 +1910,12 @@ pub(crate) mod tests {
                 }
                 let mut renderer =
                     Scene3dRenderer::new(&context.device, &context.queue, format, samples);
-                renderer.prepare_frames(&context.device, &context.queue, [&input], [config.size]);
+                renderer.prepare_frames(
+                    &context.device,
+                    &context.queue,
+                    [&input],
+                    [config.size],
+                )?;
                 let targets = &renderer.targets[&config.size];
                 attachments += bytes(&targets.depth) + targets.hdr.as_ref().map_or(0, bytes);
                 shadows += renderer.shadow_maps.values().map(bytes).sum::<u64>();
@@ -2027,24 +1944,24 @@ pub(crate) mod tests {
             wgpu::TextureFormat::R32Uint,
         ] {
             let mut renderer = Scene3dRenderer::new(&context.device, &context.queue, format, 1);
-            renderer.prepare_frames(&context.device, &context.queue, [&dense], [[16, 16]]);
+            renderer.prepare_frames(&context.device, &context.queue, [&dense], [[16, 16]])?;
             assert_eq!(renderer.slots.len(), 1);
             let large = renderer.slots[0].instances.clone();
             let params = renderer.slots[0].params.clone();
             assert_eq!(large.size(), 512 * std::mem::size_of::<Instance>() as u64);
-            renderer.prepare_frames(&context.device, &context.queue, [&medium], [[16, 16]]);
+            renderer.prepare_frames(&context.device, &context.queue, [&medium], [[16, 16]])?;
             assert_eq!(renderer.slots[0].instances, large);
 
-            renderer.prepare_frames(&context.device, &context.queue, [&sparse], [[16, 16]]);
+            renderer.prepare_frames(&context.device, &context.queue, [&sparse], [[16, 16]])?;
             let small = renderer.slots[0].instances.clone();
             assert_eq!(small.size(), 8 * std::mem::size_of::<Instance>() as u64);
             assert_ne!(small, large);
             assert_eq!(renderer.slots[0].params, params);
             assert_eq!(large.size(), 512 * std::mem::size_of::<Instance>() as u64);
-            renderer.prepare_frames(&context.device, &context.queue, [&nearby], [[16, 16]]);
+            renderer.prepare_frames(&context.device, &context.queue, [&nearby], [[16, 16]])?;
             assert_eq!(renderer.slots[0].instances, small);
 
-            renderer.prepare_frames(&context.device, &context.queue, [&split], [[16, 16]]);
+            renderer.prepare_frames(&context.device, &context.queue, [&split], [[16, 16]])?;
             assert_eq!(renderer.slots.len(), 2);
             assert!(
                 renderer
@@ -2052,11 +1969,11 @@ pub(crate) mod tests {
                     .iter()
                     .all(|slot| slot.instances.size() == std::mem::size_of::<Instance>() as u64)
             );
-            renderer.prepare_frames(&context.device, &context.queue, [&dense], [[16, 16]]);
+            renderer.prepare_frames(&context.device, &context.queue, [&dense], [[16, 16]])?;
             assert_eq!(renderer.slots.len(), 1);
             assert_eq!(renderer.slots[0].instances.size(), large.size());
             assert_ne!(renderer.slots[0].instances, large);
-            renderer.prepare_frames(&context.device, &context.queue, [], []);
+            renderer.prepare_frames(&context.device, &context.queue, [], [])?;
             assert!(renderer.slots.is_empty());
         }
         Ok(())
@@ -2125,7 +2042,7 @@ pub(crate) mod tests {
             1024,
             768,
             capabilities,
-        );
+        )?;
         assert_eq!(renderer.targets.len(), 2);
         assert_eq!(renderer.regions.len(), 3);
         let depth = renderer.targets[&[64, 48]].depth.clone();
@@ -2141,7 +2058,7 @@ pub(crate) mod tests {
             2048,
             1536,
             capabilities,
-        );
+        )?;
         assert_eq!(renderer.targets.len(), 2);
         assert_eq!(renderer.targets[&[64, 48]].depth, depth);
         assert_eq!(renderer.targets[&[64, 48]].hdr.as_ref().unwrap(), &hdr);
@@ -2153,7 +2070,7 @@ pub(crate) mod tests {
             40,
             40,
             capabilities,
-        );
+        )?;
         assert_eq!(renderer.targets.len(), 1);
         assert!(renderer.targets.contains_key(&[28, 20]));
         renderer.prepare(
@@ -2163,7 +2080,7 @@ pub(crate) mod tests {
             40,
             40,
             capabilities,
-        );
+        )?;
         assert!(renderer.targets.is_empty());
         assert!(renderer.regions.is_empty());
         Ok(())

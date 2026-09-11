@@ -56,6 +56,7 @@ impl MaterialTexture {
 /// Solid or textured material with explicit alpha interpretation.
 #[derive(Clone)]
 pub struct Material {
+    pub(crate) custom_material: Option<gpui::MeshMaterial3d>,
     pub(crate) color: Rgba,
     pub(crate) texture: Texture,
     pub(crate) unlit: bool,
@@ -78,6 +79,7 @@ impl Material {
     pub fn color(color: impl Into<Rgba>) -> Self {
         Self {
             color: color.into(),
+            custom_material: None,
             texture: Texture::None,
             unlit: false,
             alpha_cutoff: 0.5,
@@ -95,6 +97,20 @@ impl Material {
             occlusion_strength: 1.,
         }
     }
+    /// Uses a device-local material snapshot for color, shadow and data outputs.
+    /// Custom coverage requires GPU picking; viewport CPU interaction is disabled.
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    pub fn program(mut self, snapshot: crate::Scene3dMaterialSnapshot) -> Self {
+        self.custom_material = Some(gpui::MeshMaterial3d::new(std::sync::Arc::new(snapshot)));
+        self
+    }
+
+    /// Restores built-in surface evaluation and lighting.
+    pub fn builtin_program(mut self) -> Self {
+        self.custom_material = None;
+        self
+    }
+
     /// Uses an image's first decoded frame, stretched over mesh UVs.
     pub fn image(image: impl Into<ImageSource>) -> Self {
         Self {

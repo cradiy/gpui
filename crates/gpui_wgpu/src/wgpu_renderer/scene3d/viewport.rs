@@ -78,7 +78,7 @@ impl ViewportRenderer {
         height: u32,
         atlas: &WgpuAtlas,
         retain_outputs: bool,
-    ) {
+    ) -> anyhow::Result<()> {
         let mut needed = [false; 2];
         let mut frames = Vec::new();
         let mut pick_needed = false;
@@ -188,13 +188,14 @@ impl ViewportRenderer {
         );
         for renderer in self.renderers.iter_mut().flatten() {
             renderer.plans.reuse_from(&self.plans);
-            renderer.prepare(device, queue, scene, width, height, self.capabilities);
+            renderer.prepare(device, queue, scene, width, height, self.capabilities)?;
         }
         if pick_needed || self.picking.is_some() {
             self.picking
                 .get_or_insert_with(|| super::picking::PickRenderer::new(self.context.clone()))
-                .prepare(scene, [width, height], self.capabilities);
+                .prepare(scene, [width, height], self.capabilities)?;
         }
+        Ok(())
     }
 
     pub(in crate::wgpu_renderer) fn commit_outputs(&self, submitted: bool) {

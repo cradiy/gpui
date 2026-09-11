@@ -505,7 +505,7 @@ fn cpu_interaction_enabled(scene: &Scene) -> bool {
     scene
         .objects
         .iter()
-        .all(|object| object.gpu_geometry.is_none())
+        .all(|object| object.gpu_geometry.is_none() && object.material.custom_material.is_none())
 }
 
 fn pick_snapshot(
@@ -563,6 +563,19 @@ mod tests {
                 .pick(point(px(50.), px(50.)))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn custom_material_disables_cpu_coverage_until_restored() {
+        let mut source =
+            Scene::new().object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))));
+        assert!(cpu_interaction_enabled(&source));
+        source.objects[0].material.custom_material = Some(gpui::MeshMaterial3d::new(Arc::new(())));
+        let retained = source.clone();
+        assert!(!cpu_interaction_enabled(&source));
+        source.objects[0].material = source.objects[0].material.clone().builtin_program();
+        assert!(cpu_interaction_enabled(&source));
+        assert!(!cpu_interaction_enabled(&retained));
     }
 
     #[test]

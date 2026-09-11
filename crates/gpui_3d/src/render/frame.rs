@@ -194,6 +194,7 @@ impl Scene {
                 continue;
             }
             objects.push(MeshDraw3d {
+                custom_material: object.material.custom_material.clone(),
                 gpu_geometry: object.gpu_geometry.clone(),
                 render_bounds: object
                     .render_bounds

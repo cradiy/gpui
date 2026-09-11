@@ -3063,8 +3063,8 @@ impl WgpuRenderer {
                     output_budget,
                 ));
             }
-            if let Some(renderer) = &mut resources.scene3d {
-                renderer.prepare(
+            if let Some(renderer) = &mut resources.scene3d
+                && let Err(error) = renderer.prepare(
                     &resources.device,
                     &resources.queue,
                     scene,
@@ -3072,7 +3072,10 @@ impl WgpuRenderer {
                     viewport[1] as u32,
                     &atlas,
                     retain_outputs,
-                );
+                )
+            {
+                *self.last_error.lock().unwrap() = Some(error.to_string());
+                return false;
             }
             if has_particle_transition && resources.particle_transition.is_none() {
                 resources.particle_transition = Some(

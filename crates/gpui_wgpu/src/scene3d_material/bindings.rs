@@ -39,10 +39,14 @@ struct Source {
 }
 
 /// Device-local material shader and reusable group 1 layout.
-/// Recreate after device replacement. Does not create scene draw pipelines.
+/// Recreate after device replacement. Draw pipelines are prepared by scene renderers.
 #[derive(Clone)]
 pub struct Scene3dMaterialSource(Arc<Source>);
 impl Scene3dMaterialSource {
+    pub(crate) fn identity(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
+
     pub fn new(context: WgpuContext, program: MaterialProgram) -> Result<Self> {
         ensure!(!context.device_lost(), "material device is lost");
         program.validate_limits(&context.device.limits())?;

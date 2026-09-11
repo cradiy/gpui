@@ -6,8 +6,7 @@ once. The native `wgpu` feature is required.
 
 `bind()` uploads uniform values and binds existing texture views and samplers.
 It returns a `Scene3dMaterialSnapshot` retaining the source and all bound resources.
-The source and snapshot do not yet attach custom materials to scene objects or
-create scene draw pipelines.
+`Material::program(snapshot)` attaches these bindings to a scene material.
 
 ```rust
 use gpui_3d::{
@@ -25,12 +24,41 @@ let bindings = source.bind([
 let updated = bindings.with_values([
     (0, Scene3dMaterialValue::Uniform(updated_parameter_bytes.into())),
 ], limits)?;
+
+let material = gpui_3d::Material::color(gpui::white()).program(updated);
 ```
 
 The binding numbers and resource kinds must match the program's declarations.
 Initial binding requires every declaration exactly once, including unused ones.
 Input order is arbitrary. Uniform bytes must exactly match the reflected struct
 size, including WGSL padding. Oversized buffers are not treated as subranges.
+
+## Scene rendering
+
+Viewport and headless renderers use the same snapshot for color, directional
+shadow, object ID, linear depth, and geometric normal output. GPU-deformed meshes
+use the same material path. Surface alpha is evaluated before renderer-owned face
+and alpha clipping; shading cannot override coverage. Camera and shadow passes
+have different pixel footprints, so explicit texture gradients can select different
+mip levels. Blend materials retain back-to-front color compositing, nearest surviving
+ID/depth selection, and no shadow casting.
+
+Programs return linear HDR RGB. Depth testing, alpha premultiplication, tone mapping,
+and output encoding remain renderer-owned. Built-in tint, textures, lights and
+material parameters remain available through the program helpers. `builtin_program()`
+restores built-in evaluation without changing those parameters.
+
+Pipeline variants are reused by shader identity within each renderer's output format
+and sample count. Parameter updates do not recompile the program. Unreferenced
+variants are released during preparation. Objects sharing a material snapshot can
+batch when their other draw state is compatible; distinct snapshots cannot batch.
+Wrong backend types, foreign/lost devices, and pipeline compilation failures reject
+rendering rather than selecting a different material.
+
+Custom programs disable viewport CPU object hover/click and captured-UI pointer
+routing. CPU mesh queries do not evaluate custom WGSL coverage. Use retained GPU
+ID/depth captures for visible-surface selection; camera controls and surrounding
+ordinary UI remain available.
 
 ## Updates and ownership
 

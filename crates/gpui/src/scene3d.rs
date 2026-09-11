@@ -655,6 +655,8 @@ impl DirectionalShadow3d {
 /// One indexed mesh and its material parameters.
 #[derive(Clone, Debug)]
 pub struct MeshDraw3d {
+    /// Immutable backend material snapshot shared by all output passes.
+    pub custom_material: Option<MeshMaterial3d>,
     /// Immutable backend-owned geometry. Requires explicit render bounds and backend validation.
     pub gpu_geometry: Option<MeshGpuGeometry3d>,
     /// Optional conservative mesh-local render bounds, independent of CPU vertex/query data.
@@ -709,6 +711,35 @@ pub struct MeshDraw3d {
     pub cast_shadows: bool,
     /// Receive direct-light shadows; ignored by unlit materials.
     pub receive_shadows: bool,
+}
+
+/// Owned backend material snapshot. Requires renderer type and device validation.
+#[derive(Clone)]
+pub struct MeshMaterial3d(Arc<dyn std::any::Any + Send + Sync>);
+
+impl MeshMaterial3d {
+    /// Wraps an immutable backend binding snapshot.
+    pub fn new<T: std::any::Any + Send + Sync>(material: Arc<T>) -> Self {
+        Self(material)
+    }
+
+    /// Borrows a snapshot understood by the current renderer.
+    pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
+
+    /// Tests snapshot identity, not shader or resource contents.
+    pub fn same_snapshot(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for MeshMaterial3d {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MeshMaterial3d")
+            .field(&Arc::as_ptr(&self.0))
+            .finish()
+    }
 }
 
 /// Owned device-local geometry payload. The renderer validates its concrete backend type,

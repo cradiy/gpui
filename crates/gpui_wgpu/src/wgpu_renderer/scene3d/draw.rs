@@ -2,6 +2,36 @@ use super::Scene3dRenderer;
 use crate::Scene3dGpuGeometry;
 
 impl Scene3dRenderer {
+    pub(super) fn bind_material_pipeline(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        object: &gpui::MeshDraw3d,
+        shadow: bool,
+    ) {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(material) = super::materials::snapshot(object).expect("validated material") {
+            let pipelines = self.materials.get(material);
+            let pipeline = if shadow {
+                pipelines.shadow.as_ref().unwrap()
+            } else if object.alpha_mode == gpui::AlphaMode3d::Blend {
+                pipelines.blend.as_ref().unwrap_or(&pipelines.mesh)
+            } else {
+                &pipelines.mesh
+            };
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(1, material.bind_group(), &[]);
+            return;
+        }
+        let pipeline = if shadow {
+            self.shadow_pipeline.as_ref().unwrap()
+        } else if object.alpha_mode == gpui::AlphaMode3d::Blend {
+            self.blend_pipeline.as_ref().unwrap_or(&self.pipeline)
+        } else {
+            &self.pipeline
+        };
+        pass.set_pipeline(pipeline);
+    }
+
     pub(super) fn draw_geometry(
         &self,
         pass: &mut wgpu::RenderPass<'_>,

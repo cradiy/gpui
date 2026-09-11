@@ -45,7 +45,7 @@ impl PickRenderer {
         scene: &Scene,
         size: [u32; 2],
         viewport: Scene3dViewportCapabilities,
-    ) {
+    ) -> anyhow::Result<()> {
         self.entries.clear();
         visit_scenes(scene, |scene| {
             for layer in &scene.subtree_layers {
@@ -105,7 +105,7 @@ impl PickRenderer {
         });
         if self.entries.is_empty() {
             self.renderers = None;
-            return;
+            return Ok(());
         }
         let device = &self.context.device;
         let queue = &self.context.queue;
@@ -124,7 +124,7 @@ impl PickRenderer {
                 queue,
                 self.entries.values().map(|entry| entry.frame.as_ref()),
                 self.entries.values().map(|entry| entry.region.size),
-            );
+            )?;
             let mut start = 0;
             for entry in self.entries.values_mut() {
                 entry.start[index] = start;
@@ -136,6 +136,7 @@ impl PickRenderer {
                     .set_statistics(statistics);
             }
         }
+        Ok(())
     }
 
     pub(super) fn encode(

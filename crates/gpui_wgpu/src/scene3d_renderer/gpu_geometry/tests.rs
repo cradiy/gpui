@@ -133,7 +133,7 @@ fn gpu_geometry_admission_includes_material_inputs_indices_and_draw_arguments() 
             .validate(&limits, 90, 432, Some(memory.total_bytes - 1))
             .is_err()
     );
-    assert_eq!(memory.total_bytes, 90 * 96 * 2 + 432 * 4 + 20);
+    assert_eq!(memory.total_bytes, 90 * 96 * 2 + 432 * 4 + 32);
     assert!(
         memory
             .validate(
@@ -243,14 +243,43 @@ fn gpu_geometry_preserves_material_attributes_and_gates_invalid_draws() {
         expected_words[index * 24..index * 24 + 3].copy_from_slice(&attributes[index][..3]);
     }
     assert_eq!(read(&context, valid.vertices()), expected_words);
-    assert_eq!(read(&context, valid.draw()), [3, 1, 0, 0, 0]);
+    assert_eq!(&read(&context, valid.draw())[..5], [3, 1, 0, 0, 0]);
     attributes[1][12] = 3;
     let invalid = evaluate(&attributes);
     attributes[1][12] = 0;
     attributes[1][11] = (-1_f32).to_bits();
     let mixed_sign = evaluate(&attributes);
     drop(geometry);
-    assert_eq!(read(&context, invalid.draw()), [3, 0, 0, 0, 0]);
-    assert_eq!(read(&context, mixed_sign.draw()), [3, 0, 0, 0, 0]);
-    assert_eq!(read(&context, valid.draw()), [3, 1, 0, 0, 0]);
+    assert_eq!(&read(&context, invalid.draw())[..5], [3, 0, 0, 0, 0]);
+    assert_eq!(&read(&context, mixed_sign.draw())[..5], [3, 0, 0, 0, 0]);
+    assert_eq!(&read(&context, valid.draw())[..5], [3, 1, 0, 0, 0]);
+    assert!(valid.request_status(Some(31)).is_err());
+    let mut requests = [
+        valid.request_status(Some(32)).unwrap(),
+        invalid.request_status(None).unwrap(),
+        mixed_sign.request_status(None).unwrap(),
+    ];
+    drop(valid);
+    drop(invalid);
+    drop(mixed_sign);
+    context
+        .device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(30)),
+        })
+        .unwrap();
+    let [clean, failed, tangent] = requests
+        .each_mut()
+        .map(|request| request.try_read().unwrap().unwrap());
+    assert!(clean.is_drawable());
+    assert_eq!(failed.issues, Scene3dGeometryIssues::DEFORMATION_STATUS);
+    assert_eq!(failed.first_invalid_vertex, Some(1));
+    assert_eq!(tangent.issues, Scene3dGeometryIssues::TRIANGLE_TANGENT_SIGN);
+    assert_eq!(tangent.first_invalid_triangle, Some(0));
+    assert!(
+        requests
+            .iter_mut()
+            .all(|request| request.try_read().is_err())
+    );
 }

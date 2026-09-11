@@ -305,10 +305,14 @@ fn gpu_attribute_versions_preserve_geometry_and_share_packing_resources() {
         Scene3dVertexUpdate::ColorBuffer(&color_buffer),
     ] {
         let invalid = external.with_attributes(&[update], None).unwrap();
-        assert_eq!(
-            read(&context, invalid.evaluate(&buffer).unwrap().draw()),
-            [3, 0, 0, 0, 0]
-        );
+        let rejected = read(&context, invalid.evaluate(&buffer).unwrap().draw());
+        assert_eq!(&rejected[..5], [3, 0, 0, 0, 0]);
+        let issue = match update {
+            Scene3dVertexUpdate::UvBuffer { .. } => Scene3dGeometryIssues::INVALID_UV,
+            Scene3dVertexUpdate::ColorBuffer(_) => Scene3dGeometryIssues::INVALID_COLOR,
+            _ => unreachable!(),
+        };
+        assert_eq!(&rejected[5..], [issue.bits(), 0, u32::MAX]);
         let repaired = invalid
             .with_attributes(
                 &[
@@ -323,7 +327,7 @@ fn gpu_attribute_versions_preserve_geometry_and_share_packing_resources() {
             .unwrap()
             .evaluate(&buffer)
             .unwrap();
-        assert_eq!(read(&context, repaired.draw()), [3, 1, 0, 0, 0]);
+        assert_eq!(&read(&context, repaired.draw())[..5], [3, 1, 0, 0, 0]);
         assert_eq!(
             read(&context, repaired.vertices()),
             read(&context, external_packed.vertices())
@@ -364,10 +368,13 @@ fn gpu_attribute_versions_preserve_geometry_and_share_packing_resources() {
         read(&context, packed.vertices()),
         bytemuck::cast_slice::<_, u32>(&expected)
     );
-    assert_eq!(read(&context, packed.draw()), [3, 1, 0, 0, 0]);
+    assert_eq!(&read(&context, packed.draw())[..5], [3, 1, 0, 0, 0]);
     assert_eq!(
         read(&context, external_packed.vertices()),
         read(&context, packed.vertices())
     );
-    assert_eq!(read(&context, external_packed.draw()), [3, 1, 0, 0, 0]);
+    assert_eq!(
+        &read(&context, external_packed.draw())[..5],
+        [3, 1, 0, 0, 0]
+    );
 }

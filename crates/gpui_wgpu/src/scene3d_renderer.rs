@@ -24,6 +24,7 @@ mod geometry_memory;
 pub use geometry_memory::Scene3dGeometryMemory;
 mod gpu_geometry;
 pub use gpu_geometry::{
+    Scene3dGeometryIssues, Scene3dGeometryStatus, Scene3dGeometryStatusReadback,
     Scene3dGpuGeometry, Scene3dGpuGeometryMemory, Scene3dVertexUpdate, WgpuScene3dGeometry,
 };
 pub(crate) mod gpu_draws;

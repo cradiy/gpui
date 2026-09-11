@@ -7,6 +7,8 @@ use wgpu::util::DeviceExt as _;
 use crate::{WgpuContext, wgpu_renderer::scene3d::Vertex};
 
 mod attributes;
+mod status;
+pub use status::{Scene3dGeometryIssues, Scene3dGeometryStatus, Scene3dGeometryStatusReadback};
 #[cfg(test)]
 mod tests;
 pub use attributes::Scene3dVertexUpdate;
@@ -74,8 +76,8 @@ impl Scene3dGpuGeometryMemory {
             source_vertex_bytes: vertex_bytes,
             index_bytes,
             vertex_bytes,
-            draw_bytes: 20,
-            total_bytes: vertex_bytes * 2 + index_bytes + 20,
+            draw_bytes: 32,
+            total_bytes: vertex_bytes * 2 + index_bytes + 32,
         })
     }
 
@@ -175,7 +177,7 @@ impl WgpuScene3dGeometry {
             contents: bytemuck::cast_slice(mesh.indices()),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDEX,
         });
-        let entries: Vec<_> = [4, 64, 4, 4, 20]
+        let entries: Vec<_> = [4, 64, 4, 4, 32]
             .into_iter()
             .enumerate()
             .map(|(binding, minimum)| wgpu::BindGroupLayoutEntry {
@@ -267,7 +269,16 @@ impl WgpuScene3dGeometry {
         });
         let draw = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene3d.geometry.draw"),
-            contents: bytemuck::cast_slice(&[self.mesh.indices().len() as u32, 1, 0, 0, 0]),
+            contents: bytemuck::cast_slice(&[
+                self.mesh.indices().len() as u32,
+                1,
+                0,
+                0,
+                0,
+                0,
+                u32::MAX,
+                u32::MAX,
+            ]),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::INDIRECT
                 | wgpu::BufferUsages::COPY_SRC,
@@ -351,6 +362,8 @@ impl Scene3dGpuGeometry {
     pub fn indices(&self) -> &wgpu::Buffer {
         &self.indices
     }
+    /// One indexed indirect command at byte zero, followed by private validation state.
+    /// Use `request_status` to inspect validation without reading vertex data.
     pub fn draw(&self) -> &wgpu::Buffer {
         &self.draw
     }

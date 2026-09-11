@@ -42,6 +42,7 @@ pub use geometry::{
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpui_wgpu::{
+    Scene3dGeometryIssues, Scene3dGeometryStatus, Scene3dGeometryStatusReadback,
     Scene3dMaterialBindingLimits, Scene3dMaterialLimits, Scene3dMaterialProgram,
     Scene3dMaterialResource, Scene3dMaterialResourceKind, Scene3dMaterialSnapshot,
     Scene3dMaterialSource, Scene3dMaterialValue, Scene3dVertexAttribute,

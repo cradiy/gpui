@@ -78,6 +78,8 @@ unused vertices, and suppresses the entire indirect draw if UVs are nonfinite or
 color lanes fall outside `[0, 1]`. This does not turn `with_attributes` or packing
 into a CPU error result. Replacing invalid streams with valid ones produces a
 usable source; no values are clamped and earlier snapshots remain unchanged.
+Use the packed result's [validation status](deformation.md#geometry-validation)
+to inspect rejection reasons without reading vertex data.
 
 ## Versions and memory
 

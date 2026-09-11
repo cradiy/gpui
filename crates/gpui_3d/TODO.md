@@ -237,6 +237,7 @@ Core implementation order:
    - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.
    - [ ] **Render integration**: Consume deformation buffers without CPU readback, with explicit bounds and query synchronization policies.
      - [x] **GPU vertex packing**: Shared material-coordinate and index inputs, retained render-format vertices, and indirect draw suppression for invalid deformation results.
+     - [x] **Packed geometry status**: Fixed-size nonblocking validation readback, combined issue flags, deterministic first vertex/triangle locations, and request ownership independent of rendered frames.
      - [x] **Headless draw routing**: Bind packed outputs to objects across render channels, with conservative render bounds and explicit CPU query materialization.
      - [x] **Viewport draw routing**: Window-device sharing, frame-local packed resources, conservative bounds, cache invalidation, and explicit CPU interaction limits.
      - [ ] **GPU viewport interaction**: Associate displayed deformation frames with ID/depth queries, pointer coordinates, and asynchronous selection results without using original CPU mesh hits.

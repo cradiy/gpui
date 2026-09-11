@@ -298,11 +298,38 @@ attributes have separate admission limits. Draw statistics count submissions,
 including indirect draws suppressed by invalid GPU attributes.
 
 `Scene3dGpuGeometryMemory::plan` reports 96 bytes per vertex for the static source,
-another 96 bytes per packed vertex, four bytes per index, and 20 bytes per draw
-argument buffer. The optional byte limit covers one source and one output, not
+another 96 bytes per packed vertex, four bytes per index, and 32 bytes per draw
+argument/validation buffer. The optional byte limit covers one source and one output, not
 all retained results or the separate 64-byte deformation attributes. Compute,
 indirect execution, five storage bindings, and device buffer/dispatch limits are
 required. No global cache retains these objects.
+
+### Geometry validation
+
+`Scene3dGpuGeometry::request_status(max_staging_bytes)` copies a fixed 32-byte
+record into owned staging storage. `Scene3dGeometryStatusReadback::try_read()` polls
+without waiting and returns `None` while pending. A request may outlive its source
+geometry; completion or failure consumes it. Dropping cancels mapping, not queued
+work. The optional byte limit applies to each request, and the caller controls the
+number of concurrent requests.
+
+`Scene3dGeometryStatus::is_drawable()` reports whether packing admitted the draw,
+not whether it is on screen or covered by another object. `issues` combines all
+detected categories:
+
+- `INVALID_UV`: A selected coordinate contains a nonfinite lane.
+- `INVALID_COLOR`: A color lane is nonfinite or outside `[0, 1]`.
+- `DEFORMATION_STATUS`: An input deformation record has nonzero status lanes.
+- `NONFINITE_DEFORMATION`: A position, normal, or tangent lane is nonfinite.
+- `INVALID_TANGENT`: Tangent handedness, presence, or basis validity is inconsistent.
+- `TRIANGLE_TANGENT_SIGN`: A triangle's vertices have different tangent signs.
+
+`first_invalid_vertex` and `first_invalid_triangle` are the lowest base-mesh indices
+in each category of location, including unused vertices. They are `None` when no
+corresponding issue exists. The vertex index identifies at least one vertex issue,
+not necessarily every bit in `issues`. These results belong to the packed geometry
+snapshot, independently of camera, material clipping, viewport size, or later
+deformation updates. Vertex and index data are not read back.
 
 ## Window viewports
 

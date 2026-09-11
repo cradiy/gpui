@@ -21,7 +21,7 @@ fn asset(fixture: &Fixture) -> SceneAsset {
 }
 
 #[test]
-fn asset_admission_distinguishes_generated_and_authored_tangents() {
+fn asset_admission_preserves_generated_and_authored_tangent_policies() {
     let mut fixture = Fixture::new();
     let flat = asset(&fixture);
     assert!(flat.morphs()[0].geometry().regenerates_normals());
@@ -34,8 +34,15 @@ fn asset_admission_distinguishes_generated_and_authored_tangents() {
     let generated = asset(&fixture);
     assert_eq!(generated.morphs()[0].default_weights(), [0.]);
     assert!(generated.morphs()[0].geometry().regenerates_tangents());
-    let error = GpuSceneDeformation::check_asset(&generated).unwrap_err();
-    assert!(error.to_string().contains("MikkTSpace"), "{error:#}");
+    GpuSceneDeformation::check_asset(&generated).unwrap();
+    assert!(
+        generated.morphs()[0]
+            .geometry()
+            .attribute_targets()
+            .base_mesh()
+            .tangents()
+            .is_none()
+    );
 
     fixture.normals();
     let tangents = fixture.floats("VEC4", &[1., 0., 0., 1.].repeat(4));
@@ -78,6 +85,101 @@ fn mixed_fixture() -> Fixture {
     ]);
     fixture.json["skins"] = json!([{"joints":[1]}]);
     fixture
+}
+
+fn generated_fixture(authored_normals: bool) -> Fixture {
+    let mut fixture = mixed_fixture();
+    let uv = fixture.floats("VEC2", &[0., 0., 0., 1., -1., 1., -1., 0.]);
+    let normal = fixture.floats("VEC3", &[0., 0., 1.].repeat(4));
+    let normal_delta = fixture.floats("VEC3", &[0.2, -0.1, 0.].repeat(4));
+    fixture.json["materials"] = json!([{"normalTexture":{"index":0,"texCoord":2}}]);
+    fixture.json["textures"] = json!([{"source":0}]);
+    fixture.json["images"] = json!([{"uri":"normal.png","mimeType":"image/png"}]);
+    for mesh in fixture.json["meshes"].as_array_mut().unwrap() {
+        for primitive in mesh["primitives"].as_array_mut().unwrap() {
+            primitive["material"] = json!(0);
+            primitive["attributes"]["TEXCOORD_2"] = json!(uv);
+            if authored_normals {
+                primitive["attributes"]["NORMAL"] = json!(normal);
+                if let Some(targets) = primitive["targets"].as_array_mut() {
+                    targets[0]["NORMAL"] = json!(normal_delta);
+                }
+            }
+        }
+    }
+    fixture
+}
+
+#[test]
+fn generated_tangent_sources_preserve_selected_uvs_corner_order_and_zero_pose() {
+    for authored_normals in [false, true] {
+        let asset = asset(&generated_fixture(authored_normals));
+        GpuSceneDeformation::check_asset(&asset).unwrap();
+        for morph in asset.morphs() {
+            let geometry = morph.geometry();
+            assert!(geometry.regenerates_tangents());
+            assert_eq!(geometry.regenerates_normals(), !authored_normals);
+            let input = geometry.attribute_targets().base_mesh();
+            let generated = input
+                .generate_tangents_for_uv_set(2, gpui_3d::TangentGenerationMode::Repair)
+                .unwrap();
+            assert_eq!(generated.mesh().tangent_uv_set(), Some(2));
+            assert_eq!(generated.mesh().indices(), input.indices());
+            assert_eq!(
+                generated.source_vertices(),
+                (0..input.vertex_count() as u32).collect::<Vec<_>>()
+            );
+            let zero = geometry
+                .evaluate(&vec![0.; geometry.targets().len()])
+                .unwrap();
+            assert!(std::ptr::eq(
+                zero.vertices(),
+                geometry.base_mesh().vertices()
+            ));
+            assert_eq!(zero.tangents(), geometry.base_mesh().tangents());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU with SHADER_F64"]
+fn gpu_imported_tangent_generation_composes_normals_skin_and_retained_zero_samples()
+-> anyhow::Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    let mut retained = Vec::new();
+    for authored_normals in [false, true] {
+        let asset = asset(&generated_fixture(authored_normals));
+        let mut graph = SceneGraph::new();
+        let instance = graph.instantiate(None, asset.subtree())?;
+        let poses = graph.evaluate()?;
+        let gpu = GpuSceneDeformation::new(context.clone(), &asset, limits)?;
+        let target = instance.node(asset.morphs()[0].node()).unwrap();
+        for overrides in [
+            vec![],
+            vec![(target, vec![-0.5])],
+            vec![(target, vec![0.])],
+            vec![(target, vec![1.])],
+            vec![],
+        ] {
+            let expected = asset.deform(&instance, &poses, &overrides)?;
+            let outputs = gpu.evaluate(&instance, &poses, &overrides)?;
+            assert_eq!(outputs.len(), expected.len());
+            for ((handle, output), (expected_handle, expected)) in outputs.into_iter().zip(expected)
+            {
+                assert_eq!(handle, expected_handle);
+                assert_eq!(output.base_mesh().tangent_uv_set(), Some(2));
+                let render_source = output.render_source([2; 5], None)?;
+                output.render_geometry(&render_source)?;
+                poses.with_meshes([(handle, output.base_mesh().clone())])?;
+                retained.push((output, expected));
+            }
+        }
+    }
+    for (output, expected) in retained {
+        same_mesh(&output.readback()?, &expected);
+    }
+    Ok(())
 }
 
 #[test]
@@ -194,5 +296,19 @@ fn same_mesh(actual: &Mesh, expected: &Mesh) {
         near(actual.normal, expected.normal);
         assert_eq!(actual.uv, expected.uv);
     }
-    assert_eq!(actual.tangents(), expected.tangents());
+    assert_eq!(actual.tangent_uv_set(), expected.tangent_uv_set());
+    match (actual.tangents(), expected.tangents()) {
+        (Some(actual), Some(expected)) => {
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(expected) {
+                near(
+                    [actual[0], actual[1], actual[2]],
+                    [expected[0], expected[1], expected[2]],
+                );
+                assert_eq!(actual[3], expected[3]);
+            }
+        }
+        (None, None) => {}
+        _ => panic!("tangent presence mismatch"),
+    }
 }

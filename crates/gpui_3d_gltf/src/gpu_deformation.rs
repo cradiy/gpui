@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, ensure};
 use gpui_3d::{
     EvaluatedScene, GpuDeformationLimits, GpuDeformationOutput, GpuFlatNormals, GpuMorph, GpuSkin,
-    NodeHandle, SubtreeInstance, WgpuContext,
+    GpuTangentGeneration, NodeHandle, SubtreeInstance, TangentGenerationMode, WgpuContext,
 };
 
 use crate::{SceneAsset, SceneMorph, ScenePrimitive, SceneSkin, morph::resolve_weights};
@@ -25,20 +25,39 @@ struct MorphSource {
     source: SceneMorph,
     gpu: GpuMorph,
     normals: Option<GpuFlatNormals>,
+    tangents: Option<(GpuTangentGeneration, GpuDeformationOutput)>,
 }
 
 impl GpuSceneDeformation {
-    /// Checks imported direction policies without a device or GPU allocation.
-    /// MikkTSpace tangent regeneration is unsupported, including zero-weight assets.
+    /// Checks imported direction topology and coordinate metadata without GPU allocation.
     /// Device limits, payload budgets, and arithmetic validity are checked separately.
     pub fn check_asset(asset: &SceneAsset) -> Result<()> {
         for morph in asset.morphs() {
-            ensure!(
-                !morph.geometry().regenerates_tangents(),
-                "node {} primitive {:?}: GPU MikkTSpace tangent regeneration is unsupported",
-                morph.node_index(),
-                morph.primitive(),
-            );
+            let geometry = morph.geometry();
+            let input = geometry.attribute_targets().base_mesh();
+            if geometry.regenerates_normals() || geometry.regenerates_tangents() {
+                ensure!(
+                    input.vertex_count() == input.index_count()
+                        && input
+                            .indices()
+                            .iter()
+                            .enumerate()
+                            .all(|(i, &v)| i == v as usize),
+                    "node {} primitive {:?}: GPU direction regeneration requires ordered triangle corners",
+                    morph.node_index(),
+                    morph.primitive(),
+                );
+            }
+            if geometry.regenerates_tangents() {
+                let set = geometry
+                    .base_mesh()
+                    .tangent_uv_set()
+                    .context("generated tangent coordinate set is missing")?;
+                ensure!(
+                    input.uv_at(set, 0).is_some(),
+                    "generated tangent coordinates are missing"
+                );
+            }
         }
         Ok(())
     }
@@ -83,6 +102,27 @@ impl GpuSceneDeformation {
                                 )
                             })
                             .transpose()?;
+                        let tangents = geometry
+                            .regenerates_tangents()
+                            .then(|| {
+                                let source = GpuTangentGeneration::new(
+                                    context.clone(),
+                                    geometry.attribute_targets().base_mesh().clone(),
+                                    geometry
+                                        .base_mesh()
+                                        .tangent_uv_set()
+                                        .context("generated tangent coordinate set is missing")?,
+                                    TangentGenerationMode::Repair,
+                                    limits,
+                                )?;
+                                let bind = GpuDeformationOutput::upload(
+                                    context.clone(),
+                                    geometry.base_mesh().clone(),
+                                    limits,
+                                )?;
+                                Ok::<_, anyhow::Error>((source, bind))
+                            })
+                            .transpose()?;
                         Ok::<_, anyhow::Error>(MorphSource {
                             source: (*source).clone(),
                             gpu: GpuMorph::new(
@@ -91,6 +131,7 @@ impl GpuSceneDeformation {
                                 limits,
                             )?,
                             normals,
+                            tangents,
                         })
                     })
                     .transpose()?;
@@ -124,7 +165,7 @@ impl GpuSceneDeformation {
         Ok(Self { primitives })
     }
 
-    /// Submits Morph, optional flat normals, then Skin in primitive order.
+    /// Submits Morph, required normal/tangent regeneration, then Skin in primitive order.
     /// Overrides address mapped original nodes; omitted values use authored defaults.
     /// Every call starts from bind-space inputs, independently of earlier samples.
     /// Returned handles address mapped primitive children. Their output `base_mesh()`
@@ -174,16 +215,26 @@ impl GpuSceneDeformation {
                     let morphed = source
                         .morph
                         .as_ref()
-                        .map(|morph| {
+                        .map(|morph| -> Result<_> {
                             let weights = weights[&source.primitive.handle];
-                            let output = morph.gpu.evaluate(weights)?;
-                            if let Some(normals) = &morph.normals
-                                && weights.iter().any(|weight| *weight != 0.)
-                            {
-                                normals.evaluate(&output)
-                            } else {
-                                Ok(output)
+                            let changed = weights.iter().any(|weight| *weight != 0.);
+                            if !changed && let Some((_, bind)) = &morph.tangents {
+                                ensure!(
+                                    !bind.context().device_lost(),
+                                    "GPU deformation device is lost"
+                                );
+                                return Ok(bind.clone());
                             }
+                            let mut output = morph.gpu.evaluate(weights)?;
+                            if changed {
+                                if let Some(normals) = &morph.normals {
+                                    output = normals.evaluate(&output)?;
+                                }
+                                if let Some((tangents, _)) = &morph.tangents {
+                                    output = tangents.evaluate(&output)?.into_deformation();
+                                }
+                            }
+                            Ok(output)
                         })
                         .transpose()?;
                     let output = if let Some((_, skin)) = &source.skin {

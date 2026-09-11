@@ -86,7 +86,7 @@ Captured-UI pointer routing is not enabled for GPU-deformed surfaces.
 
 Unsupported direction generation, backend limits, and device changes are reported
 in the window; GPU mode does not silently substitute CPU geometry. Assets requiring
-MikkTSpace tangent regeneration cannot enable GPU mode. After device replacement,
+tangent regeneration need device-enabled `SHADER_F64`. After device replacement,
 disable and re-enable GPU deformation to rebuild its resources. Reloaded models
 start in CPU mode.
 

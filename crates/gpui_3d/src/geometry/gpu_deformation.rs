@@ -73,6 +73,8 @@ impl Default for GpuDeformationLimits {
 }
 
 /// Retained GPU attributes. CPU geometry, bounds, and picking remain unchanged until readback.
+/// Clones share the immutable vertex buffer rather than copying its contents.
+#[derive(Clone)]
 pub struct GpuDeformationOutput {
     pub(super) context: WgpuContext,
     pub(super) base: Mesh,

@@ -37,8 +37,9 @@ tags. Its mesh identity is `generator.output_mesh()`, distinct from `base_mesh()
 Results remain valid after subsequent evaluations or source destruction. Evaluation
 submits the existing stage passes without intermediate CPU readback; arithmetic
 failures remain in output status. Use individual stage APIs when intermediate
-derivatives, groups or frames are required. The glTF GPU adapter rejects assets
-requiring generated tangents.
+derivatives, groups or frames are required. The
+[glTF GPU adapter](../../../gpui_3d_gltf/docs/gpu_deformation.md) composes this stage
+after imported Morph and any required normal reconstruction, before Skin.
 
 `GpuTangentGenerationMemory::plan(corners, limits)` admits the combined payload
 before source construction. `source_bytes` includes every retained stage's
@@ -163,5 +164,4 @@ Rebuild compute sources after replacing the device.
 
 Derivative directions, magnitudes and frame accumulation use `f32` arithmetic.
 The pipeline follows its documented welding and inheritance rules; CPU MikkTSpace
-equivalence is not guaranteed. Imported primitives requiring MikkTSpace regeneration
-remain rejected by the glTF GPU adapter.
+equivalence is not guaranteed.

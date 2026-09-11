@@ -217,7 +217,7 @@ Core implementation order:
    - [x] **GPU flat normals**: Retained triangle-corner topology, source identity and payload admission, and fixed-order reconstruction between Morph and Skin.
    - [ ] **GPU direction validation**: Verify normal reconstruction, degenerate-face status, retained outputs, and Morph/Skin composition on supported adapters.
    - [ ] **Imported GPU evaluation**: Preserve generated normal/tangent policies, authored Morph defaults, Morph-before-Skin ordering, and source geometry identity when routing imported primitives to GPU draws.
-     - [x] **glTF GPU adapter**: Retained per-primitive sources, shared CPU/GPU weight resolution, instance-mapped palettes, Morph/flat-normal/Skin composition, and explicit rejection of MikkTSpace regeneration.
+     - [x] **glTF GPU adapter**: Retained per-primitive sources, shared CPU/GPU weight resolution, instance-mapped palettes, and ordered Morph/direction/Skin composition.
      - [x] **Imported GPU viewer**: Explicit CPU/GPU modes, retained material-coordinate inputs independent of image readiness, complete pose/bounds publication, and submitted-frame primitive selection in the existing model viewer.
      - [ ] **Imported viewer GPU validation**: Verify animated GLB assets, CPU/GPU pose parity, asynchronous selection, image loading, resize, authored cameras, and mode/reload changes on supported adapters.
      - [ ] **Generated tangents**: Preserve imported MikkTSpace policies on deformed GPU geometry, including vertex correspondence and handedness.
@@ -239,8 +239,9 @@ Core implementation order:
        - [ ] **GPU tangent publication**: Normal-orthogonal frames, imported repair policy, handedness checks, Morph-to-Skin composition, and CPU MikkTSpace parity on supported adapters.
          - [x] **Fixed-order tangent vertices**: Initial tangent-source metadata, normal projection, explicit Strict/Inherit/Repair modes, triangle handedness rejection, independent repair tags, and canonical deformation output for Skin and render packing.
          - [x] **Combined tangent generation**: Reusable stage ownership, direct deformation-to-tangent evaluation, aggregate payload admission, retained output identity, and explicit normal-reconstruction ordering.
+         - [x] **Imported tangent dispatch**: Selected-UV Repair generation after Morph and normal reconstruction, retained zero-weight base directions, ordered corner admission, Morph-to-Skin composition, and output-specific render source identity.
          - [ ] **Publication GPU validation**: Verify deformed frame projection, repair selection, mixed signs, original failure propagation, retained outputs, and Morph/Skin/render composition on supported adapters.
-         - [ ] **CPU/GPU generation parity**: Align welding keys, edge ordering, normalization, and degenerate-frame inheritance across evaluation paths before enabling imported generated tangents.
+         - [ ] **CPU/GPU generation parity**: Verify welding keys, edge ordering, normalization, and degenerate-frame inheritance across core and imported evaluation paths, including generated tangents and zero-weight transitions.
            - [x] **Regular-frame thresholds**: Strict lower bounds for the UV determinant and derivative magnitudes, independent zero-UV classification, and undefined-frame inheritance eligibility.
            - [x] **Publication numeric admission**: Retained CPU UV-degeneracy classification, edge/derivative range checks, and unrepaired numeric failure status in every generation mode.
            - [x] **Projected normalization**: Unscaled f32 direction normalization, explicit underflow-to-undefined handling, subgroup-local repair eligibility, and independent bitangent validity.

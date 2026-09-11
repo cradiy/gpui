@@ -12,25 +12,29 @@ gpui_3d_gltf = { path = "../gpui_3d_gltf", features = ["wgpu"] }
 
 ## Preparation
 
-`GpuSceneDeformation::check_asset(&asset)` checks direction-regeneration policies
-without creating a device or allocating GPU resources. `new(context, &asset,
-limits)` performs this check before any upload, then prepares each deformable
-primitive in scene order. Static primitives are omitted. The adapter retains
+`GpuSceneDeformation::check_asset(&asset)` checks direction-regeneration topology
+and tangent coordinate metadata without creating a device or allocating GPU
+resources. `new(context, &asset, limits)` performs this check before any upload,
+then prepares each deformable primitive in scene order. Static primitives are omitted. The adapter retains
 geometry, authored weights, and skin bindings, not materials or decoded images.
 It can evaluate multiple instances of the same asset.
 
 Supported inputs include authored normal/tangent deltas, flat normal
-reconstruction for imported triangle-corner geometry, Skin without Morph, and
-Morph followed by Skin. MikkTSpace tangent regeneration is unsupported and causes
-preparation to fail, even when authored weights are zero. Use
-[`SceneAsset::deform`](morph.md#scene-weights-and-deformation) when CPU direction
-generation is required; there is no automatic fallback.
+reconstruction for imported triangle-corner geometry, selected-set tangent
+regeneration, Skin without Morph, and Morph followed by Skin. Tangent regeneration
+uses core `GpuTangentGeneration` with `Repair` policy and requires device-enabled
+`SHADER_F64`, including assets whose authored weights are zero. Regenerated
+geometry must use ordered, unshared triangle corners. There is no automatic CPU
+fallback. [`SceneAsset::deform`](morph.md#scene-weights-and-deformation) supplies
+the CPU evaluation path.
 
 `GpuDeformationLimits` applies to each core source and each result. It is not an
 aggregate scene budget. Repeated primitive occurrences have independent GPU
 sources; instances evaluated through one adapter reuse those sources. Outputs,
 intermediate buffers, palettes, render packing, and pending readbacks also consume
-memory. Bound outstanding evaluations and retained results in the caller.
+memory. Tangent regeneration admits the combined payload of its core stages and
+retains an uploaded base-direction snapshot for zero-weight samples. Bound
+outstanding evaluations and retained results in the caller.
 
 ## Evaluation
 
@@ -65,11 +69,13 @@ applies to every primitive of its node. Omitted overrides use authored defaults
 on every call. Weights are finite, signed, and must match the target count.
 Duplicate, unknown, foreign-instance, and missing snapshot targets return errors.
 
-Evaluation starts from bind-space geometry, applies Morph, rebuilds flat normals
-for nonzero-weight samples when required, and then applies Skin. All-zero Morph
-samples retain the base directions. Skin uses instance-mapped joints in binding
-order and applies mesh-world cancellation and inverse binds once. No previous
-sample is used as input.
+Evaluation starts from bind-space geometry, applies Morph, rebuilds required flat
+normals and then tangents for nonzero-weight samples, and finally applies Skin.
+Tangent generation uses the primitive's selected tangent UV set and the current
+normals, including authored normal deltas. All-zero Morph samples retain the
+complete base directions without regeneration. Skin uses instance-mapped joints
+in binding order and applies mesh-world cancellation and inverse binds once.
+No previous sample is used as input.
 
 Returned pairs follow deformable primitive order and contain mapped primitive
 handles. Earlier outputs remain valid after another evaluation or destruction of
@@ -77,12 +83,16 @@ the adapter. CPU graphs and snapshots are never changed. An error may occur afte
 work has been submitted for earlier primitives; their outputs are not published.
 Successful submission does not prove valid shader arithmetic: core vertex status
 is checked during render packing or explicit readback.
+GPU arithmetic is not bit-identical to CPU evaluation; tangent grouping and
+numeric-limit behavior follow the [core generation contract](../../gpui_3d/docs/topics/tangent_publication.md).
 
 ## Rendering and queries
 
 Each output's `base_mesh()` is its GPU source identity. The imported scene's
 initial mesh may already contain authored Morph and Skin deformation and must not
-be substituted for this source when binding GPU draws.
+be substituted for this source when binding GPU draws. For regenerated tangents,
+zero-weight and nonzero-weight results can have different source allocations.
+Always use the returned output's identity, including when restoring zero weights.
 
 ```no_run
 # use gpui_3d::{EvaluatedScene, GpuDeformationOutput, NodeHandle};

@@ -3016,6 +3016,7 @@ dependencies = [
  "gpui",
  "gpui_3d",
  "gpui_platform",
+ "gpui_wgpu",
  "image",
  "indexmap",
  "parking_lot",

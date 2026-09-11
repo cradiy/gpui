@@ -10,6 +10,7 @@ use crate::{SceneAsset, SceneMorph, ScenePrimitive, SceneSkin, morph::resolve_we
 
 mod memory;
 mod source_memory;
+mod support;
 pub use memory::GpuSceneEvaluationMemory;
 pub use source_memory::GpuSceneSourceMemory;
 
@@ -69,7 +70,8 @@ impl GpuSceneDeformation {
     }
 
     /// Uploads each deformable primitive after checking imported direction policies,
-    /// core payload limits and the optional aggregate retained-source budget.
+    /// all stage capabilities, core payload limits and the optional aggregate
+    /// retained-source budget.
     /// The adapter retains geometry and bindings, but not materials or decoded images.
     pub fn new(
         context: WgpuContext,
@@ -78,6 +80,8 @@ impl GpuSceneDeformation {
         max_source_bytes: Option<u64>,
     ) -> Result<Self> {
         let memory = GpuSceneSourceMemory::plan(asset, limits, max_source_bytes)?;
+        ensure!(!context.device_lost(), "GPU deformation device is lost");
+        Self::check_support(asset, &gpui_3d::Scene3dDeviceCapabilities::query(&context))?;
         let morphs: HashMap<_, _> = asset
             .morphs()
             .iter()

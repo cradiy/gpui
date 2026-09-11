@@ -231,6 +231,7 @@ Core implementation order:
      - [x] **glTF GPU adapter**: Retained per-primitive sources, shared CPU/GPU weight resolution, instance-mapped palettes, and ordered Morph/direction/Skin composition.
      - [x] **Imported evaluation admission**: Weight-dependent aggregate GPU payload reports, per-call budgets before primitive dispatch, zero-weight source reuse accounting, and viewer evaluation limits separate from render preparation.
      - [x] **Imported palette admission**: Compose every mapped Skin palette before batch budget admission and GPU work; retain validated matrices through upload with primitive/joint error context.
+     - [x] **Imported capability admission**: CPU-only asset-wide enabled-feature and compute-stage limit checks before source upload, with source primitive/stage diagnostics and independent render-packing requirements.
      - [x] **Imported source admission**: CPU-only aggregate retained-buffer planning, core payload checks before the first upload, per-occurrence source accounting, bind-direction snapshots, and viewer source budgets independent of evaluation.
      - [ ] **Source admission GPU validation**: Verify constructor budget boundaries, retained reports, direction-stage allocations and multi-primitive source lifetime on supported adapters.
      - [ ] **Evaluation budget GPU validation**: Verify signed/default/zero-weight plans, exact aggregate limits, retained output sizes, source reuse, and rejection before dispatch on supported adapters.

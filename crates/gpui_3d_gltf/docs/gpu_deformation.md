@@ -16,8 +16,20 @@ gpui_3d_gltf = { path = "../gpui_3d_gltf", features = ["wgpu"] }
 and tangent coordinate metadata without creating a device or allocating GPU
 resources. `GpuSceneSourceMemory::plan(&asset, limits, max_source_bytes)` also
 checks core payload limits and the optional aggregate source budget without a
-device. `new(context, &asset, limits, max_source_bytes)` runs this admission before
-any upload, then prepares each deformable primitive in scene order. Static
+device. `check_support(&asset, &capabilities)` checks imported topology and the
+device-enabled compute features and stage limits for the complete asset. It uses
+an existing `Scene3dDeviceCapabilities` snapshot without creating a device or GPU
+resources. Capability errors identify the source node, mesh, primitive and
+processing stage.
+Static primitives impose no deformation requirements; zero authored weights do
+not remove direction-reconstruction requirements. Render packing and indirect
+draw capabilities are separate from deformation computation.
+
+`new(context, &asset, limits, max_source_bytes)` checks payload admission, device
+health and complete stage support before any upload, then prepares each
+deformable primitive in scene order. Per-buffer device sizes and source values
+are checked by the core constructors. Capability admission does not guarantee
+allocation, pipeline compilation or shader execution success. Static
 primitives are omitted. The adapter retains geometry, authored weights, and skin
 bindings, not materials or decoded images.
 It can evaluate multiple instances of the same asset.

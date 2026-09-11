@@ -5,6 +5,9 @@ use gpui_3d_gltf::{GpuSceneDeformation, GpuSceneSourceMemory, SceneAsset};
 #[path = "rendering.rs"]
 mod rendering;
 
+#[path = "support.rs"]
+mod support;
+
 fn asset(fixture: &Fixture) -> SceneAsset {
     fixture
         .prepare()

@@ -26,5 +26,8 @@ gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 tempfile.workspace = true
 url.workspace = true
 
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+gpui_wgpu.workspace = true
+
 [lints]
 workspace = true

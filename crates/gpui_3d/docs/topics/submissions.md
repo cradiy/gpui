@@ -62,9 +62,12 @@ each other's previous values. No partial scene is published. Iterator side
 effects and application-owned GPU work are outside this operation.
 
 The returned `Scene` works with `viewport3d()` and `HeadlessRenderer::render()`;
-no separate GPU override list is needed. Nonempty updates invalidate preparation
-and spatial-query caches for the result, while old scenes and prepared frames
-remain usable. An empty valid batch shares the original cache identity.
+no separate GPU override list is needed. Nonempty updates invalidate render
+preparation for the result. Material-only updates share the spatial index while
+queries apply the current material's face and alpha rules. Transform or geometry
+updates invalidate spatial-query bounds and retain graph slots, including hidden
+nodes, for `prepare_spatial_index_from()` refitting. Old scenes and prepared
+frames remain usable. An empty valid batch shares the original cache identity.
 
 Output dimensions, the actual target device, allocation budgets, image readiness,
 pipeline creation, and GPU completion remain renderer checks. This operation

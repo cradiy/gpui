@@ -111,3 +111,57 @@ fn cpu_mesh_replacement_clears_gpu_geometry_and_render_bounds_together() {
     assert!(source.objects[0].render_bounds.is_some());
     assert_eq!(result.plan_frame(1., None).unwrap().objects.len(), 1);
 }
+
+#[test]
+fn material_batches_reuse_spatial_indices_but_apply_current_coverage() {
+    let mut graph = SceneGraph::new();
+    let front = graph
+        .insert(
+            None,
+            Node::new().mesh(Mesh::plane(), Material::color(rgb(0xffffff))),
+        )
+        .unwrap();
+    graph
+        .insert(
+            None,
+            Node::new()
+                .mesh(Mesh::plane(), Material::color(rgb(0xffffff)))
+                .transform(AffineTransform::from_translation([0., 0., -1.]).unwrap()),
+        )
+        .unwrap();
+    let source = graph.evaluate().unwrap().scene(Camera::default());
+    source.prepare_spatial_index();
+    let ray = crate::Ray::new([0.1, 0., 2.], [0., 0., -1.]).unwrap();
+    let original_hit = source.raycast(ray).unwrap();
+    assert_eq!(original_hit.node, Some(front));
+    let mut cache = PreparationCache::with_capacity(2);
+    let resolve = |_: crate::TextureRequest<'_>| Ok(TextureState::Ready(MeshTexture3d::None));
+    let original_frame = cache.prepare(&source, 1., None, resolve).unwrap();
+    let changed = source
+        .with_object_updates([(
+            original_hit.object_index as u32 + 1,
+            ObjectUpdate::new().material(
+                Material::color(gpui::rgba(0xffffff00)).alpha_mode(crate::AlphaMode::Blend),
+            ),
+        )])
+        .unwrap();
+    assert!(Arc::ptr_eq(&source.spatial_index, &changed.spatial_index));
+    assert!(Arc::ptr_eq(
+        source.spatial_source.as_ref().unwrap(),
+        changed.spatial_source.as_ref().unwrap()
+    ));
+    let hit = changed.raycast(ray).unwrap();
+    assert_ne!(hit.node, Some(front));
+    assert!((hit.position[2] + 1.).abs() < 1e-6);
+    assert_eq!(source.raycast(ray).unwrap().node, Some(front));
+    let changed_frame = cache.prepare(&changed, 1., None, resolve).unwrap();
+    assert!(!Arc::ptr_eq(&original_frame, &changed_frame));
+    assert_eq!(original_frame.frame().objects[0].color.a, 1.);
+    assert!(
+        changed_frame
+            .frame()
+            .objects
+            .iter()
+            .any(|object| object.color.a == 0.)
+    );
+}

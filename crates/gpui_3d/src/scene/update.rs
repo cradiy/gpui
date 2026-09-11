@@ -61,6 +61,7 @@ impl Scene {
     ) -> Result<Self> {
         let mut output = self.clone();
         let mut seen = HashSet::new();
+        let mut spatial_changed = false;
         for (id, update) in updates {
             ensure!(seen.insert(id), "duplicate object update {id}");
             let index = id
@@ -72,6 +73,7 @@ impl Scene {
                 .ok_or_else(|| anyhow::anyhow!("object update {id} is absent from the scene"))?;
             if let Some(world) = update.world {
                 object.world = Some(world);
+                spatial_changed = true;
             }
             if let Some(material) = update.material {
                 object.material = material;
@@ -79,12 +81,14 @@ impl Scene {
             match update.geometry {
                 None => {}
                 Some(Geometry::Cpu(mesh)) => {
+                    spatial_changed = true;
                     object.mesh = mesh;
                     object.gpu_geometry = None;
                     object.render_bounds = None;
                 }
                 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
                 Some(Geometry::Gpu(geometry, bounds)) => {
+                    spatial_changed = true;
                     object.mesh = Mesh(geometry.base_mesh().clone(), Arc::default());
                     object.gpu_geometry = Some(gpui::MeshGpuGeometry3d::new(geometry));
                     object.render_bounds = Some(bounds);
@@ -96,8 +100,17 @@ impl Scene {
         gpu::validate(&output)?;
         if !seen.is_empty() {
             output.preparation_revision = Arc::new(());
+        }
+        if spatial_changed {
             output.spatial_index = Arc::default();
-            output.spatial_source = None;
+            output.spatial_source = self.spatial_source.as_ref().map(|source| {
+                Arc::new(
+                    source
+                        .iter()
+                        .map(|entry| entry.with_scene_bounds(&output.objects))
+                        .collect(),
+                )
+            });
         }
         Ok(output)
     }

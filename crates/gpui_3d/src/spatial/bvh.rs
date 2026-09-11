@@ -279,6 +279,22 @@ pub(crate) struct IndexObject {
 }
 
 impl IndexObject {
+    pub(crate) fn with_scene_bounds(self, objects: &[Object]) -> Self {
+        let Some(index) = self.object else {
+            return self;
+        };
+        let object = &objects[index];
+        let local = object.mesh.bounds();
+        Self {
+            bounds: Bounds {
+                min: local.min().map(f64::from),
+                max: local.max().map(f64::from),
+            }
+            .transformed(object.matrices().0),
+            ..self
+        }
+    }
+
     pub(crate) fn node_handle(self) -> Option<NodeHandle> {
         match self.key {
             ObjectKey::Node(handle) => Some(handle),
@@ -685,6 +701,47 @@ mod tests {
             &old_index.tree.topology,
             &appended.spatial_index.get().unwrap().tree.topology
         ));
+    }
+
+    #[test]
+    fn object_batches_preserve_graph_slots_for_spatial_refits() {
+        let mut graph = SceneGraph::new();
+        let hidden = graph
+            .insert(
+                None,
+                Node::new().mesh(Mesh::plane(), Material::color(gpui::rgb(0xffffff))),
+            )
+            .unwrap();
+        graph.set_visible(hidden, false).unwrap();
+        let visible = graph
+            .insert(
+                None,
+                Node::new().mesh(Mesh::plane(), Material::color(gpui::rgb(0xffffff))),
+            )
+            .unwrap();
+        let source = graph.evaluate().unwrap().scene(Camera::default());
+        source.prepare_spatial_index();
+        let updated = source
+            .with_object_updates([(
+                1,
+                crate::ObjectUpdate::new()
+                    .world(AffineTransform::from_translation([10., 0., 0.]).unwrap())
+                    .mesh(Mesh::cube()),
+            )])
+            .unwrap();
+        updated.prepare_spatial_index_from(&source);
+        let before = source.spatial_index.get().unwrap();
+        let after = updated.spatial_index.get().unwrap();
+        assert!(Arc::ptr_eq(&before.tree.topology, &after.tree.topology));
+        assert_eq!(after.entries.len(), 2);
+        assert_eq!(after.entries[0].node_handle(), Some(hidden));
+        assert!(after.entries[0].object.is_none());
+        assert!(updated.raycast(ray(0.1)).is_none());
+        let hit = updated.raycast(ray(10.1)).unwrap();
+        assert_eq!(hit.node, Some(visible));
+        assert!((hit.position[2] - 0.5).abs() < 1e-6);
+        assert_eq!(source.raycast(ray(0.1)).unwrap().node, Some(visible));
+        assert!(source.raycast(ray(10.1)).is_none());
     }
 
     #[test]

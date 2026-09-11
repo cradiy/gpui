@@ -15,6 +15,87 @@ fn vertices() -> Vec<Vertex> {
 }
 
 #[test]
+fn corner_expansion_preserves_attributes_and_triangle_correspondence() {
+    let positions = [
+        [0., 0., 0.],
+        [1., 0., 0.],
+        [0., 1., 0.],
+        [1., 1., 0.],
+        [20.; 3],
+    ];
+    let source = Mesh::new(
+        positions
+            .into_iter()
+            .enumerate()
+            .map(|(i, position)| Vertex {
+                position,
+                normal: [0.3 + i as f32, 0.7, 1.1],
+                uv: [-0., i as f32 * 0.3],
+            })
+            .collect(),
+        vec![2, 0, 1, 2, 1, 3, 3, 3, 1],
+    )
+    .with_uv_set(7, (0..5).map(|i| [i as f32, -0.]).collect())
+    .unwrap()
+    .with_vertex_colors((0..5).map(|i| [i as f32 / 4., 0.5, 0.7, 0.8]).collect())
+    .unwrap()
+    .with_tangents_for_uv_set(7, vec![[0.17, 0.73, 0.39, -1.]; 5])
+    .unwrap();
+    let expanded = source.expand_corners(9).unwrap();
+    assert_eq!(expanded.source_vertices(), source.indices());
+    let mesh = expanded.mesh();
+    assert_eq!(mesh.indices(), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(mesh.triangle_count(), source.triangle_count());
+    assert_eq!(mesh.uv_sets().collect::<Vec<_>>(), [0, 7]);
+    assert_eq!(mesh.tangent_uv_set(), Some(7));
+    for (out, &input) in expanded.source_vertices().iter().enumerate() {
+        let input = input as usize;
+        let a = mesh.vertices()[out];
+        let b = source.vertices()[input];
+        assert_eq!(a.position.map(f32::to_bits), b.position.map(f32::to_bits));
+        assert_eq!(a.normal.map(f32::to_bits), b.normal.map(f32::to_bits));
+        for set in [0, 7] {
+            assert_eq!(
+                mesh.uv_at(set, out).unwrap().map(f32::to_bits),
+                source.uv_at(set, input).unwrap().map(f32::to_bits)
+            );
+        }
+        assert_eq!(
+            mesh.tangents().unwrap()[out].map(f32::to_bits),
+            source.tangents().unwrap()[input].map(f32::to_bits)
+        );
+        assert_eq!(
+            mesh.vertex_colors().unwrap()[out],
+            source.vertex_colors().unwrap()[input]
+        );
+    }
+    assert_eq!(source.vertex_count(), 5);
+    assert_eq!(source.bounds().max(), [20.; 3]);
+    assert_eq!(mesh.bounds().max(), [1., 1., 0.]);
+    let repeated = mesh.expand_corners(9).unwrap();
+    assert_eq!(repeated.source_vertices(), mesh.indices());
+    assert_eq!(repeated.mesh().tangents(), mesh.tangents());
+}
+
+#[test]
+fn corner_expansion_admission_and_absent_attributes() {
+    let mesh = Mesh::new(vertices(), vec![2, 0, 1, 2, 2, 0]);
+    for limit in [0, 3, 5] {
+        assert_eq!(
+            mesh.expand_corners(limit).unwrap_err(),
+            gpui_3d::MeshExpansionError::VertexLimit { required: 6, limit }
+        );
+    }
+    let (expanded, map) = mesh.expand_corners(6).unwrap().into_parts();
+    assert_eq!(map, mesh.indices());
+    assert_eq!(expanded.vertex_count(), 6);
+    assert!(expanded.vertex_colors().is_none());
+    assert!(expanded.tangents().is_none());
+    assert!(expanded.tangent_uv_set().is_none());
+    assert_eq!(expanded.uv_sets().collect::<Vec<_>>(), [0]);
+}
+
+#[test]
 fn vertex_colors_validate_and_preserve_immutable_snapshots() {
     use gpui_3d::VertexColorError;
     let plane = Mesh::plane();

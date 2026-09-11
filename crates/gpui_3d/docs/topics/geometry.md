@@ -56,6 +56,27 @@ finite and nonzero. Camera clip distances must satisfy `0 < near < far`.
 Perspective cameras allow positive infinity for `far`; orthographic cameras
 require a finite far distance.
 
+## Triangle corners
+
+`Mesh::expand_corners(vertex_limit)` returns an `ExpandedMesh` with one vertex per
+indexed triangle corner and sequential indices. Triangle order, winding and
+degenerate triangles are retained. Unused vertices are omitted. Positions,
+normals, all UV sets, colors and stored tangents are copied bit-for-bit; no
+direction generation or normalization takes place. The tangent basis retains its
+coordinate-set identifier. The source remains unchanged, and the output has
+independent bounds and a fresh query index.
+
+`ExpandedMesh::source_vertices()` maps each output vertex to its original source
+index. Use it to duplicate external attributes, Morph deltas and Skin influences
+before constructing deformation sources. `mesh()` borrows the expanded mesh;
+`into_parts()` returns the mesh and mapping. Shared corners become independently
+addressable even when their attributes are identical.
+
+`MeshExpansionError` reports an exceeded vertex limit or an unrepresentable u32
+index count before output allocation. The vertex limit does not limit bytes or
+handle allocator exhaustion. Output vertex count equals source index count;
+attribute storage grows accordingly.
+
 ## Coordinate sets
 
 `Vertex::uv` stores coordinate set zero. `Mesh::with_uv_set(set, coordinates)`

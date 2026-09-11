@@ -1,5 +1,6 @@
 mod aim;
 mod bounds;
+mod expansion;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 mod gpu_deformation;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
@@ -19,6 +20,7 @@ mod tangents;
 mod transform;
 pub use aim::{AimError, AimResult, AimSettings, AimStatus};
 pub use bounds::Aabb;
+pub use expansion::ExpandedMesh;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpu_deformation::{
     GpuDeformationBounds, GpuDeformationBoundsReadback, GpuDeformationLimits, GpuDeformationOutput,

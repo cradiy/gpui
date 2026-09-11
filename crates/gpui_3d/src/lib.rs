@@ -20,7 +20,7 @@ pub use camera::{
 };
 pub use geometry::{
     Aabb, AffineTransform, AimError, AimResult, AimSettings, AimStatus, ConeOptions,
-    CylinderOptions, GeneratedNormals, GeneratedTangents, IkChainError, IkChainJoint,
+    CylinderOptions, ExpandedMesh, GeneratedNormals, GeneratedTangents, IkChainError, IkChainJoint,
     IkChainResult, IkChainSettings, IkChainStatus, IkOrientationStatus, IkOrientationTarget,
     IkReach, JointAngleLimitStatus, JointRotationLimitError, JointRotationLimitResult,
     JointRotationLimits, Mesh, MorphAttribute, MorphError, MorphTarget, MorphTargets,
@@ -84,6 +84,7 @@ pub use gpui::DepthBackground3d as DepthBackground;
 pub use gpui::ElementId as ObjectId;
 pub use gpui::LightKind3d as LightKind;
 pub use gpui::MAX_PUNCTUAL_LIGHTS_3D as MAX_PUNCTUAL_LIGHTS;
+pub use gpui::MeshExpansionError3d as MeshExpansionError;
 pub use gpui::MeshUpdateError3d as MeshUpdateError;
 pub use gpui::MeshVertex3d as Vertex;
 pub use gpui::PbrMaterial3d as PbrMaterial;

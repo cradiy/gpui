@@ -135,14 +135,17 @@ impl Scene3dSupport {
 
 mod color;
 mod environment;
+mod mesh_expansion;
 mod picking;
 mod uv;
 mod visibility;
+
 pub use color::VertexColorError3d;
 pub use environment::{
     EnvironmentBackground3d, EnvironmentError3d, EnvironmentMap3d, SpecularEnvironment3d,
     SpecularEnvironmentMap3d,
 };
+pub use mesh_expansion::MeshExpansionError3d;
 pub use picking::Scene3dPickCapture;
 pub use uv::UvSetError3d;
 

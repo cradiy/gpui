@@ -9,8 +9,9 @@ packing, and explicit CPU readback without reading intermediate vertices back.
 
 Each source vertex must appear exactly once in the index buffer. Index order
 may differ from vertex order. Shared and unused vertices are rejected. Prepare
-unshared triangle corners and remap Morph targets, Skin influences, and external
-attributes before constructing the compute sources.
+unshared triangle corners with [`Mesh::expand_corners`](geometry.md#triangle-corners)
+and remap Morph targets, Skin influences, and external attributes through its
+output-to-source mapping before constructing the compute sources.
 
 Construction generates initial CPU tangents with the selected UV set and
 `TangentGenerationMode`, then remaps them back to source vertex order. The

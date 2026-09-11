@@ -292,7 +292,7 @@ impl PreparedDocument {
         } else {
             (0..count as u32).collect()
         };
-        let mut indices = match primitive.mode() {
+        let indices = match primitive.mode() {
             Mode::Triangles => sequence,
             mode => {
                 let mut indices = Vec::with_capacity(expanded_count);
@@ -358,44 +358,26 @@ impl PreparedDocument {
                 uv: uv_values.get(&0).map_or([0.; 2], |values| values[index]),
             });
         }
-        let mut source_vertices: Vec<u32> = (0..count as u32).collect();
-        if morph_count > 0 && (normals.is_none() || options.generate_tangents) {
-            ensure!(
-                indices.len() <= options.vertex_limit,
-                "morph corner vertices exceed vertex limit"
-            );
-            vertices = indices
-                .iter()
-                .map(|&index| vertices[index as usize])
-                .collect();
-            source_vertices = indices;
-            indices = (0..vertices.len() as u32).collect();
-        }
         let mut mesh = Mesh::try_new(vertices, indices).context("mesh attributes")?;
         if let Some(colors) = color_values {
-            mesh = mesh
-                .with_vertex_colors(
-                    source_vertices
-                        .iter()
-                        .map(|&i| colors[i as usize])
-                        .collect(),
-                )
-                .context("COLOR_0")?;
+            mesh = mesh.with_vertex_colors(colors).context("COLOR_0")?;
         }
-        for (&set, values) in &uv_values {
+        for (set, values) in uv_values {
             if set != 0 {
                 mesh = mesh
-                    .with_uv_set(
-                        set,
-                        source_vertices
-                            .iter()
-                            .map(|&i| values[i as usize])
-                            .collect(),
-                    )
+                    .with_uv_set(set, values)
                     .with_context(|| format!("TEXCOORD_{set}"))?;
             }
         }
-        drop(uv_values);
+        let mut source_vertices;
+        if morph_count > 0 && (normals.is_none() || options.generate_tangents) {
+            (mesh, source_vertices) = mesh
+                .expand_corners(options.vertex_limit)
+                .context("morph corner expansion")?
+                .into_parts();
+        } else {
+            source_vertices = (0..count as u32).collect();
+        }
         if normals.is_none() {
             let (generated, mapping) = mesh
                 .generate_normals(NormalMode::Flat)

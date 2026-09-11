@@ -78,9 +78,18 @@ fn weld_shader_validates_record_layout_and_all_dispatch_stages() {
         valid::{Capabilities, ValidationFlags, Validator},
     };
     let module = wgsl::parse_str(include_str!("../tangent_weld.wgsl")).unwrap();
-    Validator::new(ValidationFlags::all(), Capabilities::empty())
+    assert!(
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .is_err()
+    );
+    let info = Validator::new(ValidationFlags::all(), Capabilities::FLOAT64)
         .validate(&module)
         .unwrap();
+    #[cfg(target_os = "linux")]
+    wgpu::naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
+    #[cfg(not(target_os = "linux"))]
+    let _ = info;
     let globals: Vec<_> = module
         .global_variables
         .iter()
@@ -239,6 +248,97 @@ fn normal_variants(normals: &[[f32; 3]]) -> Mesh {
     let indices = (0..vertices.len() as u32).collect();
     let uv = vertices.iter().map(|vertex| vertex.uv).collect();
     Mesh::new(vertices, indices).with_uv_set(2, uv).unwrap()
+}
+
+#[test]
+fn tangent_welding_requires_device_enabled_float64() {
+    use gpui_wgpu::Scene3dDeviceCapabilities;
+    let mut capabilities = Scene3dDeviceCapabilities {
+        adapter_info: wgpu::AdapterInfo {
+            name: String::new(),
+            vendor: 0,
+            device: 0,
+            device_type: wgpu::DeviceType::Other,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: wgpu::Backend::Vulkan,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        },
+        adapter_features: wgpu::Features::SHADER_F64,
+        enabled_features: wgpu::Features::empty(),
+        adapter_limits: wgpu::Limits::default(),
+        limits: wgpu::Limits::default(),
+        downlevel: wgpu::DownlevelCapabilities::default(),
+        color_atlas_format: wgpu::TextureFormat::Rgba8Unorm,
+        formats: Vec::new(),
+        max_image_anisotropy: 1,
+    };
+    let error = GpuTangentWeld::check_support(&capabilities)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("enabled SHADER_F64"));
+    assert!(error.contains("adapter support: true"));
+    GpuMorph::check_support(&capabilities).unwrap();
+    capabilities.enabled_features = wgpu::Features::SHADER_F64;
+    GpuTangentWeld::check_support(&capabilities).unwrap();
+    capabilities.enabled_features = wgpu::Features::empty();
+    capabilities.adapter_features = wgpu::Features::empty();
+    assert!(
+        GpuTangentWeld::check_support(&capabilities)
+            .unwrap_err()
+            .to_string()
+            .contains("adapter support: false")
+    );
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU with SHADER_F64"]
+fn gpu_weld_normal_keys_match_cpu_across_component_exponents() -> Result<()> {
+    let mut normals = vec![
+        [1., 1., 1.],
+        [f32::MAX, f32::MAX, f32::MAX],
+        [f32::MIN_POSITIVE; 3],
+        [f32::from_bits(1), -f32::from_bits(2), f32::from_bits(3)],
+        [f32::MAX, f32::from_bits(1), -f32::from_bits(1)],
+    ];
+    for exponent in [0, 1, 2, 63, 126, 127, 128, 190, 253, 254] {
+        for fraction in [1, 0x234567, 0x7fffff] {
+            let value = f32::from_bits(exponent << 23 | fraction);
+            normals.extend([
+                [value, 0.75, -0.375],
+                [value, -value, value],
+                [value, -0., 0.],
+            ]);
+        }
+    }
+    let base = normal_variants(&normals);
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    let input = GpuDeformationOutput::upload(context.clone(), base.clone(), limits)?;
+    let faces =
+        GpuTangentDerivatives::new(context.clone(), base.clone(), 2, limits)?.evaluate(&input)?;
+    let output = GpuTangentWeld::new(context, base.clone(), 2, limits)?.evaluate(&faces)?;
+    let actual = read(&output)?;
+    assert_eq!(
+        actual.iter().map(|r| r.identity[2]).collect::<Vec<_>>(),
+        expected(&base)
+    );
+    for (corner, record) in actual.iter().enumerate() {
+        let normal = normals[corner / 3];
+        let length = normal
+            .into_iter()
+            .map(|value| f64::from(value).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let expected = normal.map(|value| ((f64::from(value) / length) as f32).to_bits());
+        assert_eq!(record.status, [0; 4]);
+        assert_eq!(&record.key[3..6], &expected, "normal {normal:?}");
+    }
+    Ok(())
 }
 
 #[test]

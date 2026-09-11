@@ -245,6 +245,7 @@ Core implementation order:
            - [x] **Publication numeric admission**: Retained CPU UV-degeneracy classification, edge/derivative range checks, and unrepaired numeric failure status in every generation mode.
            - [x] **Projected normalization**: Unscaled f32 direction normalization, explicit underflow-to-undefined handling, subgroup-local repair eligibility, and independent bitangent validity.
            - [x] **Derivative normalization**: Unscaled f32 lengths, reciprocal direction normalization, length-before-determinant magnitudes, and early numeric-range failure propagation.
+           - [x] **Normal-key precision**: Device-admitted f64 square sums and normalization, exact f32 input decoding, and ties-to-even key encoding with signed-zero and subnormal preservation.
      - [ ] **Imported GPU validation**: Verify signed/default weights, multiple primitives and instances, direction reconstruction, source identity, and retained outputs against CPU evaluation on supported adapters.
    - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.
    - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.

@@ -225,7 +225,7 @@ impl WgpuContext {
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
 
-        let mut required_features = wgpu::Features::empty();
+        let mut required_features = adapter.features() & wgpu::Features::SHADER_F64;
         if dual_source_blending {
             required_features |= wgpu::Features::DUAL_SOURCE_BLENDING;
         } else {

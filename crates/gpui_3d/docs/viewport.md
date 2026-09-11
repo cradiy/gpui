@@ -119,8 +119,9 @@ Camera damping toggles an 80 ms response half-life for manual camera controls.
 Normal map applies a directional ridge pattern to the bodies. Regenerate tangents
 derives their tangent frames from the deformed geometry before skinning. Combine
 it with Blend shapes and Bend skin, then switch CPU/GPU deformation at a paused
-time to compare shading. The GPU control requires the `wgpu` feature. GPU tangent
-generation expands triangle corners and remaps Morph and Skin bindings; it keeps
+time to compare shading. The GPU control requires the `wgpu` feature; tangent
+regeneration also requires [device-enabled `SHADER_F64`](topics/tangent_weld.md#work-and-memory).
+GPU tangent generation expands triangle corners and remaps Morph and Skin bindings; it keeps
 the prepared initial pose or last validated output visible while the next result
 is pending. Errors are displayed in the viewport without switching to CPU evaluation.
 

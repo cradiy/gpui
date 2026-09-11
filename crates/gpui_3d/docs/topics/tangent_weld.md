@@ -27,8 +27,11 @@ cache. The output retains its derivative buffer and exact input vertex snapshot.
 
 Keys consist of position XYZ, normalized normal XYZ, and selected UV XY. Matching
 uses exact `f32` bits, preserves signed zero, and applies no positional tolerance.
-Normals are normalized with scaled `f32` arithmetic. CPU normalization can round
-differently; this API alone does not establish CPU MikkTSpace parity.
+Normal components are decoded from their `f32` bits, normalized in `f64` using
+the CPU tangent generator's square-sum order, then rounded to `f32` with ties to
+even. Bit encoding preserves signed zero and subnormal key components without
+`f32` arithmetic. Matching does not establish complete CPU MikkTSpace parity;
+adjacency, frame accumulation and publication have their own numeric contracts.
 
 The buffer contains one 64-byte `GpuTangentWeldRecord` per original triangle corner:
 
@@ -64,6 +67,10 @@ both scratch buffers (`128 * P` bytes total) plus the result (`64 * corners` byt
 These limits exclude retained input/derivative buffers, CPU data, and driver
 overhead. Bound concurrent evaluations and retained results separately.
 
-`check_support` checks compute support, four storage bindings, one uniform binding,
-and 64-invocation workgroups. Construction also checks enabled buffer sizes and
-dispatch limits. Device replacement requires rebuilding the source.
+`check_support` requires device-enabled `SHADER_F64`, compute support, four storage
+bindings, one uniform binding, and 64-invocation workgroups. WGPU exposes
+`SHADER_F64` on supported Vulkan adapters. `WgpuContext` requests it when advertised;
+externally supplied devices must enable it themselves. There is no lower-precision
+welding fallback. Other deformation stages do not require this feature.
+Construction also checks enabled buffer sizes and dispatch limits. Device
+replacement requires rebuilding the source.

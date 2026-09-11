@@ -11,6 +11,8 @@ packing, and explicit CPU readback without reading intermediate vertices back.
 publication stages. Construct it once for an unshared mesh and reuse it for
 subsequent deformation snapshots from the same device and base mesh allocation.
 It preserves input normals; run any required normal reconstruction beforehand.
+The combined pipeline requires device-enabled `SHADER_F64` for
+[normalized welding keys](tangent_weld.md#matching-and-records).
 
 ```rust,no_run
 # use gpui_3d::{GpuDeformationLimits, GpuDeformationOutput, GpuTangentGeneration, TangentGenerationMode};

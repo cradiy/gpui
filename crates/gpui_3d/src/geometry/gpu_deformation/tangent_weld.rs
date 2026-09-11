@@ -78,6 +78,7 @@ impl GpuTangentWeldMemory {
 
 /// Dynamic exact-key welding for tangent processing. Uses deterministic bitonic
 /// sorting with two scratch buffers; performs no CPU readback or all-pairs search.
+/// Requires enabled SHADER_F64 for CPU-precision normalized normal keys.
 pub struct GpuTangentWeld {
     context: WgpuContext,
     base: Mesh,
@@ -93,6 +94,15 @@ pub struct GpuTangentWeld {
 
 impl GpuTangentWeld {
     pub fn check_support(capabilities: &gpui_wgpu::Scene3dDeviceCapabilities) -> Result<()> {
+        ensure!(
+            capabilities
+                .enabled_features
+                .contains(wgpu::Features::SHADER_F64),
+            "GPU tangent welding requires enabled SHADER_F64; adapter support: {}",
+            capabilities
+                .adapter_features
+                .contains(wgpu::Features::SHADER_F64)
+        );
         super::support::validate(capabilities, 4, 1, 0)
     }
 

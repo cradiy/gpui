@@ -17,6 +17,59 @@ fn finite(v: vec3<f32>) -> bool {
     return all((bitcast<vec3<u32>>(v) & vec3(0x7f800000u)) != vec3(0x7f800000u));
 }
 
+// Decode finite f32 bits without arithmetic on f32 subnormals.
+fn wide_component(bits: u32) -> f64 {
+    let exponent = (bits >> 23u) & 255u;
+    let mantissa = (bits & 0x7fffffu) | select(0u, 0x800000u, exponent != 0u);
+    let magnitude = ldexp(f64(mantissa), i32(max(exponent, 1u)) - 150);
+    return select(magnitude, -magnitude, (bits & 0x80000000u) != 0u);
+}
+
+fn rounded_mantissa(value: f64) -> u32 {
+    let integral = floor(value);
+    let fraction = value - integral;
+    let mantissa = u32(integral);
+    let increment = fraction > f64(0.5) ||
+        (fraction == f64(0.5) && (mantissa & 1u) != 0u);
+    return mantissa + select(0u, 1u, increment);
+}
+
+// Encode a finite component in [-1, 1], including signed zeros and subnormals.
+fn component_key(value: f64, sign: u32) -> u32 {
+    let magnitude = abs(value);
+    if magnitude == f64(0.0) { return sign; }
+    if magnitude < ldexp(f64(1.0), -126) {
+        return sign | rounded_mantissa(ldexp(magnitude, 149));
+    }
+    var mantissa = magnitude;
+    var exponent = 0;
+    for (var shift = 64; shift > 0; shift /= 2) {
+        if mantissa < ldexp(f64(1.0), -shift) {
+            mantissa = ldexp(mantissa, shift);
+            exponent -= shift;
+        }
+    }
+    if mantissa < f64(1.0) {
+        mantissa *= f64(2.0);
+        exponent -= 1;
+    }
+    return sign | ((u32(exponent + 126) << 23u) + rounded_mantissa(ldexp(mantissa, 23)));
+}
+
+fn normal_key(bits: vec3<u32>) -> vec3<u32> {
+    let x = wide_component(bits.x);
+    let y = wide_component(bits.y);
+    let z = wide_component(bits.z);
+    let squared_xy = x * x + y * y;
+    let magnitude = sqrt(squared_xy + z * z);
+    let signs = bits & vec3(0x80000000u);
+    return vec3(
+        component_key(x / magnitude, signs.x),
+        component_key(y / magnitude, signs.y),
+        component_key(z / magnitude, signs.z),
+    );
+}
+
 @compute @workgroup_size(64)
 fn initialize(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.capacity { return; }
@@ -35,14 +88,10 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>) {
             if !finite(position) || !finite(normal) || !finite(vec3(coords, 0.0)) {
                 result.status.x = 1u;
             } else {
-                let scale = max(max(abs(normal.x), abs(normal.y)), abs(normal.z));
-                if scale == 0.0 {
+                if all((input.key_1.xyz & vec3(0x7fffffffu)) == vec3(0u)) {
                     result.status.x = 2u;
                 } else {
-                    let scaled = normal / scale;
-                    let normalized = bitcast<vec3<u32>>(scaled / length(scaled));
-                    let n = select(normalized, input.key_1.xyz,
-                        (input.key_1.xyz & vec3(0x7fffffffu)) == vec3(0u));
+                    let n = normal_key(input.key_1.xyz);
                     result.key_0 = vec4(input.key_0.xyz, n.x);
                     result.key_1 = vec4(n.yz, bitcast<vec2<u32>>(coords));
                 }

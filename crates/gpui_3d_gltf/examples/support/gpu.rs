@@ -146,9 +146,12 @@ impl Deformation {
                 .as_ref()
                 .is_none_or(|ready| ready.revision != revision)
         {
-            let outputs = self
-                .source
-                .evaluate(instance.subtree_instance(), poses, weights)?;
+            let outputs = self.source.evaluate(
+                instance.subtree_instance(),
+                poses,
+                weights,
+                Some(256 * 1024 * 1024),
+            )?;
             let poses = poses.with_meshes(
                 outputs
                     .iter()

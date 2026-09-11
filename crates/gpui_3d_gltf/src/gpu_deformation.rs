@@ -8,6 +8,9 @@ use gpui_3d::{
 
 use crate::{SceneAsset, SceneMorph, ScenePrimitive, SceneSkin, morph::resolve_weights};
 
+mod memory;
+pub use memory::GpuSceneEvaluationMemory;
+
 /// Retained imported Morph and Skin sources on one device, reusable across scene instances.
 /// Evaluation submits immutable outputs without reading vertices or changing the CPU scene.
 pub struct GpuSceneDeformation {
@@ -171,19 +174,16 @@ impl GpuSceneDeformation {
     /// Returned handles address mapped primitive children. Their output `base_mesh()`
     /// is the source identity required by GPU render packing and scene mesh overrides.
     /// CPU bounds and queries are not updated. No CPU fallback is performed.
+    /// The optional budget bounds the sum of new GPU evaluation payloads across
+    /// all primitives, including intermediate stages, before the first dispatch.
     pub fn evaluate(
         &self,
         instance: &SubtreeInstance,
         poses: &EvaluatedScene,
         weights: &[(NodeHandle, Vec<f32>)],
+        max_evaluation_bytes: Option<u64>,
     ) -> Result<Vec<(NodeHandle, GpuDeformationOutput)>> {
-        let weights = resolve_weights(
-            self.primitives
-                .iter()
-                .filter_map(|primitive| primitive.morph.as_ref().map(|morph| &morph.source)),
-            &|source| instance.node(source),
-            weights,
-        )?;
+        let weights = self.resolve_weights(instance, weights)?;
         let samples = self
             .primitives
             .iter()
@@ -206,6 +206,13 @@ impl GpuSceneDeformation {
                 sample.with_context(|| description(source.primitive))
             })
             .collect::<Result<Vec<_>>>()?;
+
+        let memory = self.memory_for_weights(&weights)?;
+        ensure!(
+            max_evaluation_bytes.is_none_or(|limit| memory.evaluation_bytes <= limit),
+            "GPU scene evaluation requires {} bytes, exceeding the configured budget",
+            memory.evaluation_bytes
+        );
 
         self.primitives
             .iter()
@@ -255,6 +262,20 @@ impl GpuSceneDeformation {
                 evaluate.with_context(|| description(source.primitive))
             })
             .collect()
+    }
+
+    fn resolve_weights<'a>(
+        &'a self,
+        instance: &SubtreeInstance,
+        weights: &'a [(NodeHandle, Vec<f32>)],
+    ) -> Result<HashMap<NodeHandle, &'a [f32]>> {
+        resolve_weights(
+            self.primitives
+                .iter()
+                .filter_map(|primitive| primitive.morph.as_ref().map(|morph| &morph.source)),
+            &|source| instance.node(source),
+            weights,
+        )
     }
 }
 

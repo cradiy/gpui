@@ -94,8 +94,9 @@ disable and re-enable GPU deformation to rebuild its resources. Reloaded models
 start in CPU mode.
 
 The example uses default per-source deformation limits, a 256 MiB limit per render
-source, a 256 MiB preparation limit per complete primitive batch, and a 256 MiB
-pick-target budget.
+source, separate 256 MiB limits for complete primitive-batch evaluation and render
+preparation, and a 256 MiB pick-target budget. Evaluation counts new weights,
+palettes, stage outputs, and tangent scratch storage before dispatching primitives.
 Render sources are reused only for matching node, texture-coordinate selections,
 and mesh allocation. Replacement sources do not invalidate the displayed batch.
 Preparation includes each primitive's packed vertices, indirect/validation storage,

@@ -223,6 +223,8 @@ Core implementation order:
    - [ ] **GPU direction validation**: Verify normal reconstruction, degenerate-face status, retained outputs, and Morph/Skin composition on supported adapters.
    - [ ] **Imported GPU evaluation**: Preserve generated normal/tangent policies, authored Morph defaults, Morph-before-Skin ordering, and source geometry identity when routing imported primitives to GPU draws.
      - [x] **glTF GPU adapter**: Retained per-primitive sources, shared CPU/GPU weight resolution, instance-mapped palettes, and ordered Morph/direction/Skin composition.
+     - [x] **Imported evaluation admission**: Weight-dependent aggregate GPU payload reports, per-call budgets before primitive dispatch, zero-weight source reuse accounting, and viewer evaluation limits separate from render preparation.
+     - [ ] **Evaluation budget GPU validation**: Verify signed/default/zero-weight plans, exact aggregate limits, retained output sizes, source reuse, and rejection before dispatch on supported adapters.
      - [x] **Imported GPU viewer**: Explicit CPU/GPU modes, retained material-coordinate inputs independent of image readiness, complete pose/bounds publication, and submitted-frame primitive selection in the existing model viewer.
      - [ ] **Imported viewer GPU validation**: Verify animated GLB assets, CPU/GPU pose parity, asynchronous selection, image loading, resize, authored cameras, and mode/reload changes on supported adapters.
      - [ ] **Generated tangents**: Preserve imported MikkTSpace policies on deformed GPU geometry, including vertex correspondence and handedness.

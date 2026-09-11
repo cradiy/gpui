@@ -34,7 +34,7 @@ pub use cache::{ResourceCache, ResourceCacheLimits};
 pub use diagnostics::ImportDiagnostic;
 pub use geometry::{GeometryOptions, PrimitiveGeometry};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
-pub use gpu_deformation::GpuSceneDeformation;
+pub use gpu_deformation::{GpuSceneDeformation, GpuSceneEvaluationMemory};
 pub use image::{DecodedScene, ImageDecodeLimits};
 pub use image_cache::{ImageCache, ImageCacheLimits};
 pub use instance::SceneInstance;

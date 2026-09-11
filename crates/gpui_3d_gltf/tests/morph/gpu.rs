@@ -62,6 +62,41 @@ fn asset_admission_preserves_generated_and_authored_tangent_policies() {
     GpuSceneDeformation::check_asset(&authored).unwrap();
 }
 
+#[test]
+#[ignore = "requires a compute-capable GPU with SHADER_F64"]
+fn gpu_zero_weight_tangents_reuse_outputs_with_zero_evaluation_budget() -> anyhow::Result<()> {
+    let mut fixture = Fixture::new();
+    fixture.json["materials"] = json!([{"normalTexture":{"index":0}}]);
+    fixture.json["textures"] = json!([{"source":0}]);
+    fixture.json["images"] = json!([{"uri":"normal.png","mimeType":"image/png"}]);
+    fixture.json["meshes"][0]["primitives"][0]["material"] = json!(0);
+    let asset = asset(&fixture);
+    let mut graph = SceneGraph::new();
+    let instance = graph.instantiate(None, asset.subtree())?;
+    let poses = graph.evaluate()?;
+    let gpu = GpuSceneDeformation::new(WgpuContext::new_headless()?, &asset, Default::default())?;
+    let memory = gpu.evaluation_memory(&instance, &[])?;
+    assert_eq!(memory.evaluation_bytes, 0);
+    let first = gpu.evaluate(&instance, &poses, &[], Some(0))?;
+    let second = gpu.evaluate(&instance, &poses, &[], Some(0))?;
+    assert_eq!(memory.output_bytes, first[0].1.buffer().size());
+    assert_eq!(first[0].1.buffer().raw(), second[0].1.buffer().raw());
+    let weights = [(instance.node(asset.morphs()[0].node()).unwrap(), vec![1.])];
+    let changed = gpu.evaluation_memory(&instance, &weights)?;
+    assert!(changed.evaluation_bytes > changed.output_bytes);
+    assert_eq!(changed.output_bytes, memory.output_bytes);
+    let error = gpu
+        .evaluate(&instance, &poses, &weights, Some(0))
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("exceeding the configured budget")
+    );
+    Ok(())
+}
+
 fn mixed_fixture() -> Fixture {
     let mut fixture = Fixture::new();
     let joints = fixture.raw("VEC4", 5121, 4, &[0; 16]);
@@ -166,7 +201,25 @@ fn gpu_imported_tangent_generation_composes_normals_skin_and_retained_zero_sampl
             vec![],
         ] {
             let expected = asset.deform(&instance, &poses, &overrides)?;
-            let outputs = gpu.evaluate(&instance, &poses, &overrides)?;
+            let memory = gpu.evaluation_memory(&instance, &overrides)?;
+            assert!(
+                gpu.evaluate(
+                    &instance,
+                    &poses,
+                    &overrides,
+                    Some(memory.evaluation_bytes - 1)
+                )
+                .is_err()
+            );
+            let outputs =
+                gpu.evaluate(&instance, &poses, &overrides, Some(memory.evaluation_bytes))?;
+            assert_eq!(
+                memory.output_bytes,
+                outputs
+                    .iter()
+                    .map(|(_, output)| output.buffer().size())
+                    .sum::<u64>()
+            );
             assert_eq!(outputs.len(), expected.len());
             for ((handle, output), (expected_handle, expected)) in outputs.into_iter().zip(expected)
             {
@@ -238,10 +291,11 @@ fn gpu_imported_deformation_matches_cpu_across_instances_and_retained_samples() 
         vec![(first.node(asset.primitives()[0].handle).unwrap(), vec![1.])],
         vec![(second.node(asset.morphs()[0].node()).unwrap(), vec![1.])],
     ] {
-        assert!(gpu.evaluate(&first, &poses, &weights).is_err());
+        assert!(gpu.evaluation_memory(&first, &weights).is_err());
+        assert!(gpu.evaluate(&first, &poses, &weights, None).is_err());
     }
     assert!(
-        gpu.evaluate(&first, &SceneGraph::new().evaluate()?, &[])
+        gpu.evaluate(&first, &SceneGraph::new().evaluate()?, &[], None)
             .is_err()
     );
     let mut retained = Vec::new();
@@ -254,7 +308,25 @@ fn gpu_imported_deformation_matches_cpu_across_instances_and_retained_samples() 
             vec![],
         ] {
             let cpu = asset.deform(instance, &poses, &overrides)?;
-            let outputs = gpu.evaluate(instance, &poses, &overrides)?;
+            let memory = gpu.evaluation_memory(instance, &overrides)?;
+            assert!(
+                gpu.evaluate(
+                    instance,
+                    &poses,
+                    &overrides,
+                    Some(memory.evaluation_bytes - 1)
+                )
+                .is_err()
+            );
+            let outputs =
+                gpu.evaluate(instance, &poses, &overrides, Some(memory.evaluation_bytes))?;
+            assert_eq!(
+                memory.output_bytes,
+                outputs
+                    .iter()
+                    .map(|(_, output)| output.buffer().size())
+                    .sum::<u64>()
+            );
             assert_eq!(outputs.len(), cpu.len());
             for (index, ((handle, output), (expected_handle, expected))) in
                 outputs.into_iter().zip(cpu).enumerate()

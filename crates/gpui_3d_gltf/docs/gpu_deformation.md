@@ -58,7 +58,7 @@ fn sample(
     poses: &EvaluatedScene,
     weights: &[(NodeHandle, Vec<f32>)],
 ) -> anyhow::Result<Vec<(NodeHandle, GpuDeformationOutput)>> {
-    gpu.evaluate(instance, poses, weights)
+    gpu.evaluate(instance, poses, weights, Some(256 * 1024 * 1024))
 }
 ```
 
@@ -68,6 +68,22 @@ mapped through `SubtreeInstance::node`, not primitive-child handles. One overrid
 applies to every primitive of its node. Omitted overrides use authored defaults
 on every call. Weights are finite, signed, and must match the target count.
 Duplicate, unknown, foreign-instance, and missing snapshot targets return errors.
+
+`evaluation_memory(instance, weights)` reports a `GpuSceneEvaluationMemory`
+without allocating GPU resources or submitting commands. `evaluation_bytes` is
+the conservative sum of new weight buffers, Skin palettes, Morph/normal outputs,
+and tangent-stage scratch/output buffers selected by the weights. `output_bytes`
+counts the returned vertex buffers per primitive, including reused bind-space
+buffers. All-zero generated-tangent Morph samples need no new Morph allocation;
+Skin still allocates its palette and result when present.
+
+The final `evaluate` argument limits `evaluation_bytes` for the complete call.
+Admission follows weight and pose validation and precedes the first primitive's
+GPU work. `None` disables this aggregate limit; per-source and per-result limits
+still apply. Resident sources, CPU data, render preparation, readbacks, driver
+overhead and other evaluations are excluded. This sum is not a measurement of
+peak GPU residency. The memory query validates instance and weight mappings, not
+pose matrices or current device health.
 
 Evaluation starts from bind-space geometry, applies Morph, rebuilds required flat
 normals and then tangents for nonzero-weight samples, and finally applies Skin.

@@ -101,7 +101,7 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
         assert_eq!(expected_hit.node, Some(primitive));
         let cpu_frame = renderer.render(&cpu_scene, config)?;
 
-        let outputs = deformation.evaluate(&instance, &poses, &weights)?;
+        let outputs = deformation.evaluate(&instance, &poses, &weights, None)?;
         let scene = poses
             .with_meshes(
                 outputs

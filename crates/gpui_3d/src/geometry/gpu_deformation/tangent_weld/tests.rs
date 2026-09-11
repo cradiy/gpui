@@ -220,6 +220,99 @@ fn expected(mesh: &Mesh) -> Vec<u32> {
         .collect()
 }
 
+fn normal_variants(normals: &[[f32; 3]]) -> Mesh {
+    let vertices: Vec<_> = normals
+        .iter()
+        .flat_map(|&normal| {
+            [
+                ([0., 0., 0.], [0., 0.]),
+                ([1., 0., 0.], [1., 0.]),
+                ([0., 1., 0.], [0., 1.]),
+            ]
+            .map(|(position, uv)| Vertex {
+                position,
+                normal,
+                uv,
+            })
+        })
+        .collect();
+    let indices = (0..vertices.len() as u32).collect();
+    let uv = vertices.iter().map(|vertex| vertex.uv).collect();
+    Mesh::new(vertices, indices).with_uv_set(2, uv).unwrap()
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU"]
+fn gpu_weld_preserves_normal_zero_signs_and_proportional_axis_keys() -> Result<()> {
+    let normals = [
+        [0., 0., 1.],
+        [-0., 0., 1.],
+        [0., -0., 1.],
+        [-0., -0., 1.],
+        [0., 0., 2.],
+        [-0., 0., 2.],
+        [1., 0., 0.],
+        [1., -0., 0.],
+        [1., 0., -0.],
+        [0., 1., -0.],
+        [-0., 1., -0.],
+    ];
+    let base = normal_variants(&normals);
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    let input = GpuDeformationOutput::upload(context.clone(), base.clone(), limits)?;
+    let faces =
+        GpuTangentDerivatives::new(context.clone(), base.clone(), 2, limits)?.evaluate(&input)?;
+    let output = GpuTangentWeld::new(context, base.clone(), 2, limits)?.evaluate(&faces)?;
+    let actual = read(&output)?;
+    assert_eq!(
+        actual.iter().map(|r| r.identity[2]).collect::<Vec<_>>(),
+        expected(&base)
+    );
+    for (corner, record) in actual.iter().enumerate() {
+        assert_eq!(record.status, [0; 4]);
+        for (axis, value) in normals[corner / 3].into_iter().enumerate() {
+            if value == 0. {
+                assert_eq!(
+                    record.key[3 + axis],
+                    value.to_bits(),
+                    "corner {corner}, axis {axis}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU; CPU/GPU normal-key rounding parity"]
+fn gpu_weld_matches_cpu_normal_rounding_equivalence_classes() -> Result<()> {
+    let base = normal_variants(&[
+        [f32::from_bits(0x3f80000c), 0.75, 0.375],
+        [f32::from_bits(0x3f80000d), 0.75, 0.375],
+        [f32::from_bits(0x3f800013), 0.75, 0.375],
+        [f32::from_bits(0x3f800014), 0.75, 0.375],
+    ]);
+    let representatives = expected(&base);
+    assert_ne!(representatives[0], representatives[3]);
+    assert_eq!(representatives[6], representatives[9]);
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    let input = GpuDeformationOutput::upload(context.clone(), base.clone(), limits)?;
+    let faces =
+        GpuTangentDerivatives::new(context.clone(), base.clone(), 2, limits)?.evaluate(&input)?;
+    let output = GpuTangentWeld::new(context, base, 2, limits)?.evaluate(&faces)?;
+    let actual = read(&output)?;
+    for record in &actual {
+        assert_eq!(record.status, [0; 4]);
+    }
+    assert_eq!(
+        actual.iter().map(|r| r.identity[2]).collect::<Vec<_>>(),
+        representatives
+    );
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires a compute-capable GPU"]
 fn gpu_weld_tracks_deformed_keys_seams_failures_and_retained_frames() -> Result<()> {

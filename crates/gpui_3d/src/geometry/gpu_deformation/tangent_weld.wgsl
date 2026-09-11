@@ -40,7 +40,9 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>) {
                     result.status.x = 2u;
                 } else {
                     let scaled = normal / scale;
-                    let n = bitcast<vec3<u32>>(scaled / length(scaled));
+                    let normalized = bitcast<vec3<u32>>(scaled / length(scaled));
+                    let n = select(normalized, input.key_1.xyz,
+                        (input.key_1.xyz & vec3(0x7fffffffu)) == vec3(0u));
                     result.key_0 = vec4(input.key_0.xyz, n.x);
                     result.key_1 = vec4(n.yz, bitcast<vec2<u32>>(coords));
                 }

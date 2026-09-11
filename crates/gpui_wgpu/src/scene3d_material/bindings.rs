@@ -49,6 +49,10 @@ impl Scene3dMaterialSource {
 
     pub fn new(context: WgpuContext, program: MaterialProgram) -> Result<Self> {
         ensure!(!context.device_lost(), "material device is lost");
+        ensure!(
+            program.vertex_attributes().is_empty(),
+            "custom vertex streams are not supported by material bindings"
+        );
         program.validate_limits(&context.device.limits())?;
         let scope = context
             .device

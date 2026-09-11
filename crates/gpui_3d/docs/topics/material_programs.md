@@ -8,6 +8,9 @@ Compilation prepares source and layouts without uploading data or resolving imag
 Use [material bindings](material_bindings.md) to prepare a device-local snapshot
 and attach it with `Material::program()`.
 
+[Custom vertex inputs](material_attributes.md) define typed attributes and
+interpolation for program compilation.
+
 ```rust
 use gpui_3d::Scene3dMaterialProgram;
 
@@ -85,7 +88,7 @@ layout. Uniform data must follow WGSL alignment and padding, not packed Rust lay
 Texture RGB encoding depends on the bound view format, not its variable name.
 
 `compile_with_limits()` accepts `Scene3dMaterialLimits`. Defaults admit 64 KiB of
-source, 16 resources, and 64 KiB of aggregate minimum uniform storage. These limits
+source, 16 resources, 16 custom vertex declarations, and 64 KiB of aggregate minimum uniform storage. These limits
 exclude retained compiled-source storage, compiler working memory, and GPU storage.
 
 `validate_limits(&device.limits())` checks the enabled device limits, including the

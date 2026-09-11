@@ -74,6 +74,7 @@ fn material_resource_admission_includes_unused_declarations_and_device_reservati
     let limits = Scene3dMaterialLimits {
         max_source_bytes: SOURCE.len(),
         max_resources: 5,
+        max_vertex_attributes: 0,
         max_uniform_bytes: 96,
     };
     let program = MaterialProgram::compile_with_limits(SOURCE, limits).unwrap();

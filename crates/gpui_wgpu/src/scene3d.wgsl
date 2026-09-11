@@ -1,3 +1,4 @@
+// MATERIAL_ATTRIBUTE_DECLARATIONS
 struct ImageParams {
     rect: vec4<f32>, uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
 };
@@ -44,14 +45,31 @@ struct InstanceInput {
     @location(10) normal_2: vec4<f32>,
     @location(12) color: vec4<f32>, @location(13) ids: vec4<u32>,
 };
-struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec4<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32, @location(5) color: vec4<f32>, @location(6) @interpolate(flat) output_id: u32, @location(7) detail_uv: vec4<f32>, @location(8) occlusion_uv: vec2<f32> };
+struct Output {
+    @builtin(position) position: vec4<f32>,
+    @location(0) normal: vec3<f32>, @location(1) uv: vec4<f32>,
+    @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>,
+    @location(4) @interpolate(flat) orientation: f32, @location(5) color: vec4<f32>,
+    @location(6) @interpolate(flat) output_id: u32,
+    @location(7) detail_uv: vec4<f32>, @location(8) occlusion_uv: vec2<f32>,
+    // MATERIAL_ATTRIBUTE_OUTPUT
+};
 struct SurfaceInput {
     world: vec3<f32>, normal: vec3<f32>, tangent: vec4<f32>,
     uv: vec4<f32>, detail_uv: vec4<f32>, occlusion_uv: vec2<f32>, color: vec4<f32>,
+    // MATERIAL_ATTRIBUTE_SURFACE
 };
 fn surface_input(input: Output) -> SurfaceInput {
-    return SurfaceInput(input.world, input.normal, input.tangent,
-        input.uv, input.detail_uv, input.occlusion_uv, input.color);
+    var surface: SurfaceInput;
+    surface.world = input.world;
+    surface.normal = input.normal;
+    surface.tangent = input.tangent;
+    surface.uv = input.uv;
+    surface.detail_uv = input.detail_uv;
+    surface.occlusion_uv = input.occlusion_uv;
+    surface.color = input.color;
+    // MATERIAL_ATTRIBUTE_INTERPOLATED
+    return surface;
 }
 fn world_vertex(position: vec3<f32>, normal: vec3<f32>, uv: vec4<f32>, tangent: vec4<f32>, detail_uv: vec4<f32>, occlusion_uv: vec2<f32>, vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
     let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
@@ -60,11 +78,23 @@ fn world_vertex(position: vec3<f32>, normal: vec3<f32>, uv: vec4<f32>, tangent: 
     let handedness = sign(dot(cross(unit_vector(model[0].xyz), unit_vector(model[1].xyz)), unit_vector(model[2].xyz)));
     let world_tangent = vec4<f32>((model * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w * handedness);
     let color = vertex_color * vec4<f32>(srgb_to_linear(instance.color.rgb), instance.color.a);
-    return Output(world, normal_matrix * normal, uv, world.xyz, world_tangent, handedness, color, instance.ids.x, detail_uv, occlusion_uv);
+    var output: Output;
+    output.position = world;
+    output.normal = normal_matrix * normal;
+    output.uv = uv;
+    output.world = world.xyz;
+    output.tangent = world_tangent;
+    output.orientation = handedness;
+    output.color = color;
+    output.output_id = instance.ids.x;
+    output.detail_uv = detail_uv;
+    output.occlusion_uv = occlusion_uv;
+    return output;
 }
 @vertex
-fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
+fn vertex(/* MATERIAL_ATTRIBUTE_INDEX */ @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
     var output = world_vertex(position, normal, uv, tangent, detail_uv, occlusion_uv, vertex_color, instance);
+    // MATERIAL_ATTRIBUTE_LOAD
     let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
     var clip = params.camera * model * vec4<f32>(position, 1.0);
     let origin = params.bounds.xy / params.viewport.xy;
@@ -147,8 +177,9 @@ fn apply_coverage(base: vec4<f32>, orientation: f32, front: bool) -> vec4<f32> {
     return vec4<f32>(base.rgb, select(1.0, alpha, params.ids.y == 2u));
 }
 @vertex
-fn shadow_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
+fn shadow_vertex(/* MATERIAL_ATTRIBUTE_INDEX */ @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
     var output = world_vertex(position, normal, uv, tangent, detail_uv, occlusion_uv, vertex_color, instance);
+    // MATERIAL_ATTRIBUTE_LOAD
     output.position = params.shadow_camera * output.position;
     return output;
 }

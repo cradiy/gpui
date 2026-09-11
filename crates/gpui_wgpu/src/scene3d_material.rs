@@ -1,9 +1,11 @@
 use anyhow::{Result, ensure};
 use std::sync::{Arc, OnceLock};
 use wgpu::naga::{self, Expression, Function, Handle, Module, Statement};
+mod attributes;
 #[cfg(not(target_family = "wasm"))]
 mod bindings;
 mod resources;
+pub use attributes::{Scene3dVertexAttribute, Scene3dVertexInterpolation};
 #[cfg(not(target_family = "wasm"))]
 pub use bindings::{
     Scene3dMaterialBindingLimits, Scene3dMaterialSnapshot, Scene3dMaterialSource,
@@ -34,6 +36,7 @@ const SHADING_HELPERS: &[&str] = &[
 pub struct MaterialProgram {
     source: Arc<str>,
     resources: Arc<[Scene3dMaterialResource]>,
+    vertex_attributes: Arc<[Scene3dVertexAttribute]>,
 }
 
 impl MaterialProgram {
@@ -61,16 +64,45 @@ impl MaterialProgram {
     /// Checks enabled device limits including the renderer's standard material bindings.
     /// This does not validate actual texture formats, handles, or GPU shader compilation.
     pub fn validate_limits(&self, limits: &wgpu::Limits) -> Result<()> {
-        resources::validate_limits(&self.resources, limits)
+        resources::validate_limits(&self.resources, limits)?;
+        attributes::validate_limits(&self.vertex_attributes, limits)
     }
 
     /// Compiles without creating an adapter or allocating GPU resources.
     pub fn compile_with_limits(material: &str, limits: Scene3dMaterialLimits) -> Result<Self> {
+        Self::compile_with_attributes_and_limits(material, &[], limits)
+    }
+
+    /// Custom streams in declaration order. Each uses one vertex-visible group 2 binding.
+    pub fn vertex_attributes(&self) -> &[Scene3dVertexAttribute] {
+        &self.vertex_attributes
+    }
+
+    /// Compiles typed custom vertex inputs exposed as `SurfaceInput.attributes`.
+    /// Streams use packed 32-bit scalar/vector records and hardware interpolation.
+    pub fn compile_with_attributes(
+        material: &str,
+        attributes: &[Scene3dVertexAttribute],
+    ) -> Result<Self> {
+        Self::compile_with_attributes_and_limits(
+            material,
+            attributes,
+            Scene3dMaterialLimits::default(),
+        )
+    }
+
+    /// Compiles custom vertex inputs under explicit source and declaration budgets.
+    pub fn compile_with_attributes_and_limits(
+        material: &str,
+        attributes: &[Scene3dVertexAttribute],
+        limits: Scene3dMaterialLimits,
+    ) -> Result<Self> {
         ensure!(
             material.len() <= limits.max_source_bytes,
             "material source exceeds byte limit"
         );
-        let source = format!("{CORE}\n{material}");
+        let core = attributes::assemble(CORE, attributes, limits.max_vertex_attributes)?;
+        let source = format!("{core}\n{material}");
         let module = naga::front::wgsl::parse_str(&source)
             .map_err(|error| anyhow::anyhow!("{}", error.emit_to_string(&source)))?;
         let info = naga::valid::Validator::new(
@@ -83,7 +115,7 @@ impl MaterialProgram {
             module.overrides.is_empty(),
             "material overrides are not supported"
         );
-        let resources = resources::reflect(&module, &info, limits)?;
+        let resources = resources::reflect(&module, &info, limits, core.len())?;
         ensure!(
             module.entry_points.len() == 7
                 && module.entry_points.iter().all(|entry| {
@@ -110,7 +142,7 @@ impl MaterialProgram {
                     .functions
                     .get_span(handle)
                     .to_range()
-                    .filter(|s| s.start >= CORE.len())
+                    .filter(|s| s.start >= core.len())
                     .map(|_| handle)
             })
             .collect();
@@ -194,6 +226,7 @@ impl MaterialProgram {
         Ok(Self {
             source: source.into(),
             resources: resources.into(),
+            vertex_attributes: attributes.into(),
         })
     }
 }

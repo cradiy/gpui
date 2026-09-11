@@ -14,7 +14,7 @@ pub use id_remap::{IdRemapConfig, WgpuIdRemapper};
 pub use offscreen_renderer::*;
 pub use scene3d_material::{
     MaterialProgram as Scene3dMaterialProgram, Scene3dMaterialLimits, Scene3dMaterialResource,
-    Scene3dMaterialResourceKind,
+    Scene3dMaterialResourceKind, Scene3dVertexAttribute, Scene3dVertexInterpolation,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use scene3d_material::{

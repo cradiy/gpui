@@ -6,6 +6,8 @@ use wgpu::naga::{self, Module, TypeInner};
 pub struct Scene3dMaterialLimits {
     pub max_source_bytes: usize,
     pub max_resources: usize,
+    /// Maximum declared custom vertex streams; enabled device limits are checked separately.
+    pub max_vertex_attributes: usize,
     /// Sum of minimum binding sizes across all declared uniform blocks.
     pub max_uniform_bytes: u64,
 }
@@ -14,6 +16,7 @@ impl Default for Scene3dMaterialLimits {
         Self {
             max_source_bytes: 64 * 1024,
             max_resources: 16,
+            max_vertex_attributes: 16,
             max_uniform_bytes: 64 * 1024,
         }
     }
@@ -74,6 +77,7 @@ pub(super) fn reflect(
     module: &Module,
     info: &naga::valid::ModuleInfo,
     limits: Scene3dMaterialLimits,
+    core_len: usize,
 ) -> Result<Vec<Scene3dMaterialResource>> {
     let surface = super::named(module, "material_surface")?;
     let shading = super::named(module, "material_shading")?;
@@ -84,7 +88,7 @@ pub(super) fn reflect(
             .global_variables
             .get_span(handle)
             .to_range()
-            .is_some_and(|s| s.start < super::CORE.len())
+            .is_some_and(|s| s.start < core_len)
         {
             continue;
         }

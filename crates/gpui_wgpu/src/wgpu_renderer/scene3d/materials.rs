@@ -50,6 +50,7 @@ impl MaterialCache {
                     continue;
                 };
                 let source = snapshot.source();
+                snapshot.validate_vertex_count(object.mesh.vertices().len())?;
                 ensure!(
                     !source.context().device_lost()
                         && std::ptr::eq(device, source.context().device.as_ref()),
@@ -82,6 +83,7 @@ pub(super) fn create_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     extension: Option<&wgpu::BindGroupLayout>,
+    vertex_extension: Option<&wgpu::BindGroupLayout>,
     format: wgpu::TextureFormat,
     samples: u32,
     pass: Pass,
@@ -99,10 +101,16 @@ pub(super) fn create_pipeline(
         label: Some("scene3d_material_standard"),
         entries: &material_bindings(data || shadow),
     });
-    let groups = [Some(&standard), extension];
+    let groups = [Some(&standard), extension, vertex_extension];
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("scene3d_material_program"),
-        bind_group_layouts: &groups[..if extension.is_some() { 2 } else { 1 }],
+        bind_group_layouts: &groups[..if vertex_extension.is_some() {
+            3
+        } else if extension.is_some() {
+            2
+        } else {
+            1
+        }],
         immediate_size: 0,
     });
     let target = Some(wgpu::ColorTargetState {
@@ -170,6 +178,7 @@ impl Pipelines {
                 device,
                 source.shader(),
                 Some(source.layout()),
+                source.vertex_layout(),
                 format,
                 samples,
                 pass,

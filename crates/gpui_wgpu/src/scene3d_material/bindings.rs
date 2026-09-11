@@ -5,6 +5,8 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 mod plan;
+mod streams;
+pub use streams::Scene3dVertexStreams;
 #[cfg(test)]
 mod tests;
 
@@ -36,6 +38,7 @@ struct Source {
     program: MaterialProgram,
     shader: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
+    vertex_layout: Option<wgpu::BindGroupLayout>,
 }
 
 /// Device-local material shader and reusable group 1 layout.
@@ -50,8 +53,13 @@ impl Scene3dMaterialSource {
     pub fn new(context: WgpuContext, program: MaterialProgram) -> Result<Self> {
         ensure!(!context.device_lost(), "material device is lost");
         ensure!(
-            program.vertex_attributes().is_empty(),
-            "custom vertex streams are not supported by material bindings"
+            program.vertex_attributes().is_empty()
+                || context
+                    .adapter
+                    .get_downlevel_capabilities()
+                    .flags
+                    .contains(wgpu::DownlevelFlags::VERTEX_STORAGE),
+            "material custom attributes require vertex storage support"
         );
         program.validate_limits(&context.device.limits())?;
         let scope = context
@@ -74,6 +82,29 @@ impl Scene3dMaterialSource {
                 label: Some("gpui_3d.material.layout"),
                 entries: &entries,
             });
+        let vertex_layout = (!program.vertex_attributes().is_empty()).then(|| {
+            let entries: Vec<_> = program
+                .vertex_attributes()
+                .iter()
+                .enumerate()
+                .map(|(index, attribute)| wgpu::BindGroupLayoutEntry {
+                    binding: index as u32,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(attribute.format.size()),
+                    },
+                    count: None,
+                })
+                .collect();
+            context
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("gpui_3d.material.vertex_layout"),
+                    entries: &entries,
+                })
+        });
         if let Some(error) = gpui::block_on(scope.pop()) {
             anyhow::bail!("material preparation: {error}");
         }
@@ -83,6 +114,7 @@ impl Scene3dMaterialSource {
             program,
             shader,
             layout,
+            vertex_layout,
         })))
     }
     pub fn context(&self) -> &WgpuContext {
@@ -96,6 +128,11 @@ impl Scene3dMaterialSource {
     }
     pub fn layout(&self) -> &wgpu::BindGroupLayout {
         &self.0.layout
+    }
+
+    /// Vertex-visible group 2 layout, or None when no custom streams are declared.
+    pub fn vertex_layout(&self) -> Option<&wgpu::BindGroupLayout> {
+        self.0.vertex_layout.as_ref()
     }
 
     /// Binds every declared resource exactly once. Input order is arbitrary.
@@ -202,6 +239,7 @@ impl Scene3dMaterialSource {
             slots,
             bind_group,
             uniform_bytes,
+            vertex_streams: previous.and_then(|p| p.0.vertex_streams.clone()),
         })))
     }
 }
@@ -212,11 +250,13 @@ enum BoundValue {
     Texture(wgpu::TextureView),
     Sampler(wgpu::Sampler),
 }
+#[derive(Clone)]
 struct Snapshot {
     source: Scene3dMaterialSource,
     slots: Vec<BoundValue>,
     bind_group: wgpu::BindGroup,
     uniform_bytes: u64,
+    vertex_streams: Option<Scene3dVertexStreams>,
 }
 
 /// Retained bindings with private immutable uniform buffers. External texture
@@ -233,6 +273,40 @@ impl Scene3dMaterialSnapshot {
     /// Full uniform payload represented by this snapshot; shared buffers count in each snapshot.
     pub fn uniform_bytes(&self) -> u64 {
         self.0.uniform_bytes
+    }
+    pub fn vertex_streams(&self) -> Option<&Scene3dVertexStreams> {
+        self.0.vertex_streams.as_ref()
+    }
+
+    /// Attaches independently retained streams from this exact source shader/layout.
+    /// Uniforms and texture bindings remain shared. Drawing checks the mesh vertex count.
+    pub fn with_vertex_streams(&self, streams: Scene3dVertexStreams) -> Result<Self> {
+        ensure!(
+            !self.source().context().device_lost(),
+            "material device is lost"
+        );
+        ensure!(
+            self.source().identity() == streams.source().identity(),
+            "vertex streams belong to a different material source"
+        );
+        Ok(Self(Arc::new(Snapshot {
+            vertex_streams: Some(streams),
+            ..self.0.as_ref().clone()
+        })))
+    }
+
+    pub(crate) fn validate_vertex_count(&self, count: usize) -> Result<()> {
+        if self.source().program().vertex_attributes().is_empty() {
+            return Ok(());
+        }
+        let streams = self
+            .vertex_streams()
+            .ok_or_else(|| anyhow::anyhow!("material requires custom vertex streams"))?;
+        ensure!(
+            streams.vertex_count() == count,
+            "custom vertex stream count does not match mesh"
+        );
+        Ok(())
     }
     /// Replaces only named bindings, retaining all others without reuploading them.
     /// Failures leave this snapshot unchanged. The source shader and layout are reused.

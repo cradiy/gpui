@@ -65,4 +65,5 @@ storage-binding, and dispatch limits are checked separately.
 Calls submit on the source's queue without vertex readback or a CPU wait for GPU
 completion. Packing submitted afterward observes the updated source. Recreate
 sources after device replacement. This interface uses the renderer's fixed UV and
-color formats; it does not declare application-specific vertex attributes.
+color formats. [Custom vertex inputs](material_attributes.md) use separately
+declared streams and immutable material-bound snapshots.

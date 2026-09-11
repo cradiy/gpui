@@ -20,6 +20,9 @@ impl Scene3dRenderer {
             };
             pass.set_pipeline(pipeline);
             pass.set_bind_group(1, material.bind_group(), &[]);
+            if let Some(streams) = material.vertex_streams() {
+                pass.set_bind_group(2, streams.bind_group(), &[]);
+            }
             return;
         }
         let pipeline = if shadow {

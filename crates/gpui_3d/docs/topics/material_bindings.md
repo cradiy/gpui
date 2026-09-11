@@ -8,6 +8,10 @@ once. The native `wgpu` feature is required.
 It returns a `Scene3dMaterialSnapshot` retaining the source and all bound resources.
 `Material::program(snapshot)` attaches these bindings to a scene material.
 
+Programs declaring [custom vertex inputs](material_attributes.md) also require
+`with_vertex_streams()` before drawing. Uniform/texture updates retain attached
+streams; attribute updates preserve the material's group 1 bindings.
+
 ```rust
 use gpui_3d::{
     Scene3dMaterialBindingLimits, Scene3dMaterialSource, Scene3dMaterialValue,

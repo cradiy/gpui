@@ -544,7 +544,7 @@ impl Scene3dRenderer {
                 | wgpu::TextureFormat::Rgba32Float
         );
         let create_pipeline =
-            |pass| materials::create_pipeline(device, &shader, None, format, samples, pass);
+            |pass| materials::create_pipeline(device, &shader, None, None, format, samples, pass);
         let pipeline = create_pipeline(materials::Pass::Opaque);
         let blend_pipeline = (!data_output).then(|| create_pipeline(materials::Pass::Blend));
         let shadow_pipeline = (!data_output).then(|| create_pipeline(materials::Pass::Shadow));

@@ -1,6 +1,9 @@
 use super::*;
 use crate::Scene3dVertexAttribute;
 
+mod input;
+pub use input::Scene3dVertexStreamValue;
+
 #[cfg(test)]
 mod tests;
 
@@ -12,8 +15,8 @@ struct Streams {
     payload_bytes: u64,
 }
 
-/// Immutable custom-attribute buffers in mesh vertex order, retaining their source layout.
-/// Updates share unchanged allocations and never overwrite buffers used by earlier frames.
+/// Custom-attribute buffers in mesh vertex order, retaining their source layout.
+/// Updates share unchanged allocations. Shared external buffers must remain immutable.
 #[derive(Clone)]
 pub struct Scene3dVertexStreams(Arc<Streams>);
 
@@ -24,7 +27,7 @@ impl Scene3dVertexStreams {
     pub fn vertex_count(&self) -> usize {
         self.0.vertex_count
     }
-    /// Complete GPU payload, including buffers shared with other versions.
+    /// Complete bound payload, counting each declaration, including shared buffers.
     pub fn payload_bytes(&self) -> u64 {
         self.0.payload_bytes
     }
@@ -32,10 +35,14 @@ impl Scene3dVertexStreams {
         &self.0.bind_group
     }
 
-    /// Replaces named streams; omitted streams retain their buffers. Inputs are copied.
+    /// Replaces named streams; omitted streams retain their buffers.
     /// The budget admits the complete snapshot, not only changed streams. Empty updates
     /// share the snapshot after validating device health and the supplied budget.
-    pub fn with_values(&self, values: &[(&str, &[u8])], max_payload_bytes: u64) -> Result<Self> {
+    pub fn with_values(
+        &self,
+        values: &[(&str, Scene3dVertexStreamValue<'_>)],
+        max_payload_bytes: u64,
+    ) -> Result<Self> {
         self.source().build_vertex_streams(
             self.vertex_count(),
             values,
@@ -46,15 +53,17 @@ impl Scene3dVertexStreams {
 }
 
 impl Scene3dMaterialSource {
-    /// Uploads every declared custom vertex stream exactly once, in arbitrary name order.
+    /// Binds every declared custom vertex stream exactly once, in arbitrary name order.
     /// Each value has exactly `vertex_count * format.size()` tightly packed bytes.
-    /// Floating-point lanes must be finite; integer lanes preserve all 32 bits.
+    /// Floating-point lanes must be finite; GPU contents are caller-validated.
+    /// Integer lanes preserve all 32 bits. See `Scene3dVertexStreamValue` for ownership
+    /// and queue-order requirements of external inputs.
     /// The byte budget covers the complete GPU snapshot, excluding retained versions,
     /// material uniforms, caller input storage, and driver overhead.
     pub fn bind_vertex_streams(
         &self,
         vertex_count: usize,
-        values: &[(&str, &[u8])],
+        values: &[(&str, Scene3dVertexStreamValue<'_>)],
         max_payload_bytes: u64,
     ) -> Result<Scene3dVertexStreams> {
         self.build_vertex_streams(vertex_count, values, max_payload_bytes, None)
@@ -63,11 +72,14 @@ impl Scene3dMaterialSource {
     fn build_vertex_streams(
         &self,
         vertex_count: usize,
-        values: &[(&str, &[u8])],
+        values: &[(&str, Scene3dVertexStreamValue<'_>)],
         max_payload_bytes: u64,
         previous: Option<&Scene3dVertexStreams>,
     ) -> Result<Scene3dVertexStreams> {
         ensure!(!self.context().device_lost(), "material device is lost");
+        for (_, value) in values {
+            value.check_device(&self.context().device)?;
+        }
         let declarations = self.program().vertex_attributes();
         let plan = StreamPlan::new(
             declarations,
@@ -84,16 +96,37 @@ impl Scene3dMaterialSource {
         }
         let device = &self.context().device;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut copies = None;
         let buffers: Vec<_> = plan
             .mapping
             .iter()
             .enumerate()
             .map(|(index, supplied)| match supplied {
-                Some(value) => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("gpui_3d.material.vertex_stream"),
-                    contents: values[*value].1,
-                    usage: wgpu::BufferUsages::STORAGE,
-                }),
+                Some(value) => match values[*value].1 {
+                    Scene3dVertexStreamValue::Bytes(bytes) => {
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("gpui_3d.material.vertex_stream"),
+                            contents: bytes,
+                            usage: wgpu::BufferUsages::STORAGE,
+                        })
+                    }
+                    Scene3dVertexStreamValue::SharedBuffer(buffer) => buffer.raw().clone(),
+                    Scene3dVertexStreamValue::CopiedBuffer(source) => {
+                        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("gpui_3d.material.vertex_stream"),
+                            size: source.size(),
+                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        let encoder = copies.get_or_insert_with(|| {
+                            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("gpui_3d.material.vertex_stream_copy"),
+                            })
+                        });
+                        encoder.copy_buffer_to_buffer(source, 0, &buffer, 0, source.size());
+                        buffer
+                    }
+                },
                 None => previous.expect("validated partial stream update").0.buffers[index].clone(),
             })
             .collect();
@@ -110,6 +143,9 @@ impl Scene3dMaterialSource {
             layout: self.vertex_layout().expect("validated vertex declarations"),
             entries: &entries,
         });
+        if let Some(encoder) = copies {
+            self.context().queue.submit(Some(encoder.finish()));
+        }
         if let Some(error) = gpui::block_on(scope.pop()) {
             anyhow::bail!("material vertex binding: {error}");
         }
@@ -133,7 +169,7 @@ impl StreamPlan {
     fn new(
         declarations: &[Scene3dVertexAttribute],
         count: usize,
-        values: &[(&str, &[u8])],
+        values: &[(&str, Scene3dVertexStreamValue<'_>)],
         partial: bool,
         limits: &wgpu::Limits,
         max_bytes: u64,
@@ -167,7 +203,7 @@ impl StreamPlan {
             "custom vertex streams exceed snapshot payload budget"
         );
         let mut mapping = vec![None; declarations.len()];
-        for (value, (name, bytes)) in values.iter().enumerate() {
+        for (value, (name, input)) in values.iter().enumerate() {
             let index = declarations
                 .iter()
                 .position(|attribute| attribute.name == *name)
@@ -178,24 +214,7 @@ impl StreamPlan {
             );
             let attribute = &declarations[index];
             let expected = count as u64 * attribute.format.size();
-            ensure!(
-                bytes.len() as u64 == expected,
-                "custom vertex stream {name} requires exactly {expected} bytes"
-            );
-            if matches!(
-                attribute.format,
-                wgpu::VertexFormat::Float32
-                    | wgpu::VertexFormat::Float32x2
-                    | wgpu::VertexFormat::Float32x3
-                    | wgpu::VertexFormat::Float32x4
-            ) {
-                ensure!(
-                    bytes
-                        .chunks_exact(4)
-                        .all(|word| f32::from_ne_bytes(word.try_into().unwrap()).is_finite()),
-                    "custom vertex stream {name} contains nonfinite floats"
-                );
-            }
+            input.validate(name, attribute.format, expected)?;
             mapping[index] = Some(value);
         }
         ensure!(

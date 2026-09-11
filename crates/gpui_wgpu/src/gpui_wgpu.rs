@@ -19,7 +19,7 @@ pub use scene3d_material::{
 #[cfg(not(target_family = "wasm"))]
 pub use scene3d_material::{
     Scene3dMaterialBindingLimits, Scene3dMaterialSnapshot, Scene3dMaterialSource,
-    Scene3dMaterialValue, Scene3dVertexStreams,
+    Scene3dMaterialValue, Scene3dVertexStreamValue, Scene3dVertexStreams,
 };
 pub use scene3d_renderer::*;
 pub use wgpu;

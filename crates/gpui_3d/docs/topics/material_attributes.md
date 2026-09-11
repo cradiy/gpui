@@ -30,33 +30,35 @@ response using `input.attributes.region`. Surface alpha still follows the materi
 ## Stream snapshots
 
 `Scene3dMaterialSource::bind_vertex_streams(vertex_count, values, max_payload_bytes)`
-uploads one value for each declared stream and returns `Scene3dVertexStreams`.
-Values are borrowed `(name, bytes)` pairs in arbitrary order. Every stream contains
-exactly one tightly packed record per vertex, including unused vertices. Float lanes
-must be finite; integer lanes preserve all bit patterns. Unknown, duplicate, missing,
-incorrectly sized, and nonfinite inputs are rejected before buffer allocation.
+binds one value for each declared stream and returns `Scene3dVertexStreams`.
+Values are `(name, Scene3dVertexStreamValue)` pairs in arbitrary order. Every stream
+contains exactly one tightly packed record per vertex, including unused vertices.
+Float lanes must be finite; integer lanes preserve all bit patterns. Unknown,
+duplicate, missing, and incorrectly sized inputs are rejected before allocation.
+CPU float contents are checked; GPU float contents are the caller's responsibility.
 
 ```rust
-let source = gpui_3d::Scene3dMaterialSource::new(context, program)?;
+use gpui_3d::Scene3dVertexStreamValue::Bytes;
+
+let source = gpui_3d::Scene3dMaterialSource::new(context.clone(), program)?;
 let streams = source.bind_vertex_streams(mesh.vertex_count(), &[
-    ("weight", bytemuck::cast_slice(&weights)),
-    ("region", bytemuck::cast_slice(&regions)),
-    ("direction", bytemuck::cast_slice(&directions)),
+    ("weight", Bytes(bytemuck::cast_slice(&weights))),
+    ("region", Bytes(bytemuck::cast_slice(&regions))),
+    ("direction", Bytes(bytemuck::cast_slice(&directions))),
 ], 8 * 1024 * 1024)?;
 let bindings = source.bind(material_values, Default::default())?
     .with_vertex_streams(streams.clone())?;
-let material = gpui_3d::Material::color(gpui::white()).program(bindings);
+let material = gpui_3d::Material::color(gpui::white()).program(bindings.clone());
 
 let updated = streams.with_values(&[
-    ("weight", bytemuck::cast_slice(&updated_weights)),
+    ("weight", Bytes(bytemuck::cast_slice(&updated_weights))),
 ], 8 * 1024 * 1024)?;
 ```
 
-`with_values()` on streams uploads only the named replacements. Omitted buffers
-remain shared; previous snapshots are never overwritten. Empty updates retain the
-snapshot after checking the full payload budget and device health. The snapshot owns
-private storage buffers; caller input bytes are not retained, and raw external GPU
-buffers are not accepted by this upload interface.
+`with_values()` on streams processes only the named replacements. Omitted buffers
+remain shared; updates never overwrite previous snapshots. Empty updates retain the
+snapshot after checking the full payload budget and device health. `Bytes` inputs
+are copied into private storage; caller input bytes are not retained.
 
 `Scene3dMaterialSnapshot::with_vertex_streams()` requires streams from that exact
 source shader/layout and preserves uniform/texture bindings. Material `with_values()`
@@ -69,6 +71,33 @@ streams across meshes with the same count is allowed; the application is respons
 for matching their vertex semantics and remapping values when topology changes.
 Color, shadow, ID, depth, and normal passes bind the same snapshot. CPU mesh queries
 do not evaluate custom attribute coverage; use GPU ID/depth captures for picking.
+
+## External GPU inputs
+
+`SharedBuffer` retains an application buffer without copying or submitting work.
+It requires `STORAGE` usage. `CopiedBuffer` requires `COPY_SRC` and copies into a
+private storage buffer on the source context's queue, without CPU readback. Both
+require an exact `vertex_count * format.size()` allocation, with no padding between
+records or trailing bytes. Construct resources through the source's `WgpuContext`;
+foreign creation devices are rejected before backend access.
+
+```rust
+use gpui_3d::Scene3dVertexStreamValue::{CopiedBuffer, SharedBuffer};
+
+let updated = streams.with_values(&[
+    ("weight", SharedBuffer(&weight_buffer)),
+    ("direction", CopiedBuffer(&direction_buffer)),
+], 8 * 1024 * 1024)?;
+let bindings = bindings.with_vertex_streams(updated)?;
+```
+
+CPU bytes, shared buffers, and copied buffers may be mixed in one bind or update.
+Submit producers on the material source's context queue before calling the method.
+Keep shared buffers unchanged, unmapped, and undestroyed while any retained snapshot
+or queued draw may use them. Copied sources may receive later queue-ordered writes
+after the method returns; those writes do not change the private snapshot. Do not
+map or explicitly destroy a copied source before its copy completes. These APIs do
+not wait for GPU completion or verify GPU-produced contents.
 
 ## Types and interpolation
 
@@ -110,8 +139,9 @@ vertex-storage support and validates driver shader/layout creation.
 Stream binding checks enabled buffer/storage limits and u32 vertex-word addressing.
 The byte budget covers all buffers represented by the snapshot, including shared
 and unchanged streams; it excludes retained older snapshots, material uniforms,
-CPU input storage, and driver overhead. `payload_bytes()` reports this complete
-payload. No positions, normals, tangents, or indices are rebuilt or uploaded.
+CPU input storage, external copy sources, and driver overhead. A shared allocation
+bound to multiple declarations counts once per binding. `payload_bytes()` reports
+this complete payload. No positions, normals, tangents, or indices are rebuilt or uploaded.
 Clones retain device-local resources; recreate the source and streams after device
 replacement. `vertex_layout()` exposes the source's group 2 layout and stream
 `bind_group()` exposes its compatible bindings for application-owned renderers.

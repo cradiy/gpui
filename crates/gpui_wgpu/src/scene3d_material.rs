@@ -9,7 +9,7 @@ pub use attributes::{Scene3dVertexAttribute, Scene3dVertexInterpolation};
 #[cfg(not(target_family = "wasm"))]
 pub use bindings::{
     Scene3dMaterialBindingLimits, Scene3dMaterialSnapshot, Scene3dMaterialSource,
-    Scene3dMaterialValue, Scene3dVertexStreams,
+    Scene3dMaterialValue, Scene3dVertexStreamValue, Scene3dVertexStreams,
 };
 pub use resources::{Scene3dMaterialLimits, Scene3dMaterialResource, Scene3dMaterialResourceKind};
 

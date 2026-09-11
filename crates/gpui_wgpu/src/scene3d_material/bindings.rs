@@ -6,7 +6,7 @@ use wgpu::util::DeviceExt;
 
 mod plan;
 mod streams;
-pub use streams::Scene3dVertexStreams;
+pub use streams::{Scene3dVertexStreamValue, Scene3dVertexStreams};
 #[cfg(test)]
 mod tests;
 

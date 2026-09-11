@@ -132,6 +132,7 @@ fn assert_pixel(pixels: &Scene3dPixels, x: usize, covered: bool, blue: bool) {
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn scene3d_custom_vertex_streams_preserve_versions_across_mesh_and_gpu_draws() -> Result<()> {
+    use crate::Scene3dVertexStreamValue::{Bytes, CopiedBuffer, SharedBuffer};
     use crate::{Scene3dVertexAttribute, WgpuScene3dGeometry};
     use wgpu::util::DeviceExt as _;
     let context = WgpuContext::new_headless()?;
@@ -154,17 +155,38 @@ fn scene3d_custom_vertex_streams_preserve_versions_across_mesh_and_gpu_draws() -
     let source = Scene3dMaterialSource::new(context.clone(), program)?;
     let red = [[1_f32, 0., 0.]; 3];
     let blue = [[0_f32, 0., 1.]; 3];
+    let producer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&red),
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    });
+    let coverage = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&[1_f32; 3]),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
     let streams = source.bind_vertex_streams(
         3,
         &[
-            ("tint", bytemuck::cast_slice(&red)),
-            ("coverage", bytemuck::cast_slice(&[1_f32; 3])),
+            ("tint", CopiedBuffer(&producer)),
+            ("coverage", SharedBuffer(&coverage)),
         ],
         48,
     )?;
-    let blue_streams = streams.with_values(&[("tint", bytemuck::cast_slice(&blue))], 48)?;
+    context
+        .queue
+        .write_buffer(&producer, 0, bytemuck::cast_slice(&blue));
+    let blue_streams = streams.with_values(&[("tint", Bytes(bytemuck::cast_slice(&blue)))], 48)?;
+    let coverage_producer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&[0_f32; 3]),
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    });
     let hidden_streams =
-        blue_streams.with_values(&[("coverage", bytemuck::cast_slice(&[0_f32; 3]))], 48)?;
+        blue_streams.with_values(&[("coverage", CopiedBuffer(&coverage_producer))], 48)?;
+    context
+        .queue
+        .write_buffer(&coverage_producer, 0, bytemuck::cast_slice(&[1_f32; 3]));
     let limits = Scene3dMaterialBindingLimits::default();
     let original = source
         .bind(

@@ -100,6 +100,7 @@ fn material_resource_admission_includes_unused_declarations_and_device_reservati
         max_sampled_textures_per_shader_stage: 10,
         max_samplers_per_shader_stage: 8,
         max_uniform_buffers_per_shader_stage: 3,
+        max_buffers_and_acceleration_structures_per_shader_stage: 3,
         ..Default::default()
     };
     program.validate_limits(&device).unwrap();
@@ -124,6 +125,10 @@ fn material_resource_admission_includes_unused_declarations_and_device_reservati
             max_uniform_buffers_per_shader_stage: 2,
             ..device
         },
+        wgpu::Limits {
+            max_buffers_and_acceleration_structures_per_shader_stage: 2,
+            ..device
+        },
     ] {
         assert!(program.validate_limits(&rejected).is_err());
     }
@@ -135,6 +140,32 @@ fn material_resource_admission_includes_unused_declarations_and_device_reservati
         large
             .validate_limits(&wgpu::Limits {
                 max_uniform_buffer_binding_size: 4096,
+                ..device
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn resource_free_materials_reserve_the_empty_extension_group() {
+    let program = MaterialProgram::compile(DEFAULT).unwrap();
+    let device = wgpu::Limits {
+        max_bind_groups: 2,
+        max_buffers_and_acceleration_structures_per_shader_stage: 1,
+        ..Default::default()
+    };
+    program.validate_limits(&device).unwrap();
+    let error = program
+        .validate_limits(&wgpu::Limits {
+            max_bind_groups: 1,
+            ..device
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("bind groups"), "{error}");
+    assert!(
+        program
+            .validate_limits(&wgpu::Limits {
+                max_buffers_and_acceleration_structures_per_shader_stage: 0,
                 ..device
             })
             .is_err()

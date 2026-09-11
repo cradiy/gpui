@@ -529,6 +529,13 @@ mod tests {
         }
         for (name, constrained) in [
             (
+                "max_buffers_and_acceleration_structures_per_shader_stage",
+                wgpu::Limits {
+                    max_buffers_and_acceleration_structures_per_shader_stage: 0,
+                    ..limits
+                },
+            ),
+            (
                 "max_vertex_attributes",
                 wgpu::Limits {
                     max_vertex_attributes: 13,

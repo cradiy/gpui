@@ -169,11 +169,7 @@ pub(super) fn validate_limits(
         bindings.iter().filter(|entry| predicate(entry)).count() as u64
     };
     for (name, available, required) in [
-        (
-            "bind groups",
-            u64::from(limits.max_bind_groups),
-            if resources.is_empty() { 1 } else { 2 },
-        ),
+        ("bind groups", u64::from(limits.max_bind_groups), 2),
         (
             "binding index",
             u64::from(limits.max_bindings_per_bind_group),
@@ -196,6 +192,11 @@ pub(super) fn validate_limits(
         (
             "uniform blocks",
             u64::from(limits.max_uniform_buffers_per_shader_stage),
+            count(|e| matches!(e.ty, wgpu::BindingType::Buffer { .. })),
+        ),
+        (
+            "fragment buffers and acceleration structures",
+            u64::from(limits.max_buffers_and_acceleration_structures_per_shader_stage),
             count(|e| matches!(e.ty, wgpu::BindingType::Buffer { .. })),
         ),
     ] {

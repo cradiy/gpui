@@ -238,6 +238,11 @@ pub(crate) fn validate_device_limits(limits: &wgpu::Limits) -> anyhow::Result<()
             1,
         ),
         (
+            "max_buffers_and_acceleration_structures_per_shader_stage",
+            u64::from(limits.max_buffers_and_acceleration_structures_per_shader_stage),
+            1,
+        ),
+        (
             "max_uniform_buffer_binding_size",
             limits.max_uniform_buffer_binding_size,
             uniform_size,

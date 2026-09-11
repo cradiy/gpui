@@ -127,6 +127,9 @@ exclude retained compiled-source storage, compiler working memory, and GPU stora
 
 `validate_limits(&device.limits())` checks the enabled device limits, including the
 renderer's standard bindings, the highest custom binding index, and uniform sizes.
+Material programs require two bind groups even without custom resources; custom
+vertex streams require three. Per-stage buffer limits include the standard
+uniform block alongside the material's declared resources, including unused ones.
 It does not create bind groups or verify actual resource handles, texture formats,
 or driver compilation. Program clones retain the same compiled source and metadata.
 

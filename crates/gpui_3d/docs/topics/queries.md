@@ -8,7 +8,8 @@ For comparisons against rendered samples, see [Frame depth comparisons](depth_qu
 direction. `Scene::raycast(ray)` ignores the camera and its clipping planes,
 while respecting mesh geometry, material/vertex alpha, and picking behavior.
 It does not resolve images or sample image alpha. Query distance is measured from
-the ray origin.
+the ray origin. Hit normals are normalized after interpolation and world-space
+transformation, then flipped on back faces; a zero interpolated normal remains zero.
 
 `Scene::pick_where` and `Scene::raycast_where` accept a per-query predicate over
 `QueryObject`. Its borrowed application ID, graph node handle, scene-local index,

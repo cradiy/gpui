@@ -13,8 +13,11 @@ pub(crate) fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 pub(crate) fn unit(v: [f32; 3]) -> [f32; 3] {
-    let n = dot(v, v).sqrt().max(0.000001);
-    v.map(|x| x / n)
+    let n = v.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>().sqrt();
+    if n == 0. {
+        return [0.; 3];
+    }
+    v.map(|x| (f64::from(x) / n) as f32)
 }
 pub(crate) fn multiply(a: Matrix, b: Matrix) -> Matrix {
     std::array::from_fn(|c| std::array::from_fn(|r| (0..4).map(|k| a[k][r] * b[c][k]).sum()))

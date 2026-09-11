@@ -1,6 +1,6 @@
 use crate::{
     ObjectId, Scene,
-    math::{cross, dot, sub, transform, unit},
+    math::{dot, sub, transform, unit},
 };
 use gpui::{Bounds, Pixels, Point, RenderImage};
 use std::sync::Arc;
@@ -134,7 +134,8 @@ pub struct Hit {
     pub triangle_index: usize,
     /// Intersection position in world space.
     pub position: [f32; 3],
-    /// Interpolated world-space shading normal, flipped on back faces.
+    /// Unit interpolated world-space shading normal, flipped on back faces.
+    /// A zero interpolated normal remains zero.
     pub normal: [f32; 3],
     /// Interpolated set-zero coordinates, independent of material sampling.
     /// `(0, 0)` is the top left.
@@ -361,6 +362,18 @@ fn intersect(
     vertices: [[f32; 3]; 3],
     bounded: bool,
 ) -> Option<(f32, [f32; 3], bool)> {
+    let origin = origin.map(f64::from);
+    let direction = direction.map(f64::from);
+    let vertices = vertices.map(|vertex| vertex.map(f64::from));
+    let sub = |a: [f64; 3], b: [f64; 3]| std::array::from_fn::<_, 3, _>(|i| a[i] - b[i]);
+    let dot = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+    let cross = |a: [f64; 3], b: [f64; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
     let edge1 = sub(vertices[1], vertices[0]);
     let edge2 = sub(vertices[2], vertices[0]);
     let p = cross(direction, edge2);
@@ -380,7 +393,13 @@ fn intersect(
     {
         return None;
     }
-    Some((distance, [1. - u - v, u, v], determinant > 0.))
+    let distance = distance as f32;
+    let weights = [1. - u - v, u, v].map(|value| value as f32);
+    (distance.is_finite() && weights.iter().all(|value| value.is_finite())).then_some((
+        distance,
+        weights,
+        determinant > 0.,
+    ))
 }
 
 pub(crate) struct DragProjection {
@@ -415,6 +434,9 @@ impl DragProjection {
         uv.iter().all(|v| v.is_finite()).then_some(uv)
     }
 }
+
+#[cfg(test)]
+mod precision_tests;
 
 #[cfg(test)]
 mod tests {

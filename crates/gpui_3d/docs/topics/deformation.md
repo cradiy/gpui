@@ -2,6 +2,9 @@
 
 [3D viewports](../viewport.md) · [CPU Morph and Skin](animation.md)
 
+Application-produced buffers use the [external deformation](external_deformation.md)
+adoption and GPU snapshot interfaces.
+
 ## Morph computation
 
 With the native `wgpu` feature, `GpuMorph` uploads a `MorphTargets` binding to

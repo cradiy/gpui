@@ -5,6 +5,7 @@ use gpui_wgpu::{WgpuContext, wgpu};
 use wgpu::util::DeviceExt as _;
 
 mod bounds;
+mod external;
 mod flat_normals;
 mod readback;
 pub(super) mod support;
@@ -67,6 +68,11 @@ pub struct GpuDeformationOutput {
     pub(super) buffer: wgpu::Buffer,
 }
 impl GpuDeformationOutput {
+    /// Device and queue shared by producers and downstream consumers.
+    pub fn context(&self) -> &WgpuContext {
+        &self.context
+    }
+
     /// Uploads reusable UV/color/index inputs for render vertex packing.
     /// Sets are base, metallic/roughness, emission, normal, and occlusion coordinates.
     /// This does not attach the geometry to a Scene or Viewport.

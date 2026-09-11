@@ -81,6 +81,8 @@ selected** use bounds from the displayed batch.
 Left-click selection reads ID/depth from the submitted viewport frame at the click
 position, then maps its primitive back to imported node and material details.
 Selection is asynchronous, with one pending request and one latest queued click.
+Only the latest click updates selection. Background clicks clear selection;
+pending or failed queries leave it unchanged. Superseded query errors are ignored.
 Mode changes and successful reloads discard outstanding selection requests.
 Captured-UI pointer routing is not enabled for GPU-deformed surfaces.
 

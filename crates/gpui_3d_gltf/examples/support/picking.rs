@@ -41,19 +41,22 @@ impl Picking {
         }
     }
 
-    pub fn poll(&mut self, window: &Window) -> Option<NodeHandle> {
+    /// Returns a completed selection; `Some(None)` clears it, `None` leaves it unchanged.
+    pub fn poll(&mut self, window: &Window) -> Option<Option<NodeHandle>> {
         let mut selected = None;
         if let Some(pending) = &mut self.pending {
             match pending.try_read() {
                 Ok(Some(result)) => {
                     if self.queued.is_none() {
-                        selected = result.frame.hit.and_then(|hit| hit.object.node);
+                        selected = Some(result.frame.hit.and_then(|hit| hit.object.node));
                     }
                     self.pending = None;
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    self.error = Some(error.to_string());
+                    if self.queued.is_none() {
+                        self.error = Some(error.to_string());
+                    }
                     self.pending = None;
                 }
             }
@@ -63,6 +66,9 @@ impl Picking {
         {
             match frame.pick(position) {
                 Ok(request) => {
+                    if request.is_none() {
+                        selected = Some(None);
+                    }
                     self.pending = request;
                     self.error = None;
                 }

@@ -307,13 +307,14 @@ impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
         if self.model.as_ref().is_some_and(Model::gpu_enabled) {
-            if let Some(node) = self.picking.poll(window)
-                && self
-                    .model
-                    .as_ref()
-                    .is_some_and(|model| model.instance.source_primitive(node).is_some())
+            if let Some(selection) = self.picking.poll(window)
+                && selection.is_none_or(|node| {
+                    self.model
+                        .as_ref()
+                        .is_some_and(|model| model.instance.source_primitive(node).is_some())
+                })
             {
-                self.selected = Some(node);
+                self.selected = selection;
             }
         } else {
             self.picking.clear();

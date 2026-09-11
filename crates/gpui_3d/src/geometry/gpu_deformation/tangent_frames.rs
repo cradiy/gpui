@@ -18,8 +18,9 @@ pub struct GpuTangentFrame {
     pub tangent: [f32; 4],
     /// Independently normalized bitangent and mean derivative magnitude.
     pub bitangent: [f32; 4],
-    /// Original corner, regular group representative, and UV orientation (0 or 1).
-    /// Nonregular corners use u32::MAX for group and orientation and have no frame.
+    /// Frame source corner, source group representative, and UV orientation (0 or 1).
+    /// The source is the destination corner unless a collapsed face inherits a donor.
+    /// Unresolved corners use u32::MAX for group and orientation and have no frame.
     pub identity: [u32; 3],
     /// Sum of the accepted contributors' projected corner angles, in radians.
     pub angle_weight: f32,
@@ -34,13 +35,15 @@ pub struct GpuTangentFrame {
 pub struct GpuTangentFramesMemory {
     pub uniform_bytes: u64,
     pub scratch_bytes: u64,
+    /// Included in scratch_bytes; one u32 per corner, with a 64-byte binding minimum.
+    pub donor_bytes: u64,
     pub output_bytes: u64,
     pub padded_corners: u32,
     pub sort_passes: u32,
 }
 impl GpuTangentFramesMemory {
-    /// Source admission covers pass uniforms. Output admission covers both sort
-    /// buffers and the returned corner-frame buffer.
+    /// Source admission covers shared pass uniforms. Output admission covers both
+    /// sort buffers, the donor map, and the returned corner-frame buffer.
     pub fn plan(corners: usize, limits: GpuDeformationLimits) -> Result<Self> {
         ensure!(
             corners > 0 && corners <= (1usize << 30) && corners.is_multiple_of(3),
@@ -49,9 +52,11 @@ impl GpuTangentFramesMemory {
         let padded_corners = (corners as u32).next_power_of_two();
         let levels = padded_corners.ilog2();
         let sort_passes = levels * (levels + 1) / 2;
+        let donor_bytes = (corners as u64 * 4).max(64);
         let memory = Self {
             uniform_bytes: u64::from(sort_passes + 2) * 16,
-            scratch_bytes: u64::from(padded_corners) * 128,
+            scratch_bytes: u64::from(padded_corners) * 128 + donor_bytes,
+            donor_bytes,
             output_bytes: corners as u64 * 64,
             padded_corners,
             sort_passes,
@@ -71,7 +76,9 @@ impl GpuTangentFramesMemory {
 /// Angle-weighted regular corner frames. Contributions are ordered by original
 /// corner within each connected group; exactly opposing projected tangent or
 /// bitangent directions are excluded per destination corner. No float atomics are used.
-/// Degenerate-frame inheritance, repair, and vertex publication are separate stages.
+/// Faces with coincident positions inherit the earliest valid regular frame with
+/// the same welded vertex. UV-degenerate grouping, repair and vertex publication
+/// are separate stages.
 pub struct GpuTangentFrames {
     context: WgpuContext,
     base: Mesh,
@@ -81,6 +88,9 @@ pub struct GpuTangentFrames {
     initialize: ComputeKernel,
     sort: ComputeKernel,
     accumulate: ComputeKernel,
+    clear_donors: ComputeKernel,
+    select_donors: ComputeKernel,
+    inherit: ComputeKernel,
 }
 impl GpuTangentFrames {
     pub fn check_support(capabilities: &gpui_wgpu::Scene3dDeviceCapabilities) -> Result<()> {
@@ -101,7 +111,11 @@ impl GpuTangentFrames {
         let memory = GpuTangentFramesMemory::plan(base.index_count(), limits)?;
         validate_storage(
             &context.device.limits(),
-            &[memory.scratch_bytes / 2, memory.output_bytes],
+            &[
+                u64::from(memory.padded_corners) * 64,
+                memory.output_bytes,
+                memory.donor_bytes,
+            ],
             memory.padded_corners as usize,
         )?;
         let device = &context.device;
@@ -109,6 +123,15 @@ impl GpuTangentFrames {
         let initialize = ComputeKernel::new(device, shader, "initialize", [64; 3])?;
         let sort = ComputeKernel::new(device, shader, "sort_pairs", [64; 3])?;
         let accumulate = ComputeKernel::new(device, shader, "accumulate", [64; 3])?;
+        let donor_shader = include_str!("tangent_frame_donors.wgsl");
+        let clear_donors = ComputeKernel::new(device, donor_shader, "clear_donors", [64; 3])?;
+        let select_donors = ComputeKernel::new(device, donor_shader, "select_donors", [64; 3])?;
+        let inherit = ComputeKernel::new(
+            device,
+            include_str!("tangent_frame_inherit.wgsl"),
+            "inherit",
+            [64; 3],
+        )?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let params = super::tangent_weld::passes(base.index_count() as u32)
             .into_iter()
@@ -133,6 +156,9 @@ impl GpuTangentFrames {
             initialize,
             sort,
             accumulate,
+            clear_donors,
+            select_donors,
+            inherit,
         })
     }
     pub fn memory(&self) -> GpuTangentFramesMemory {
@@ -171,8 +197,10 @@ impl GpuTangentFrames {
                 mapped_at_creation: false,
             })
         };
-        let mut a = allocate(self.memory.scratch_bytes / 2, "gpui_3d.frames.sort_a");
-        let mut b = allocate(self.memory.scratch_bytes / 2, "gpui_3d.frames.sort_b");
+        let sort_bytes = u64::from(self.memory.padded_corners) * 64;
+        let mut a = allocate(sort_bytes, "gpui_3d.frames.sort_a");
+        let mut b = allocate(sort_bytes, "gpui_3d.frames.sort_b");
+        let donors = allocate(self.memory.donor_bytes, "gpui_3d.frames.donors");
         let output = allocate(self.memory.output_bytes, "gpui_3d.frames.output");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("gpui_3d.frames"),
@@ -206,9 +234,25 @@ impl GpuTangentFrames {
                 &a,
                 groups.buffer(),
                 weld.buffer(),
-                &output,
+                &b,
                 self.params.last().unwrap(),
             ],
+        );
+        let params = self.params.last().unwrap();
+        let count = self.base.index_count() as u32;
+        for kernel in [&self.clear_donors, &self.select_donors] {
+            kernel.encode(
+                device,
+                &mut encoder,
+                count,
+                [&b, groups.buffer(), weld.buffer(), &donors, params],
+            );
+        }
+        self.inherit.encode(
+            device,
+            &mut encoder,
+            count,
+            [&b, &donors, weld.buffer(), &output, params],
         );
         self.context.queue.submit(Some(encoder.finish()));
         if let Some(error) = gpui::block_on(scope.pop()) {

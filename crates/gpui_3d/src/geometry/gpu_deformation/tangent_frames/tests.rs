@@ -74,7 +74,11 @@ fn frame_budget_covers_padded_sort_buffers_and_all_pass_uniforms() {
             memory.output_bytes,
             (count * std::mem::size_of::<GpuTangentFrame>()) as u64
         );
-        assert_eq!(memory.scratch_bytes, u64::from(passes[0][3]) * 128);
+        assert_eq!(memory.donor_bytes, (count as u64 * 4).max(64));
+        assert_eq!(
+            memory.scratch_bytes,
+            u64::from(passes[0][3]) * 128 + memory.donor_bytes
+        );
         let limits = GpuDeformationLimits {
             max_source_bytes: memory.uniform_bytes,
             max_output_bytes: memory.scratch_bytes + memory.output_bytes,
@@ -246,7 +250,10 @@ fn gpu_frames_weight_corners_preserve_subgroups_and_retain_deformed_inputs() -> 
         ),
     };
     let collapsed = read(&frames.evaluate(&grouped(&collapsed)?)?)?;
-    for record in &collapsed[3..] {
+    assert_eq!(collapsed[3].identity, collapsed[0].identity);
+    assert_eq!(collapsed[3].tangent, collapsed[0].tangent);
+    assert_eq!(collapsed[4].identity, collapsed[2].identity);
+    for record in &collapsed[5..] {
         assert_eq!(record.identity[1..], [u32::MAX; 2]);
         assert_eq!(record.tangent, [0.; 4]);
         assert_eq!(record.angle_weight, 0.);
@@ -318,5 +325,195 @@ fn gpu_frames_weight_corners_preserve_subgroups_and_retain_deformed_inputs() -> 
     close(records[3].tangent[0], -1.);
     close(records[0].angle_weight, std::f32::consts::FRAC_PI_2);
     close(records[3].angle_weight, std::f32::consts::FRAC_PI_4);
+    Ok(())
+}
+
+#[test]
+fn inheritance_shaders_match_frame_and_donor_buffers() {
+    use wgpu::naga::{
+        TypeInner,
+        front::wgsl,
+        valid::{Capabilities, ValidationFlags, Validator},
+    };
+    for (source, donor_binding, names) in [
+        (
+            include_str!("../tangent_frame_donors.wgsl"),
+            3,
+            &["clear_donors", "select_donors"][..],
+        ),
+        (
+            include_str!("../tangent_frame_inherit.wgsl"),
+            1,
+            &["inherit"][..],
+        ),
+    ] {
+        let module = wgsl::parse_str(source).unwrap();
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .unwrap();
+        let globals: Vec<_> = module.global_variables.iter().map(|(_, v)| v).collect();
+        assert_eq!(globals.len(), 5);
+        for variable in globals {
+            let binding = variable.binding.as_ref().unwrap();
+            assert_eq!(binding.group, 0);
+            let ty = &module.types[variable.ty].inner;
+            if binding.binding == 4 {
+                assert!(matches!(ty, TypeInner::Struct { span: 16, .. }));
+            } else {
+                let TypeInner::Array { stride, base, .. } = ty else {
+                    panic!("storage array required")
+                };
+                assert_eq!(
+                    *stride,
+                    if binding.binding == donor_binding {
+                        4
+                    } else {
+                        64
+                    }
+                );
+                if binding.binding == 0 || (binding.binding == 3 && donor_binding == 1) {
+                    let TypeInner::Struct { members, span: 64 } = &module.types[*base].inner else {
+                        panic!("frame record required")
+                    };
+                    assert_eq!(
+                        members
+                            .iter()
+                            .map(|v| v.offset as usize)
+                            .collect::<Vec<_>>(),
+                        [
+                            std::mem::offset_of!(GpuTangentFrame, tangent),
+                            std::mem::offset_of!(GpuTangentFrame, bitangent),
+                            std::mem::offset_of!(GpuTangentFrame, identity),
+                            std::mem::offset_of!(GpuTangentFrame, angle_weight),
+                            std::mem::offset_of!(GpuTangentFrame, status),
+                        ]
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            module
+                .entry_points
+                .iter()
+                .map(|v| v.name.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+        assert!(
+            module
+                .entry_points
+                .iter()
+                .all(|v| v.workgroup_size == [64, 1, 1])
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU"]
+fn gpu_collapsed_frames_choose_valid_donors_without_crossing_attribute_seams() -> Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    let positions = [
+        [0., 0., 0.],
+        [1., 0., 0.],
+        [0., 1., 0.],
+        [2., 0., 0.],
+        [2., 1., 0.],
+        [1., 1., 0.],
+        [0., 0., 0.],
+        [0., 0., 0.],
+        [4., 4., 0.],
+    ];
+    let uv = vec![
+        [0., 0.],
+        [1., 0.],
+        [0., 1.],
+        [-1., 0.],
+        [-1., 1.],
+        [2., 0.],
+        [0.5, 0.5],
+        [0., 0.],
+        [0., 0.],
+    ];
+    let vertices = positions
+        .into_iter()
+        .enumerate()
+        .map(|(index, position)| Vertex {
+            position,
+            normal: if index == 7 {
+                [0., 1., 0.]
+            } else {
+                [0., 0., 1.]
+            },
+            uv: [0.; 2],
+        })
+        .collect();
+    let mut indices = vec![0, 1, 2, 0, 3, 4, 0, 1, 5, 6, 6, 1, 7, 7, 1, 8, 8, 1];
+    for _ in 0..65 {
+        indices.extend([0, 1, 1]);
+    }
+    let base = Mesh::new(vertices, indices).with_uv_set(2, uv)?;
+    let (derivatives, weld, adjacency, groups, frames) = sources(&context, &base)?;
+    let input = GpuDeformationOutput::upload(context.clone(), base, limits)?;
+    let output =
+        frames
+            .evaluate(&groups.evaluate(
+                &adjacency.evaluate(&weld.evaluate(&derivatives.evaluate(&input)?)?)?,
+            )?)?;
+    drop((input, derivatives, weld, adjacency, groups, frames));
+    let records = read(&output)?;
+    close(records[0].tangent[0], 1.);
+    close(records[3].tangent[0], -1.);
+    for (index, record) in records.iter().enumerate() {
+        assert_eq!(record.status, [0; 4]);
+        if (6..9).contains(&index) || [9, 10, 12, 13, 15, 16].contains(&index) {
+            assert_eq!(record.identity, [index as u32, u32::MAX, u32::MAX]);
+            assert_eq!(record.tangent, [0.; 4]);
+        } else if index >= 9 {
+            let donor = if index >= 18 && (index - 18) % 3 == 0 {
+                0
+            } else {
+                1
+            };
+            assert_eq!(record.identity, records[donor].identity);
+            assert_eq!(record.tangent, records[donor].tangent);
+            assert_eq!(record.bitangent, records[donor].bitangent);
+            assert_eq!(record.angle_weight, records[donor].angle_weight);
+        }
+    }
+    let base = Mesh::new(
+        [
+            ([0., 0., 0.], [0., 0.]),
+            ([1., 0., 0.], [1., 0.]),
+            ([0., 1., 0.], [0., 1.]),
+            ([0., 1., 0.], [1., 0.]),
+            ([0., 0., 1.], [0., 1.]),
+        ]
+        .into_iter()
+        .map(|(position, uv)| Vertex {
+            position,
+            normal: [1., 0., 0.],
+            uv,
+        })
+        .collect(),
+        vec![0, 1, 2, 0, 3, 4, 0, 1, 1],
+    );
+    let uv = base.vertices().iter().map(|v| v.uv).collect();
+    let base = base.with_uv_set(2, uv)?;
+    let (derivatives, weld, adjacency, groups, frames) = sources(&context, &base)?;
+    let input = GpuDeformationOutput::upload(context, base, limits)?;
+    let output =
+        frames
+            .evaluate(&groups.evaluate(
+                &adjacency.evaluate(&weld.evaluate(&derivatives.evaluate(&input)?)?)?,
+            )?)?;
+    let records = read(&output)?;
+    assert_eq!(records[0].status, [2, 0, 0, 0]);
+    assert_eq!(records[6].identity, records[3].identity);
+    close(records[6].tangent[1], 1.);
+    assert_eq!(records[6].status, [0; 4]);
+    for record in &records[7..] {
+        assert_eq!(record.identity[1..], [u32::MAX; 2]);
+    }
     Ok(())
 }

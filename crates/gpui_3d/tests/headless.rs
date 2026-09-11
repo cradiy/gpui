@@ -9,6 +9,9 @@ mod picking;
 #[path = "headless/labels.rs"]
 mod labels;
 
+#[path = "headless/submissions.rs"]
+mod submissions;
+
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn target_budget_rejects_before_images_and_preserves_retained_outputs() -> anyhow::Result<()> {

@@ -75,6 +75,14 @@ pub(super) struct Model {
     animation: Option<BoundAnimation>,
     pub(super) playback: Option<AnimationPlayback>,
     pub(super) skipped_tracks: usize,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    gpu: Option<super::gpu::Deformation>,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    desired: Option<(EvaluatedScene, Vec<(NodeHandle, Vec<f32>)>)>,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    revision: u64,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    gpu_display_revision: Option<u64>,
 }
 
 pub(super) fn publish(
@@ -102,6 +110,14 @@ pub(super) fn publish(
             animation,
             playback,
             skipped_tracks: 0,
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            gpu: None,
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            desired: None,
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            revision: 0,
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            gpu_display_revision: None,
         };
         if let Some(playback) = &model.playback {
             model.sample(playback.time())?;
@@ -137,9 +153,15 @@ impl Model {
         let poses = self
             .graph
             .evaluate_with_transforms(sample.pose().transforms())?;
-        let replacements = self.instance.deform(&poses, sample.weights())?;
-        let evaluated = poses.with_meshes(replacements)?;
-        self.evaluated = evaluated;
+        if !self.gpu_enabled() {
+            let replacements = self.instance.deform(&poses, sample.weights())?;
+            self.evaluated = poses.with_meshes(replacements)?;
+        }
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        {
+            self.desired = Some((poses, sample.weights().to_vec()));
+            self.revision = self.revision.wrapping_add(1);
+        }
         self.skipped_tracks = self
             .animation
             .as_ref()
@@ -172,6 +194,84 @@ impl Model {
 
     pub(super) fn asset(&self) -> &SceneAsset {
         self.instance.asset()
+    }
+
+    pub(super) fn gpu_enabled(&self) -> bool {
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        {
+            self.gpu.is_some()
+        }
+        #[cfg(not(all(feature = "wgpu", not(target_family = "wasm"))))]
+        {
+            false
+        }
+    }
+
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    pub(super) fn toggle_gpu(&mut self, window: &gpui::Window) -> Result<()> {
+        let next = if self.gpu.is_some() {
+            None
+        } else {
+            Some(super::gpu::Deformation::new(window, &self.instance)?)
+        };
+        let previous = std::mem::replace(&mut self.gpu, next);
+        if let Err(error) = self.sample(
+            self.playback
+                .as_ref()
+                .map_or(Duration::ZERO, AnimationPlayback::time),
+        ) {
+            self.gpu = previous;
+            return Err(error);
+        }
+        self.gpu_display_revision = None;
+        Ok(())
+    }
+
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    pub(super) fn poll_gpu(&mut self, window: &gpui::Window) -> Result<()> {
+        let Some(gpu) = &mut self.gpu else {
+            return Ok(());
+        };
+        let (poses, weights) = self
+            .desired
+            .as_ref()
+            .context("GPU pose has not been sampled")?;
+        let result = gpu.update(window, &self.instance, poses, weights, self.revision);
+        if let Some((revision, poses)) = gpu.ready_pose()
+            && self.gpu_display_revision != Some(revision)
+        {
+            self.evaluated = poses.clone();
+            self.gpu_display_revision = Some(revision);
+        }
+        result
+    }
+
+    pub(super) fn display_bounds(
+        &self,
+        selected: Option<NodeHandle>,
+    ) -> Result<Option<gpui_3d::Aabb>> {
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        if let Some(gpu) = &self.gpu {
+            return gpu.bounds(selected);
+        }
+        Ok(if let Some(node) = selected {
+            self.evaluated
+                .node(node)
+                .and_then(|node| node.subtree_bounds)
+        } else {
+            self.evaluated.bounds()
+        })
+    }
+
+    pub(super) fn viewport(
+        &mut self,
+        scene: gpui_3d::Scene,
+    ) -> Result<Option<gpui_3d::Viewport3d>> {
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        if let Some(gpu) = &mut self.gpu {
+            return gpu.view(scene);
+        }
+        Ok(Some(gpui_3d::viewport3d("model", scene)))
     }
 
     pub(super) fn details(&self, selected: Option<NodeHandle>) -> Vec<String> {

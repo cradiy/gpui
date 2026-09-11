@@ -1,6 +1,8 @@
 mod binding;
 mod cache;
 mod frame;
+mod geometry_inputs;
+pub use geometry_inputs::GeometryInput;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 mod gpu_geometry;
 pub use cache::PreparationCache;

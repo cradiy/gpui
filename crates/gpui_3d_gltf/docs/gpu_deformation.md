@@ -95,11 +95,13 @@ let render_pose = poses.with_meshes(
 # }
 ```
 
-Create render sources with the material's five texture-coordinate selections,
-pack each result with `render_geometry`, and bind the packed geometry to its scene
-object. Output IDs are scene object indices plus one, not indices in the adapter's
-result vector. Supply conservative mesh-local bounds for the same deformation
-sample, or obtain them through `GpuDeformationBounds`. See
+Use `Scene::geometry_inputs()` to obtain each object's node, source mesh, output ID,
+and five active texture-coordinate selections before image resolution. Create render
+sources with those selections, pack each result with `render_geometry`, and bind
+the packed geometry to its scene object. Output IDs are scene object indices plus
+one, not indices in the adapter's result vector. Supply conservative mesh-local
+bounds for the same deformation sample, or obtain them through
+`GpuDeformationBounds`. See
 [core GPU deformation](../../gpui_3d/docs/topics/deformation.md#render-vertex-packing)
 for packing, headless rendering, and viewport binding.
 
@@ -107,7 +109,8 @@ The replacement snapshot above contains source meshes, not final CPU geometry.
 Its CPU bounds and picking do not describe deformed surfaces. GPU viewport
 overrides disable CPU picking and captured-UI pointer routing. Use explicit mesh
 readback to build a CPU-query snapshot when needed; no selection synchronization
-is performed by this adapter.
+is performed by this adapter. The [model viewer](viewer.md#gpu-deformation) combines
+this adapter with GPU bounds and submitted-frame ID/depth selection.
 
 Use the window's shared context for viewport rendering and the renderer's context
 for headless output. Sources and results belong to that device. Rebuild the

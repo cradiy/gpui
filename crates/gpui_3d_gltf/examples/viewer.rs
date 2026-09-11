@@ -19,8 +19,14 @@ mod files;
 
 const USAGE: &str = "Usage: viewer <asset.gltf|asset.glb> [SCENE_INDEX] [ANIMATION_INDEX]";
 
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+#[path = "support/gpu.rs"]
+mod gpu;
 #[path = "support/model.rs"]
 mod model;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+#[path = "support/picking.rs"]
+mod picking;
 use model::{Model, fitted_size, load, publish};
 
 struct Viewer {
@@ -39,6 +45,8 @@ struct Viewer {
     selected: Option<NodeHandle>,
     source_camera: Option<NodeHandle>,
     error: Option<String>,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    picking: picking::Picking,
     _activation: Subscription,
 }
 
@@ -75,6 +83,8 @@ impl Viewer {
             selected: None,
             source_camera: None,
             error: None,
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            picking: picking::Picking::new(),
             _activation: activation,
         };
         viewer.reload(cx);
@@ -98,6 +108,8 @@ impl Viewer {
             let completion = worker.await;
             let _ = this.update(cx, |this, cx| {
                 if publish(&mut this.slot, &mut this.model, completion) {
+                    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                    this.picking.clear();
                     this.frame_pending = true;
                     this.selected = None;
                     this.source_camera = None;
@@ -113,13 +125,10 @@ impl Viewer {
         let Some(model) = &self.model else {
             return Ok(());
         };
-        let bounds = if selected {
-            self.selected
-                .and_then(|handle| model.evaluated.node(handle))
-                .and_then(|node| node.subtree_bounds)
-        } else {
-            model.evaluated.bounds()
-        };
+        if selected && self.selected.is_none() {
+            return Ok(());
+        }
+        let bounds = model.display_bounds(if selected { self.selected } else { None })?;
         let Some(bounds) = bounds else {
             return Ok(());
         };
@@ -296,6 +305,19 @@ impl Viewer {
 
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        if self.model.as_ref().is_some_and(Model::gpu_enabled) {
+            if let Some(node) = self.picking.poll(window)
+                && self
+                    .model
+                    .as_ref()
+                    .is_some_and(|model| model.instance.source_primitive(node).is_some())
+            {
+                self.selected = Some(node);
+            }
+        } else {
+            self.picking.clear();
+        }
         let now = Instant::now();
         if let Some(model) = &mut self.model {
             if let Err(error) = model.advance(now.duration_since(self.last_frame)) {
@@ -313,6 +335,15 @@ impl Render for Viewer {
             }
         }
         self.last_frame = now;
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        if let Some(model) = &mut self.model
+            && let Err(error) = model.poll_gpu(window)
+        {
+            self.error = Some(format!("{error:#}"));
+            if let Some(playback) = &mut model.playback {
+                playback.pause();
+            }
+        }
         if self.frame_pending
             && self.bounds.get().size.height > px(0.)
             && self.bounds.get().size.width > px(0.)
@@ -338,6 +369,55 @@ impl Render for Viewer {
             }
             model.evaluated.scene(self.controls.camera())
         });
+        let viewport = if let Some(model) = &mut self.model {
+            model.viewport(scene)
+        } else {
+            Ok(Some(viewport3d("model", scene)))
+        };
+        let viewport = match viewport {
+            Ok(Some(viewport)) => {
+                #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                let viewport = if self.model.as_ref().is_some_and(Model::gpu_enabled) {
+                    viewport.pick_capture(self.picking.capture.clone())
+                } else {
+                    viewport
+                };
+                viewport
+                    .w(viewport_size.width)
+                    .h(viewport_size.height)
+                    .on_object_click(cx.listener(|this, hit: &gpui_3d::Hit, _, cx| {
+                        if !this.model.as_ref().is_some_and(Model::gpu_enabled) {
+                            this.selected = hit.node;
+                            cx.notify();
+                        }
+                    }))
+                    .into_any_element()
+            }
+            Ok(None) => {
+                #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                self.picking.clear();
+                div()
+                    .p_4()
+                    .child("Preparing GPU geometry…")
+                    .into_any_element()
+            }
+            Err(error) => {
+                #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                self.picking.clear();
+                self.error = Some(format!("{error:#}"));
+                if let Some(playback) = self
+                    .model
+                    .as_mut()
+                    .and_then(|model| model.playback.as_mut())
+                {
+                    playback.pause();
+                }
+                div()
+                    .p_4()
+                    .child("GPU geometry is unavailable")
+                    .into_any_element()
+            }
+        };
         let mut stage = div()
             .id("stage")
             .relative()
@@ -350,6 +430,24 @@ impl Render for Viewer {
             .overflow_hidden()
             .rounded(px(12.))
             .bg(rgb(0x162337));
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        {
+            stage = stage.on_click(cx.listener(|this, event, _, cx| {
+                if !this.model.as_ref().is_some_and(Model::gpu_enabled) {
+                    return;
+                }
+                let gpui::ClickEvent::Mouse(event) = event else {
+                    return;
+                };
+                let delta = event.up.position - event.down.position;
+                if event.down.button == MouseButton::Left
+                    && f32::from(delta.x).hypot(f32::from(delta.y)) <= 4.
+                {
+                    this.picking.click(event.up.position);
+                    cx.notify();
+                }
+            }));
+        }
         for button in [MouseButton::Right, MouseButton::Middle] {
             stage = stage
                 .on_mouse_down(
@@ -406,15 +504,7 @@ impl Render for Viewer {
                 this.input(result, cx);
                 cx.stop_propagation();
             }))
-            .child(
-                viewport3d("model", scene)
-                    .w(viewport_size.width)
-                    .h(viewport_size.height)
-                    .on_object_click(cx.listener(|this, hit: &gpui_3d::Hit, _, cx| {
-                        this.selected = hit.node;
-                        cx.notify();
-                    })),
-            )
+            .child(viewport)
             .child(
                 canvas(
                     move |rect, _, cx| {
@@ -437,6 +527,31 @@ impl Render for Viewer {
             .error
             .clone()
             .or_else(|| self.slot.error().map(|e| format!("{e:#}")));
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        let error = error.or_else(|| self.picking.error.clone());
+        let deformation_controls = div();
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        let deformation_controls = deformation_controls.child(
+            self.button(
+                "deformation",
+                if self.model.as_ref().is_some_and(Model::gpu_enabled) {
+                    "GPU deformation"
+                } else {
+                    "CPU deformation"
+                },
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.picking.clear();
+                if let Some(model) = &mut this.model {
+                    match model.toggle_gpu(window) {
+                        Ok(()) => this.error = None,
+                        Err(error) => this.error = Some(format!("{error:#}")),
+                    }
+                }
+                this.last_frame = Instant::now();
+                cx.notify();
+            })),
+        );
         div()
             .size_full()
             .p_5()
@@ -446,6 +561,7 @@ impl Render for Viewer {
             .bg(rgb(0x0b1422))
             .text_color(rgb(0xeaf2fc))
             .child(div().text_size(px(26.)).child("Model viewer"))
+            .child(deformation_controls)
             .child(
                 div()
                     .text_sm()

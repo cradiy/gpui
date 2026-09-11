@@ -49,8 +49,48 @@ evaluates all TRS and weight channels, applies Morph before Skin, and publishes 
 snapshot for meshes, bounds, cameras and picking. Node-track groups outside the
 selected scene are skipped and counted in the controls. Invalid sampling pauses
 playback, reports the error and retains the last successful frame and position.
-Animation frames are requested only while playing. Camera framing is explicit
-after initial loading; animation does not continuously reframe the model.
+Animation frames are requested while playing or awaiting GPU results. Camera
+framing is explicit after initial loading; animation does not continuously reframe
+the model.
+
+## GPU deformation
+
+Build with the native `wgpu` feature to enable the **CPU deformation / GPU
+deformation** toggle:
+
+```sh
+cargo run -p gpui_3d_gltf --features wgpu --example viewer -- /path/to/model.glb 0 0
+```
+
+CPU mode evaluates final vertices on the CPU. GPU mode samples transforms and
+weights on the CPU, then evaluates Morph and Skin through
+[`GpuSceneDeformation`](gpu_deformation.md). It retains uploaded sources and packs
+render vertices without reading them back to the CPU. Material coordinate sets
+are bound independently of image loading.
+
+GPU mode keeps one pending evaluation batch and the last complete display batch.
+Each primitive's bounds are reduced on the GPU and read back as a fixed-size
+result. Geometry, bounds, transforms, lights and cameras become visible together
+after every primitive in the batch completes. The timeline shows the requested
+sample; the displayed pose can lag while work completes. Before the first batch
+is ready, the viewport shows a preparation message. **Frame all** and **Frame
+selected** use bounds from the displayed batch.
+
+Left-click selection reads ID/depth from the submitted viewport frame at the click
+position, then maps its primitive back to imported node and material details.
+Selection is asynchronous, with one pending request and one latest queued click.
+Mode changes and successful reloads discard outstanding selection requests.
+Captured-UI pointer routing is not enabled for GPU-deformed surfaces.
+
+Unsupported direction generation, backend limits, and device changes are reported
+in the window; GPU mode does not silently substitute CPU geometry. Assets requiring
+MikkTSpace tangent regeneration cannot enable GPU mode. After device replacement,
+disable and re-enable GPU deformation to rebuild its resources. Reloaded models
+start in CPU mode.
+
+The example uses default per-source deformation limits, a 256 MiB limit per render
+source, a 256 MiB pick-target budget, and 64 bytes of bounds-readback working storage
+per deformed primitive. These limits are not an aggregate GPU residency budget.
 
 ## Loading and resources
 

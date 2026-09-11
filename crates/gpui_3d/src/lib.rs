@@ -48,8 +48,8 @@ pub use material::{Material, MaterialTexture, TextureSlot};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use render::headless;
 pub use render::{
-    PendingTexture, PreparationCache, PrepareError, PreparedScene, RenderObject, TextureRequest,
-    TextureSource, TextureState, Viewport3d, viewport3d,
+    GeometryInput, PendingTexture, PreparationCache, PrepareError, PreparedScene, RenderObject,
+    TextureRequest, TextureSource, TextureState, Viewport3d, viewport3d,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use render::{ViewportPick, ViewportPickCapture, ViewportPickFrame, ViewportPickReadback};

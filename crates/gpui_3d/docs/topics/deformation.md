@@ -225,6 +225,13 @@ with GPU positions, normals, and tangents, returning a `Scene3dGpuGeometry` with
 CPU readback. Reuse the source across outputs from the same base mesh allocation
 and device; mismatches are rejected.
 
+`Scene::geometry_inputs()` exposes every object's output ID, optional node and
+application identity, source mesh, and active coordinate sets before image
+resolution or raster culling. Use these inputs to bind GPU geometry even while
+textures are loading. Inactive material slots use coordinate set zero. Inspection
+does not validate geometry or materials; preparation and rendering perform those
+checks.
+
 ```rust
 # use gpui_3d::{GpuDeformationOutput, WgpuScene3dGeometry};
 # fn pack(output: &GpuDeformationOutput) -> anyhow::Result<()> {

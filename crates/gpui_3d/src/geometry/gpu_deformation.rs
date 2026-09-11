@@ -8,9 +8,14 @@ mod bounds;
 mod flat_normals;
 mod readback;
 pub(super) mod support;
+mod tangent_derivatives;
 pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
 pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
 pub use readback::GpuDeformationReadback;
+pub use tangent_derivatives::{
+    GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
+    GpuTangentDerivativesMemory,
+};
 
 /// 64-byte storage/vertex-buffer record. XYZ occupies each attribute's first three lanes.
 #[repr(C)]
@@ -261,12 +266,29 @@ impl ComputeKernel {
         inputs: [&wgpu::Buffer; 3],
         params: &wgpu::Buffer,
     ) -> Result<GpuDeformationOutput> {
+        let buffer = self.evaluate_records(context, base.vertex_count(), inputs, params)?;
+        Ok(GpuDeformationOutput {
+            context: context.clone(),
+            base,
+            buffer,
+        })
+    }
+
+    /// Dispatches one invocation per 64-byte output record. Callers admit payloads
+    /// and validate dispatch limits before creating their retained source.
+    fn evaluate_records(
+        &self,
+        context: &WgpuContext,
+        records: usize,
+        inputs: [&wgpu::Buffer; 3],
+        params: &wgpu::Buffer,
+    ) -> Result<wgpu::Buffer> {
         ensure!(!context.device_lost(), "GPU deformation device is lost");
         let device = &context.device;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gpui_3d.deformation.output"),
-            size: base.vertex_count() as u64 * 64,
+            size: records as u64 * 64,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::VERTEX
                 | wgpu::BufferUsages::COPY_SRC,
@@ -296,17 +318,13 @@ impl ComputeKernel {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups((base.vertex_count() as u32).div_ceil(64), 1, 1);
+            pass.dispatch_workgroups((records as u32).div_ceil(64), 1, 1);
         }
         context.queue.submit(Some(encoder.finish()));
         if let Some(error) = gpui::block_on(scope.pop()) {
             anyhow::bail!("GPU deformation submission: {error}");
         }
-        Ok(GpuDeformationOutput {
-            context: context.clone(),
-            base,
-            buffer: output,
-        })
+        Ok(output)
     }
 }
 pub(super) fn buffer(

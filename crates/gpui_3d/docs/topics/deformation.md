@@ -217,6 +217,9 @@ them for the undeformed CPU mesh's query bounds.
 
 ## Render vertex packing
 
+For per-triangle derivative inputs to tangent processing, see
+[GPU surface derivatives](tangent_derivatives.md).
+
 `output.render_source(uv_sets, byte_limit)` creates a reusable
 `WgpuScene3dGeometry` containing static material attributes and indices.
 The five coordinate sets select base color, metallic/roughness, emission, normal,

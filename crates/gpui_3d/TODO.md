@@ -221,6 +221,9 @@ Core implementation order:
      - [x] **Imported GPU viewer**: Explicit CPU/GPU modes, retained material-coordinate inputs independent of image readiness, complete pose/bounds publication, and submitted-frame primitive selection in the existing model viewer.
      - [ ] **Imported viewer GPU validation**: Verify animated GLB assets, CPU/GPU pose parity, asynchronous selection, image loading, resize, authored cameras, and mode/reload changes on supported adapters.
      - [ ] **Generated tangents**: Preserve imported MikkTSpace policies on deformed GPU geometry, including vertex correspondence and handedness.
+       - [x] **GPU triangle derivatives**: Retained indices and selected UVs, immutable input/face pairing, derivative directions and magnitudes, mirrored-orientation and degeneracy classification, and bounded payload admission.
+       - [ ] **GPU tangent groups**: Deformed position/normal/UV welding, connected orientation groups, corner weighting, and degenerate-face inheritance with fixed vertex correspondence.
+       - [ ] **GPU tangent publication**: Normal-orthogonal frames, imported repair policy, handedness checks, Morph-to-Skin composition, and CPU MikkTSpace parity on supported adapters.
      - [ ] **Imported GPU validation**: Verify signed/default weights, multiple primitives and instances, direction reconstruction, source identity, and retained outputs against CPU evaluation on supported adapters.
    - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.
    - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.

@@ -5,6 +5,105 @@ fn influence(joint: usize, weight: f32) -> SkinInfluence {
 }
 
 #[test]
+fn palettes_retain_mesh_space_matrices_across_samples_clones_and_vertex_remaps() {
+    let mesh = Mesh::plane();
+    let world = AffineTransform::from_translation([5., 2., -3.]).unwrap();
+    let binds = [
+        AffineTransform::from_translation([-1., 0., 0.]).unwrap(),
+        AffineTransform::from_translation([0., -2., 0.]).unwrap(),
+    ];
+    let deltas = [[0.5, 0., 0.], [0., 1., 0.]];
+    let joints: Vec<_> = deltas
+        .iter()
+        .zip(binds)
+        .map(|(&delta, bind)| {
+            world
+                .compose(AffineTransform::from_translation(delta).unwrap())
+                .unwrap()
+                .compose(bind.inverse())
+                .unwrap()
+        })
+        .collect();
+    let source = Skin::new(binds, (0..4).map(|v| [influence(v % 2, 1.)])).unwrap();
+    let palette = source.palette(world, &joints).unwrap();
+    let retained = palette.clone();
+    assert!(std::ptr::eq(palette.matrices(), retained.matrices()));
+    for (&matrix, delta) in palette.matrices().iter().zip(deltas) {
+        assert_eq!(
+            matrix,
+            AffineTransform::from_translation(delta).unwrap().matrix()
+        );
+    }
+    let cloned = source.clone();
+    let expanded = mesh.expand_corners(6).unwrap();
+    let remapped = source.remap_vertices(expanded.source_vertices()).unwrap();
+    let unrelated = Skin::new(binds, (0..4).map(|v| [influence(v % 2, 1.)])).unwrap();
+    assert!(matches!(
+        unrelated.evaluate_with_palette(&mesh, &palette),
+        Err(SkinError::PaletteBindingMismatch)
+    ));
+    assert!(matches!(
+        source.evaluate_with_palette(&Mesh::cube(), &palette),
+        Err(SkinError::VertexCount { .. })
+    ));
+    let newer = source.palette(world, &[world; 2]).unwrap();
+    assert_ne!(palette.matrices(), newer.matrices());
+    drop((source, palette));
+    let sampled = cloned.evaluate_with_palette(&mesh, &retained).unwrap();
+    let corners = remapped
+        .evaluate_with_palette(expanded.mesh(), &retained)
+        .unwrap();
+    for (index, vertex) in sampled.vertices().iter().enumerate() {
+        let expected = std::array::from_fn(|axis| {
+            mesh.vertices()[index].position[axis] + deltas[index % 2][axis]
+        });
+        assert_eq!(vertex.position, expected);
+        assert_eq!(vertex.normal, mesh.vertices()[index].normal);
+    }
+    for (vertex, &source) in corners.vertices().iter().zip(expanded.source_vertices()) {
+        assert_eq!(
+            vertex.position,
+            sampled.vertices()[source as usize].position
+        );
+        assert_eq!(vertex.normal, sampled.vertices()[source as usize].normal);
+    }
+    assert_eq!(sampled.tangents(), mesh.tangents());
+    assert_eq!(corners.tangents(), expanded.mesh().tangents());
+}
+
+#[test]
+fn palette_admission_checks_every_joint_before_vertex_blending() {
+    let source = Skin::new(
+        [AffineTransform::IDENTITY; 2],
+        (0..4).map(|_| [influence(0, 1.), influence(1, 1.)]),
+    )
+    .unwrap();
+    assert!(matches!(
+        source.palette(AffineTransform::IDENTITY, &[AffineTransform::IDENTITY]),
+        Err(SkinError::JointCount {
+            expected: 2,
+            actual: 1
+        })
+    ));
+    let large = AffineTransform::from_translation([f32::MAX, 0., 0.]).unwrap();
+    assert!(matches!(
+        source.palette(large.inverse(), &[large.inverse(), large]),
+        Err(SkinError::InvalidJointTransform { joint: 1 })
+    ));
+    let reflection = AffineTransform::from_trs([0.; 3], [0., 0., 0., 1.], [-1., 1., 1.]).unwrap();
+    let palette = source
+        .palette(
+            AffineTransform::IDENTITY,
+            &[AffineTransform::IDENTITY, reflection],
+        )
+        .unwrap();
+    assert!(matches!(
+        source.evaluate_with_palette(&Mesh::plane(), &palette),
+        Err(SkinError::InvalidVertexTransform { vertex: 0 })
+    ));
+}
+
+#[test]
 fn influence_views_preserve_normalized_order_duplicates_and_shared_storage() {
     let skin = Skin::new(
         [AffineTransform::IDENTITY; 2],

@@ -403,6 +403,20 @@ fn gpu_imported_deformation_matches_cpu_across_instances_and_retained_samples() 
         gpu.evaluate(&first, &SceneGraph::new().evaluate()?, &[], None)
             .is_err()
     );
+    let last_skin = asset.skins().last().unwrap();
+    let large = AffineTransform::from_translation([f32::MAX, 0., 0.])?;
+    let invalid_poses = graph.evaluate_with_transforms([
+        (first.node(last_skin.joints()[0]).unwrap(), large),
+        (first.node(last_skin.primitive()).unwrap(), large.inverse()),
+    ])?;
+    let error = gpu
+        .evaluate(&first, &invalid_poses, &[], Some(0))
+        .err()
+        .expect("invalid Skin composition must fail admission");
+    assert!(error.chain().any(|cause| matches!(
+        cause.downcast_ref::<gpui_3d::SkinError>(),
+        Some(gpui_3d::SkinError::InvalidJointTransform { joint: 0 })
+    )));
     let mut retained = Vec::new();
     for instance in [&first, &second] {
         let target = instance.node(asset.morphs()[0].node()).unwrap();

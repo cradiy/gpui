@@ -126,6 +126,24 @@ collect each joint's `EvaluatedNode::world`, sample the skin, then pass the
 result to `evaluate_with_overrides` with the same local transforms. Render under
 the same `mesh_world` used for sampling.
 
+`Skin::palette(mesh_world, joint_world)` prepares an immutable `SkinPalette`
+without evaluating vertices or allocating GPU resources. `matrices()` borrows
+its column-major mesh-local matrices in inverse-bind order. Composition validates
+every joint, including joints unused by the current vertex influences.
+
+Pass the snapshot to `Skin::evaluate_with_palette(mesh, &palette)` for CPU vertex
+evaluation or `GpuSkin::upload_palette(&palette)` for GPU use. CPU palette clones
+share matrix storage. The originating `Skin`, its clones and vertex remaps share
+the joint-binding identity and can reuse it; independently constructed bindings
+are rejected, even with identical matrix values. The snapshot contains no vertex
+data and remains valid after later pose samples or destruction of its source.
+
+Prepare all palettes before submitting a batch when matrix-composition errors
+must be rejected before GPU work. This does not validate blended vertex matrices,
+deformed positions or device state; those checks belong to evaluation. Each
+palette contains one 64-byte matrix per joint, with CPU allocation and retained
+snapshot counts managed by the caller.
+
 Positions use the blended affine transform. Normals use its inverse transpose
 and are normalized; zero source normals remain zero without tangents. Tangent XYZ
 uses the blended linear transform and is orthogonalized against the output normal.

@@ -160,25 +160,6 @@ fn skin_admission_bounds_flat_indexing_palette_storage_and_dispatch() {
     );
 }
 
-#[test]
-fn palette_uses_output_space_and_inverse_bind_and_reports_invalid_composition() {
-    let world = AffineTransform::from_translation([5., 2., -3.]).unwrap();
-    let bind = AffineTransform::from_translation([-1., 0., 0.]).unwrap();
-    let source = Skin::new(
-        [bind],
-        [[SkinInfluence {
-            joint: 0,
-            weight: 1.,
-        }]],
-    )
-    .unwrap();
-    let matrices = pack_palette(&source, world, &[world.compose(bind.inverse()).unwrap()]).unwrap();
-    assert_eq!(matrices, [AffineTransform::IDENTITY.matrix()]);
-    assert!(pack_palette(&source, world, &[]).is_err());
-    let large = AffineTransform::from_translation([f32::MAX, 0., 0.]).unwrap();
-    assert!(pack_palette(&source, large.inverse(), &[large]).is_err());
-}
-
 fn near_mesh(actual: &Mesh, expected: &Mesh) {
     assert_eq!(actual.indices(), expected.indices());
     assert_eq!(actual.vertex_count(), expected.vertex_count());
@@ -240,7 +221,11 @@ fn compute_skin_composes_morph_and_retains_outputs_with_shared_palettes() {
         AffineTransform::IDENTITY,
     ];
     let world = AffineTransform::from_translation([3., 2., 1.]).unwrap();
-    let palette = skin.palette(world, &joints).unwrap();
+    let prepared = source.palette(world, &joints).unwrap();
+    let palette = skin.upload_palette(&prepared).unwrap();
+    let unrelated = binding(mesh.vertex_count());
+    let wrong = unrelated.palette(world, &joints).unwrap();
+    assert!(skin.upload_palette(&wrong).is_err());
     let first = skin.evaluate(&input, &palette).unwrap();
     let uploaded = GpuDeformationOutput::upload(context.clone(), mesh.clone(), limits).unwrap();
     let bind_result = skin.evaluate(&uploaded, &palette).unwrap();
@@ -250,6 +235,17 @@ fn compute_skin_composes_morph_and_retains_outputs_with_shared_palettes() {
         .unwrap();
     let reflected = skin.evaluate(&input, &reflected_palette).unwrap();
     let foreign = GpuSkin::new(context.clone(), source.clone(), limits).unwrap();
+    let shared = foreign.upload_palette(&prepared).unwrap();
+    near_mesh(
+        &foreign
+            .evaluate(&input, &shared)
+            .unwrap()
+            .readback()
+            .unwrap(),
+        &source
+            .evaluate_with_palette(&morph_source.evaluate(&[0.75]).unwrap(), &prepared)
+            .unwrap(),
+    );
     assert!(foreign.evaluate(&input, &palette).is_err());
     let mismatched = GpuDeformationOutput::upload(context.clone(), Mesh::cube(), limits).unwrap();
     assert!(skin.evaluate(&mismatched, &palette).is_err());

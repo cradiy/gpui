@@ -208,6 +208,7 @@ Core implementation order:
 
 1. [x] **World-space pose inputs**: Mixed local/world transform overrides, parent-first evaluation independent of input order, unchanged authored graphs, stable identities, and final-pose geometry/query consistency.
 2. [x] **Skin influence access**: Borrowed normalized per-vertex joint weights, explicit vertex-index errors, and immutable bindings suitable for weight inspection and external editing tools.
+   - [x] **Skin palette snapshots**: CPU-composed mesh-local matrices, shared joint-binding identity across clones and vertex remaps, retained CPU evaluation and explicit GPU upload without recomposition.
 3. [x] **Joint rotation limits**: Stateless local-space swing/twist constraints with explicit reference frames, finite limits, and clamping diagnostics; independent of humanoid naming and physical joints.
 4. [x] **IK extensions**: End-effector orientation and constrained multi-joint chains with explicit convergence/reach results and caller-owned time state.
    - [x] **End-effector orientation**: Independent terminal frame targets and weights, preserved positional solutions and affine shape, and rounded-output angular errors.
@@ -216,7 +217,7 @@ Core implementation order:
 6. [ ] **GPU deformation**: Shared skin palettes and Morph inputs, bounded GPU buffers, retained outputs, and explicit CPU bounds/picking synchronization. Preserve CPU evaluation for callers requiring final geometry.
    - [x] **Capability preflight**: Per-operation compute checks shared with constructors, adapter/enabled limit reporting, and independent indirect-execution requirements for vertex packing.
    - [x] **GPU Morph**: Reusable uploaded targets, signed per-evaluation weights, retained attribute buffers, payload admission, and explicit CPU mesh readback.
-   - [ ] **GPU validation**: Check Morph/Skin output parity, bounds reduction, composition, and retained-output lifetime on supported adapters.
+   - [ ] **GPU validation**: Check Morph/Skin output parity, prepared palette uploads and binding rejection, bounds reduction, composition, and retained-output lifetime on supported adapters.
    - [x] **GPU Skin**: Shared influence bindings, per-instance palettes, and Morph-to-Skin buffer composition.
    - [x] **Imported deformation inputs**: Shared glTF attribute targets, explicit direction-regeneration requirements, and instance-mapped final Skin poses in binding joint order.
    - [x] **GPU flat normals**: Retained triangle-corner topology, source identity and payload admission, and fixed-order reconstruction between Morph and Skin.
@@ -228,6 +229,7 @@ Core implementation order:
    - [ ] **Imported GPU evaluation**: Preserve generated normal/tangent policies, authored Morph defaults, Morph-before-Skin ordering, and source geometry identity when routing imported primitives to GPU draws.
      - [x] **glTF GPU adapter**: Retained per-primitive sources, shared CPU/GPU weight resolution, instance-mapped palettes, and ordered Morph/direction/Skin composition.
      - [x] **Imported evaluation admission**: Weight-dependent aggregate GPU payload reports, per-call budgets before primitive dispatch, zero-weight source reuse accounting, and viewer evaluation limits separate from render preparation.
+     - [x] **Imported palette admission**: Compose every mapped Skin palette before batch budget admission and GPU work; retain validated matrices through upload with primitive/joint error context.
      - [x] **Imported source admission**: CPU-only aggregate retained-buffer planning, core payload checks before the first upload, per-occurrence source accounting, bind-direction snapshots, and viewer source budgets independent of evaluation.
      - [ ] **Source admission GPU validation**: Verify constructor budget boundaries, retained reports, direction-stage allocations and multi-primitive source lifetime on supported adapters.
      - [ ] **Evaluation budget GPU validation**: Verify signed/default/zero-weight plans, exact aggregate limits, retained output sizes, source reuse, and rejection before dispatch on supported adapters.

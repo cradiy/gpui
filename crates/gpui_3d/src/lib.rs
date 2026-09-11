@@ -25,9 +25,9 @@ pub use geometry::{
     IkReach, JointAngleLimitStatus, JointRotationLimitError, JointRotationLimitResult,
     JointRotationLimits, Mesh, MorphAttribute, MorphError, MorphTarget, MorphTargets,
     NormalGenerationError, NormalMode, NormalizedSkinInfluence, PlaneOptions, PrimitiveError, Skin,
-    SkinError, SkinInfluence, SphereOptions, TangentGenerationError, TangentGenerationMode,
-    TangentRepair, TangentRepairKind, Transform, TransformError, TwoBoneIkError, TwoBoneIkResult,
-    TwoBoneIkSettings,
+    SkinError, SkinInfluence, SkinPalette, SphereOptions, TangentGenerationError,
+    TangentGenerationMode, TangentRepair, TangentRepairKind, Transform, TransformError,
+    TwoBoneIkError, TwoBoneIkResult, TwoBoneIkSettings,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use geometry::{

@@ -100,6 +100,13 @@ inputs evaluated by the same `GpuSkin`. Updating a pose creates a new palette;
 earlier palettes and outputs are not overwritten. A palette from a different
 `GpuSkin` is rejected, even if the joint counts match.
 
+Use `source().palette(mesh_world, joint_world)` to prepare a CPU `SkinPalette`
+without GPU work, then `upload_palette(&palette)` to upload its exact matrices.
+The CPU snapshot can also feed CPU Skin evaluation and GPU sources on other
+devices that retain the same joint-binding allocation. Each upload creates an
+independent device-local palette tied to the receiving `GpuSkin`; it does not
+recompose matrices or modify earlier palettes.
+
 ```rust
 use gpui_3d::{
     AffineTransform, GpuDeformationLimits, GpuDeformationOutput, GpuSkin,

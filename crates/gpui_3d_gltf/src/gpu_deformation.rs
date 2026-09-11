@@ -185,6 +185,8 @@ impl GpuSceneDeformation {
     /// CPU bounds and queries are not updated. No CPU fallback is performed.
     /// The optional budget bounds the sum of new GPU evaluation payloads across
     /// all primitives, including intermediate stages, before the first dispatch.
+    /// All mapped Skin palettes are composed and validated on the CPU before
+    /// admission and GPU work. Upload and shader failures can still occur later.
     pub fn evaluate(
         &self,
         instance: &SubtreeInstance,
@@ -208,7 +210,10 @@ impl GpuSceneDeformation {
                     let skin = source
                         .skin
                         .as_ref()
-                        .map(|(skin, _)| skin.pose(instance, poses))
+                        .map(|(skin, _)| -> Result<_> {
+                            let pose = skin.pose(instance, poses)?;
+                            Ok(skin.binding().palette(pose.mesh_world, &pose.joint_world)?)
+                        })
                         .transpose()?;
                     Ok((handle, skin))
                 })();
@@ -254,8 +259,8 @@ impl GpuSceneDeformation {
                         })
                         .transpose()?;
                     let output = if let Some((_, skin)) = &source.skin {
-                        let pose = pose.context("missing Skin pose")?;
-                        let palette = skin.palette(pose.mesh_world, &pose.joint_world)?;
+                        let pose = pose.context("missing Skin palette")?;
+                        let palette = skin.upload_palette(&pose)?;
                         skin.evaluate(
                             morphed
                                 .as_ref()

@@ -1,5 +1,5 @@
 use super::gpu_deformation::{ComputeKernel, buffer, validate_storage};
-use crate::{AffineTransform, GpuDeformationLimits, GpuDeformationOutput, Skin};
+use crate::{AffineTransform, GpuDeformationLimits, GpuDeformationOutput, Skin, SkinPalette};
 use anyhow::{Context as _, Result, ensure};
 use gpui_wgpu::{WgpuContext, wgpu};
 use std::sync::Arc;
@@ -159,13 +159,21 @@ impl GpuSkin {
         joint_world: &[AffineTransform],
     ) -> Result<GpuSkinPalette> {
         ensure!(!self.context.device_lost(), "GPU Skin device is lost");
-        let matrices = pack_palette(&self.source, mesh_world, joint_world)?;
+        self.upload_palette(&self.source.palette(mesh_world, joint_world)?)
+    }
+
+    /// Uploads an already composed CPU palette without recomputing its matrices.
+    /// The palette must retain the source's joint bindings. CPU palettes can be
+    /// reused across devices; the uploaded result belongs to this `GpuSkin` only.
+    pub fn upload_palette(&self, palette: &SkinPalette) -> Result<GpuSkinPalette> {
+        palette.validate_binding(&self.source)?;
+        ensure!(!self.context.device_lost(), "GPU Skin device is lost");
         let device = &self.context.device;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let buffer = buffer(
             device,
             "gpui_3d.skin.palette",
-            bytemuck::cast_slice(&matrices),
+            bytemuck::cast_slice(palette.matrices()),
             wgpu::BufferUsages::STORAGE,
         );
         if let Some(error) = gpui::block_on(scope.pop()) {
@@ -223,30 +231,4 @@ fn pack_binding(source: &Skin, memory: GpuSkinMemory) -> Result<Vec<u32>> {
     }
     words[source.vertex_count()] = ((words.len() - offset_words) / 2) as u32;
     Ok(words)
-}
-
-fn pack_palette(
-    source: &Skin,
-    mesh_world: AffineTransform,
-    joint_world: &[AffineTransform],
-) -> Result<Vec<[[f32; 4]; 4]>> {
-    ensure!(
-        joint_world.len() == source.joint_count(),
-        "GPU Skin joint count mismatch"
-    );
-    let inverse = mesh_world.inverse();
-    joint_world
-        .iter()
-        .zip(source.inverse_bind_matrices())
-        .enumerate()
-        .map(|(index, (&world, &bind))| {
-            inverse
-                .compose(world)
-                .and_then(|local| local.compose(bind))
-                .map(AffineTransform::matrix)
-                .with_context(|| {
-                    format!("GPU Skin joint {index} produces an invalid palette matrix")
-                })
-        })
-        .collect()
 }

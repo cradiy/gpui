@@ -1,6 +1,9 @@
 use crate::{AffineTransform, Mesh, MeshUpdateError, Vertex};
 use std::{fmt, sync::Arc};
 
+mod palette;
+pub use palette::SkinPalette;
+
 /// One joint's contribution to a vertex. Joint indices address the inverse bind array.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SkinInfluence {
@@ -50,6 +53,7 @@ pub enum SkinError {
     InvalidJointTransform {
         joint: usize,
     },
+    PaletteBindingMismatch,
     InvalidVertexTransform {
         vertex: usize,
     },
@@ -94,6 +98,9 @@ impl fmt::Display for SkinError {
             }
             Self::InvalidJointTransform { joint } => {
                 write!(f, "skin joint {joint} produces an invalid affine transform")
+            }
+            Self::PaletteBindingMismatch => {
+                f.write_str("skin palette belongs to different joint bindings")
             }
             Self::InvalidVertexTransform { vertex } => write!(
                 f,
@@ -292,25 +299,27 @@ impl Skin {
                 actual: mesh.vertex_count(),
             });
         }
-        if joint_world.len() != self.joint_count() {
-            return Err(SkinError::JointCount {
-                expected: self.joint_count(),
-                actual: joint_world.len(),
+        let palette = self.palette(mesh_world, joint_world)?;
+        self.evaluate_with_palette(mesh, &palette)
+    }
+
+    /// Evaluates bind-space or morphed vertices with a retained mesh-local palette.
+    /// The palette must retain this binding's inverse-bind allocation, including
+    /// clones and remapped influences. Matrix blending and output validation are
+    /// identical to `evaluate_world`; previous results remain unchanged.
+    pub fn evaluate_with_palette(
+        &self,
+        mesh: &Mesh,
+        palette: &SkinPalette,
+    ) -> Result<Mesh, SkinError> {
+        if mesh.vertex_count() != self.vertex_count() {
+            return Err(SkinError::VertexCount {
+                expected: self.vertex_count(),
+                actual: mesh.vertex_count(),
             });
         }
-        let world_to_mesh = mesh_world.inverse();
-        let palette = joint_world
-            .iter()
-            .zip(self.inverse_bind.iter())
-            .enumerate()
-            .map(|(joint, (&world, &bind))| {
-                world_to_mesh
-                    .compose(world)
-                    .and_then(|local| local.compose(bind))
-                    .map(AffineTransform::matrix)
-                    .map_err(|_| SkinError::InvalidJointTransform { joint })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        palette.validate_binding(self)?;
+        let palette = palette.matrices();
         let mut vertices = Vec::with_capacity(mesh.vertex_count());
         let mut tangents = mesh
             .tangents()

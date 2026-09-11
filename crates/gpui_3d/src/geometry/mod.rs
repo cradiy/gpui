@@ -50,7 +50,7 @@ pub use mesh::Mesh;
 pub use morph::{MorphAttribute, MorphError, MorphTarget, MorphTargets};
 pub use normals::{GeneratedNormals, NormalGenerationError, NormalMode};
 pub use primitives::{ConeOptions, CylinderOptions, PlaneOptions, PrimitiveError, SphereOptions};
-pub use skin::{NormalizedSkinInfluence, Skin, SkinError, SkinInfluence};
+pub use skin::{NormalizedSkinInfluence, Skin, SkinError, SkinInfluence, SkinPalette};
 pub use tangents::{
     GeneratedTangents, TangentGenerationError, TangentGenerationMode, TangentRepair,
     TangentRepairKind,

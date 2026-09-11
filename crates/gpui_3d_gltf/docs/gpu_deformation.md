@@ -79,6 +79,11 @@ mapped through `SubtreeInstance::node`, not primitive-child handles. One overrid
 applies to every primitive of its node. Omitted overrides use authored defaults
 on every call. Weights are finite, signed, and must match the target count.
 Duplicate, unknown, foreign-instance, and missing snapshot targets return errors.
+All Skin palettes are composed into CPU snapshots before any primitive's GPU
+work. Mesh-world cancellation, inverse-bind composition and their finite affine
+constraints are checked for every joint; composition errors identify the
+primitive and joint. The admitted snapshots are uploaded without recomposition.
+Per-vertex blend failures remain GPU evaluation results, not pose-admission errors.
 
 `evaluation_memory(instance, weights)` reports a `GpuSceneEvaluationMemory`
 without allocating GPU resources or submitting commands. `evaluation_bytes` is

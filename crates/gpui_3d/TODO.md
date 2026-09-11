@@ -325,6 +325,7 @@ contract. Core APIs do not own a physics world, character controller, or editor 
   - [x] **Object batches**: Retained scene updates combine final world transforms, CPU/GPU geometry with bounds, and material/attribute snapshots; validate target IDs and resource metadata without publishing partial results.
   - [x] **Geometry preparation**: Coupled packed-geometry validation and bounds readback, bounded per-request payload, retained ready pairs, terminal failures, and deferred geometry publication in the scene example.
   - [x] **Imported batch preparation**: The model viewer publishes all primitive geometry/status/bounds results with retained poses and material coordinate selections, keeping the previous display batch on preparation failure.
+  - [x] **Imported source rebinding**: Mesh-allocation-aware render-source reuse across direction regeneration and zero-weight transitions, with retained displayed batches.
   - [ ] **Submission acceptance**: Verify combined GPU geometry, custom streams, material/pass changes, retained outputs and asynchronous coverage identities across viewport and headless rendering.
 - [ ] **Deformed custom-material picking**: Bind regional ID/depth and coverage results to the submitted geometry, material resources, camera, and viewport identity; reject stale results and preserve retained-frame reads after updates.
   - [x] **Output provenance**: Opaque output identities carried through regional/full readbacks, picks, CPU coverage/labels and GPU labels, with mounted-viewport freshness checks before or after completion.

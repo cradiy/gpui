@@ -15,6 +15,23 @@ fn vertices() -> Vec<Vertex> {
 }
 
 #[test]
+fn mesh_identity_distinguishes_attribute_updates_from_clones() {
+    let mesh = Mesh::new(vertices(), vec![0, 1, 2]);
+    assert!(mesh.ptr_eq(&mesh.clone()));
+    assert!(!mesh.ptr_eq(&Mesh::new(vertices(), vec![0, 1, 2])));
+
+    let uv = mesh.with_uv_set(7, vec![[0.5, 0.25]; 3]).unwrap();
+    let colors = mesh
+        .with_vertex_colors(vec![[0.5, 0.7, 0.9, 1.]; 3])
+        .unwrap();
+    for updated in [uv, colors] {
+        assert_eq!(mesh.vertices().as_ptr(), updated.vertices().as_ptr());
+        assert!(!mesh.ptr_eq(&updated));
+        assert!(updated.ptr_eq(&updated.clone()));
+    }
+}
+
+#[test]
 fn corner_expansion_preserves_attributes_and_triangle_correspondence() {
     let positions = [
         [0., 0., 0.],

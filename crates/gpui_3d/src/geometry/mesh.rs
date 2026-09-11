@@ -9,6 +9,12 @@ use std::sync::{Arc, OnceLock};
 #[derive(Clone, Debug)]
 pub struct Mesh(pub(crate) Arc<Mesh3d>, pub(crate) Arc<OnceLock<bvh::Bvh>>);
 impl Mesh {
+    /// Whether both handles reference the same immutable mesh allocation.
+    /// Clones match; equal contents or shared vertex storage alone do not.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// Creates counterclockwise triangles from mesh-local vertex data.
     /// Panics for invalid geometry; use `try_new` for fallible construction.
     #[track_caller]

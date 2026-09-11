@@ -38,8 +38,10 @@ let first_position = mesh.vertices()[triangle[0] as usize].position;
 ```
 
 `vertices()` and `indices()` borrow immutable storage; mesh clones share that
-storage. `vertex_count()`, `index_count()` and `triangle_count()` report the stored
-data, without filtering. `bounds()` computes mesh-local bounds of all vertices,
+storage. `ptr_eq(&other)` compares exact mesh allocation identity for resource
+reuse; identical contents or shared vertices with different attributes do not
+establish identity. `vertex_count()`, `index_count()` and `triangle_count()` report
+the stored data, without filtering. `bounds()` computes mesh-local bounds of all vertices,
 including unused ones, and permits zero extent.
 
 Construction preserves ordering, repeated indices, zero normals and finite UVs

@@ -4,8 +4,8 @@ use anyhow::{Context as _, Result, ensure};
 use gpui::Window;
 use gpui_3d::{
     Aabb, Camera, EvaluatedScene, GpuDeformationBounds, GpuDeformationLimits,
-    GpuGeometryPreparation, NodeHandle, PreparedGpuGeometry, Scene, Scene3dGpuDraw, Viewport3d,
-    WgpuContext, WgpuScene3dGeometry, viewport3d,
+    GpuGeometryPreparation, Mesh, NodeHandle, PreparedGpuGeometry, Scene, Scene3dGpuDraw,
+    Viewport3d, WgpuContext, WgpuScene3dGeometry, viewport3d,
 };
 use gpui_3d_gltf::{GpuSceneDeformation, SceneInstance};
 
@@ -13,7 +13,7 @@ pub(super) struct Deformation {
     context: WgpuContext,
     source: GpuSceneDeformation,
     bounds: GpuDeformationBounds,
-    packing: HashMap<(NodeHandle, [u32; 5]), WgpuScene3dGeometry>,
+    packing: HashMap<(NodeHandle, [u32; 5]), (Mesh, WgpuScene3dGeometry)>,
     pending: Option<Pending>,
     ready: Option<Ready>,
     failed: Option<(u64, String)>,
@@ -165,12 +165,17 @@ impl Deformation {
                     let uv_sets = *coordinates
                         .get(&node)
                         .context("GPU primitive is absent from its evaluated scene")?;
-                    let source = match self.packing.entry((node, uv_sets)) {
-                        std::collections::hash_map::Entry::Occupied(slot) => slot.into_mut(),
-                        std::collections::hash_map::Entry::Vacant(slot) => {
-                            slot.insert(output.render_source(uv_sets, Some(256 * 1024 * 1024))?)
-                        }
-                    };
+                    let key = (node, uv_sets);
+                    if self
+                        .packing
+                        .get(&key)
+                        .is_none_or(|(mesh, _)| !mesh.ptr_eq(output.base_mesh()))
+                    {
+                        let source = output.render_source(uv_sets, Some(256 * 1024 * 1024))?;
+                        self.packing
+                            .insert(key, (output.base_mesh().clone(), source));
+                    }
+                    let source = &self.packing[&key].1;
                     let request = output.prepare_render_geometry(
                         source,
                         &self.bounds,

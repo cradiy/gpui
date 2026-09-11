@@ -92,6 +92,8 @@ start in CPU mode.
 
 The example uses default per-source deformation limits, a 256 MiB limit per render
 source, a 256 MiB preparation limit per primitive, and a 256 MiB pick-target budget.
+Render sources are reused only for matching node, texture-coordinate selections,
+and mesh allocation. Replacement sources do not invalidate the displayed batch.
 Preparation includes packed vertices, indirect/validation storage, and 96 bytes
 for bounds reduction and both staging buffers. Existing sources and driver
 overhead are excluded. These limits are not an aggregate GPU residency budget.

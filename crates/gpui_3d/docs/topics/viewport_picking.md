@@ -42,6 +42,13 @@ pixels. Applications may accept an older click-time result while animation runs;
 resolve its original object identity and reject superseded requests. The scene
 example uses one pending request and retains only the latest queued click.
 
+Frames, pending requests, and completed picks expose `frame_id()`. This identifies
+the submitted ID/depth output, not merely the prepared scene or its camera.
+`picks.is_current_frame(request.frame_id())` checks whether that output remains
+current before readback finishes. It returns false for removed, failed, cleared,
+or not-yet-matched bindings. Tokens retain no GPU textures. See
+[frame identity](readback.md#frame-identity).
+
 ## Backend capture
 
 The WGPU viewport renderer publishes paired Object ID and camera-forward depth

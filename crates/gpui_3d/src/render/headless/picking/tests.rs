@@ -23,6 +23,34 @@ fn object() -> RenderObject {
 }
 
 #[test]
+fn picks_preserve_frame_identity_for_both_surfaces_and_background() {
+    let id = crate::Scene3dFrameId::default();
+    for (output_id, depth) in [(0, 0.), (1, 4.)] {
+        let sample = pixels(output_id, depth, DepthBackground::Zero);
+        let pick = resolve(
+            id.clone(),
+            Camera::default(),
+            [9, 7],
+            [4, 3],
+            &[object()],
+            &sample,
+        )
+        .unwrap();
+        let later = resolve(
+            Default::default(),
+            Camera::default(),
+            [9, 7],
+            [4, 3],
+            &[object()],
+            &sample,
+        )
+        .unwrap();
+        assert_eq!(pick.frame_id(), &id);
+        assert_ne!(pick.frame_id(), later.frame_id());
+    }
+}
+
+#[test]
 fn clipped_raster_reconstruction_preserves_the_source_projection_aspect() {
     let bounds = Bounds::new(point(px(30.), px(-10.)), size(px(80.5), px(60.5)));
     let rect = [-10.25, -20.5, 81.25, 61.75];
@@ -38,6 +66,7 @@ fn clipped_raster_reconstruction_preserves_the_source_projection_aspect() {
             ..Default::default()
         };
         let result = resolve_projected(
+            Default::default(),
             camera,
             [70, 40],
             pixel,
@@ -78,6 +107,7 @@ fn pick_reconstruction_uses_original_extent_pixel_center_and_camera_optics() {
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(71.), px(39.)));
         for pixel in [[0, 0], [63, 7], [35, 19], [70, 38]] {
             let result = resolve(
+                Default::default(),
                 camera,
                 extent,
                 pixel,
@@ -120,6 +150,7 @@ fn background_and_zero_depth_surfaces_have_distinct_pick_results() {
     };
     for background in [DepthBackground::Zero, DepthBackground::NegativeOne] {
         let miss = resolve(
+            Default::default(),
             camera,
             [3, 3],
             [1, 1],
@@ -129,6 +160,7 @@ fn background_and_zero_depth_surfaces_have_distinct_pick_results() {
         .unwrap();
         assert!(miss.hit.is_none());
         let surface = resolve(
+            Default::default(),
             camera,
             [3, 3],
             [1, 1],
@@ -140,6 +172,7 @@ fn background_and_zero_depth_surfaces_have_distinct_pick_results() {
         for invalid in [f32::NAN, f32::INFINITY, -2.] {
             assert!(
                 resolve(
+                    Default::default(),
                     camera,
                     [3, 3],
                     [1, 1],
@@ -151,6 +184,7 @@ fn background_and_zero_depth_surfaces_have_distinct_pick_results() {
         }
         assert!(
             resolve(
+                Default::default(),
                 camera,
                 [3, 3],
                 [1, 1],
@@ -162,6 +196,7 @@ fn background_and_zero_depth_surfaces_have_distinct_pick_results() {
     }
     assert!(
         resolve(
+            Default::default(),
             Camera::default(),
             [3, 3],
             [1, 1],
@@ -200,7 +235,15 @@ fn pick_identity_remains_frame_local_and_malformed_samples_are_errors() {
         )
         .unwrap();
     let sample = pixels(1, 4., DepthBackground::Zero);
-    let result = resolve(Camera::default(), [9, 7], [4, 3], &objects, &sample).unwrap();
+    let result = resolve(
+        Default::default(),
+        Camera::default(),
+        [9, 7],
+        [4, 3],
+        &objects,
+        &sample,
+    )
+    .unwrap();
     drop(prepared);
     drop(objects);
     drop(graph);
@@ -211,6 +254,7 @@ fn pick_identity_remains_frame_local_and_malformed_samples_are_errors() {
     for id in [2, u32::MAX] {
         assert!(
             resolve(
+                Default::default(),
                 Camera::default(),
                 [9, 7],
                 [4, 3],
@@ -221,22 +265,72 @@ fn pick_identity_remains_frame_local_and_malformed_samples_are_errors() {
         );
     }
     for pixel in [[9, 0], [0, 7], [u32::MAX; 2]] {
-        assert!(resolve(Camera::default(), [9, 7], pixel, &[object()], &sample).is_err());
+        assert!(
+            resolve(
+                Default::default(),
+                Camera::default(),
+                [9, 7],
+                pixel,
+                &[object()],
+                &sample
+            )
+            .is_err()
+        );
     }
     for size in [[0, 7], [9, 0]] {
-        assert!(resolve(Camera::default(), size, [0, 0], &[object()], &sample).is_err());
+        assert!(
+            resolve(
+                Default::default(),
+                Camera::default(),
+                size,
+                [0, 0],
+                &[object()],
+                &sample
+            )
+            .is_err()
+        );
     }
     let mut invalid = sample;
     invalid.size = [2, 1];
-    assert!(resolve(Camera::default(), [9, 7], [0, 0], &[object()], &invalid).is_err());
+    assert!(
+        resolve(
+            Default::default(),
+            Camera::default(),
+            [9, 7],
+            [0, 0],
+            &[object()],
+            &invalid
+        )
+        .is_err()
+    );
     invalid.size = [1, 1];
     for ids in [None, Some(vec![]), Some(vec![1, 2])] {
         invalid.object_ids = ids;
-        assert!(resolve(Camera::default(), [9, 7], [0, 0], &[object()], &invalid).is_err());
+        assert!(
+            resolve(
+                Default::default(),
+                Camera::default(),
+                [9, 7],
+                [0, 0],
+                &[object()],
+                &invalid
+            )
+            .is_err()
+        );
     }
     invalid.object_ids = Some(vec![1]);
     for depths in [None, Some(vec![]), Some(vec![4., 4.])] {
         invalid.linear_depth = depths;
-        assert!(resolve(Camera::default(), [9, 7], [0, 0], &[object()], &invalid).is_err());
+        assert!(
+            resolve(
+                Default::default(),
+                Camera::default(),
+                [9, 7],
+                [0, 0],
+                &[object()],
+                &invalid
+            )
+            .is_err()
+        );
     }
 }

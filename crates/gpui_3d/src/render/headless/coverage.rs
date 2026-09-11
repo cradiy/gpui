@@ -56,6 +56,7 @@ pub struct ObjectCoverage<'a> {
 /// occlusion, clipping, discarded alpha, or subpixel geometry.
 #[derive(Clone, Debug)]
 pub struct FrameCoverage {
+    frame_id: crate::Scene3dFrameId,
     size: [u32; 2],
     background_pixels: u64,
     camera: Camera,
@@ -118,6 +119,7 @@ impl ReadFrame {
             });
         }
         Ok(FrameCoverage {
+            frame_id: self.frame_id().clone(),
             size: self.pixels.size,
             background_pixels,
             camera: self.camera,
@@ -128,6 +130,9 @@ impl ReadFrame {
 }
 
 impl FrameCoverage {
+    pub fn frame_id(&self) -> &crate::Scene3dFrameId {
+        &self.frame_id
+    }
     pub fn size(&self) -> [u32; 2] {
         self.size
     }
@@ -179,6 +184,7 @@ mod tests {
         let mut graph = SceneGraph::new();
         let node = graph.insert(None, Node::new()).unwrap();
         ReadFrame {
+            frame_id: Default::default(),
             pixels: Scene3dPixels {
                 depth_background: Default::default(),
                 size,
@@ -266,6 +272,25 @@ mod tests {
             Some("replacement-2".into())
         );
         assert_eq!(later.camera().eye, Camera::default().eye);
+    }
+
+    #[test]
+    fn derived_results_keep_frame_identity_without_conflating_equal_contents() {
+        let first = frame([2, 2], vec![0, 1, 2, 1]);
+        let second = frame([2, 2], vec![0, 1, 2, 1]);
+        let identity = first.frame_id().clone();
+        let coverage = first.coverage().unwrap();
+        let labels = first.label_image(4, |object| object.output_id).unwrap();
+        assert_eq!(coverage.frame_id(), &identity);
+        assert_eq!(labels.frame_id(), &identity);
+        assert_ne!(second.coverage().unwrap().frame_id(), &identity);
+        drop(first);
+        let mut identities = std::collections::HashSet::new();
+        identities.insert(identity);
+        identities.insert(coverage.frame_id().clone());
+        identities.insert(second.frame_id().clone());
+        assert_eq!(identities.len(), 2);
+        assert!(identities.contains(labels.frame_id()));
     }
 
     #[test]

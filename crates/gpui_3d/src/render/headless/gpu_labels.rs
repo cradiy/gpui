@@ -8,6 +8,7 @@ use std::sync::Arc;
 /// Does not retain source textures or scene geometry. Encoded outputs require
 /// submission before use on the GPU; submission does not imply completion.
 pub struct RenderedLabels {
+    frame_id: crate::Scene3dFrameId,
     texture: wgpu::Texture,
     camera: Camera,
     labels: Vec<u32>,
@@ -32,6 +33,7 @@ impl RenderedFrame {
         mapper.validate_input(input, self.objects.len())?;
         let labels = assign_labels(&self.objects, assign)?;
         Ok(RenderedLabels {
+            frame_id: self.frame_id().clone(),
             texture: mapper.render(input, &labels)?,
             camera: self.camera,
             labels,
@@ -56,6 +58,7 @@ impl RenderedFrame {
         mapper.validate_input(input, self.objects.len())?;
         let labels = assign_labels(&self.objects, assign)?;
         Ok(RenderedLabels {
+            frame_id: self.frame_id().clone(),
             texture: mapper.encode(encoder, input, &labels)?,
             camera: self.camera,
             labels,
@@ -65,6 +68,9 @@ impl RenderedFrame {
 }
 
 impl RenderedLabels {
+    pub fn frame_id(&self) -> &crate::Scene3dFrameId {
+        &self.frame_id
+    }
     /// Single-sampled, single-mip R32Uint texture with TEXTURE_BINDING,
     /// RENDER_ATTACHMENT, and COPY_SRC usages. Calls never reuse an older output.
     pub fn texture(&self) -> &wgpu::Texture {

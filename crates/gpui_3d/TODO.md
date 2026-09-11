@@ -302,6 +302,8 @@ contract. Core APIs do not own a physics world, character controller, or editor 
   - [x] **Object batches**: Retained scene updates combine final world transforms, CPU/GPU geometry with bounds, and material/attribute snapshots; validate target IDs and resource metadata without publishing partial results.
   - [ ] **Submission acceptance**: Verify combined GPU geometry, custom streams, material/pass changes, retained outputs and asynchronous coverage identities across viewport and headless rendering.
 - [ ] **Deformed custom-material picking**: Bind regional ID/depth and coverage results to the submitted geometry, material resources, camera, and viewport identity; reject stale results and preserve retained-frame reads after updates.
+  - [x] **Output provenance**: Opaque output identities carried through regional/full readbacks, picks, CPU coverage/labels and GPU labels, with mounted-viewport freshness checks before or after completion.
+  - [ ] **Picking acceptance**: Verify output identity propagation and stale-result rejection with combined GPU deformation, custom material clipping, retained frames, viewport layout changes and device replacement.
 
 Toon responses, sphere-map coordinate generation, outline styles, and character-specific
 material conventions belong to application or extension code built on these interfaces.

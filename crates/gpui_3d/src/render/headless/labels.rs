@@ -40,6 +40,7 @@ impl std::error::Error for LabelError {}
 /// original pixel buffers, or scene geometry are retained.
 #[derive(Debug)]
 pub struct FrameLabels {
+    frame_id: crate::Scene3dFrameId,
     size: [u32; 2],
     camera: Camera,
     pixels: Vec<u32>,
@@ -103,6 +104,7 @@ impl ReadFrame {
             pixels.push(label);
         }
         Ok(FrameLabels {
+            frame_id: self.frame_id().clone(),
             size: self.pixels.size,
             camera: self.camera,
             pixels,
@@ -127,6 +129,9 @@ pub(super) fn assign_labels(
 }
 
 impl FrameLabels {
+    pub fn frame_id(&self) -> &crate::Scene3dFrameId {
+        &self.frame_id
+    }
     pub fn size(&self) -> [u32; 2] {
         self.size
     }
@@ -174,6 +179,7 @@ mod tests {
         let mut graph = SceneGraph::new();
         let nodes = std::array::from_fn::<_, 4, _>(|_| graph.insert(None, Node::new()).unwrap());
         ReadFrame {
+            frame_id: Default::default(),
             pixels: Scene3dPixels {
                 depth_background: Default::default(),
                 size: [4, 2],

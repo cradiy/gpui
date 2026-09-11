@@ -4,6 +4,8 @@ mod coverage;
 mod depth;
 mod gpu_geometry;
 mod gpu_labels;
+#[cfg(test)]
+mod identity_tests;
 mod images;
 mod labels;
 mod picking;
@@ -25,10 +27,10 @@ use crate::{Camera, CameraError, PreparationCache, Scene};
 
 pub use gpui_wgpu::{
     IdRemapConfig, Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities,
-    Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dGeometryMemory, Scene3dGpuDraw,
-    Scene3dGpuGeometry, Scene3dGpuGeometryMemory, Scene3dOutputConfig, Scene3dPixels,
-    Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dReadbackRegion, Scene3dTargetMemory,
-    WgpuContext, WgpuIdRemapper, WgpuScene3dGeometry,
+    Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dFrameId, Scene3dGeometryMemory,
+    Scene3dGpuDraw, Scene3dGpuGeometry, Scene3dGpuGeometryMemory, Scene3dOutputConfig,
+    Scene3dPixels, Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dReadbackRegion,
+    Scene3dTargetMemory, WgpuContext, WgpuIdRemapper, WgpuScene3dGeometry,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load
@@ -173,6 +175,10 @@ pub struct RenderedFrame {
     camera: Camera,
 }
 impl RenderedFrame {
+    /// Identity shared by this output's reads, picks, coverage and labels.
+    pub fn frame_id(&self) -> &Scene3dFrameId {
+        self.output.frame_id()
+    }
     /// Camera used for this output, independent of subsequent scene changes.
     pub fn camera(&self) -> Camera {
         self.camera
@@ -209,11 +215,15 @@ pub struct FrameReadback {
     camera: Camera,
 }
 impl FrameReadback {
+    pub fn frame_id(&self) -> &Scene3dFrameId {
+        self.pending.frame_id()
+    }
     pub fn memory(&self) -> Scene3dReadbackMemory {
         self.pending.memory()
     }
     pub fn try_read(&mut self) -> Result<Option<ReadFrame>> {
         Ok(self.pending.try_read()?.map(|pixels| ReadFrame {
+            frame_id: self.pending.frame_id().clone(),
             pixels,
             objects: self.objects.clone(),
             camera: self.camera,
@@ -223,11 +233,16 @@ impl FrameReadback {
 
 /// Tightly packed, top-left-origin pixels and the identities that produced them.
 pub struct ReadFrame {
+    frame_id: Scene3dFrameId,
     pub pixels: Scene3dPixels,
     objects: Arc<[RenderObject]>,
     camera: Camera,
 }
 impl ReadFrame {
+    /// Original output identity; editing public pixel buffers does not change provenance.
+    pub fn frame_id(&self) -> &Scene3dFrameId {
+        &self.frame_id
+    }
     /// Camera used to produce these pixels.
     pub fn camera(&self) -> Camera {
         self.camera
@@ -295,6 +310,7 @@ mod tests {
 
     fn depth_frame(projection: Projection) -> ReadFrame {
         ReadFrame {
+            frame_id: Default::default(),
             pixels: Scene3dPixels {
                 depth_background: Default::default(),
                 size: [3, 2],

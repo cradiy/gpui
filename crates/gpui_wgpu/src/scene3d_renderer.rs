@@ -12,7 +12,9 @@ use crate::{
     wgpu_renderer::scene3d::{RenderRegion, Scene3dRenderer},
 };
 
+mod identity;
 mod statistics;
+pub use identity::Scene3dFrameId;
 pub use statistics::Scene3dDrawStatistics;
 mod capabilities;
 pub use capabilities::{Scene3dDeviceCapabilities, Scene3dFormatCapabilities};
@@ -666,6 +668,7 @@ impl WgpuScene3dRenderer {
             renderer.commit_uploads(true);
         }
         Ok(Scene3dGpuOutput {
+            frame_id: Scene3dFrameId::default(),
             geometry_memory,
             depth_background: frame.depth_background,
             context: self.context.clone(),
@@ -756,6 +759,7 @@ fn output_texture(
 /// An owned submitted frame. Textures remain valid across subsequent renders
 /// and resizes. GPU consumers must use the same device and queue ordering.
 pub struct Scene3dGpuOutput {
+    frame_id: Scene3dFrameId,
     depth_background: gpui::DepthBackground3d,
     context: WgpuContext,
     draw_statistics: Scene3dDrawStatistics,
@@ -770,6 +774,10 @@ pub struct Scene3dGpuOutput {
     geometry_memory: Scene3dGeometryMemory,
 }
 impl Scene3dGpuOutput {
+    /// Identity of this output allocation, distinct even for identical repeated renders.
+    pub fn frame_id(&self) -> &Scene3dFrameId {
+        &self.frame_id
+    }
     /// Background sentinel used by this frame's linear-depth texture.
     pub fn depth_background(&self) -> gpui::DepthBackground3d {
         self.depth_background
@@ -859,6 +867,7 @@ impl Scene3dGpuOutput {
             "a 3D readback is already pending"
         );
         let mut pending = Scene3dReadback {
+            frame_id: self.frame_id.clone(),
             depth_background: self.depth_background,
             context: self.context.clone(),
             region,
@@ -974,6 +983,7 @@ pub struct Scene3dPixels {
 
 /// Pending readback that owns its staging buffers and renderer queue permit.
 pub struct Scene3dReadback {
+    frame_id: Scene3dFrameId,
     depth_background: gpui::DepthBackground3d,
     context: WgpuContext,
     region: Scene3dReadbackRegion,
@@ -983,6 +993,10 @@ pub struct Scene3dReadback {
     memory: Scene3dReadbackMemory,
 }
 impl Scene3dReadback {
+    /// Source output identity, also available after completion or a terminal readback error.
+    pub fn frame_id(&self) -> &Scene3dFrameId {
+        &self.frame_id
+    }
     /// Physical source rectangle, independent of region-local result coordinates.
     pub fn region(&self) -> Scene3dReadbackRegion {
         self.region

@@ -85,6 +85,7 @@ impl WgpuScene3dPickFrame {
         let device = &context.device;
         Ok(Self {
             output: Scene3dGpuOutput {
+                frame_id: Default::default(),
                 depth_background: frame.depth_background,
                 draw_statistics: Scene3dDrawStatistics::default(),
                 config,

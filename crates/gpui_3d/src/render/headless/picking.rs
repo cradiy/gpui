@@ -12,6 +12,7 @@ use super::{
 /// One completed pixel-center query from a retained rendered frame.
 #[derive(Clone, Debug)]
 pub struct FramePick {
+    frame_id: crate::Scene3dFrameId,
     /// Top-left-origin physical coordinates in the source output, not window coordinates.
     pub pixel: [u32; 2],
     /// Full source output dimensions, not the one-pixel readback size.
@@ -22,6 +23,9 @@ pub struct FramePick {
 }
 
 impl FramePick {
+    pub fn frame_id(&self) -> &crate::Scene3dFrameId {
+        &self.frame_id
+    }
     pub fn camera(&self) -> Camera {
         self.camera
     }
@@ -90,6 +94,9 @@ impl FramePickReadback {
 }
 
 impl FramePickReadback {
+    pub fn frame_id(&self) -> &crate::Scene3dFrameId {
+        self.pending.frame_id()
+    }
     pub fn memory(&self) -> Scene3dReadbackMemory {
         self.pending.memory()
     }
@@ -103,6 +110,7 @@ impl FramePickReadback {
             .map(|pixels| {
                 if let Some(rect) = self.projection_rect {
                     return resolve_projected(
+                        self.pending.frame_id().clone(),
                         self.camera,
                         self.size,
                         self.pending.region().origin,
@@ -112,6 +120,7 @@ impl FramePickReadback {
                     );
                 }
                 resolve(
+                    self.pending.frame_id().clone(),
                     self.camera,
                     self.size,
                     self.pending.region().origin,
@@ -124,6 +133,7 @@ impl FramePickReadback {
 }
 
 fn resolve(
+    frame_id: crate::Scene3dFrameId,
     camera: Camera,
     output_size: [u32; 2],
     pixel: [u32; 2],
@@ -131,6 +141,7 @@ fn resolve(
     pixels: &Scene3dPixels,
 ) -> Result<FramePick> {
     resolve_projected(
+        frame_id,
         camera,
         output_size,
         pixel,
@@ -141,6 +152,7 @@ fn resolve(
 }
 
 fn resolve_projected(
+    frame_id: crate::Scene3dFrameId,
     camera: Camera,
     output_size: [u32; 2],
     pixel: [u32; 2],
@@ -198,6 +210,7 @@ fn resolve_projected(
         })
     };
     Ok(FramePick {
+        frame_id,
         pixel,
         size: output_size,
         hit,

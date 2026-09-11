@@ -80,6 +80,15 @@ impl ViewportPickCapture {
         })
     }
 
+    /// Checks an output identity before or after asynchronous readback. Missing,
+    /// removed, failed or not-yet-submitted viewport bindings return false.
+    pub fn is_current_frame(&self, frame_id: &crate::Scene3dFrameId) -> bool {
+        self.frame()
+            .ok()
+            .flatten()
+            .is_some_and(|frame| frame.frame_id() == frame_id)
+    }
+
     /// Releases the current binding without invalidating retained frames or requests.
     pub fn clear(&self) {
         *self.snapshot.borrow_mut() = None;
@@ -130,6 +139,10 @@ pub struct ViewportPickFrame {
 }
 
 impl ViewportPickFrame {
+    /// Identity of the submitted ID/depth output, not only the prepared scene.
+    pub fn frame_id(&self) -> &crate::Scene3dFrameId {
+        self.output.gpu().frame_id()
+    }
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.snapshot.layout.bounds
     }
@@ -171,6 +184,9 @@ pub struct ViewportPick {
 }
 
 impl ViewportPick {
+    pub fn frame_id(&self) -> &crate::Scene3dFrameId {
+        self.frame.frame_id()
+    }
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
     }
@@ -185,6 +201,9 @@ pub struct ViewportPickReadback {
 }
 
 impl ViewportPickReadback {
+    pub fn frame_id(&self) -> &crate::Scene3dFrameId {
+        self.pending.frame_id()
+    }
     /// `None` means pending; completion and errors are terminal. No redraws are scheduled.
     pub fn try_read(&mut self) -> Result<Option<ViewportPick>> {
         Ok(self.pending.try_read()?.map(|frame| ViewportPick {

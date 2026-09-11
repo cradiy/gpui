@@ -2,6 +2,11 @@
 
 [Headless output](headless.md) · [Frame readback](readback.md) · [Viewport capture](viewport_picking.md) · [GPU deformation](deformation.md)
 
+Requests and completed picks expose the originating output's `frame_id()`,
+including background picks. Compare it with the expected `RenderedFrame` before
+applying an asynchronous result; identical cameras and object IDs do not imply
+the same rendered frame. See [frame identity](readback.md#frame-identity).
+
 `RenderedFrame::pick([x, y])` reads one physical pixel's Object ID and linear depth
 without copying either full image or materializing CPU geometry. It selects the
 nearest surviving rendered surface, including GPU-deformed meshes passed to

@@ -25,6 +25,25 @@ textures remain on the GPU; they are not copied or mapped. No rerender occurs.
 `Scene3dReadbackConfig::new(channels)` disables the optional payload limits with
 `None`; device limits and the single-pending-request rule still apply.
 
+## Frame identity
+
+`RenderedFrame::frame_id()` and `Scene3dGpuOutput::frame_id()` identify one output
+allocation with a `Scene3dFrameId`. Separate renders receive distinct identities
+even when the scene, camera, size, object IDs, and cached resources are unchanged.
+Clones of a token compare equal and can be used as map keys. Tokens are
+process-local, do not order frames, and do not indicate GPU completion.
+
+Full-frame and regional readback requests expose the same `frame_id()`. Completed
+`ReadFrame`, `FramePick`, `FrameCoverage`, `FrameLabels`, and `RenderedLabels`
+retain that identity. Compare it with the expected output before applying an
+asynchronous result. An older result remains valid for its original frame.
+
+Identity tokens retain no textures, scene geometry, or device. Manually creating
+a token does not render anything. They describe provenance, not content hashes:
+editing a `ReadFrame`'s public pixel buffers does not change its source identity.
+Raw `Scene3dPixels` contain no provenance; when using lower-level regional reads,
+retain `Scene3dReadback::frame_id()` alongside the returned pixels.
+
 ## Regions
 
 `frame.gpu().readback_region(region, config)` copies a nonempty rectangle from

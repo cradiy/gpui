@@ -196,6 +196,7 @@ mod tests {
 
     fn frame(projection: Projection) -> ReadFrame {
         ReadFrame {
+            frame_id: Default::default(),
             pixels: Scene3dPixels {
                 depth_background: Default::default(),
                 size: [4, 2],

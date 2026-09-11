@@ -151,3 +151,12 @@ pub(super) fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
         a[0] * b[1] - a[1] * b[0],
     ]
 }
+
+pub(super) fn basis(forward: [f64; 3], up: [f64; 3]) -> Option<[[f64; 3]; 3]> {
+    let right = cross(forward, up);
+    if dot(right, right) <= 1e-12 {
+        return None;
+    }
+    let right = unit(right)?;
+    Some([right, cross(right, forward), forward])
+}

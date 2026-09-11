@@ -1,6 +1,6 @@
 use super::{
     AffineTransform,
-    rotation::{Rotation, dot, unit},
+    rotation::{Rotation, basis, dot, unit},
 };
 use std::fmt;
 
@@ -26,12 +26,49 @@ impl Default for TwoBoneIkSettings {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TwoBoneIkResult {
-    /// Root, middle, and tip world transforms. The tip inherits both bone rotations.
+    /// Root, middle, and tip world transforms, including any terminal orientation correction.
     pub transforms: [AffineTransform; 3],
     /// Closest target in the chain's radial reach interval, before blending.
     pub reachable_target: [f32; 3],
     pub reach: IkReach,
     /// Distance from the returned tip to the requested target, including blending error.
+    pub target_error: f64,
+    /// Present only when an orientation target was supplied.
+    pub orientation: Option<IkOrientationStatus>,
+}
+
+/// World-space terminal orientation with an independent blend weight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IkOrientationTarget {
+    /// Desired local-to-world quaternion in `[x, y, z, w]` order.
+    /// Finite nonzero inputs are normalized.
+    pub rotation: [f32; 4],
+    /// Shortest rigid rotation blend in `0..=1`, independent of position IK weight.
+    pub weight: f32,
+    /// Terminal joint-local forward axis. Need not be normalized.
+    pub local_forward: [f32; 3],
+    /// Terminal joint-local up axis, projected perpendicular to forward.
+    pub local_up: [f32; 3],
+}
+
+impl Default for IkOrientationTarget {
+    fn default() -> Self {
+        Self {
+            rotation: [0., 0., 0., 1.],
+            weight: 1.,
+            local_forward: [0., 0., -1.],
+            local_up: [0., 1., 0.],
+        }
+    }
+}
+
+/// Shortest frame correction in radians, measured after position IK.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IkOrientationStatus {
+    pub requested_angle: f64,
+    /// Angular correction before matrix rounding.
+    pub applied_angle: f64,
+    /// Remaining frame angle from the returned, rounded tip to the target.
     pub target_error: f64,
 }
 
@@ -40,6 +77,9 @@ pub enum TwoBoneIkError {
     InvalidWeight,
     InvalidTarget,
     InvalidPole,
+    InvalidOrientation,
+    InvalidOrientationWeight,
+    InvalidOrientationAxes,
     ZeroLengthBone { bone: usize },
     DegeneratePole,
     Unrepresentable,
@@ -50,6 +90,9 @@ impl fmt::Display for TwoBoneIkError {
             Self::InvalidWeight => f.write_str("IK weight must be finite and in 0..=1"),
             Self::InvalidTarget => f.write_str("IK target must be finite"),
             Self::InvalidPole => f.write_str("IK pole must be finite and distinct from the root"),
+            Self::InvalidOrientation => f.write_str("IK orientation must be finite and nonzero"),
+            Self::InvalidOrientationWeight => f.write_str("IK orientation weight must be finite and in 0..=1"),
+            Self::InvalidOrientationAxes => f.write_str("IK orientation axes must be finite, nonzero, and nonparallel before and after transformation"),
             Self::ZeroLengthBone { bone } => write!(f, "IK bone {bone} has coincident joints"),
             Self::DegeneratePole => {
                 f.write_str("IK pole is parallel to the target direction for a bent solution")
@@ -182,8 +225,69 @@ impl TwoBoneIkSettings {
             reachable_target,
             reach,
             target_error: length(sub(actual[2], target.map(f64::from))),
+            orientation: None,
         })
     }
+
+    /// Solves position IK, then rotates only the tip about its solved origin.
+    /// Aligns the transformed forward/projected-up frame with the target rotation
+    /// applied to the same local frame, preserving affine shape and handedness.
+    /// Both local and transformed axis pairs require sine angle greater than `1e-6`.
+    /// Zero orientation weight preserves the position-only result but still validates inputs.
+    pub fn solve_with_orientation(
+        self,
+        transforms: [AffineTransform; 3],
+        target: [f32; 3],
+        pole: [f32; 3],
+        orientation: IkOrientationTarget,
+    ) -> Result<TwoBoneIkResult, TwoBoneIkError> {
+        let desired = Rotation::from_quaternion(orientation.rotation.map(f64::from))
+            .ok_or(TwoBoneIkError::InvalidOrientation)?;
+        if !orientation.weight.is_finite() || !(0. ..=1.).contains(&orientation.weight) {
+            return Err(TwoBoneIkError::InvalidOrientationWeight);
+        }
+        let mut result = self.solve(transforms, target, pole)?;
+        let tip = result.transforms[2];
+        let correction = orientation_correction(tip, desired, orientation)?;
+        let requested_angle = correction.angle();
+        let applied_angle = requested_angle * f64::from(orientation.weight);
+        if applied_angle > 0. {
+            result.transforms[2] = rotated(
+                tip,
+                correction.scaled(f64::from(orientation.weight)),
+                position(tip),
+            )?;
+        }
+        result.orientation = Some(IkOrientationStatus {
+            requested_angle,
+            applied_angle,
+            target_error: orientation_correction(result.transforms[2], desired, orientation)?
+                .angle(),
+        });
+        Ok(result)
+    }
+}
+
+fn orientation_correction(
+    transform: AffineTransform,
+    desired: Rotation,
+    target: IkOrientationTarget,
+) -> Result<Rotation, TwoBoneIkError> {
+    let invalid = TwoBoneIkError::InvalidOrientationAxes;
+    let forward = unit(target.local_forward.map(f64::from)).ok_or(invalid)?;
+    let up = unit(target.local_up.map(f64::from)).ok_or(invalid)?;
+    let destination = basis(desired.apply(forward), desired.apply(up)).ok_or(invalid)?;
+    let matrix = transform.matrix();
+    let direction = |axis: [f64; 3]| {
+        unit(std::array::from_fn(|r| {
+            (0..3).map(|c| f64::from(matrix[c][r]) * axis[c]).sum()
+        }))
+        .ok_or(invalid)
+    };
+    let source = basis(direction(forward)?, direction(up)?).ok_or(invalid)?;
+    Ok(Rotation::from_matrix(std::array::from_fn(|c| {
+        std::array::from_fn(|r| (0..3).map(|k| destination[k][r] * source[k][c]).sum())
+    })))
 }
 
 fn rotated(

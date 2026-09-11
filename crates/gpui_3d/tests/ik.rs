@@ -1,4 +1,7 @@
-use gpui_3d::{AffineTransform, IkReach, Node, SceneGraph, TwoBoneIkError, TwoBoneIkSettings};
+use gpui_3d::{
+    AffineTransform, IkOrientationTarget, IkReach, Node, SceneGraph, TwoBoneIkError,
+    TwoBoneIkSettings,
+};
 
 fn translation(point: [f32; 3]) -> AffineTransform {
     AffineTransform::from_translation(point).unwrap()
@@ -34,6 +37,15 @@ fn preserves_shape(before: [AffineTransform; 3], after: [AffineTransform; 3]) {
         assert!((a - b).abs() < 2e-5, "bone {bone}: {a} != {b}");
     }
     for (before, after) in before.into_iter().zip(after) {
+        let determinant = |m: [[f32; 4]; 4]| {
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[1][0] * (m[0][1] * m[2][2] - m[0][2] * m[2][1])
+                + m[2][0] * (m[0][1] * m[1][2] - m[0][2] * m[1][1])
+        };
+        assert_eq!(
+            determinant(before.matrix()).signum(),
+            determinant(after.matrix()).signum()
+        );
         for a in 0..3 {
             for b in 0..3 {
                 let metric = |m: [[f32; 4]; 4]| (0..3).map(|r| m[a][r] * m[b][r]).sum::<f32>();
@@ -41,6 +53,204 @@ fn preserves_shape(before: [AffineTransform; 3], after: [AffineTransform; 3]) {
             }
         }
     }
+}
+
+fn orientation_frame(transform: AffineTransform, axes: IkOrientationTarget) -> [[f32; 3]; 2] {
+    let dot = |a: [f32; 3], b: [f32; 3]| a.into_iter().zip(b).map(|(a, b)| a * b).sum::<f32>();
+    let unit = |v: [f32; 3]| v.map(|x| x / dot(v, v).sqrt());
+    let matrix = transform.matrix();
+    let direction = |v: [f32; 3]| {
+        unit(std::array::from_fn(|r| {
+            (0..3).map(|c| matrix[c][r] * v[c]).sum()
+        }))
+    };
+    let forward = direction(axes.local_forward);
+    let up = direction(axes.local_up);
+    [
+        forward,
+        unit(std::array::from_fn(|i| {
+            up[i] - dot(forward, up) * forward[i]
+        })),
+    ]
+}
+
+#[test]
+fn terminal_orientation_preserves_position_solution_and_affine_shape() {
+    let mut source = chain(1., 1.);
+    source[2] = AffineTransform::from_matrix([
+        [-2., 0., 0., 0.],
+        [0.3, 1., 0., 0.],
+        [0.2, 0.4, 1.5, 0.],
+        [2., 0., 0., 1.],
+    ])
+    .unwrap();
+    for target in [[1., 1., 0.], [5., 0., 0.]] {
+        let settings = TwoBoneIkSettings { weight: 0.7 };
+        let positional = settings.solve(source, target, [0., 0., 2.]).unwrap();
+        assert!(positional.orientation.is_none());
+        let orientation = IkOrientationTarget {
+            rotation: [0.2, 0.4, -0.1, 0.8],
+            local_forward: [2., 0., 0.],
+            local_up: [0.5, 3., 0.],
+            ..Default::default()
+        };
+        let result = settings
+            .solve_with_orientation(source, target, [0., 0., 2.], orientation)
+            .unwrap();
+        assert_eq!(&result.transforms[..2], &positional.transforms[..2]);
+        assert_eq!(
+            result.transforms[2].matrix()[3],
+            positional.transforms[2].matrix()[3]
+        );
+        assert_eq!(result.target_error, positional.target_error);
+        assert_eq!(result.reach, positional.reach);
+        assert_eq!(result.reachable_target, positional.reachable_target);
+        preserves_shape(source, result.transforms);
+        let desired = AffineTransform::from_trs([0.; 3], orientation.rotation, [1.; 3]).unwrap();
+        for (actual, expected) in orientation_frame(result.transforms[2], orientation)
+            .into_iter()
+            .zip(orientation_frame(desired, orientation))
+        {
+            close(actual, expected);
+        }
+        assert!(result.orientation.unwrap().target_error < 1e-6);
+        let repeated = settings
+            .solve_with_orientation(source, target, [0., 0., 2.], orientation)
+            .unwrap();
+        assert_eq!(repeated, result);
+    }
+}
+
+#[test]
+fn terminal_orientation_weights_blend_shortest_rotations_independently() {
+    let source = chain(1., 1.);
+    for weight in [0., 0.25, 0.5, 1.] {
+        let orientation = IkOrientationTarget {
+            rotation: [0., 0., 1., 0.],
+            weight,
+            ..Default::default()
+        };
+        let settings = TwoBoneIkSettings { weight: 0. };
+        let result = settings
+            .solve_with_orientation(source, [1., 1., 0.], [0., 0., 2.], orientation)
+            .unwrap();
+        assert_eq!(&result.transforms[..2], &source[..2]);
+        assert_eq!(result.transforms[2].matrix()[3], source[2].matrix()[3]);
+        let angle = std::f32::consts::PI * weight;
+        let desired = AffineTransform::from_trs(
+            [2., 0., 0.],
+            [0., 0., (angle / 2.).sin(), (angle / 2.).cos()],
+            [1.; 3],
+        )
+        .unwrap();
+        for (actual, expected) in result.transforms[2]
+            .matrix()
+            .iter()
+            .flatten()
+            .zip(desired.matrix().iter().flatten())
+        {
+            assert!((actual - expected).abs() < 2e-6);
+        }
+        let status = result.orientation.unwrap();
+        assert!((status.requested_angle - std::f64::consts::PI).abs() < 1e-6);
+        assert!((status.applied_angle - f64::from(angle)).abs() < 1e-6);
+        assert!(
+            (status.target_error - std::f64::consts::PI * (1. - f64::from(weight))).abs() < 1e-6
+        );
+        let negated = settings
+            .solve_with_orientation(
+                source,
+                [1., 1., 0.],
+                [0., 0., 2.],
+                IkOrientationTarget {
+                    rotation: orientation.rotation.map(|v| -v),
+                    ..orientation
+                },
+            )
+            .unwrap();
+        assert_eq!(result, negated);
+        if weight == 0. {
+            assert_eq!(result.transforms, source);
+        }
+    }
+    let settings = TwoBoneIkSettings::default();
+    let positional = settings.solve(source, [1., 1., 0.], [0., 0., 2.]).unwrap();
+    let result = settings
+        .solve_with_orientation(
+            source,
+            [1., 1., 0.],
+            [0., 0., 2.],
+            IkOrientationTarget {
+                weight: 0.,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(positional.transforms, result.transforms);
+}
+
+#[test]
+fn terminal_orientation_validates_quaternions_weights_and_axis_frames() {
+    let solve = |orientation| {
+        TwoBoneIkSettings::default().solve_with_orientation(
+            chain(1., 1.),
+            [1., 1., 0.],
+            [0., 0., 2.],
+            orientation,
+        )
+    };
+    for rotation in [[0.; 4], [f32::NAN; 4], [f32::INFINITY; 4]] {
+        assert_eq!(
+            solve(IkOrientationTarget {
+                rotation,
+                weight: 0.,
+                ..Default::default()
+            }),
+            Err(TwoBoneIkError::InvalidOrientation)
+        );
+    }
+    for weight in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+        assert_eq!(
+            solve(IkOrientationTarget {
+                weight,
+                ..Default::default()
+            }),
+            Err(TwoBoneIkError::InvalidOrientationWeight)
+        );
+    }
+    for local_up in [[0.; 3], [0., 0., 1.], [0., 1e-7, 1.], [f32::NAN; 3]] {
+        assert_eq!(
+            solve(IkOrientationTarget {
+                local_up,
+                weight: 0.,
+                ..Default::default()
+            }),
+            Err(TwoBoneIkError::InvalidOrientationAxes)
+        );
+    }
+    for value in [f32::from_bits(1), f32::MAX] {
+        let result = solve(IkOrientationTarget {
+            rotation: [0., 0., 0., value],
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(result.orientation.unwrap().target_error < 1e-6);
+    }
+    let mut source = chain(1., 1.);
+    source[2] = AffineTransform::from_trs([2., 0., 0.], [0., 0., 0., 1.], [1., 1e-8, 1.]).unwrap();
+    assert_eq!(
+        TwoBoneIkSettings { weight: 0. }.solve_with_orientation(
+            source,
+            [1., 1., 0.],
+            [0., 0., 2.],
+            IkOrientationTarget {
+                local_forward: [1., 0., 0.],
+                local_up: [1., 1., 0.],
+                ..Default::default()
+            },
+        ),
+        Err(TwoBoneIkError::InvalidOrientationAxes)
+    );
 }
 
 #[test]
@@ -203,12 +413,28 @@ fn solved_world_poses_apply_to_a_graph_without_changing_the_source_snapshot() {
             Node::new().transform(translation([1., 0., 0.])),
         )
         .unwrap();
+    let attachment = graph
+        .insert(Some(tip), Node::new().transform(translation([1., 0., 0.])))
+        .unwrap();
     let snapshot = graph.evaluate().unwrap();
     let revision = graph.revision();
     let handles = [root, middle, tip];
     let source = handles.map(|node| snapshot.node(node).unwrap().world);
     let result = TwoBoneIkSettings::default()
-        .solve(source, [3., 1., 0.], [2., 0., 2.])
+        .solve_with_orientation(
+            source,
+            [3., 1., 0.],
+            [2., 0., 2.],
+            IkOrientationTarget {
+                rotation: [
+                    0.,
+                    0.,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                ],
+                ..Default::default()
+            },
+        )
         .unwrap();
     let [a, b, c] = result.transforms;
     let solved = graph
@@ -241,6 +467,14 @@ fn solved_world_poses_apply_to_a_graph_without_changing_the_source_snapshot() {
         }
     }
     close(position(solved.node(tip).unwrap().world), [3., 1., 0.]);
+    close(
+        position(solved.node(attachment).unwrap().world),
+        [3., 2., 0.],
+    );
+    close(
+        position(snapshot.node(attachment).unwrap().world),
+        [5., 0., 0.],
+    );
     close(position(snapshot.node(tip).unwrap().world), [4., 0., 0.]);
     assert_eq!(graph.revision(), revision);
     assert_eq!(

@@ -1,5 +1,5 @@
 use super::AffineTransform;
-use super::rotation::{Rotation, cross, dot, unit};
+use super::rotation::{Rotation, basis, unit};
 use std::fmt;
 
 /// Stateless orientation settings. Vectors need not be normalized.
@@ -127,13 +127,4 @@ impl AimSettings {
             AffineTransform::from_matrix(result).map_err(|_| AimError::Unrepresentable)?;
         Ok(AimResult { transform, status })
     }
-}
-
-fn basis(forward: [f64; 3], up: [f64; 3]) -> Option<[[f64; 3]; 3]> {
-    let right = cross(forward, up);
-    if dot(right, right) <= 1e-12 {
-        return None;
-    }
-    let right = unit(right)?;
-    Some([right, cross(right, forward), forward])
 }

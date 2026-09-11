@@ -164,7 +164,7 @@ let tip_local = middle_world.inverse().compose(tip_world)?;
 The root position is fixed. The pole selects the side of the root-to-target
 axis toward which the middle joint bends. The solver uses shortest-swing root
 and middle rotations, preserving each joint's affine shape and handedness.
-The tip inherits both rotations; there is no separate tip-orientation target.
+With `solve`, the tip inherits both rotations and `orientation` is `None`.
 Exact opposed directions use a deterministic orthogonal rotation axis.
 
 `weight` is in `0..=1`, defaulting to one. It blends the root rotation and the
@@ -202,6 +202,66 @@ no parent); the middle and tip use the solved root and middle inverses as above.
 Retain other sampled parent overrides. This also permits passing solved world
 poses directly into skinning without owning a `SceneGraph`. Applications own
 multi-chain ordering and any conflicting pose overrides.
+
+#### Terminal orientation
+
+`TwoBoneIkSettings::solve_with_orientation(transforms, target, pole, orientation)`
+solves position IK and then applies an independent rigid rotation to the terminal
+joint about its solved origin. Root and middle transforms, all joint positions,
+bone lengths, `reach`, `reachable_target`, and positional `target_error` are
+identical to the position-only solution.
+
+`IkOrientationTarget::rotation` is the desired local-to-world quaternion in
+`[x, y, z, w]` order. Finite nonzero quaternions are normalized. Its `weight`, in
+`0..=1`, blends the shortest correction from the position-solved tip frame to
+the target frame. This weight is independent of `TwoBoneIkSettings::weight`:
+zero position weight can still rotate the tip in place, and zero orientation
+weight returns the position-only transforms unchanged. Both sets of inputs
+remain validated at zero weight.
+
+```rust
+use gpui_3d::{AffineTransform, IkOrientationTarget, TwoBoneIkSettings};
+
+let source = [
+    AffineTransform::IDENTITY,
+    AffineTransform::from_translation([1., 0., 0.])?,
+    AffineTransform::from_translation([2., 0., 0.])?,
+];
+let result = TwoBoneIkSettings::default().solve_with_orientation(
+    source,
+    [1., 1., 0.],
+    [0., 0., 2.],
+    IkOrientationTarget {
+        rotation: [0., 0., 0., 1.],
+        weight: 0.75,
+        ..Default::default()
+    },
+)?;
+let remaining_angle = result.orientation.unwrap().target_error;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`local_forward` and `local_up` select the terminal frame, defaulting to `-Z` and
+`+Y`. The frame uses normalized forward and the component of up perpendicular
+to it. The target quaternion rotates the same local frame. The solver aligns
+the transformed source frame with that target, preserving the terminal affine
+shape and handedness rather than decomposing its matrix into TRS. Under shear,
+the original up vector need not become perpendicular to forward. Under reflection,
+the remaining axis retains the reflected handedness.
+
+The result's `orientation` contains `IkOrientationStatus` with `requested_angle`,
+`applied_angle`, and `target_error` in radians at `f64` precision. The first two
+describe the correction before matrix rounding; `target_error` measures the
+remaining frame angle from the returned tip matrix. An unreachable positional
+target does not prevent orientation alignment. Exact half-turn corrections use
+a deterministic axis; no angular velocity or multi-turn history is tracked.
+
+Non-finite or zero quaternions, invalid orientation weights, and invalid frame
+axes return `InvalidOrientation`, `InvalidOrientationWeight`, or
+`InvalidOrientationAxes` within `TwoBoneIkError`. Local and transformed axis
+pairs must have a sine angle greater than `1e-6`. Unrepresentable output matrices
+return `Unrepresentable`. Joint limits are not applied automatically. Child nodes
+inherit the corrected terminal transform when these poses are evaluated in a graph.
 
 ## Joint rotation limits
 
@@ -261,6 +321,80 @@ corresponding `JointRotationLimitError`. Callers apply the output to a
 matrices are not decomposed into joint orientations. This solver does not
 automatically constrain `TwoBoneIkSettings` or preserve an IK target after
 clamping; chain solving and constraint order are caller-controlled.
+
+## Constrained IK chains
+
+`IkChainSettings::solve(parent, joints, target)` accepts an external parent world
+transform, a contiguous root-to-tip slice of `IkChainJoint`, and a world-space
+target point. Each joint contains a local `TransformPose` and optional
+`JointRotationLimits`. At least two joints are required. The last joint's origin
+is the endpoint; its own rotation does not affect the positional objective.
+
+```rust
+use gpui_3d::{AffineTransform, IkChainJoint, IkChainSettings, JointRotationLimits, TransformPose};
+
+let joints: Vec<IkChainJoint> = (0..4).map(|index| IkChainJoint {
+    pose: TransformPose {
+        translation: if index == 0 { [0.; 3] } else { [1., 0., 0.] },
+        ..Default::default()
+    },
+    limits: Some(JointRotationLimits {
+        twist_axis: [0., 0., 1.],
+        max_swing: 0.,
+        twist_range: [-1.5, 1.5],
+        ..Default::default()
+    }),
+}).collect();
+let result = IkChainSettings::default()
+    .solve(AffineTransform::IDENTITY, &joints, [2., 1., 0.])?;
+let local_transforms = result.poses.iter()
+    .map(|pose| pose.affine()).collect::<Result<Vec<_>, _>>()?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+All rotations are normalized and all limits are projected before iteration,
+including the terminal joint's limits. The solver changes only local rotations;
+translations, signed scales, the external parent, and input slices are unchanged.
+Coincident joints are allowed. Rotation proposals use joint-parent coordinates,
+followed by local swing/twist projection and forward evaluation. Root-to-tip
+distances are preserved for rigid/unit-scale chains. Under nonuniform scale or
+shear, world-space segment lengths can change as local rotations change; local
+translations and scales remain fixed. No affine matrix is decomposed into TRS.
+
+Cyclic coordinate descent visits joints from the terminal parent toward the root.
+Each proposal is limited by `max_step_angle` and can be halved up to eleven times
+to reduce the actual world-space endpoint error. When a sweep makes no progress,
+deterministic bend probes about parent-coordinate axes attempt to escape local
+stalls. A probe and its subsequent sweep are retained only if their combined result
+improves the endpoint error. Probes are at most `0.1` radians and also respect
+`max_step_angle` and joint limits. These searches do not guarantee a global solution.
+
+`max_iterations` defaults to 64 and bounds CCD sweeps, including probe sweeps.
+`tolerance` defaults to `1e-4` world units, and `max_step_angle` defaults to `pi`.
+Zero iterations returns the initially projected pose. A zero step angle disables
+rotational search. Tolerance must be finite and nonnegative; step angle must be
+finite and within `0..=pi`. The initial limit projection is not step-limited.
+
+The returned local `poses` and world `transforms` describe the same final chain.
+`target_error` is measured from those rounded world transforms; `iterations` counts
+performed sweeps. `limited_joints` lists joints clamped during initial projection
+or retained updates, not every rejected proposal. `status` distinguishes:
+
+- `Converged`: returned endpoint error is within tolerance.
+- `Stalled`: the configured search found no improving update.
+- `IterationLimit`: the sweep budget ended before convergence.
+
+Neither `Stalled` nor `IterationLimit` proves geometric unreachability. Constraints,
+singular configurations, local minima, and numeric precision can prevent convergence.
+Invalid poses and limits identify their joint index in `IkChainError`; invalid
+settings/targets and unrepresentable world transforms are explicit errors.
+
+Pair returned local poses with their caller-owned node handles for
+`SceneGraph::evaluate_with_transforms`, or consume the returned worlds for skinning.
+The supplied external parent must match the scene's final parent pose. Terminal
+orientation, pole preferences, multiple-chain scheduling, and conflicting pose
+ownership are not solved by this positional chain API. Calls retain no time state;
+use an independently sampled source pose for deterministic seeking.
 
 ## Related topics
 

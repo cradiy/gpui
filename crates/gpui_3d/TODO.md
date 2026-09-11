@@ -201,8 +201,10 @@ Core implementation order:
 1. [x] **World-space pose inputs**: Mixed local/world transform overrides, parent-first evaluation independent of input order, unchanged authored graphs, stable identities, and final-pose geometry/query consistency.
 2. [x] **Skin influence access**: Borrowed normalized per-vertex joint weights, explicit vertex-index errors, and immutable bindings suitable for weight inspection and external editing tools.
 3. [x] **Joint rotation limits**: Stateless local-space swing/twist constraints with explicit reference frames, finite limits, and clamping diagnostics; independent of humanoid naming and physical joints.
-4. [ ] **IK extensions**: End-effector orientation and constrained multi-joint chains with explicit convergence/reach results and caller-owned time state.
-5. [ ] **Deformation measurements**: Reproducible CPU Skin/Morph workloads covering mesh size, active influences, target counts, and concurrent instances; distinguish evaluation from upload/render time.
+4. [x] **IK extensions**: End-effector orientation and constrained multi-joint chains with explicit convergence/reach results and caller-owned time state.
+   - [x] **End-effector orientation**: Independent terminal frame targets and weights, preserved positional solutions and affine shape, and rounded-output angular errors.
+   - [x] **Constrained chains**: Multi-joint solving with local rotation limits, explicit convergence/reach diagnostics, and no internal playback history.
+5. [x] **Deformation measurements**: Reproducible CPU Skin/Morph workloads covering mesh size, active influences, target counts, and concurrent instances; distinguish evaluation from upload/render time.
 6. [ ] **GPU deformation**: Shared skin palettes and Morph inputs, bounded GPU buffers, retained outputs, and explicit CPU bounds/picking synchronization. Preserve CPU evaluation for callers requiring final geometry.
 
 Independent extensions:

@@ -31,5 +31,9 @@ required-features = ["wgpu"]
 name = "scene"
 harness = false
 
+[[bench]]
+name = "deformation"
+harness = false
+
 [lints]
 workspace = true

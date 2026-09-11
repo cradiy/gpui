@@ -113,6 +113,57 @@ hits with the same resource callbacks. Scene construction is outside the timed
 region. These CPU-only
 measurements do not include GPU uploads, draw encoding, shading, or readback.
 
+## CPU deformation benchmarks
+
+```sh
+cargo bench -p gpui_3d --bench deformation
+```
+
+The CPU-only workloads use deterministic tangent-equipped grids, 64-joint skin
+palettes, and position/normal/tangent morph deltas. Two precomputed input poses
+alternate between iterations. Construction and validation of base meshes,
+bindings, morph targets, and input poses are outside the timed region.
+
+| Group | Variables | Timed operation |
+| --- | --- | --- |
+| `skin_cpu` | 1,024 / 16,384 / 65,536 vertices; 1 / 4 / 8 positive influences per vertex | `Skin::evaluate` |
+| `morph_cpu` | 1,024 / 16,384 / 65,536 vertices; 1 / 8 / 32 active targets | `MorphTargets::evaluate` |
+| `morph_active_cpu` | 16,384 vertices; 0 / 4 / 32 active targets out of 32 stored targets | Morph evaluation, including the all-zero shared-base path |
+| `deformation_batch_cpu` | 1 / 8 / 32 instances; 16,384 vertices, 4 influences, and 8 morph targets per instance | Morph followed by Skin for each instance |
+
+Evaluation timings include allocation, normal/tangent processing, mesh validation,
+bounds updates, output construction, and output destruction. Bindings and base
+geometry are shared, while each instance has its own weights, joint pose, and
+deformed output. Results for a batch remain live until that batch completes.
+Throughput counts vertices evaluated per operation, not joint contributions or
+GPU frames. The active-target group reports time only; its all-zero path does not
+visit every vertex.
+
+Batch measurements compare serial evaluation with four persistent worker threads
+for 8 and 32 instances. Thread startup, shutdown, and serial/parallel output
+equivalence checks are outside timing. Dispatch, synchronization, result collection,
+and destruction are included. These wall-clock numbers measure the scheduling
+configuration as well as deformation; they are not isolated per-thread kernel times.
+No production thread-pool policy is implied.
+
+No group uploads geometry, prepares scene draws, submits GPU work, shades pixels,
+or reads back an image. Use the scene-preparation and GPU-submission groups
+separately for those boundaries. CPU results alone do not predict GPU speedups.
+
+Criterion filters select a workload or group:
+
+```sh
+cargo bench -p gpui_3d --bench deformation -- skin_cpu/influences_4/16384
+cargo bench -p gpui_3d --bench deformation -- deformation_batch_cpu
+cargo bench -p gpui_3d --bench deformation -- --test
+```
+
+`--test` executes the workload checks without collecting timing statistics.
+Regular runs use 10 samples, a 200 ms warm-up, and a 1 s measurement target per
+case; Criterion can extend collection for slower workloads. Reports are written
+under `target/criterion`. Compare runs on the same hardware, compiler/profile,
+power settings, and background load; record these alongside exported measurements.
+
 ## Draw statistics
 
 With the `wgpu` feature, `Scene3dDrawStatistics::plan(frame, channels, limit)`

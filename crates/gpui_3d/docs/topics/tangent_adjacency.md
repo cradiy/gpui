@@ -57,9 +57,10 @@ Missing edge/corner references use `u32::MAX`. Eligibility is 0 for regular fram
 Orientation compatibility is true only when both frames are regular and have the
 same UV orientation. No orientation is assigned to a frame needing inheritance.
 
-This stage does not build connected corner groups, select inherited frames, compute
-angle weights, or publish vertex tangents. It does not establish compatibility with
-CPU MikkTSpace's legacy edge-sorting behavior.
+[`GpuTangentGroups`](tangent_groups.md) consumes this output to label connected
+regular corners. Adjacency does not select inherited frames, compute angle weights,
+or publish vertex tangents. It does not establish compatibility with CPU
+MikkTSpace's legacy edge-sorting behavior.
 
 ## Admission
 

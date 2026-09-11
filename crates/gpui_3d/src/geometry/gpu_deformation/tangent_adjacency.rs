@@ -224,6 +224,7 @@ impl GpuTangentAdjacency {
 }
 
 /// Immutable edge relationships paired with their original corner and face data.
+#[derive(Clone)]
 pub struct GpuTangentAdjacencyOutput {
     weld: GpuTangentWeldOutput,
     buffer: wgpu::Buffer,

@@ -225,6 +225,9 @@ Core implementation order:
        - [ ] **GPU tangent groups**: Deformed position/normal/UV welding, connected orientation groups, corner weighting, and degenerate-face inheritance with fixed vertex correspondence.
          - [x] **Dynamic corner welding**: Exact deformed keys, normalized normals, selected UVs, deterministic earliest-corner representatives, bounded ping-pong sorting, and retained derivative/input pairing.
          - [x] **GPU edge adjacency**: Opposite-edge rank pairing, deterministic non-manifold relationships, distinct coincident/collinear policies, inherited-frame eligibility, and regular-frame orientation compatibility.
+         - [x] **Regular corner groups**: Orientation-compatible connected components, deterministic minimum-corner representatives, bounded pointer doubling, and retained adjacency/input snapshots.
+         - [ ] **Group GPU validation**: Verify long chains and cycles across workgroups, seams, mirror boundaries, point-only contact, failed/collapsed faces, and changing deformation snapshots on supported adapters.
+         - [ ] **Inherited frames and weights**: Assign degenerate-frame directions and accumulate corner-weighted tangent contributions with fixed vertex correspondence.
          - [ ] **Adjacency GPU validation**: Verify mirrored boundaries, non-manifold ranks, point-only contact, collapsed/collinear and failed faces, dynamic pairing, and retained results on supported adapters.
          - [ ] **Welding GPU validation**: Verify dynamic split/merge, shared indices, seams, signed zero, failed corners, multi-workgroup sorting, and retained frames on supported adapters.
        - [ ] **GPU tangent publication**: Normal-orthogonal frames, imported repair policy, handedness checks, Morph-to-Skin composition, and CPU MikkTSpace parity on supported adapters.

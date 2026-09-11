@@ -25,7 +25,8 @@ pub use gpu_deformation::{
     GpuDeformationReadback, GpuDeformationVertex, GpuFlatNormals, GpuFlatNormalsMemory,
     GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput,
     GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
-    GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentWeld, GpuTangentWeldMemory,
+    GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentGroup, GpuTangentGroups,
+    GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld, GpuTangentWeldMemory,
     GpuTangentWeldOutput, GpuTangentWeldRecord,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

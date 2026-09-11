@@ -36,6 +36,7 @@ pub use geometry::{
     GpuMorphMemory, GpuSkin, GpuSkinMemory, GpuSkinPalette, GpuTangentAdjacency,
     GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput, GpuTangentDerivative,
     GpuTangentDerivativeOutput, GpuTangentDerivatives, GpuTangentDerivativesMemory, GpuTangentEdge,
+    GpuTangentGroup, GpuTangentGroups, GpuTangentGroupsMemory, GpuTangentGroupsOutput,
     GpuTangentWeld, GpuTangentWeldMemory, GpuTangentWeldOutput, GpuTangentWeldRecord,
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;

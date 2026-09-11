@@ -417,6 +417,9 @@ uses eight bytes per texel summed across all levels, in addition to atlas storag
 One-sample and four-sample views in the same WGPU viewport renderer share mip
 chains and samplers. Chains remain cached while any prepared view needs them;
 separate windows and nested UI-capture renderers have independent caches.
+Samplers unused by all prepared views are released, including after sampling
+changes, material-map deactivation, and removal of the last viewport. Images
+without mipmaps retain their active samplers independently of mip-chain storage.
 
 GPU level selection uses derivatives of transformed, unwrapped UVs. Color,
 object-ID, depth, and normal outputs share the same image-alpha sampling at a

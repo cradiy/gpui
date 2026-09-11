@@ -143,6 +143,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Instance capacity reclamation**: Device-bounded growth, quarter-capacity shrink hysteresis, active-batch reuse, and removed-batch release across viewport and direct-output passes.
   - [x] **Mixed-quality geometry sharing**: Viewport-local vertex/index pools across one/four-sample pipelines, shared snapshot/UV keys, retired-consumer release before topology reuse, and independent per-view attachments.
   - [x] **Mixed-quality image sharing**: Common mip-chain and sampler caches across one/four-sample viewport pipelines, union-based image retention, and independent atlas-generation/color-space keys.
+  - [x] **Sampler reclamation**: Active material-input retention across prepared views, independent non-mipmapped sampling, and release after sampling changes, map deactivation, or viewport removal.
   - [x] **Submitted vertex uploads**: Queue-submission-gated staging release, unchanged-geometry copy reuse, shared geometry-channel ownership, and replay after failed or caller-owned encoding.
   - [x] **External vertex ownership**: Non-recyclable externally encoded vertex destinations, including initially populated buffers, with renderer-owned snapshot reuse and retained upload replay.
   - [x] **Direct target admission**: CPU-only output/attachment/shadow payload reports, optional per-request byte limits before uploads, preserved cache/frame ownership, and submission-local reports independent of cache hits.

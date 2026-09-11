@@ -35,14 +35,20 @@ pub(super) struct ImageCache {
 impl ImageCache {
     pub fn retain<'a>(&mut self, objects: impl Iterator<Item = &'a MeshDraw3d>) {
         let mut required = HashSet::default();
+        let mut samplers = HashSet::default();
+        let mut require = |tile, srgb, sampling: TextureSampling3d| {
+            samplers.insert(sampler_key(sampling));
+            if sampling.mip_filter != TextureMipFilter3d::None {
+                required.insert(tile_key(tile, srgb));
+            }
+        };
         for object in objects {
             if let MeshTexture3d::Image(tile) = object.texture {
-                if object.sampling.mip_filter != TextureMipFilter3d::None {
-                    required.insert(tile_key(
-                        tile,
-                        object.image_color_space == TextureColorSpace3d::Srgb,
-                    ));
-                }
+                require(
+                    tile,
+                    object.image_color_space == TextureColorSpace3d::Srgb,
+                    object.sampling,
+                );
             }
             let pbr = object.pbr.is_some() && !object.unlit;
             for (map, srgb, active) in [
@@ -61,14 +67,14 @@ impl ImageCache {
             ] {
                 if let Some(map) = map
                     && active
-                    && map.sampling.mip_filter != TextureMipFilter3d::None
                 {
-                    required.insert(tile_key(map.tile, srgb));
+                    require(map.tile, srgb, map.sampling);
                 }
             }
         }
         self.images
             .retain(|key, entry| required.contains(&tile_key(entry.tile, key.srgb)));
+        self.samplers.retain(|key, _| samplers.contains(key));
     }
 
     pub fn get(
@@ -82,17 +88,9 @@ impl ImageCache {
     ) -> Image {
         assert!(sampling.is_valid(), "invalid 3D texture sampling");
         let (source, generation) = atlas.get_tile_info(tile);
-        let sampler_key = [
-            sampling.address_u as u32,
-            sampling.address_v as u32,
-            sampling.filter as u32,
-            sampling.magnification_filter() as u32,
-            sampling.mip_filter as u32,
-            u32::from(sampling.max_anisotropy),
-        ];
         let sampler = self
             .samplers
-            .entry(sampler_key)
+            .entry(sampler_key(sampling))
             .or_insert_with(|| device.create_sampler(&sampler_descriptor(sampling)))
             .clone();
         if sampling.mip_filter == TextureMipFilter3d::None {
@@ -131,6 +129,17 @@ impl ImageCache {
         );
         Image { view, sampler }
     }
+}
+
+fn sampler_key(sampling: TextureSampling3d) -> [u32; 6] {
+    [
+        sampling.address_u as u32,
+        sampling.address_v as u32,
+        sampling.filter as u32,
+        sampling.magnification_filter() as u32,
+        sampling.mip_filter as u32,
+        u32::from(sampling.max_anisotropy),
+    ]
 }
 
 fn tile_key(tile: AtlasTile, srgb: bool) -> (gpui::AtlasTextureId, u32, [i32; 4], bool) {
@@ -367,6 +376,53 @@ mod tests {
         );
         assert_ne!(first.view, linear.view);
         assert_eq!(cache.images.len(), 2);
+        let atlas_sampling = TextureSampling3d {
+            mip_filter: TextureMipFilter3d::None,
+            ..sampling
+        };
+        let atlas_image = cache.get(
+            &context.device,
+            &context.queue,
+            &atlas,
+            tile,
+            TextureColorSpace3d::Srgb,
+            atlas_sampling,
+        );
+        let mut color = super::super::tests::object();
+        color.texture = MeshTexture3d::Image(tile);
+        color.sampling = sampling;
+        color.image_color_space = TextureColorSpace3d::Srgb;
+        let mut detail = super::super::tests::object();
+        detail.unlit = false;
+        detail.pbr = Some(Default::default());
+        detail.normal_texture = Some(gpui::MaterialTexture3d {
+            tile,
+            sampling: different_sampling,
+            uv_set: 0,
+        });
+        let mut unmipped = color.clone();
+        unmipped.sampling = atlas_sampling;
+        cache.retain([&color, &detail, &unmipped].into_iter());
+        assert_eq!(cache.images.len(), 2);
+        assert_eq!(cache.samplers.len(), 3);
+        assert_eq!(cache.samplers[&sampler_key(sampling)], first.sampler);
+        assert_eq!(
+            cache.samplers[&sampler_key(different_sampling)],
+            reused.sampler
+        );
+        cache.retain([&detail, &unmipped].into_iter());
+        assert_eq!(cache.images.len(), 1);
+        assert_eq!(cache.samplers.len(), 2);
+        detail.normal_scale = 0.;
+        cache.retain([&detail, &unmipped].into_iter());
+        assert!(cache.images.is_empty());
+        assert_eq!(cache.samplers.len(), 1);
+        assert_eq!(
+            cache.samplers[&sampler_key(atlas_sampling)],
+            atlas_image.sampler
+        );
+        cache.retain(std::iter::empty());
+        assert!(cache.samplers.is_empty());
         for clear in [false, true] {
             if clear {
                 atlas.clear();
@@ -388,6 +444,7 @@ mod tests {
         }
         cache.retain(std::iter::empty());
         assert!(cache.images.is_empty());
+        assert!(cache.samplers.is_empty());
         // Previously returned views remain owned independently of cache eviction.
         assert_eq!(first.view.texture().width(), 5);
         assert_eq!(first.view.texture().mip_level_count(), 3);

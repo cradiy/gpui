@@ -37,6 +37,10 @@ CPU `NormalMode::Smooth` removes unused vertices and can reorder the output.
 `GpuSmoothNormals` keeps every vertex slot: unreferenced vertices retain their
 complete input records, including normals and status.
 
+Use [GPU deformation remapping](deformation_remapping.md) to expand the evaluated
+smooth normals into triangle corners before GPU tangent generation, without
+reading vertex data back to the CPU.
+
 Every referenced triangle must have nonzero area. Degenerate faces fail even if
 other incident faces would provide a valid normal. Opposite contributions that
 cancel exactly also fail. Status X is one for a nonfinite position, two for a

@@ -44,6 +44,8 @@ available through `source().evaluate(weights)`; no automatic fallback is perform
 
 For shared indexed geometry, [GPU smooth normals](smooth_normals.md) rebuild
 area-weighted normals while preserving vertex correspondence.
+[GPU remapping](deformation_remapping.md) duplicates, reorders or selects evaluated
+vertices for a destination topology without CPU readback.
 
 ## Flat normal reconstruction
 

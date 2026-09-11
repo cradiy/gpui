@@ -9,6 +9,7 @@ mod external;
 mod flat_normals;
 mod preparation;
 mod readback;
+mod remap;
 mod smooth_normals;
 pub(super) mod support;
 mod tangent_adjacency;
@@ -22,6 +23,7 @@ pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
 pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
 pub use preparation::{GpuGeometryBatchPreparation, GpuGeometryPreparation, PreparedGpuGeometry};
 pub use readback::GpuDeformationReadback;
+pub use remap::{GpuDeformationRemap, GpuDeformationRemapMemory};
 pub use smooth_normals::{GpuSmoothNormals, GpuSmoothNormalsMemory};
 pub use tangent_adjacency::{
     GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput, GpuTangentEdge,
@@ -259,17 +261,17 @@ pub(super) fn validate_storage(
     Ok(())
 }
 
-pub(super) struct ComputeKernel {
+pub(super) struct ComputeKernel<const INPUTS: usize = 3> {
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::ComputePipeline,
 }
 
-impl ComputeKernel {
+impl<const INPUTS: usize> ComputeKernel<INPUTS> {
     pub(super) fn new(
         device: &wgpu::Device,
         shader: &str,
         entry: &str,
-        minimums: [u64; 3],
+        minimums: [u64; INPUTS],
     ) -> Result<Self> {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let entries: Vec<_> = minimums
@@ -280,11 +282,11 @@ impl ComputeKernel {
                 binding: binding as u32,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
-                    ty: if binding == 4 {
+                    ty: if binding == INPUTS + 1 {
                         wgpu::BufferBindingType::Uniform
                     } else {
                         wgpu::BufferBindingType::Storage {
-                            read_only: binding != 3,
+                            read_only: binding != INPUTS,
                         }
                     },
                     has_dynamic_offset: false,
@@ -324,7 +326,7 @@ impl ComputeKernel {
         &self,
         context: &WgpuContext,
         base: Mesh,
-        inputs: [&wgpu::Buffer; 3],
+        inputs: [&wgpu::Buffer; INPUTS],
         params: &wgpu::Buffer,
     ) -> Result<GpuDeformationOutput> {
         let buffer = self.evaluate_records(context, base.vertex_count(), inputs, params)?;
@@ -341,7 +343,7 @@ impl ComputeKernel {
         &self,
         context: &WgpuContext,
         records: usize,
-        inputs: [&wgpu::Buffer; 3],
+        inputs: [&wgpu::Buffer; INPUTS],
         params: &wgpu::Buffer,
     ) -> Result<gpui_wgpu::WgpuResource<wgpu::Buffer>> {
         ensure!(!context.device_lost(), "GPU deformation device is lost");
@@ -362,7 +364,7 @@ impl ComputeKernel {
             device,
             &mut encoder,
             records as u32,
-            [inputs[0], inputs[1], inputs[2], &output, params],
+            inputs.into_iter().chain([output.raw(), params]),
         );
         context.queue.submit(Some(encoder.finish()));
         if let Some(error) = gpui::block_on(scope.pop()) {
@@ -371,12 +373,12 @@ impl ComputeKernel {
         Ok(output)
     }
 
-    fn encode(
+    fn encode<'a>(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         records: u32,
-        buffers: [&wgpu::Buffer; 5],
+        buffers: impl IntoIterator<Item = &'a wgpu::Buffer>,
     ) {
         let entries: Vec<_> = buffers
             .into_iter()

@@ -1,3 +1,4 @@
+mod binding;
 mod cache;
 mod frame;
 pub use cache::PreparationCache;

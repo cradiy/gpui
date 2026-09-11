@@ -91,6 +91,100 @@ fn preparation(c: &mut Criterion) {
     }
 }
 
+fn alternating_cameras(c: &mut Criterion) {
+    let mut group = c.benchmark_group("alternating_cameras");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_millis(500));
+    for count in [1024, 16384] {
+        let front = scene(count, "shared_geometry");
+        let side = front.clone().camera(Camera::orbit(0.4, 0.2, 20.));
+        group.throughput(Throughput::Elements(count as u64 * 2));
+        for capacity in [1, 2] {
+            group.bench_function(
+                BenchmarkId::new(format!("capacity_{capacity}"), count),
+                |b| {
+                    let mut cache = PreparationCache::with_capacity(capacity);
+                    let resolve =
+                        |_: TextureRequest<'_>| Ok(TextureState::Ready(ResolvedTexture::None));
+                    let first = cache.prepare(&front, 1., None, resolve).unwrap();
+                    cache.prepare(&side, 1., None, resolve).unwrap();
+                    let next = cache.prepare(&front, 1., None, resolve).unwrap();
+                    assert_eq!(std::sync::Arc::ptr_eq(&first, &next), capacity == 2);
+                    b.iter(|| {
+                        for scene in [&front, &side] {
+                            black_box(cache.prepare(black_box(scene), 1., None, resolve).unwrap());
+                        }
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn resource_rebinding(c: &mut Criterion) {
+    let tile = gpui::AtlasTile {
+        texture_id: gpui::AtlasTextureId {
+            index: 0,
+            kind: gpui::AtlasTextureKind::Polychrome,
+        },
+        tile_id: gpui::TileId(0),
+        padding: 0,
+        bounds: gpui::Bounds::new(
+            gpui::point(gpui::DevicePixels(0), gpui::DevicePixels(0)),
+            gpui::size(gpui::DevicePixels(16), gpui::DevicePixels(16)),
+        ),
+    };
+    let ready = TextureState::Ready(ResolvedTexture::Image(tile));
+    let relocated = TextureState::Ready(ResolvedTexture::Image(gpui::AtlasTile {
+        tile_id: gpui::TileId(1),
+        ..tile
+    }));
+    let mut group = c.benchmark_group("resource_rebinding");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_millis(500));
+    for count in [1024, 16384] {
+        let scene = scene(count, "pending_images");
+        group.throughput(Throughput::Elements(count as u64 * 2));
+        for (workload, states) in [
+            ("readiness", [TextureState::Pending, ready]),
+            ("atlas_relocation", [ready, relocated]),
+        ] {
+            for capacity in [0, 1] {
+                group.bench_function(
+                    BenchmarkId::new(format!("{workload}/capacity_{capacity}"), count),
+                    |b| {
+                        let mut cache = PreparationCache::with_capacity(capacity);
+                        for state in states {
+                            let output = cache.prepare(&scene, 1., None, |_| Ok(state)).unwrap();
+                            let pending = matches!(state, TextureState::Pending);
+                            assert_eq!(output.is_ready(), !pending);
+                            assert_eq!(
+                                output.frame().objects.len(),
+                                if pending { 0 } else { count }
+                            );
+                        }
+                        b.iter(|| {
+                            for state in states {
+                                black_box(
+                                    cache
+                                        .prepare(black_box(&scene), 1., None, |_| {
+                                            Ok(black_box(state))
+                                        })
+                                        .unwrap(),
+                                );
+                            }
+                        });
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
 fn spatial_index(c: &mut Criterion) {
     use gpui_3d::{AffineTransform, Node, SceneGraph};
     let mut group = c.benchmark_group("spatial_index");
@@ -158,7 +252,13 @@ fn spatial_index(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, preparation, spatial_index);
+criterion_group!(
+    benches,
+    preparation,
+    alternating_cameras,
+    resource_rebinding,
+    spatial_index
+);
 
 #[cfg(feature = "wgpu")]
 fn draw_planning(c: &mut Criterion) {

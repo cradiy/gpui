@@ -1,18 +1,26 @@
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use gpui::{MeshTexture3d, UiTexture3d};
+
+use super::preparation::PreparationPlan;
 
 use crate::{
     Camera, PrepareError, PreparedScene, Scene, Texture, TextureRequest, TextureSlot,
     TextureSource, TextureState,
 };
 
-/// Retains one CPU preparation, shared across unchanged scene clones.
+/// Retains bounded CPU preparations, shared across unchanged scene clones.
 /// Every call refreshes active texture requests through the supplied resolver.
 /// This cache neither owns atlas allocations nor caches rendered pixels.
-#[derive(Default)]
 pub struct PreparationCache {
-    entry: Option<Entry>,
+    entries: VecDeque<Entry>,
+    capacity: usize,
+}
+
+impl Default for PreparationCache {
+    fn default() -> Self {
+        Self::with_capacity(1)
+    }
 }
 
 struct Entry {
@@ -21,6 +29,7 @@ struct Entry {
     aspect: f32,
     ui: Option<[f32; 3]>,
     resources: Vec<Resource>,
+    plan: PreparationPlan,
     prepared: Arc<PreparedScene>,
 }
 
@@ -35,15 +44,37 @@ impl PreparationCache {
         Self::default()
     }
 
+    /// Retains at most `capacity` preparations, evicting the least recently used.
+    /// Zero disables retention. This is an entry limit, not a byte budget.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Applies the entry limit immediately, preserving the most recently used
+    /// preparations. Previously returned preparations remain valid.
+    pub fn set_capacity(&mut self, capacity: usize) {
+        self.capacity = capacity;
+        self.entries.truncate(capacity);
+    }
+
     /// Releases retained CPU inputs. Previously returned preparations remain valid.
     pub fn clear(&mut self) {
-        self.entry = None;
+        self.entries.clear();
     }
 
     /// Reuses validation, culling, matrices, and identity mapping when inputs match.
-    /// Scene content, camera, aspect, UI dimensions/density, or resolved texture
-    /// changes invalidate the preparation. Each active input is resolved once per
-    /// call, including cache hits. Failures clear the cache and return no frame.
+    /// Scene content, camera, aspect, or UI dimensions/density changes select or
+    /// rebuild a plan. Texture changes only rebind its resources and update
+    /// readiness. Each active input is resolved once per call, including cache
+    /// hits. Failures discard only the matching entry
+    /// and return no frame; other entries remain available.
     /// The caller owns resource lifetime, completion notifications, and redraws.
     pub fn prepare(
         &mut self,
@@ -59,12 +90,16 @@ impl PreparationCache {
                 ui.scale_factor(),
             ]
         });
-        let previous = self.entry.take().filter(|entry| {
-            Arc::ptr_eq(&entry.revision, &scene.preparation_revision)
-                && entry.camera == scene.camera
-                && entry.aspect == aspect
-                && entry.ui == ui
-        });
+        let previous = self
+            .entries
+            .iter()
+            .position(|entry| {
+                Arc::ptr_eq(&entry.revision, &scene.preparation_revision)
+                    && entry.camera == scene.camera
+                    && entry.aspect == aspect
+                    && entry.ui == ui
+            })
+            .and_then(|index| self.entries.remove(index));
         let entry = if let Some(mut entry) = previous {
             let mut changed = false;
             for resource in &mut entry.resources {
@@ -101,7 +136,7 @@ impl PreparationCache {
             }
             if changed {
                 let mut resources = entry.resources.iter();
-                entry.prepared = Arc::new(scene.prepare(aspect, ui_texture, |request| {
+                entry.prepared = Arc::new(scene.resolve_plan(&entry.plan, |request| {
                     let resource = resources.next().expect("retained texture request");
                     debug_assert_eq!(
                         (resource.object_index, resource.slot),
@@ -113,7 +148,8 @@ impl PreparationCache {
             entry
         } else {
             let mut resources = Vec::new();
-            let prepared = scene.prepare(aspect, ui_texture, |request| {
+            let plan = scene.prepare_plan(aspect, ui_texture)?;
+            let prepared = scene.resolve_plan(&plan, |request| {
                 let state = resolve(request)?;
                 resources.push(Resource {
                     object_index: request.object_index,
@@ -128,14 +164,21 @@ impl PreparationCache {
                 aspect,
                 ui,
                 resources,
+                plan,
                 prepared: Arc::new(prepared),
             }
         };
         let prepared = entry.prepared.clone();
-        self.entry = Some(entry);
+        if self.capacity > 0 {
+            self.entries.truncate(self.capacity - 1);
+            self.entries.push_front(entry);
+        }
         Ok(prepared)
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 fn same_state(left: TextureState, right: TextureState) -> bool {
     match (left, right) {

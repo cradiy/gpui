@@ -3,41 +3,42 @@
 mod coverage;
 mod depth;
 mod gpu_labels;
+mod images;
 mod labels;
 pub use coverage::{CoverageError, FrameCoverage, ObjectCoverage};
 pub use depth::{DepthComparison, DepthQueryError, DepthRelation};
 pub use gpu_labels::RenderedLabels;
+pub use images::{ImageCacheLimits, ImageCacheUsage};
 pub use labels::{FrameLabels, LabelError};
 
-use std::{borrow::Cow, collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
-use anyhow::{Context as _, Result, bail, ensure};
-use gpui::{
-    Bounds, ImageId, ImageSource, MeshTexture3d, PlatformAtlas, RenderImageParams, point, px, size,
-};
+use anyhow::Result;
+use gpui::{Bounds, point, px, size};
 use gpui_wgpu::{Scene3dGpuOutput, Scene3dReadback, WgpuScene3dRenderer};
 
 pub use crate::RenderObject;
-use crate::{Camera, CameraError, PreparationCache, Scene, TextureSource, TextureState};
+use crate::{Camera, CameraError, PreparationCache, Scene};
 
 pub use gpui_wgpu::{
     IdRemapConfig, Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities,
-    Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dOutputConfig, Scene3dPixels,
-    Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dTargetMemory, WgpuContext, WgpuIdRemapper,
+    Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dGeometryMemory, Scene3dOutputConfig,
+    Scene3dPixels, Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dTargetMemory, WgpuContext,
+    WgpuIdRemapper,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load
 /// resources, execute custom image callbacks, or capture UI subtrees.
 pub struct HeadlessRenderer {
     renderer: WgpuScene3dRenderer,
-    images: HashSet<ImageId>,
+    images: images::ImageCache,
     preparation: PreparationCache,
 }
 impl HeadlessRenderer {
     pub fn new() -> Result<Self> {
         Ok(Self {
             renderer: WgpuScene3dRenderer::new_headless()?,
-            images: HashSet::new(),
+            images: images::ImageCache::default(),
             preparation: PreparationCache::new(),
         })
     }
@@ -45,7 +46,7 @@ impl HeadlessRenderer {
     pub fn with_context(context: WgpuContext) -> Result<Self> {
         Ok(Self {
             renderer: WgpuScene3dRenderer::new(context)?,
-            images: HashSet::new(),
+            images: images::ImageCache::default(),
             preparation: PreparationCache::new(),
         })
     }
@@ -70,6 +71,60 @@ impl HeadlessRenderer {
         self.renderer.set_target_byte_limit(bytes);
     }
 
+    /// Optional per-request vertex/index payload limit. Defaults to `None`.
+    pub fn geometry_byte_limit(&self) -> Option<u64> {
+        self.renderer.geometry_byte_limit()
+    }
+
+    /// Checks geometry before mesh allocation; decoded images are resolved first.
+    /// Existing outputs remain valid. Zero admits only requests with no active geometry.
+    pub fn set_geometry_byte_limit(&mut self, bytes: Option<u64>) {
+        self.renderer.set_geometry_byte_limit(bytes);
+    }
+
+    /// Maximum retained CPU preparations. Defaults to one; zero disables retention.
+    pub fn preparation_capacity(&self) -> usize {
+        self.preparation.capacity()
+    }
+
+    /// Bounds CPU preparation reuse across scenes, cameras, and aspect ratios.
+    /// Shrinking evicts least-recently-used entries immediately. Does not change
+    /// GPU cache budgets or invalidate returned frames and readbacks.
+    pub fn set_preparation_capacity(&mut self, capacity: usize) {
+        self.preparation.set_capacity(capacity);
+    }
+
+    pub fn image_cache_limits(&self) -> ImageCacheLimits {
+        self.images.limits()
+    }
+
+    /// Per-preparation decoded-image pixel payload limit. Defaults to `None`.
+    pub fn image_byte_limit(&self) -> Option<u64> {
+        self.images.byte_limit()
+    }
+
+    /// Counts each active image identity once, including resident images. Checked
+    /// before allocating the image that would exceed the limit. Earlier new
+    /// allocations are released on failure; previous residency remains unchanged.
+    /// Zero admits only preparations with no image inputs. Not a GPU memory quota.
+    pub fn set_image_byte_limit(&mut self, bytes: Option<u64>) {
+        self.images.set_byte_limit(bytes);
+    }
+
+    pub fn image_cache_usage(&self) -> ImageCacheUsage {
+        self.images.usage()
+    }
+
+    /// Changes idle atlas retention, evicting least-recently-used images immediately
+    /// when either limit is exceeded. Active images and returned outputs remain valid.
+    /// Images used in the same preparation have equal recency.
+    pub fn set_image_cache_limits(&mut self, limits: ImageCacheLimits) {
+        let atlas = self.renderer.sprite_atlas();
+        self.images.set_limits(limits, |image_id| {
+            images::remove_image(atlas.as_ref(), image_id)
+        });
+    }
+
     /// Releases retained CPU preparation and cached GPU resources, including the image atlas.
     /// Subsequent renders rebuild resources from the supplied scene. Returned
     /// frames and pending readbacks remain valid. Does not wait for the GPU.
@@ -89,56 +144,13 @@ impl HeadlessRenderer {
         )?;
         let max_dimension = self.capabilities().max_dimension;
         let atlas = self.renderer.sprite_atlas();
-        let mut used = HashSet::new();
-        let prepared = self.preparation.prepare(
+        let prepared = self.images.prepare(
+            &mut self.preparation,
             scene,
             config.size[0] as f32 / config.size[1] as f32,
-            None,
-            |request| {
-                let texture = match request.source {
-                    TextureSource::Solid => MeshTexture3d::None,
-                    TextureSource::Ui => bail!("UI textures require a viewport capture"),
-                    TextureSource::Image(ImageSource::Render(image)) => {
-                        let bytes = image.as_bytes(0).context("decoded image has no frame")?;
-                        let size = image.size(0);
-                        ensure!(
-                            size.width.0 > 0
-                                && size.height.0 > 0
-                                && size.width.0 as u32 <= max_dimension
-                                && size.height.0 as u32 <= max_dimension,
-                            "decoded image has invalid or unsupported dimensions"
-                        );
-                        let key = RenderImageParams {
-                            image_id: image.id,
-                            frame_index: 0,
-                        }
-                        .into();
-                        let tile = atlas
-                            .get_or_insert_with(&key, &mut || {
-                                Ok(Some((size, Cow::Borrowed(bytes))))
-                            })?
-                            .context("image allocation failed")?;
-                        used.insert(image.id);
-                        MeshTexture3d::Image(tile)
-                    }
-                    TextureSource::Image(_) => bail!(
-                        "direct rendering requires an ImageSource::Render with decoded pixels"
-                    ),
-                };
-                Ok(TextureState::Ready(texture))
-            },
-        );
-        for image_id in self.images.difference(&used) {
-            atlas.remove(
-                &RenderImageParams {
-                    image_id: *image_id,
-                    frame_index: 0,
-                }
-                .into(),
-            );
-        }
-        self.images = used;
-        let prepared = prepared?;
+            max_dimension,
+            atlas.as_ref(),
+        )?;
         let output = self.renderer.render(prepared.frame(), config)?;
         let objects = prepared.identities();
         Ok(RenderedFrame {

@@ -2,6 +2,9 @@ use collections::HashMap;
 use gpui::Mesh3d;
 use std::sync::Arc;
 
+mod upload;
+pub(super) use upload::Upload;
+
 struct Entry<T> {
     mesh: Arc<Mesh3d>,
     resource: T,
@@ -19,7 +22,7 @@ impl<T> Default for GeometryCache<T> {
     }
 }
 
-fn key(mesh: &Arc<Mesh3d>, uv_sets: [u32; 5]) -> (usize, [u32; 5]) {
+pub(super) fn key(mesh: &Arc<Mesh3d>, uv_sets: [u32; 5]) -> (usize, [u32; 5]) {
     (Arc::as_ptr(mesh) as usize, uv_sets)
 }
 
@@ -28,6 +31,24 @@ fn topology(mesh: &Mesh3d) -> (usize, usize) {
 }
 
 impl<T> GeometryCache<T> {
+    pub(super) fn prepare_shared<'a>(
+        &mut self,
+        meshes: Vec<(Arc<Mesh3d>, [u32; 5])>,
+        peers: impl IntoIterator<Item = &'a mut Self>,
+        upload: impl FnMut(Option<T>, &Mesh3d, [u32; 5]) -> T,
+    ) where
+        T: 'a,
+    {
+        let mut peers: Vec<_> = peers.into_iter().collect();
+        for peer in &mut peers {
+            peer.retain(meshes.iter().cloned());
+        }
+        self.prepare(meshes, upload);
+        for peer in peers {
+            peer.reuse_from(self);
+        }
+    }
+
     pub(super) fn prepare(
         &mut self,
         meshes: impl IntoIterator<Item = (Arc<Mesh3d>, [u32; 5])>,
@@ -61,6 +82,10 @@ impl<T> GeometryCache<T> {
 
     pub(super) fn get(&self, mesh: &Arc<Mesh3d>, uv_sets: [u32; 5]) -> &T {
         &self.entries[&key(mesh, uv_sets)].resource
+    }
+
+    pub(super) fn resources(&self) -> impl Iterator<Item = &T> {
+        self.entries.values().map(|entry| &entry.resource)
     }
 
     pub(super) fn reuse_from(&mut self, other: &Self) {
@@ -228,6 +253,76 @@ mod tests {
         assert_eq!(ids.get(&c, [0; 5]).id, previous);
         assert_eq!(ids.get(&c, [0; 5]).x, 4.);
         assert_eq!(allocations, 2);
+    }
+
+    #[test]
+    fn scene3d_geometry_pool_shares_consumers_and_preserves_live_snapshots() {
+        let original = mesh(0.);
+        let a = update(&original, 1.);
+        let b = update(&original, 2.);
+        let c = update(&original, 3.);
+        let mut pool = GeometryCache::default();
+        let mut low = GeometryCache::default();
+        let mut high = GeometryCache::default();
+        let mut allocations = 0;
+        pool.prepare_shared(
+            vec![(original.clone(), [0; 5]), (original.clone(), [0; 5])],
+            [&mut low, &mut high],
+            |old, mesh, _| upload(&mut allocations, old, mesh),
+        );
+        assert_eq!(allocations, 1);
+        assert_eq!(
+            low.get(&original, [0; 5]).id,
+            high.get(&original, [0; 5]).id
+        );
+        let original_entry = Arc::downgrade(&pool.entries[&key(&original, [0; 5])]);
+        pool.prepare_shared(
+            vec![(original.clone(), [0; 5]), (a.clone(), [0; 5])],
+            [&mut low, &mut high],
+            |old, mesh, _| upload(&mut allocations, old, mesh),
+        );
+        low.prepare([(original.clone(), [0; 5])], |_, _, _| {
+            panic!("shared mesh uploaded again")
+        });
+        high.prepare([(a.clone(), [0; 5])], |_, _, _| {
+            panic!("shared mesh uploaded again")
+        });
+        assert_eq!(allocations, 2);
+        assert_eq!(low.get(&original, [0; 5]).x, 0.);
+        assert_eq!(high.get(&a, [0; 5]).x, 1.);
+        assert_ne!(low.get(&original, [0; 5]).id, high.get(&a, [0; 5]).id);
+        let a_entry = Arc::downgrade(&pool.entries[&key(&a, [0; 5])]);
+        pool.prepare_shared(
+            vec![(b.clone(), [0; 5])],
+            [&mut low, &mut high],
+            |old, mesh, _| upload(&mut allocations, old, mesh),
+        );
+        assert_eq!(allocations, 2);
+        assert!(original_entry.upgrade().is_none());
+        assert!(a_entry.upgrade().is_none());
+        assert_eq!(low.get(&b, [0; 5]).id, high.get(&b, [0; 5]).id);
+        assert_eq!(high.get(&b, [0; 5]).x, 2.);
+        assert_eq!(pool.entries.len(), 1);
+
+        let mut retained = GeometryCache::default();
+        retained.reuse_from(&high);
+        let b_entry = Arc::downgrade(&pool.entries[&key(&b, [0; 5])]);
+        pool.prepare_shared(
+            vec![(c.clone(), [0; 5])],
+            [&mut low, &mut high],
+            |old, mesh, _| upload(&mut allocations, old, mesh),
+        );
+        assert_eq!(allocations, 3);
+        assert_eq!(retained.get(&b, [0; 5]).x, 2.);
+        assert_eq!(low.get(&c, [0; 5]).x, 3.);
+        assert_ne!(retained.get(&b, [0; 5]).id, low.get(&c, [0; 5]).id);
+        let c_entry = Arc::downgrade(&pool.entries[&key(&c, [0; 5])]);
+        pool.prepare_shared(Vec::new(), [&mut low, &mut high], |_, _, _| unreachable!());
+        assert!(pool.entries.is_empty() && low.entries.is_empty() && high.entries.is_empty());
+        assert!(c_entry.upgrade().is_none());
+        assert!(b_entry.upgrade().is_some());
+        drop(retained);
+        assert!(b_entry.upgrade().is_none());
     }
 
     #[test]

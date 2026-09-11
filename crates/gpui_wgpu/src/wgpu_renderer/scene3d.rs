@@ -426,7 +426,7 @@ struct Geometry {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
-    upload: Option<wgpu::Buffer>,
+    upload: geometry::Upload<wgpu::Buffer>,
 }
 
 impl Geometry {
@@ -440,38 +440,38 @@ impl Geometry {
             .map(|index| Vertex::new(mesh, index, uv_sets))
             .collect::<Vec<_>>();
         let contents = bytemuck::cast_slice(&vertices);
-        if let Some(mut previous) = previous {
-            previous.upload = Some(
+        if let Some(mut previous) = previous
+            && previous.upload.replace(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("mesh_vertex_upload"),
                     contents,
                     usage: wgpu::BufferUsages::COPY_SRC,
-                }),
-            );
-            previous
-        } else {
-            Self {
-                vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("mesh_vertices"),
-                    contents,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                }),
-                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("mesh_indices"),
-                    contents: bytemuck::cast_slice(mesh.indices()),
-                    usage: wgpu::BufferUsages::INDEX,
-                }),
-                count: mesh.indices().len() as u32,
-                upload: None,
-            }
+                })
+            })
+        {
+            return previous;
+        }
+        Self {
+            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh_vertices"),
+                contents,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            }),
+            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh_indices"),
+                contents: bytemuck::cast_slice(mesh.indices()),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            count: mesh.indices().len() as u32,
+            upload: geometry::Upload::new(None),
         }
     }
 
     fn encode_upload(&self, encoder: &mut wgpu::CommandEncoder) {
-        if let Some(upload) = &self.upload {
+        self.upload.encode(|upload| {
             // Keep the copy in command order and replay it after abandoned encoders.
             encoder.copy_buffer_to_buffer(upload, 0, &self.vertices, 0, upload.size());
-        }
+        });
     }
 }
 
@@ -505,6 +505,18 @@ pub(crate) struct Scene3dRenderer {
 }
 
 impl Scene3dRenderer {
+    pub(crate) fn commit_uploads(&self, submitted: bool) {
+        for geometry in self.geometry.resources() {
+            geometry.upload.commit(submitted);
+        }
+    }
+
+    pub(super) fn retain_external_uploads(&self) {
+        for geometry in self.geometry.resources() {
+            geometry.upload.retain_external();
+        }
+    }
+
     pub(crate) fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -763,7 +775,8 @@ impl Scene3dRenderer {
             }
         });
         let sizes: Vec<_> = self.regions.values().map(|region| region.size).collect();
-        self.prepare_frames(device, queue, frames.iter().map(AsRef::as_ref), sizes);
+        let references: Vec<_> = frames.iter().map(AsRef::as_ref).collect();
+        self.prepare_frame_resources(device, queue, &references, sizes);
         let mut slot_count = 0;
         for (layer, frame) in layers.into_iter().zip(&frames) {
             self.offsets.insert(layer, slot_count);
@@ -791,6 +804,47 @@ impl Scene3dRenderer {
         instances::BatchPlan::new(frame, color, limit).statistics(frame)
     }
 
+    pub(crate) fn plan_geometry_memory(
+        frame: &gpui::Scene3dFrame,
+        color: bool,
+    ) -> anyhow::Result<crate::Scene3dGeometryMemory> {
+        use anyhow::Context as _;
+        let mut seen = HashSet::new();
+        let mut memory = crate::Scene3dGeometryMemory::default();
+        for object in frame.objects.iter() {
+            if !instances::Visibility::new(frame, object, color).any()
+                || !seen.insert(geometry::key(&object.mesh, object.texture_uv_sets()))
+            {
+                continue;
+            }
+            let vertex_bytes = (object.mesh.vertices().len() as u64)
+                .checked_mul(std::mem::size_of::<Vertex>() as u64)
+                .context("3D vertex byte count overflow")?;
+            let index_bytes = (object.mesh.indices().len() as u64)
+                .checked_mul(std::mem::size_of::<u32>() as u64)
+                .context("3D index byte count overflow")?;
+            memory.meshes += 1;
+            memory.vertex_bytes = memory
+                .vertex_bytes
+                .checked_add(vertex_bytes)
+                .context("3D vertex byte count overflow")?;
+            memory.index_bytes = memory
+                .index_bytes
+                .checked_add(index_bytes)
+                .context("3D index byte count overflow")?;
+            let largest = vertex_bytes.max(index_bytes);
+            if largest > memory.max_buffer_bytes {
+                memory.max_buffer_bytes = largest;
+                memory.max_buffer_object_id = Some(object.output_id);
+            }
+        }
+        memory.total_bytes = memory
+            .vertex_bytes
+            .checked_add(memory.index_bytes)
+            .context("3D geometry byte count overflow")?;
+        Ok(memory)
+    }
+
     pub(crate) fn prepare_frames<'a>(
         &mut self,
         device: &wgpu::Device,
@@ -802,6 +856,16 @@ impl Scene3dRenderer {
         self.images
             .lock()
             .retain(frames.iter().flat_map(|frame| frame.objects.iter()));
+        self.prepare_frame_resources(device, queue, &frames, sizes);
+    }
+
+    fn prepare_frame_resources(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frames: &[&gpui::Scene3dFrame],
+        sizes: impl IntoIterator<Item = [u32; 2]>,
+    ) {
         self.plans.prepare(
             frames.iter().copied(),
             self.blend_pipeline.is_some(),
@@ -1603,6 +1667,7 @@ fn color_draw_order(objects: &[gpui::MeshDraw3d]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod geometry_memory;
 
     fn output_layer(texture: MeshTexture3d) -> SubtreeLayer {
         let mut object = object();

@@ -178,12 +178,30 @@ fn linear_depth_reconstruction_preserves_offsets_scale_and_unclipped_positions()
 fn linear_depth_reconstruction_rejects_invalid_inputs_and_checks_result_precision() {
     let camera = camera(Projection::Orthographic { vertical_size: 4. }, [0.; 2]);
     let rect = viewport(1., 1.);
-    for depth in [0., -1., f32::INFINITY, f32::NAN] {
-        assert_eq!(
-            camera.screen_to_world(rect, rect.center(), depth),
-            Err(CameraError::InvalidDepth)
-        );
+    for projection in projections() {
+        for depth in [-1., f32::INFINITY, f32::NAN] {
+            assert_eq!(
+                Camera {
+                    projection,
+                    ..camera
+                }
+                .screen_to_world(rect, rect.center(), depth),
+                Err(CameraError::InvalidDepth)
+            );
+        }
     }
+    assert_eq!(
+        camera.screen_to_world(rect, rect.center(), 0.),
+        Ok(camera.eye)
+    );
+    assert_eq!(
+        Camera {
+            projection: Projection::default(),
+            ..camera
+        }
+        .screen_to_world(rect, rect.center(), 0.),
+        Err(CameraError::InvalidDepth)
+    );
     assert_eq!(
         camera.screen_to_world(rect, point(px(f32::NAN), px(0.)), 1.),
         Err(CameraError::InvalidPoint)
@@ -193,7 +211,11 @@ fn linear_depth_reconstruction_rejects_invalid_inputs_and_checks_result_precisio
         Err(CameraError::InvalidViewport)
     );
     assert_eq!(
-        Camera { near: 0., ..camera }.screen_to_world(rect, rect.center(), 1.),
+        Camera {
+            near: -1.,
+            ..camera
+        }
+        .screen_to_world(rect, rect.center(), 1.),
         Err(CameraError::InvalidProjection)
     );
     assert_eq!(

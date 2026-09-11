@@ -1,10 +1,14 @@
 use super::{
-    RenderRegion,
+    Geometry, RenderRegion,
+    geometry::GeometryCache,
+    images::ImageCache,
+    instances::BatchPlanCache,
     output_cache::{Output, OutputBudget, OutputKey},
 };
 use super::{Scene3dRenderer, WgpuAtlas};
 use gpui::{Scene, Scene3dViewportCapabilities, SubtreeLayer};
-use std::collections::HashMap;
+use parking_lot::Mutex;
+use std::{collections::HashMap, sync::Arc};
 
 pub(super) fn visit_scenes(scene: &Scene, mut visit: impl FnMut(&Scene)) {
     let mut pending = vec![scene];
@@ -28,6 +32,9 @@ pub(super) fn visit_scenes(scene: &Scene, mut visit: impl FnMut(&Scene)) {
 
 pub(in crate::wgpu_renderer) struct ViewportRenderer {
     renderers: [Option<Scene3dRenderer>; 2],
+    geometry: GeometryCache<Geometry>,
+    plans: BatchPlanCache,
+    images: Arc<Mutex<ImageCache>>,
     capabilities: Scene3dViewportCapabilities,
     format: wgpu::TextureFormat,
     outputs: Vec<Option<Output>>,
@@ -44,6 +51,9 @@ impl ViewportRenderer {
     ) -> Self {
         Self {
             renderers: [None, None],
+            geometry: GeometryCache::default(),
+            plans: BatchPlanCache::default(),
+            images: Arc::new(Mutex::new(ImageCache::default())),
             capabilities,
             format,
             outputs: Vec::new(),
@@ -65,6 +75,7 @@ impl ViewportRenderer {
         retain_outputs: bool,
     ) {
         let mut needed = [false; 2];
+        let mut frames = Vec::new();
         if self.surface_size != [width, height] {
             self.outputs.clear();
             self.surface_size = [width, height];
@@ -78,20 +89,22 @@ impl ViewportRenderer {
                     needed[usize::from(samples == 4)] = true;
                     let old = previous.next().flatten();
                     let bounds = layer.composite.bounds;
+                    let region = RenderRegion::viewport(
+                        [
+                            bounds.origin.x.0,
+                            bounds.origin.y.0,
+                            bounds.size.width.0,
+                            bounds.size.height.0,
+                        ],
+                        [width, height],
+                        frame.viewport_quality.resolution_scale(),
+                        self.capabilities.max_texture_dimension,
+                    );
+                    if region.is_some() {
+                        frames.push(frame.clone());
+                    }
                     let output = (retain_outputs && self.budget.stats().budget_bytes > 0)
-                        .then(|| {
-                            RenderRegion::viewport(
-                                [
-                                    bounds.origin.x.0,
-                                    bounds.origin.y.0,
-                                    bounds.size.width.0,
-                                    bounds.size.height.0,
-                                ],
-                                [width, height],
-                                frame.viewport_quality.resolution_scale(),
-                                self.capabilities.max_texture_dimension,
-                            )
-                        })
+                        .then_some(region)
                         .flatten()
                         .and_then(|region| {
                             let bytes = u64::from(region.output_size[0])
@@ -129,6 +142,9 @@ impl ViewportRenderer {
                 }
             }
         });
+        self.images
+            .lock()
+            .retain(frames.iter().flat_map(|frame| frame.objects.iter()));
         for (index, samples) in [1, 4].into_iter().enumerate() {
             if !needed[index] {
                 self.renderers[index] = None;
@@ -136,13 +152,50 @@ impl ViewportRenderer {
             }
             let renderer = self.renderers[index]
                 .get_or_insert_with(|| Scene3dRenderer::new(device, queue, self.format, samples));
+            renderer.images = self.images.clone();
+        }
+        let limit = super::instance_limit(device);
+        self.plans
+            .prepare(frames.iter().map(AsRef::as_ref), true, limit);
+        let meshes = frames
+            .iter()
+            .flat_map(|frame| {
+                self.plans
+                    .get(frame, true, limit)
+                    .order
+                    .iter()
+                    .map(|&index| {
+                        let object = &frame.objects[index];
+                        (object.mesh.clone(), object.texture_uv_sets())
+                    })
+            })
+            .collect();
+        self.geometry.prepare_shared(
+            meshes,
+            self.renderers
+                .iter_mut()
+                .flatten()
+                .map(|renderer| &mut renderer.geometry),
+            |previous, mesh, uv_sets| Geometry::prepare(device, previous, mesh, uv_sets),
+        );
+        for renderer in self.renderers.iter_mut().flatten() {
+            renderer.plans.reuse_from(&self.plans);
             renderer.prepare(device, queue, scene, width, height, self.capabilities);
         }
     }
 
     pub(in crate::wgpu_renderer) fn commit_outputs(&self, submitted: bool) {
+        for renderer in self.renderers.iter().flatten() {
+            renderer.commit_uploads(submitted);
+        }
         for output in self.outputs.iter().flatten() {
             output.validity.commit(submitted);
+        }
+    }
+
+    pub(in crate::wgpu_renderer) fn retain_external_uploads(&self) {
+        for renderer in self.renderers.iter().flatten() {
+            renderer.retain_external_uploads();
         }
     }
 

@@ -96,39 +96,8 @@ the resource manager.
 
 ## Retained preparation
 
-`PreparationCache` retains one `Arc<PreparedScene>`. Unchanged `Scene` clones and
-scenes created from the same `EvaluatedScene` snapshot reuse validation, culling,
-matrices, and identity mapping. Camera values, aspect ratio, UI logical dimensions
-and raster density are compared separately. Content builders invalidate the
-preparation; constructing a new scene or evaluating a new graph snapshot also
-requires preparation, even when its values happen to match an older scene.
-
-```rust
-use gpui_3d::{Material, Mesh, Object, PreparationCache, ResolvedTexture, Scene, TextureState};
-
-let scene = Scene::new().object(Object::new(Mesh::cube(), Material::color(gpui::white())));
-let mut cache = PreparationCache::new();
-let first = cache.prepare(&scene, 1., None, |_| {
-    Ok(TextureState::Ready(ResolvedTexture::None))
-})?;
-let next = cache.prepare(&scene.clone(), 1., None, |_| {
-    Ok(TextureState::Ready(ResolvedTexture::None))
-})?;
-assert!(std::sync::Arc::ptr_eq(&first, &next));
-# Ok::<(), gpui_3d::PrepareError>(())
-```
-
-Every call invokes the resolver once per active input, including cache hits.
-Pending/ready transitions and changed atlas tile references rebuild the output.
-An error clears the cache and returns no frame. `clear()` releases the retained
-CPU inputs without affecting previously returned preparations or renderer caches.
-
-Viewports retain this cache under their element ID. Keep a scene or evaluated
-snapshot in application state and clone it when rendering. UI layout, painting,
-and pick-surface resolution still run normally. This is a CPU input cache, not a
-rendered-image cache: unchanged tile references do not imply unchanged pixels.
-Resource managers must keep resolving current residency, retain allocations
-through submission, and request redraws when asynchronous inputs change.
+See [Preparation caching](preparation.md) for scene reuse, capacity limits,
+resource refresh, and viewport/headless ownership.
 
 ## CPU preparation benchmarks
 

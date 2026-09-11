@@ -25,6 +25,10 @@ impl UiCapture {
         self.validity.commit(submitted);
         self.renderer.commit_scene3d_outputs(submitted);
     }
+
+    pub(super) fn retain_external_scene3d_uploads(&self) {
+        self.renderer.retain_external_scene3d_uploads();
+    }
 }
 
 impl WgpuRenderer {

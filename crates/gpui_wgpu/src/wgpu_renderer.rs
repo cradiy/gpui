@@ -2408,10 +2408,13 @@ impl WgpuRenderer {
     }
 
     /// Encodes into caller-owned commands without reusing mesh or UI capture pixels.
+    /// Exposed vertex buffers are not recycled for other mesh snapshots; retained
+    /// replacement uploads remain replayable on later draws of the same snapshot.
     /// Use `draw_external` for renderer-owned submission and output reuse.
     pub fn encode_external(&mut self, scene: &Scene, target: WgpuExternalRenderTarget<'_>) -> bool {
         let encoded = self.encode_external_scene(scene, target, false);
         self.commit_encoded_scene(encoded);
+        self.retain_external_scene3d_uploads();
         encoded
     }
 
@@ -3148,6 +3151,15 @@ impl WgpuRenderer {
         }
         for capture in &self.resources().ui_captures {
             capture.commit_scene3d_outputs(submitted);
+        }
+    }
+
+    fn retain_external_scene3d_uploads(&self) {
+        if let Some(renderer) = &self.resources().scene3d {
+            renderer.retain_external_uploads();
+        }
+        for capture in &self.resources().ui_captures {
+            capture.retain_external_scene3d_uploads();
         }
     }
 

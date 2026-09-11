@@ -58,7 +58,8 @@ tint, basic lighting, unlit shading, alpha cutout, and alpha blending. Images us
 decoded BGRA frame. Decode resources before rendering. Resource paths, URLs,
 encoded `Image` values, custom UI image loaders, and captured UI textures return
 errors identifying the object; they are not silently omitted or loaded on the
-rendering thread. Image atlas entries unused by the next preparation are released.
+rendering thread. Unused image atlas entries are released by default; configurable
+[idle image residency](image_residency.md) supports reuse across scene and camera changes.
 
 Numeric output IDs are local to a returned frame, not persistent scene IDs.
 Each submitted mesh receives a nonzero `u32`; `RenderedFrame::objects()` maps it
@@ -480,10 +481,19 @@ construct the ready scene on the worker when needed.
 
 ### Cache release
 
-Each renderer retains one CPU scene preparation. Unchanged scene clones reuse
+[Geometry memory](geometry_memory.md) provides vertex/index payload reports and
+per-request admission, separately from target budgets and retained cache limits.
+
+Each renderer retains one CPU scene preparation by default. Use
+`set_preparation_capacity(entries)` to retain multiple scenes or camera configurations;
+zero disables retention. Least-recently-used entries are evicted when the limit
+is reached or reduced. This is an entry limit, not a CPU or GPU byte budget.
+See [Preparation caching](preparation.md) for keys and resource lifetime.
+Unchanged scene clones reuse
 validation, matrices, culling, and identity mapping while decoded-image atlas
-references are refreshed on every render. Scene content, camera, aspect, and
-resolved tile changes invalidate this cache. Output size changes that preserve
+references are refreshed on every render. Scene content, camera, and aspect select
+separate entries; changed atlas references rebind resources without recalculating geometry.
+Output size changes that preserve
 aspect reuse CPU preparation but still render into the requested output targets.
 Every `render` call produces GPU output; this cache does not retain rendered pixels.
 

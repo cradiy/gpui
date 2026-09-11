@@ -106,6 +106,11 @@ pub struct PreparedScene {
     pending: Vec<PendingTexture>,
 }
 
+pub(super) struct PreparationPlan {
+    frame: Scene3dFrame,
+    objects: Arc<[RenderObject]>,
+}
+
 impl PreparedScene {
     pub fn frame(&self) -> &Scene3dFrame {
         &self.frame
@@ -137,16 +142,47 @@ impl Scene {
     /// Validates and prepares visible camera/shadow inputs without a window or GPU.
     /// The resolver owns image loading, upload, cache lifetime, and redraw scheduling.
     /// Pending inputs omit their object but do not prevent requests for its other inputs.
+    /// Scene validation completes before the first resource request.
     /// Failures return no frame; resolver side effects are not rolled back.
     pub fn prepare(
         &self,
         aspect: f32,
         ui_texture: Option<UiTexture3d>,
+        resolve: impl FnMut(TextureRequest<'_>) -> anyhow::Result<TextureState>,
+    ) -> Result<PreparedScene, PrepareError> {
+        self.resolve_plan(&self.prepare_plan(aspect, ui_texture)?, resolve)
+    }
+
+    pub(super) fn prepare_plan(
+        &self,
+        aspect: f32,
+        ui_texture: Option<UiTexture3d>,
+    ) -> Result<PreparationPlan, PrepareError> {
+        let frame = self
+            .plan_frame(aspect, ui_texture)
+            .map_err(PrepareError::InvalidScene)?;
+        let objects = self
+            .objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| RenderObject {
+                output_id: index as u32 + 1,
+                object_index: index,
+                id: object.id.clone(),
+                node: object.node,
+            })
+            .collect();
+        Ok(PreparationPlan { frame, objects })
+    }
+
+    pub(super) fn resolve_plan(
+        &self,
+        plan: &PreparationPlan,
         mut resolve: impl FnMut(TextureRequest<'_>) -> anyhow::Result<TextureState>,
     ) -> Result<PreparedScene, PrepareError> {
         let mut pending = Vec::new();
         let frame = self
-            .prepare_frame(aspect, ui_texture, |index, slot, texture| {
+            .bind_frame(&plan.frame, |index, slot, texture| {
                 let object = &self.objects[index];
                 let source = match texture {
                     Texture::None => TextureSource::Solid,
@@ -196,20 +232,9 @@ impl Scene {
                     .downcast::<PrepareError>()
                     .unwrap_or_else(PrepareError::InvalidScene)
             })?;
-        let objects = self
-            .objects
-            .iter()
-            .enumerate()
-            .map(|(index, object)| RenderObject {
-                output_id: index as u32 + 1,
-                object_index: index,
-                id: object.id.clone(),
-                node: object.node,
-            })
-            .collect();
         Ok(PreparedScene {
             frame,
-            objects,
+            objects: plan.objects.clone(),
             pending,
         })
     }

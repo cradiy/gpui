@@ -123,7 +123,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Local mesh attachments**: Surface-clipped pixel bounds, preserved fractional alignment and UI sampling, size-shared HDR/depth/MSAA targets, active-size eviction, and surface-space composition.
   - [x] **Viewport quality controls**: Positive finite resolution scale, one/four color samples with capability fallback, mixed-quality viewport pipelines, device-bounded attachments, bilinear reconstruction, and unchanged input/UI texture coordinates.
 - [ ] **On-demand updates**: Track scene, camera, and UI texture invalidation separately; reuse results when static, invisible, or paused without continuously requesting frames.
-  - [x] **Retained CPU preparation**: Single-entry scene/snapshot reuse, camera/aspect/UI configuration invalidation, per-call active resource refresh, immutable prepared outputs, and viewport/headless-local ownership.
+  - [x] **Retained CPU preparation**: Configurable entry-bounded scene/snapshot reuse, least-recently-used eviction, camera/aspect/UI configuration keys, resource rebinding without geometry recalculation, immutable prepared outputs, and viewport/headless-local ownership.
   - [x] **Submitted viewport outputs**: Immutable frame identity, captured paint content, referenced atlas generations, submission-gated pixel reuse, bounded viewport-local output storage, dynamic-input bypass, and renderer-owned external submission.
   - [x] **UI capture reuse**: Retain static capture pixels independently of mesh output, compare newly painted content after unrelated UI updates, and isolate caller-owned pending writes.
   - [x] **Retained draw plans**: Immutable object snapshots, camera/shadow clip matrices, output mode and batch-limit keys; active-plan eviction and shared geometry-channel plans.
@@ -131,15 +131,22 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Instanced material batches**: Shared-mesh, compatible-material batching for color, shadow, and geometry outputs without reordering depth writers.
   - [x] **Frustum culling**: Cached indexed mesh bounds, perspective/orthographic clip-volume tests with full object transforms, independent camera/shadow eligibility, resource-resolution pruning, and per-frame draw plans without renumbering IDs or changing world-ray queries.
   - [ ] **Rendering benchmarks**: Reproducible shared-mesh and mixed-material workloads with CPU preparation and draw-count measurements.
-    - [x] **Scene preparation**: CPU-only shared geometry, mixed PBR, off-camera, and pending-image workloads at 1,024 and 16,384 objects.
+    - [x] **Scene preparation**: CPU-only shared geometry, mixed PBR, off-camera, pending-image, alternating-camera, and resource-rebinding workloads at 1,024 and 16,384 objects.
     - [x] **Draw planning**: CPU-only batching workloads, per-pass mesh/instance/triangle counts, parameter-upload payload sizes, and retained submission statistics.
     - [x] **Draw encoding**: Opt-in serialized GPU submissions for shared geometry, mixed PBR, culled instances, and vertex updates; color and geometry-output passes with CPU timing and submitted draw-count checks.
     - [ ] **GPU measurements**: Run encoding workloads on supported hardware and record adapter-specific results separately from CPU planning benchmarks.
 - [ ] **Resource lifecycle**: Handle multiple viewports, resizing, device recovery, and cache eviction within resource budgets.
   - [x] **Explicit cache release**: Window-local mesh cache release preserving shared 2D resources; direct-renderer cache release preserving public atlas tiles; headless cache and private atlas release with retained frame/readback ownership and lazy reconstruction.
+  - [x] **Headless image residency**: Configurable idle image-count and pixel-payload limits, preparation-recency eviction, active-image preservation, idle usage reports, and rollback of new allocations on preparation failure.
+  - [x] **Headless image admission**: Per-preparation decoded-pixel budgets with identity deduplication, resident-input checks, active/idle payload reports, and allocation rollback on rejection.
   - [x] **Mesh output-cache budgets**: Configurable window/external-renderer quotas shared by nested UI captures, allocation counts and bytes, immediate entry release on budget changes, zero-budget bypass, and recovery-preserved settings.
   - [x] **Instance capacity reclamation**: Device-bounded growth, quarter-capacity shrink hysteresis, active-batch reuse, and removed-batch release across viewport and direct-output passes.
+  - [x] **Mixed-quality geometry sharing**: Viewport-local vertex/index pools across one/four-sample pipelines, shared snapshot/UV keys, retired-consumer release before topology reuse, and independent per-view attachments.
+  - [x] **Mixed-quality image sharing**: Common mip-chain and sampler caches across one/four-sample viewport pipelines, union-based image retention, and independent atlas-generation/color-space keys.
+  - [x] **Submitted vertex uploads**: Queue-submission-gated staging release, unchanged-geometry copy reuse, shared geometry-channel ownership, and replay after failed or caller-owned encoding.
+  - [x] **External vertex ownership**: Non-recyclable externally encoded vertex destinations, including initially populated buffers, with renderer-owned snapshot reuse and retained upload replay.
   - [x] **Direct target admission**: CPU-only output/attachment/shadow payload reports, optional per-request byte limits before uploads, preserved cache/frame ownership, and submission-local reports independent of cache hits.
+  - [x] **Direct geometry admission**: CPU-only vertex/index payload reports with shared mesh/UV accounting, camera/shadow eligibility, per-buffer device checks, optional per-request totals before geometry allocation, and retained output reports.
   - [x] **Selective readback admission**: Available-channel subsets, aligned staging and widened CPU payload budgets before allocation, retained request reports, and direct decoding with the shared pending/cancellation limit.
 - [ ] **Platform coverage**: Add macOS and Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
 - [ ] **Cross-platform validation**: Cover depth, transparency, texture colors, nested composition, input mapping, and high DPI; distinguish automated checks from manual visual confirmation.

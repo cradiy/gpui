@@ -410,14 +410,24 @@ fn retained_preparation_tracks_camera_aspect_ui_configuration_and_explicit_relea
 #[test]
 fn retained_resources_refresh_once_per_slot_and_preserve_older_outputs() {
     let scene = Scene::new()
-        .object(Object::new(Mesh::plane(), layered_material()).id("surface"))
+        .object(
+            Object::new(
+                Mesh::plane(),
+                layered_material().alpha_mode(gpui_3d::AlphaMode::Blend),
+            )
+            .position([0.1, 0.2, -0.3])
+            .rotation([0.2, 0.3, 0.4])
+            .scale([1.2, 0.8, 1.])
+            .id("surface"),
+        )
         .object(Object::new(Mesh::cube(), Material::color(rgb(0xffffff))).id("solid"))
         .object(
             Object::new(Mesh::plane(), Material::image("offscreen.png")).position([100., 0., 0.]),
         );
     let mut cache = PreparationCache::new();
-    let mut previous = None;
+    let mut previous: Option<Arc<gpui_3d::PreparedScene>> = None;
     let mut retained_pending = None;
+    let mut retained_ready: Option<Arc<gpui_3d::PreparedScene>> = None;
     for (step, ready, tile_id) in [
         (0, false, 9),
         (1, false, 9),
@@ -466,6 +476,21 @@ fn retained_resources_refresh_once_per_slot_and_preserve_older_outputs() {
         assert_eq!(prepared.frame().objects.len(), if ready { 2 } else { 1 });
         assert_eq!(prepared.objects().len(), 3);
         if ready {
+            if let Some(first) = &retained_ready {
+                let old = &first.frame().objects[0];
+                let current = &prepared.frame().objects[0];
+                assert!(Arc::ptr_eq(&old.mesh, &current.mesh));
+                assert_eq!(old.model, current.model);
+                assert_eq!(old.normal, current.normal);
+                assert_eq!(old.sort_depth, current.sort_depth);
+                assert_eq!(old.sampling, current.sampling);
+                assert_eq!(old.uv_set, current.uv_set);
+                assert_eq!(old.cast_shadows, current.cast_shadows);
+                assert_eq!(old.receive_shadows, current.receive_shadows);
+                assert_eq!(old.normal_texture.unwrap().tile.tile_id, TileId(9));
+            } else {
+                retained_ready = Some(prepared.clone());
+            }
             assert_eq!(
                 prepared.frame().objects[0]
                     .normal_texture
@@ -478,6 +503,7 @@ fn retained_resources_refresh_once_per_slot_and_preserve_older_outputs() {
             assert_eq!(prepared.frame().objects[0].output_id, 2);
         }
         if let Some(previous) = previous {
+            assert!(Arc::ptr_eq(&previous.identities(), &prepared.identities()));
             assert_eq!(Arc::ptr_eq(&previous, &prepared), step == 1 || step == 3);
         } else {
             retained_pending = Some(prepared.clone());
@@ -487,6 +513,27 @@ fn retained_resources_refresh_once_per_slot_and_preserve_older_outputs() {
     let pending = retained_pending.unwrap();
     assert_eq!(pending.pending_textures().len(), 5);
     assert_eq!(pending.frame().objects.len(), 1);
+}
+
+#[test]
+fn invalid_later_objects_do_not_start_resource_resolution() {
+    let scene = Scene::new()
+        .object(Object::new(Mesh::plane(), Material::image("surface.png")))
+        .object(Object::new(Mesh::cube(), Material::color(rgb(0xffffff))).scale([1., 0., 1.]));
+    let mut requests = 0;
+    let mut resolve = |_: gpui_3d::TextureRequest<'_>| {
+        requests += 1;
+        Ok(TextureState::Ready(ResolvedTexture::Image(tile())))
+    };
+    assert!(matches!(
+        scene.prepare(1., None, &mut resolve),
+        Err(PrepareError::InvalidScene(_))
+    ));
+    assert!(matches!(
+        PreparationCache::new().prepare(&scene, 1., None, &mut resolve),
+        Err(PrepareError::InvalidScene(_))
+    ));
+    assert_eq!(requests, 0);
 }
 
 #[test]

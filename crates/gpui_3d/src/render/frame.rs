@@ -1,13 +1,24 @@
-use crate::{Scene, Texture, TextureSlot};
+#[cfg(test)]
+use crate::Texture;
+use crate::{Scene, TextureSlot};
 use anyhow::{Result, ensure};
 use gpui::{MeshDraw3d, MeshTexture3d, Scene3dFrame, UiTexture3d};
 
 impl Scene {
+    #[cfg(test)]
     pub(crate) fn prepare_frame(
         &self,
         aspect: f32,
         ui_texture: Option<UiTexture3d>,
-        mut resolve: impl FnMut(usize, TextureSlot, &Texture) -> Result<Option<MeshTexture3d>>,
+        resolve: impl FnMut(usize, TextureSlot, &Texture) -> Result<Option<MeshTexture3d>>,
+    ) -> Result<Scene3dFrame> {
+        self.bind_frame(&self.plan_frame(aspect, ui_texture)?, resolve)
+    }
+
+    pub(super) fn plan_frame(
+        &self,
+        aspect: f32,
+        ui_texture: Option<UiTexture3d>,
     ) -> Result<Scene3dFrame> {
         let view_projection = self.camera.view_projection(aspect)?;
         let view = self.camera.view_matrix()?;
@@ -179,38 +190,6 @@ impl Scene {
             if !camera_visible && !shadow_visible {
                 continue;
             }
-            let mut metallic_roughness_texture = None;
-            let mut emissive_texture = None;
-            let mut normal_texture = None;
-            let mut occlusion_texture = None;
-            let mut ready = true;
-            for (slot, map) in object.material.lighting_textures() {
-                match resolve(index, slot, &Texture::Image(map.image.clone()))? {
-                    Some(MeshTexture3d::Image(tile)) => {
-                        let resolved = Some(gpui::MaterialTexture3d {
-                            tile,
-                            sampling: map.sampling,
-                            uv_set: map.uv_set,
-                        });
-                        match slot {
-                            TextureSlot::MetallicRoughness => metallic_roughness_texture = resolved,
-                            TextureSlot::Emissive => emissive_texture = resolved,
-                            TextureSlot::Normal => normal_texture = resolved,
-                            TextureSlot::Occlusion => occlusion_texture = resolved,
-                            TextureSlot::BaseColor => unreachable!(),
-                        }
-                    }
-                    None => ready = false,
-                    _ => anyhow::bail!("object {index}: material maps require atlas images"),
-                }
-            }
-            let Some(texture) = resolve(index, TextureSlot::BaseColor, &object.material.texture)?
-            else {
-                continue;
-            };
-            if !ready {
-                continue;
-            }
             objects.push(MeshDraw3d {
                 cast_shadows: object.cast_shadows,
                 receive_shadows: object.receive_shadows,
@@ -219,16 +198,16 @@ impl Scene {
                 model,
                 normal,
                 color,
-                texture,
+                texture: MeshTexture3d::None,
                 sampling: object.material.sampling,
                 uv_set: object.material.uv_set,
                 image_color_space: object.material.image_color_space,
                 pbr: object.material.pbr,
-                metallic_roughness_texture,
-                emissive_texture,
-                normal_texture,
+                metallic_roughness_texture: None,
+                emissive_texture: None,
+                normal_texture: None,
                 normal_scale: object.material.normal_scale,
-                occlusion_texture,
+                occlusion_texture: None,
                 occlusion_strength: object.material.occlusion_strength,
                 alpha_cutoff: object.material.alpha_cutoff,
                 double_sided: object.material.double_sided,

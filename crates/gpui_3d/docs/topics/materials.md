@@ -414,6 +414,9 @@ includes odd image edges and supports one-pixel axes. Image identity, atlas
 allocation generation, and color interpretation distinguish cached chains;
 sampling changes reuse a chain while mipmapping remains enabled. Chain storage
 uses eight bytes per texel summed across all levels, in addition to atlas storage.
+One-sample and four-sample views in the same WGPU viewport renderer share mip
+chains and samplers. Chains remain cached while any prepared view needs them;
+separate windows and nested UI-capture renderers have independent caches.
 
 GPU level selection uses derivatives of transformed, unwrapped UVs. Color,
 object-ID, depth, and normal outputs share the same image-alpha sampling at a

@@ -18,6 +18,8 @@ mod capabilities;
 pub use capabilities::{Scene3dDeviceCapabilities, Scene3dFormatCapabilities};
 mod memory;
 pub use memory::Scene3dTargetMemory;
+mod geometry_memory;
+pub use geometry_memory::Scene3dGeometryMemory;
 mod readback;
 pub use readback::{Scene3dReadbackConfig, Scene3dReadbackMemory};
 
@@ -171,6 +173,7 @@ pub struct WgpuScene3dRenderer {
     device_capabilities: Scene3dDeviceCapabilities,
     readback_busy: Arc<AtomicBool>,
     target_byte_limit: Option<u64>,
+    geometry_byte_limit: Option<u64>,
 }
 impl WgpuScene3dRenderer {
     #[cfg(not(target_family = "wasm"))]
@@ -192,6 +195,7 @@ impl WgpuScene3dRenderer {
             device_capabilities,
             readback_busy: Arc::new(AtomicBool::new(false)),
             target_byte_limit: None,
+            geometry_byte_limit: None,
         })
     }
     pub fn context(&self) -> &WgpuContext {
@@ -218,6 +222,32 @@ impl WgpuScene3dRenderer {
     /// device, or bound total GPU residency. Use `clear_caches` to release caches.
     pub fn set_target_byte_limit(&mut self, bytes: Option<u64>) {
         self.target_byte_limit = bytes;
+    }
+
+    /// Optional per-request vertex/index payload limit. Defaults to `None`.
+    pub fn geometry_byte_limit(&self) -> Option<u64> {
+        self.geometry_byte_limit
+    }
+
+    /// Applies to future requests without releasing existing caches or outputs.
+    /// Zero permits only empty or fully culled geometry. Not a total GPU budget.
+    pub fn set_geometry_byte_limit(&mut self, bytes: Option<u64>) {
+        self.geometry_byte_limit = bytes;
+    }
+
+    /// Plans a valid prepared frame and checks geometry limits without GPU allocation.
+    /// Scene parameters, channel support, and atlas residency are validated separately.
+    pub fn validate_geometry_memory(
+        &self,
+        frame: &Scene3dFrame,
+        channels: Scene3dChannels,
+    ) -> Result<Scene3dGeometryMemory> {
+        let memory = Scene3dGeometryMemory::plan(frame, channels)?;
+        memory.validate(
+            self.context.device.limits().max_buffer_size,
+            self.geometry_byte_limit,
+        )?;
+        Ok(memory)
     }
 
     /// Checks device output limits and this renderer's per-request target budget
@@ -448,6 +478,7 @@ impl WgpuScene3dRenderer {
             );
         }
         let [width, height] = config.size;
+        let geometry_memory = self.validate_geometry_memory(frame, config.channels)?;
         let stride = (u64::from(width) * 4).div_ceil(256) * 256;
         ensure!(
             stride * u64::from(height) <= self.context.device.limits().max_buffer_size,
@@ -574,7 +605,19 @@ impl WgpuScene3dRenderer {
             resource_source = Some(renderer);
         }
         self.context.queue.submit([encoder.finish()]);
+        for renderer in [
+            self.color.as_ref().map(|(_, renderer)| renderer),
+            self.ids.as_ref(),
+            self.depth.as_ref(),
+            self.normals.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            renderer.commit_uploads(true);
+        }
         Ok(Scene3dGpuOutput {
+            geometry_memory,
             depth_background: frame.depth_background,
             context: self.context.clone(),
             draw_statistics,
@@ -675,6 +718,7 @@ pub struct Scene3dGpuOutput {
     normals: Option<wgpu::Texture>,
     readback_busy: Arc<AtomicBool>,
     target_memory: Scene3dTargetMemory,
+    geometry_memory: Scene3dGeometryMemory,
 }
 impl Scene3dGpuOutput {
     /// Background sentinel used by this frame's linear-depth texture.
@@ -684,6 +728,10 @@ impl Scene3dGpuOutput {
     /// Target payload of this submission's configuration, independent of cache reuse.
     pub fn target_memory(&self) -> Scene3dTargetMemory {
         self.target_memory
+    }
+    /// Geometry payload of this frame, independent of cache hits and later renders.
+    pub fn geometry_memory(&self) -> Scene3dGeometryMemory {
+        self.geometry_memory
     }
     /// Counts from this submission's prepared mesh plans, without GPU readback.
     pub fn draw_statistics(&self) -> Scene3dDrawStatistics {

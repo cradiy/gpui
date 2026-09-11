@@ -229,8 +229,20 @@ The WGPU renderer reuses vertex and index buffers from retired snapshots with
 shared topology and equal vertex counts. Simultaneously visible snapshots keep
 separate vertex contents. Replacement uploads are ordered before their draws,
 including shadow and geometry-output passes. Upload staging storage is allocated
-per replacement snapshot; cached replacements replay that copy when drawn.
+per replacement snapshot. Window rendering, `draw_external`, and direct headless
+rendering release retained staging data after queue submission; later draws of
+the same cached geometry need no replacement copy. Failed or abandoned encoding
+keeps the copy replayable. Vertex buffers exposed through `encode_external` are
+not recycled for other mesh snapshots, including buffers initialized without a
+replacement upload. Later renderer-owned submissions do not remove this protection.
+Retained replacement uploads remain replayable for the same snapshot. Pending and
+submitted commands own the resources they still need, independently of the cache.
 Meshes kept in their original allocations require no vertex uploads.
+Within each WGPU viewport renderer, one-sample and four-sample views share
+vertex/index allocations for the same mesh snapshot and material UV combination.
+Their render targets and per-view instance data remain independent. Geometry
+sharing does not extend across separate window renderers or nested UI-capture
+renderers.
 Cache entries absent from the prepared scenes are released. Vertex/index count
 changes require a new `Mesh`; batched instance streams are separate from vertex
 replacement.

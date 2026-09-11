@@ -73,7 +73,8 @@ Each primitive's packed geometry is validated and its bounds are reduced on the
 GPU, with fixed-size status and bounds readbacks. Geometry, material coordinate
 selections, bounds, transforms, lights and cameras become visible together after
 every primitive passes both checks. A failed preparation retains the previous
-display batch and reports the error. The timeline shows the requested
+display batch and reports the error. Newer samples remain eligible for evaluation;
+redraws alone do not retry the failed sample. The timeline shows the requested
 sample; the displayed pose can lag while work completes. Before the first batch
 is ready, the viewport shows a preparation message. **Frame all** and **Frame
 selected** use bounds from the displayed batch.

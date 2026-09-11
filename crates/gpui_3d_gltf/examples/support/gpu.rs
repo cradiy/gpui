@@ -85,12 +85,24 @@ impl Deformation {
             self.device_valid,
             "GPU device changed; disable and re-enable GPU deformation"
         );
+        if let Some(pending_revision) = self.pending.as_ref().map(|pending| pending.revision)
+            && let Err(error) = self.poll_pending()
+        {
+            self.failed = Some((pending_revision, format!("{error:#}")));
+            if pending_revision != revision {
+                window.request_animation_frame();
+            }
+            return Err(error);
+        }
         if let Some((failed, error)) = &self.failed
             && *failed == revision
         {
+            if self.pending.is_some() {
+                window.request_animation_frame();
+            }
             anyhow::bail!("{error}");
         }
-        let result = self.advance(instance, poses, weights, revision);
+        let result = self.submit(instance, poses, weights, revision);
         if let Err(error) = &result {
             self.failed = Some((revision, format!("{error:#}")));
         }
@@ -100,13 +112,7 @@ impl Deformation {
         result
     }
 
-    fn advance(
-        &mut self,
-        instance: &SceneInstance,
-        poses: &EvaluatedScene,
-        weights: &[(NodeHandle, Vec<f32>)],
-        revision: u64,
-    ) -> Result<()> {
+    fn poll_pending(&mut self) -> Result<()> {
         if let Some(mut pending) = self.pending.take() {
             for entry in &mut pending.entries {
                 if let Some(request) = &mut entry.request
@@ -140,6 +146,16 @@ impl Deformation {
                 self.pending = Some(pending);
             }
         }
+        Ok(())
+    }
+
+    fn submit(
+        &mut self,
+        instance: &SceneInstance,
+        poses: &EvaluatedScene,
+        weights: &[(NodeHandle, Vec<f32>)],
+        revision: u64,
+    ) -> Result<()> {
         if self.pending.is_none()
             && self
                 .ready

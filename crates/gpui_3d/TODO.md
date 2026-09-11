@@ -299,6 +299,8 @@ contract. Core APIs do not own a physics world, character controller, or editor 
   - [x] **Normal expansion**: Signed world-unit or raster-pixel displacement, bounded Float32 width streams, pass-specific vertex specialization, conservative expanded camera visibility, and unchanged primary data/shadow bounds.
   - [ ] **Mesh pass GPU validation**: Verify stage order, mirrored face visibility, depth bias/write/compare, blending, independent material and custom-stream snapshots, deformed geometry, viewport captures, and unchanged primary data/shadow outputs on supported adapters.
 - [ ] **Coherent evaluated frames**: Compose final transforms, geometry/attribute results, material snapshots, and bounds into a retained submission with transactional validation and no application animation or physics policy in the renderer.
+  - [x] **Object batches**: Retained scene updates combine final world transforms, CPU/GPU geometry with bounds, and material/attribute snapshots; validate target IDs and resource metadata without publishing partial results.
+  - [ ] **Submission acceptance**: Verify combined GPU geometry, custom streams, material/pass changes, retained outputs and asynchronous coverage identities across viewport and headless rendering.
 - [ ] **Deformed custom-material picking**: Bind regional ID/depth and coverage results to the submitted geometry, material resources, camera, and viewport identity; reject stale results and preserve retained-frame reads after updates.
 
 Toon responses, sphere-map coordinate generation, outline styles, and character-specific

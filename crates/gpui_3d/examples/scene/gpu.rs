@@ -3,8 +3,8 @@ use gpui::Window;
 use gpui_3d::{
     Aabb, AffineTransform, GpuDeformationBounds, GpuDeformationBoundsReadback,
     GpuDeformationLimits, GpuDeformationOutput, GpuMorph, GpuSkin, MorphTargets, NodeHandle,
-    ResolvedTexture, Scene, Scene3dDeviceCapabilities, Scene3dGpuDraw, Scene3dGpuGeometry, Skin,
-    TextureState, Viewport3d, WgpuContext, WgpuScene3dGeometry, viewport3d,
+    ObjectUpdate, Scene, Scene3dDeviceCapabilities, Scene3dGpuGeometry, Skin, Viewport3d,
+    WgpuContext, WgpuScene3dGeometry, viewport3d,
 };
 use std::sync::Arc;
 
@@ -125,18 +125,17 @@ impl Deformation {
                 bounds: self.bounds.request(output, Some(64))?,
             });
         }
-        let identities =
-            scene.prepare(1., None, |_| Ok(TextureState::Ready(ResolvedTexture::None)))?;
-        let draws: Vec<_> = identities
-            .objects()
-            .iter()
+        let updates = scene
+            .geometry_inputs()?
             .filter(|object| object.node.is_some_and(|node| bodies.contains(&node)))
-            .map(|object| Scene3dGpuDraw {
-                output_id: object.output_id,
-                geometry: self.output.geometry.clone(),
-                bounds: [self.output.bounds.min(), self.output.bounds.max()],
-            })
-            .collect();
-        viewport3d("scene", scene).gpu_geometry(&draws)
+            .map(|object| {
+                (
+                    object.output_id,
+                    ObjectUpdate::new()
+                        .gpu_geometry(self.output.geometry.clone(), self.output.bounds),
+                )
+            });
+        let submitted = scene.with_object_updates(updates)?;
+        Ok(viewport3d("scene", submitted))
     }
 }

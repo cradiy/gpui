@@ -2,6 +2,9 @@
 
 [3D viewports](../viewport.md)
 
+For final per-object transforms, geometry and materials, see
+[object submissions](submissions.md).
+
 ## Scene hierarchy
 
 `SceneGraph` manages nodes with optional mesh, camera, and light properties

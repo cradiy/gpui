@@ -295,7 +295,8 @@ impl Scene3dMaterialSnapshot {
         })))
     }
 
-    pub(crate) fn validate_vertex_count(&self, count: usize) -> Result<()> {
+    /// Checks required custom streams against a mesh without allocating or submitting work.
+    pub fn validate_vertex_count(&self, count: usize) -> Result<()> {
         if self.source().program().vertex_attributes().is_empty() {
             return Ok(());
         }

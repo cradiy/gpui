@@ -1,10 +1,12 @@
 mod constraints;
 mod graph;
+mod update;
 pub use constraints::{ConstraintStatus, TransformConstraint};
 pub use graph::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
     SceneSubtree, SubtreeInstance, SubtreeNode, TransformOverride,
 };
+pub use update::ObjectUpdate;
 
 use crate::{
     AffineTransform, Camera, ColorOutput, DiffuseEnvironment, DirectionalShadow, Light, Material,

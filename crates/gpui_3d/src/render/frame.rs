@@ -15,7 +15,7 @@ impl Scene {
         self.bind_frame(&self.plan_frame(aspect, ui_texture)?, resolve)
     }
 
-    pub(super) fn plan_frame(
+    pub(crate) fn plan_frame(
         &self,
         aspect: f32,
         ui_texture: Option<UiTexture3d>,

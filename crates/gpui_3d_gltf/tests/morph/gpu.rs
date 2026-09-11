@@ -1,6 +1,6 @@
 use super::*;
 use gpui_3d::{GpuDeformationLimits, Mesh, WgpuContext};
-use gpui_3d_gltf::{GpuSceneDeformation, SceneAsset};
+use gpui_3d_gltf::{GpuSceneDeformation, GpuSceneSourceMemory, SceneAsset};
 
 #[path = "rendering.rs"]
 mod rendering;
@@ -63,6 +63,89 @@ fn asset_admission_preserves_generated_and_authored_tangent_policies() {
 }
 
 #[test]
+fn source_budget_counts_primitive_occurrences_and_ignores_static_geometry() -> anyhow::Result<()> {
+    let limits = GpuDeformationLimits::default();
+    let mut fixture = Fixture::new();
+    let single = GpuSceneSourceMemory::plan(&asset(&fixture), limits, None)?;
+    assert_eq!(single.primitive_count, 1);
+    let primitive = fixture.json["meshes"][0]["primitives"][0].clone();
+    fixture.json["meshes"][0]["primitives"] = json!([primitive, primitive]);
+    let repeated = asset(&fixture);
+    let memory = GpuSceneSourceMemory::plan(&repeated, limits, None)?;
+    assert_eq!(memory.primitive_count, 2);
+    assert_eq!(memory.source_bytes, single.source_bytes * 2);
+    assert_eq!(
+        GpuSceneSourceMemory::plan(&repeated, limits, Some(memory.source_bytes))?,
+        memory
+    );
+    assert!(GpuSceneSourceMemory::plan(&repeated, limits, Some(memory.source_bytes - 1)).is_err());
+    assert!(
+        GpuSceneSourceMemory::plan(
+            &repeated,
+            GpuDeformationLimits {
+                max_source_bytes: 0,
+                ..limits
+            },
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        GpuSceneSourceMemory::plan(
+            &repeated,
+            GpuDeformationLimits {
+                max_output_bytes: 0,
+                ..limits
+            },
+            None
+        )
+        .is_err()
+    );
+    for primitive in fixture.json["meshes"][0]["primitives"]
+        .as_array_mut()
+        .unwrap()
+    {
+        primitive.as_object_mut().unwrap().remove("targets");
+    }
+    assert_eq!(
+        GpuSceneSourceMemory::plan(&asset(&fixture), limits, Some(0))?,
+        Default::default()
+    );
+    Ok(())
+}
+
+#[test]
+fn source_budget_includes_skin_bind_meshes_and_generated_directions() -> anyhow::Result<()> {
+    let limits = GpuDeformationLimits::default();
+    let plain = asset(&mixed_fixture());
+    let memory = GpuSceneSourceMemory::plan(&plain, limits, None)?;
+    assert_eq!(memory.primitive_count, 4);
+    // Morph sources use six split corners; the Skin-only mesh keeps four vertices.
+    // Morph weights and Skin palettes are allocated during evaluation, not upload.
+    assert_eq!(
+        memory.source_bytes,
+        3 * (6 * 64 * 2 + 16 + 6 * 8 + 16)
+            + 2 * ((6 + 1 + 2 * 6) * 4 + 32)
+            + (4 + 1 + 2 * 4) * 4
+            + 32
+            + 4 * 64
+    );
+    let generated = asset(&generated_fixture(false));
+    let directions = GpuSceneSourceMemory::plan(&generated, limits, None)?;
+    let tangent_bytes = gpui_3d::GpuTangentGenerationMemory::plan(6, limits)?.source_bytes;
+    assert_eq!(
+        directions.source_bytes - memory.source_bytes,
+        3 * (tangent_bytes + 6 * 64)
+    );
+    assert!(GpuSceneSourceMemory::plan(&generated, limits, Some(memory.source_bytes)).is_err());
+    assert_eq!(
+        GpuSceneSourceMemory::plan(&generated, limits, Some(directions.source_bytes))?,
+        directions
+    );
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires a compute-capable GPU with SHADER_F64"]
 fn gpu_zero_weight_tangents_reuse_outputs_with_zero_evaluation_budget() -> anyhow::Result<()> {
     let mut fixture = Fixture::new();
@@ -74,7 +157,12 @@ fn gpu_zero_weight_tangents_reuse_outputs_with_zero_evaluation_budget() -> anyho
     let mut graph = SceneGraph::new();
     let instance = graph.instantiate(None, asset.subtree())?;
     let poses = graph.evaluate()?;
-    let gpu = GpuSceneDeformation::new(WgpuContext::new_headless()?, &asset, Default::default())?;
+    let gpu = GpuSceneDeformation::new(
+        WgpuContext::new_headless()?,
+        &asset,
+        Default::default(),
+        None,
+    )?;
     let memory = gpu.evaluation_memory(&instance, &[])?;
     assert_eq!(memory.evaluation_bytes, 0);
     let first = gpu.evaluate(&instance, &poses, &[], Some(0))?;
@@ -191,7 +279,23 @@ fn gpu_imported_tangent_generation_composes_normals_skin_and_retained_zero_sampl
         let mut graph = SceneGraph::new();
         let instance = graph.instantiate(None, asset.subtree())?;
         let poses = graph.evaluate()?;
-        let gpu = GpuSceneDeformation::new(context.clone(), &asset, limits)?;
+        let source_memory = GpuSceneSourceMemory::plan(&asset, limits, None)?;
+        assert!(
+            GpuSceneDeformation::new(
+                context.clone(),
+                &asset,
+                limits,
+                Some(source_memory.source_bytes - 1)
+            )
+            .is_err()
+        );
+        let gpu = GpuSceneDeformation::new(
+            context.clone(),
+            &asset,
+            limits,
+            Some(source_memory.source_bytes),
+        )?;
+        assert_eq!(gpu.source_memory(), source_memory);
         let target = instance.node(asset.morphs()[0].node()).unwrap();
         for overrides in [
             vec![],
@@ -282,6 +386,7 @@ fn gpu_imported_deformation_matches_cpu_across_instances_and_retained_samples() 
         WgpuContext::new_headless()?,
         &asset,
         GpuDeformationLimits::default(),
+        None,
     )?;
     let target = first.node(asset.morphs()[0].node()).unwrap();
     for weights in [

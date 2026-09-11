@@ -9,12 +9,15 @@ use gpui_3d::{
 use crate::{SceneAsset, SceneMorph, ScenePrimitive, SceneSkin, morph::resolve_weights};
 
 mod memory;
+mod source_memory;
 pub use memory::GpuSceneEvaluationMemory;
+pub use source_memory::GpuSceneSourceMemory;
 
 /// Retained imported Morph and Skin sources on one device, reusable across scene instances.
 /// Evaluation submits immutable outputs without reading vertices or changing the CPU scene.
 pub struct GpuSceneDeformation {
     primitives: Vec<PrimitiveSource>,
+    memory: GpuSceneSourceMemory,
 }
 
 struct PrimitiveSource {
@@ -65,15 +68,16 @@ impl GpuSceneDeformation {
         Ok(())
     }
 
-    /// Uploads each deformable primitive after checking all imported direction policies.
-    /// Limits apply per core source and per output, not to aggregate scene residency.
+    /// Uploads each deformable primitive after checking imported direction policies,
+    /// core payload limits and the optional aggregate retained-source budget.
     /// The adapter retains geometry and bindings, but not materials or decoded images.
     pub fn new(
         context: WgpuContext,
         asset: &SceneAsset,
         limits: GpuDeformationLimits,
+        max_source_bytes: Option<u64>,
     ) -> Result<Self> {
-        Self::check_asset(asset)?;
+        let memory = GpuSceneSourceMemory::plan(asset, limits, max_source_bytes)?;
         let morphs: HashMap<_, _> = asset
             .morphs()
             .iter()
@@ -165,7 +169,12 @@ impl GpuSceneDeformation {
             })();
             primitives.push(prepare.with_context(|| description(primitive))?);
         }
-        Ok(Self { primitives })
+        Ok(Self { primitives, memory })
+    }
+
+    /// Buffer payload admitted before source upload, excluding evaluation results.
+    pub fn source_memory(&self) -> GpuSceneSourceMemory {
+        self.memory
     }
 
     /// Submits Morph, required normal/tangent regeneration, then Skin in primitive order.

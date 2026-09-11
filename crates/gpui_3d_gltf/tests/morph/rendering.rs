@@ -42,8 +42,12 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
     let joint = instance.node(asset.skins()[0].joints()[0]).unwrap();
     let mut renderer = HeadlessRenderer::new()?;
     let context = renderer.context().clone();
-    let deformation =
-        GpuSceneDeformation::new(context.clone(), &asset, GpuDeformationLimits::default())?;
+    let deformation = GpuSceneDeformation::new(
+        context.clone(),
+        &asset,
+        GpuDeformationLimits::default(),
+        None,
+    )?;
     let bounds = GpuDeformationBounds::new(context)?;
     let config = Scene3dOutputConfig {
         size: [96, 80],

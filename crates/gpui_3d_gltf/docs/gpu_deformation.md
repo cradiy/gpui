@@ -14,9 +14,12 @@ gpui_3d_gltf = { path = "../gpui_3d_gltf", features = ["wgpu"] }
 
 `GpuSceneDeformation::check_asset(&asset)` checks direction-regeneration topology
 and tangent coordinate metadata without creating a device or allocating GPU
-resources. `new(context, &asset, limits)` performs this check before any upload,
-then prepares each deformable primitive in scene order. Static primitives are omitted. The adapter retains
-geometry, authored weights, and skin bindings, not materials or decoded images.
+resources. `GpuSceneSourceMemory::plan(&asset, limits, max_source_bytes)` also
+checks core payload limits and the optional aggregate source budget without a
+device. `new(context, &asset, limits, max_source_bytes)` runs this admission before
+any upload, then prepares each deformable primitive in scene order. Static
+primitives are omitted. The adapter retains geometry, authored weights, and skin
+bindings, not materials or decoded images.
 It can evaluate multiple instances of the same asset.
 
 Supported inputs include authored normal/tangent deltas, flat normal
@@ -28,13 +31,19 @@ geometry must use ordered, unshared triangle corners. There is no automatic CPU
 fallback. [`SceneAsset::deform`](morph.md#scene-weights-and-deformation) supplies
 the CPU evaluation path.
 
-`GpuDeformationLimits` applies to each core source and each result. It is not an
-aggregate scene budget. Repeated primitive occurrences have independent GPU
-sources; instances evaluated through one adapter reuse those sources. Outputs,
-intermediate buffers, palettes, render packing, and pending readbacks also consume
-memory. Tangent regeneration admits the combined payload of its core stages and
-retains an uploaded base-direction snapshot for zero-weight samples. Bound
-outstanding evaluations and retained results in the caller.
+`GpuDeformationLimits` applies to each core source and each result. The final
+constructor argument separately limits the complete retained source payload;
+`None` disables only this aggregate limit. `source_memory()` returns the admitted
+`GpuSceneSourceMemory`, with `source_bytes` and `primitive_count`.
+
+The report includes Morph bases/deltas, Skin influence bindings, direction
+reconstruction sources, uniforms, and uploaded bind-space snapshots. It excludes
+evaluation weights/palettes/results, render packing, readbacks, CPU data, pipelines
+and driver overhead. Repeated primitive occurrences have independent GPU sources;
+instances evaluated through one adapter reuse those sources. Tangent regeneration
+also retains a base-direction snapshot for zero-weight samples. Bound outstanding
+evaluations and retained results separately. CPU admission does not establish
+device support or guarantee successful GPU allocation.
 
 ## Evaluation
 
@@ -49,7 +58,9 @@ fn prepare(
     context: WgpuContext,
     asset: &SceneAsset,
 ) -> anyhow::Result<GpuSceneDeformation> {
-    GpuSceneDeformation::new(context, asset, GpuDeformationLimits::default())
+    GpuSceneDeformation::new(
+        context, asset, GpuDeformationLimits::default(), Some(256 * 1024 * 1024),
+    )
 }
 
 fn sample(

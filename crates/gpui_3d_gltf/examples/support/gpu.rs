@@ -53,6 +53,7 @@ impl Deformation {
                 context.clone(),
                 instance.asset(),
                 GpuDeformationLimits::default(),
+                Some(256 * 1024 * 1024),
             )?,
             bounds: GpuDeformationBounds::new(context.clone())?,
             context,

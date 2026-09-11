@@ -145,8 +145,9 @@ the buffer through another GPU binding.
 
 Status X is zero for a valid record, one for detected nonfinite arithmetic,
 two for an undefined tangent frame, three for a singular or unrepresentable
-blended Skin transform, and four for a rejected zero-area face during normal or
-tangent generation. Other lanes are reserved and zero. Submission
+blended Skin transform, four for a rejected zero-area face during normal or
+tangent generation, and five for tangent input outside its supported numeric
+range. Other lanes are reserved and zero. Submission
 validation does not prove that the computed attributes are valid.
 
 `readback()` waits for the GPU, checks record status, validates mesh attributes,

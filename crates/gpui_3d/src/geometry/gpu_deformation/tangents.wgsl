@@ -5,7 +5,7 @@ struct Frame {
     tangent: vec4<f32>, bitangent: vec4<f32>,
     identity: vec3<u32>, weight: f32, status: vec4<u32>,
 }
-struct Topology { vertex: u32, reserved: u32, uv: vec2<f32> }
+struct Topology { vertex: u32, zero_uv: u32, uv: vec2<f32> }
 struct Params { vertices: u32, mode: u32, reserved: vec2<u32> }
 @group(0) @binding(0) var<storage, read> source: array<Vertex>;
 @group(0) @binding(1) var<storage, read> frames: array<Frame>;
@@ -18,6 +18,19 @@ fn finite(v: vec4<f32>) -> bool {
     return all((bitcast<vec4<u32>>(v) & vec4(0x7f800000u)) != vec4(0x7f800000u));
 }
 fn magnitude(v: vec3<f32>) -> f32 { return max(max(abs(v.x), abs(v.y)), abs(v.z)); }
+fn normal_float(v: f32) -> bool {
+    let exponent = bitcast<u32>(v) & 0x7f800000u;
+    return exponent != 0u && exponent != 0x7f800000u;
+}
+fn squared_length(v: vec3<f32>) -> f32 { return v.x * v.x + v.y * v.y + v.z * v.z; }
+fn supported_edge(v: vec3<f32>, allow_zero: bool) -> bool {
+    return normal_float(squared_length(v)) || (allow_zero && all(v == vec3(0.0)));
+}
+fn supported_derivative(v: vec3<f32>, inherited: bool, determinant: f32) -> bool {
+    let squared = squared_length(v);
+    if !normal_float(squared) { return inherited && all(v == vec3(0.0)); }
+    return inherited || finite(vec4(sqrt(squared) / abs(determinant)));
+}
 fn unit(v: vec3<f32>) -> vec3<f32> {
     let scale = magnitude(v);
     if scale == 0.0 { return vec3(0.0); }
@@ -86,23 +99,33 @@ fn publish(@builtin(global_invocation_id) id: vec3<u32>) {
     let c = topology[first + 2u];
     let e = source[b.vertex].position.xyz - source[a.vertex].position.xyz;
     let f = source[c.vertex].position.xyz - source[a.vertex].position.xyz;
+    let opposite = source[c.vertex].position.xyz - source[b.vertex].position.xyz;
     let duv = b.uv - a.uv;
     let euv = c.uv - a.uv;
     let determinant = duv.x * euv.y - duv.y * euv.x;
     let derivative = (e * euv.y - f * duv.y) * select(-1.0, 1.0, determinant >= 0.0);
+    let bitangent = f * duv.x - e * euv.x;
     if !finite(vec4(e, 0.0)) || !finite(vec4(f, 0.0)) || !finite(vec4(duv, euv)) ||
-        !finite(vec4(determinant)) || !finite(vec4(derivative, 0.0)) {
+        !finite(vec4(determinant)) || !finite(vec4(derivative, 0.0)) ||
+        !finite(vec4(opposite, 0.0)) || !finite(vec4(bitangent, 0.0)) {
         reject(first, vec4(1u, 0u, 0u, 0u)); return;
     }
+    let es = magnitude(e);
+    let fs = magnitude(f);
+    var zero_area = es == 0.0 || fs == 0.0;
+    if !zero_area { zero_area = all(cross(e / es, f / fs) == vec3(0.0)); }
+    let zero_uv = a.zero_uv != 0u;
     if params.mode == 0u {
-        let es = magnitude(e);
-        let fs = magnitude(f);
-        var zero_area = es == 0.0 || fs == 0.0;
-        if !zero_area { zero_area = all(cross(e / es, f / fs) == vec3(0.0)); }
         if zero_area {
             reject(first, vec4(4u, 0u, 0u, 0u)); return;
         }
-        if determinant == 0.0 { reject(first, vec4(2u, 0u, 0u, 0u)); return; }
+        if zero_uv { reject(first, vec4(2u, 0u, 0u, 0u)); return; }
+    }
+    let inherited = zero_area || zero_uv;
+    if !(normal_float(determinant) || (zero_uv && determinant == 0.0)) ||
+        !supported_edge(e, inherited) || !supported_edge(f, inherited) || !supported_edge(opposite, inherited) ||
+        !supported_derivative(derivative, inherited, determinant) || !supported_derivative(bitangent, inherited, determinant) {
+        reject(first, vec4(5u, 0u, 0u, 0u)); return;
     }
     var repair_sign = select(-1.0, 1.0, determinant >= 0.0);
     for (var corner = 0u; corner < 3u; corner++) {

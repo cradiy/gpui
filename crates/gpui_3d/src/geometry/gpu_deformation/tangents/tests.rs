@@ -1,4 +1,5 @@
 use super::*;
+mod numeric;
 mod parity;
 use crate::{
     AffineTransform, GpuMorph, GpuSkin, GpuTangentAdjacency, GpuTangentDerivatives,
@@ -34,6 +35,7 @@ fn preparation_preserves_vertex_order_attributes_and_selected_tangent_basis() {
     );
     for item in &topology {
         assert_eq!(Some(item.uv), base.uv_at(2, item.vertex as usize));
+        assert_eq!(item.zero_uv, 0);
     }
     for (output, source) in output.vertices().iter().zip(base.vertices()) {
         assert_eq!(output.position, source.position);
@@ -74,7 +76,8 @@ fn preparation_requires_fixed_corners_and_explicit_initial_repair() {
     ] {
         assert!(prepare(&base, 0, mode).is_err());
     }
-    let (_, repaired) = prepare(&base, 0, TangentGenerationMode::Repair).unwrap();
+    let (topology, repaired) = prepare(&base, 0, TangentGenerationMode::Repair).unwrap();
+    assert!(topology.iter().all(|item| item.zero_uv == 1));
     assert_eq!(repaired.tangent_uv_set(), Some(0));
     assert_eq!(repaired.tangents().unwrap(), [[1., 0., 0., 1.]; 3]);
 }
@@ -141,7 +144,7 @@ fn admission_includes_repair_output_and_shader_matches_host_layout() {
                         .collect::<Vec<_>>(),
                     [
                         std::mem::offset_of!(Topology, vertex),
-                        std::mem::offset_of!(Topology, reserved),
+                        std::mem::offset_of!(Topology, zero_uv),
                         std::mem::offset_of!(Topology, uv)
                     ]
                 );

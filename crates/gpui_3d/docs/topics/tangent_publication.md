@@ -18,6 +18,10 @@ retained `output_mesh()` carries this initial basis and its UV-set identity.
 Initial generation errors are returned by the constructor. This is source
 preparation, not per-evaluation CPU deformation.
 
+The fixed UV topology also retains zero-area classification computed with CPU
+`f64` differences and products. Evaluation does not reclassify UV degeneracy from
+a rounded GPU determinant.
+
 ```rust,no_run
 # use gpui_3d::{GpuDeformationLimits, GpuTangentFramesOutput, GpuTangents, TangentGenerationMode};
 # fn publish(frames: &GpuTangentFramesOutput) -> anyhow::Result<()> {
@@ -64,9 +68,18 @@ the entire triangle in every mode.
 
 Input vertex failures, nonfinite arithmetic, and zero normals cannot be repaired.
 Failure propagates to every vertex of the triangle. Status X = 1 indicates
-nonfinite arithmetic, X = 2 an undefined frame or inconsistent handedness, and
-X = 4 a zero-area triangle rejected by `Strict`. Original input failures preserve
-their status vector. Rejected tangents are zero and must not be consumed.
+nonfinite arithmetic, X = 2 an undefined frame or inconsistent handedness,
+X = 4 a zero-area triangle rejected by `Strict`, and X = 5 tangent input outside
+the supported numeric range. Original input failures preserve their status vector.
+Rejected tangents are zero and must not be consumed.
+
+Numeric admission requires a normal `f32` UV determinant, except exact zero on
+a zero-UV face. All three edge squared lengths and both unnormalized derivative
+squared lengths must be positive normal `f32` values. Zero vectors are allowed
+only on geometrically degenerate or zero-UV faces. Regular faces also require
+finite derivative magnitudes. Underflow, overflow, and nonzero subnormal squared
+lengths are rejected in every mode before repair. Dynamic geometric degeneracy
+uses scaled `f32` cross products; CPU geometry classification uses wider arithmetic.
 
 `GpuTangentsOutput::repair_buffer()` is a read-only storage/copy-source buffer
 containing one `u32` per original source vertex:

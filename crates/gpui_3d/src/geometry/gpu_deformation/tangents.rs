@@ -47,7 +47,7 @@ impl GpuTangentsMemory {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Topology {
     vertex: u32,
-    reserved: u32,
+    zero_uv: u32,
     uv: [f32; 2],
 }
 
@@ -288,19 +288,28 @@ fn prepare(base: &Mesh, set: u32, mode: TangentGenerationMode) -> Result<(Vec<To
         base.vertex_count() == base.index_count(),
         "GPU tangents require one index per source vertex"
     );
-    let topology = base
+    let mut topology = base
         .indices()
         .iter()
         .map(|&vertex| {
             Ok(Topology {
                 vertex,
-                reserved: 0,
+                zero_uv: 0,
                 uv: base
                     .uv_at(set, vertex as usize)
                     .ok_or_else(|| anyhow::anyhow!("missing UV set {set}"))?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    for triangle in topology.chunks_exact_mut(3) {
+        let [a, b, c] = std::array::from_fn::<_, 3, _>(|i| triangle[i].uv.map(f64::from));
+        let u = [b[0] - a[0], b[1] - a[1]];
+        let v = [c[0] - a[0], c[1] - a[1]];
+        let zero_uv = u32::from(u[0] * v[1] - u[1] * v[0] == 0.);
+        for corner in triangle {
+            corner.zero_uv = zero_uv;
+        }
+    }
     let mut used = vec![false; base.vertex_count()];
     for &vertex in base.indices() {
         ensure!(

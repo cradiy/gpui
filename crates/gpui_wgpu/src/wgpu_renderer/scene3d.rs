@@ -778,6 +778,13 @@ impl Scene3dRenderer {
         frames: &[&gpui::Scene3dFrame],
         sizes: impl IntoIterator<Item = [u32; 2]>,
     ) -> anyhow::Result<()> {
+        for frame in frames {
+            crate::scene3d_renderer::validate_frame_settings(
+                frame,
+                device.limits().max_texture_dimension_2d,
+                self.blend_pipeline.is_some(),
+            )?;
+        }
         #[cfg(not(target_family = "wasm"))]
         self.materials
             .prepare(device, frames, self.format, self.samples)?;
@@ -831,17 +838,9 @@ impl Scene3dRenderer {
         let mut batch_sizes = Vec::new();
         let mut has_frame = false;
         for frame in frames {
-            assert!(
-                frame.shadow_is_valid(),
-                "invalid directional shadow parameters or source"
-            );
             if self.shadow_pipeline.is_some()
                 && let Some(shadow) = frame.directional_shadow
             {
-                assert!(
-                    shadow.resolution <= device.limits().max_texture_dimension_2d,
-                    "shadow resolution exceeds device limits"
-                );
                 shadow_sizes.insert(shadow.resolution);
             }
             has_frame = true;
@@ -1050,9 +1049,7 @@ impl Scene3dRenderer {
         let mut shadow_groups = Vec::with_capacity(plan.batches.len());
         let mut lights = [DirectLight::zeroed(); gpui::MAX_PUNCTUAL_LIGHTS_3D];
         let light_count = if let Some(sources) = &frame.lights {
-            assert!(sources.len() <= lights.len(), "too many direct lights");
             for (target, source) in lights.iter_mut().zip(sources.iter()) {
-                assert!(source.is_valid(), "invalid direct light");
                 *target = (*source).into();
             }
             sources.len() as u32

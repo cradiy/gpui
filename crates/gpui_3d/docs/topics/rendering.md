@@ -234,6 +234,12 @@ paint order. Ancestor opacity applies once to the final image, and ancestor
 clipping still applies. Mesh edges default to four samples when supported,
 otherwise one. Captured viewports can be nested in other subtree effects.
 
+WGPU viewport and headless rendering share camera, lighting, shadow, environment,
+and exposure parameter validation. Invalid frame settings are rejected before
+3D resource preparation. Shadow and environment textures must fit the device's
+texture dimensions; background and specular environment checks apply to shaded
+outputs. Viewport pick captures receive scene preparation failures.
+
 ## Viewport effects
 
 Wrap a viewport with `gpui_effects::subtree_effect_chain` to apply Bloom and color

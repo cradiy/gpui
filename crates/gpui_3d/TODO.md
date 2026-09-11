@@ -125,6 +125,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [ ] **Capabilities and diagnostics**: Query formats, channels, sample counts, limits, and backend support; return actionable asset and rendering failures.
   - [x] **WGPU device reports**: Adapter/device feature separation, format usages and flags, output/channel/sample queries, enabled limits, image anisotropy, and pre-construction mesh-pipeline validation.
   - [x] **Viewport backend reports**: Live window support with backend/device/resource reasons, WGPU target-format validation independent of direct outputs, selected 1x/4x sampling, and device-bounded UI capture density.
+  - [x] **Shared frame settings**: Viewport/headless camera, light, shadow, environment and exposure admission before 3D resource preparation, with device-bounded texture dimensions and shaded-output environment checks.
 - [x] **Viewport-sized render targets**: Viewport-local HDR color, depth, and MSAA attachments with configurable resolution and sample count; generic subtree-composition textures remain surface-sized.
   - [x] **Local mesh attachments**: Surface-clipped pixel bounds, preserved fractional alignment and UI sampling, size-shared HDR/depth/MSAA targets, active-size eviction, and surface-space composition.
   - [x] **Viewport quality controls**: Positive finite resolution scale, one/four color samples with capability fallback, mixed-quality viewport pipelines, device-bounded attachments, bilinear reconstruction, and unchanged input/UI texture coordinates.

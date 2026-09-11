@@ -121,10 +121,24 @@ fn failed_viewport_preparation_publishes_pick_errors_and_allows_resubmission() -
     invalid_nested.insert_primitive(Primitive::SubtreeLayer(invalid_child));
     invalid_nested.finish();
     nested_failure.subtree_layers[0].scene = Rc::new(invalid_nested);
+    let mut shadow_failure = scene(false, false);
+    Arc::make_mut(shadow_failure.subtree_layers[0].scene3d.as_mut().unwrap()).directional_shadow =
+        Some(gpui::DirectionalShadow3d {
+            light_index: 0,
+            view_projection: IDENTITY,
+            resolution: 0,
+            depth_bias: 0.,
+            normal_bias: 0.,
+            softness: 0.,
+        });
     for (invalid, expected) in [
         (scene(true, false), "unsupported GPU geometry backend"),
         (scene(false, true), "unsupported 3D material backend"),
         (nested_failure, "unsupported 3D material backend"),
+        (
+            shadow_failure,
+            "invalid directional shadow parameters or source",
+        ),
     ] {
         let capacity = renderer.instance_buffer_capacity;
         assert!(!renderer.draw_external(&invalid, &texture, &view, wgpu::Color::TRANSPARENT));

@@ -3063,10 +3063,17 @@ impl WgpuRenderer {
             scene.visit(&mut |scene| {
                 for layer in &scene.subtree_layers {
                     if let Some(frame) = &layer.scene3d
-                        && let Err(error) = crate::scene3d_renderer::gpu_draws::validate_frame(
-                            &self.resources().device,
+                        && let Err(error) = crate::scene3d_renderer::validate_frame_settings(
                             frame,
+                            self.resources().device.limits().max_texture_dimension_2d,
+                            true,
                         )
+                        .and_then(|()| {
+                            crate::scene3d_renderer::gpu_draws::validate_frame(
+                                &self.resources().device,
+                                frame,
+                            )
+                        })
                     {
                         failure = Some(error);
                     }

@@ -33,6 +33,8 @@ mod readback;
 pub use readback::{Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dReadbackRegion};
 mod viewport_picking;
 pub use viewport_picking::WgpuScene3dPickFrame;
+mod validation;
+pub(crate) use validation::validate_frame_settings;
 
 bitflags::bitflags! {
     /// Independently selectable outputs. Non-color channels use the pixel center.
@@ -340,87 +342,18 @@ impl WgpuScene3dRenderer {
             config,
             frame.directional_shadow.map(|shadow| shadow.resolution),
         )?;
-        ensure!(
-            frame.shadow_is_valid(),
-            "invalid directional shadow parameters or source"
-        );
-        if let Some(lights) = &frame.lights {
-            ensure!(
-                lights.len() <= gpui::MAX_PUNCTUAL_LIGHTS_3D,
-                "too many direct lights"
-            );
-            for (index, light) in lights.iter().enumerate() {
-                ensure!(
-                    light.is_valid(),
-                    "direct light {index} has invalid parameters"
-                );
-            }
-        }
-        ensure!(
-            frame
-                .diffuse_environment
-                .is_none_or(|environment| environment.is_valid()),
-            "invalid diffuse environment parameters"
-        );
+        validate_frame_settings(
+            frame,
+            self.capabilities.max_dimension,
+            config.channels.shaded(),
+        )?;
         ensure!(!self.context.device_lost(), "3D rendering device is lost");
-        if config.channels.shaded()
-            && let Some(environment) = &frame.specular_environment
-        {
-            ensure!(
-                environment.is_valid(),
-                "invalid specular environment parameters"
-            );
-            ensure!(
-                environment.map.size() <= self.capabilities.max_dimension,
-                "specular environment exceeds device texture dimensions"
-            );
-        }
-        if config.channels.shaded()
-            && let Some(background) = &frame.background
-        {
-            ensure!(
-                background.is_valid(),
-                "invalid environment background parameters"
-            );
-            ensure!(
-                background
-                    .map
-                    .size()
-                    .iter()
-                    .all(|v| *v <= self.capabilities.max_dimension),
-                "environment map exceeds device texture dimensions"
-            );
-        }
-        ensure!(
-            frame.color_output.is_valid(),
-            "3D exposure must be finite and between -16 and 16 stops"
-        );
         ensure!(
             frame
                 .objects
                 .iter()
                 .all(|object| !matches!(object.texture, MeshTexture3d::Subtree)),
             "direct 3D rendering does not capture UI textures"
-        );
-        ensure!(
-            frame
-                .view_projection
-                .iter()
-                .flatten()
-                .chain(frame.world_to_view.iter().flatten())
-                .chain(&frame.camera_position)
-                .chain(frame.orthographic_view_direction.iter().flatten())
-                .chain(&frame.light_direction)
-                .chain(&frame.light)
-                .chain([&frame.ambient])
-                .all(|value| value.is_finite()),
-            "3D frame contains non-finite camera or light parameters"
-        );
-        ensure!(
-            frame
-                .orthographic_view_direction
-                .is_none_or(|direction| direction.iter().any(|v| *v != 0.)),
-            "3D orthographic view direction must be nonzero"
         );
         for object in frame.objects.iter() {
             ensure!(

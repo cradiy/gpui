@@ -421,22 +421,34 @@ fn surface_gradients(input: Output) -> SurfaceGradients {
         mat2x2<f32>(dpdx(input.occlusion_uv), dpdy(input.occlusion_uv)), shadow_depth);
 }
 
+struct MaterialFactors {
+    metallic: f32,
+    roughness: f32,
+    emission: vec3<f32>,
+    occlusion: f32,
+};
+fn material_factors(input: SurfaceInput, gradients: SurfaceGradients) -> MaterialFactors {
+    let factors = sample_image(metallic_roughness_image, metallic_roughness_sampler, params.metallic_roughness_map, input.uv.zw, gradients.surface);
+    let emission = params.emissive.rgb * sample_image(emissive_image, emissive_sampler, params.emissive_map, input.detail_uv.xy, gradients.emission).rgb;
+    return MaterialFactors(params.pbr.x * factors.b, params.pbr.y * factors.g,
+        emission, occlusion(input.occlusion_uv, gradients.occlusion));
+}
+
 fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, input: SurfaceInput, gradients: SurfaceGradients) -> vec3<f32> {
     let world = input.world;
-    let factors = sample_image(metallic_roughness_image, metallic_roughness_sampler, params.metallic_roughness_map, input.uv.zw, gradients.surface);
-    let metal = params.pbr.x * factors.b;
-    let roughness = max(params.pbr.y * factors.g, 0.045);
-    let emission = params.emissive.rgb * sample_image(emissive_image, emissive_sampler, params.emissive_map, input.detail_uv.xy, gradients.emission).rgb;
+    let factors = material_factors(input, gradients);
+    let metal = factors.metallic;
+    let roughness = max(factors.roughness, 0.045);
     let view = unit_vector(params.view.xyz - world * params.view.w);
     let diffuse = base * (1.0 - metal);
     let f0 = mix(vec3<f32>(0.04), base, metal);
-    var result = diffuse * (vec3<f32>(params.ambient.x) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * occlusion(input.occlusion_uv, gradients.occlusion) + emission;
+    var result = diffuse * (vec3<f32>(params.ambient.x) + (vec3<f32>(1.0) - f0) * diffuse_environment(normal)) * factors.occlusion + factors.emission;
     let nv = clamp(dot(normal, view), 0.0, 1.0);
     if (params.specular_environment.z > 0.0 && nv > 0.0) {
         let direction = reflect(-view, normal);
         let radiance = material_environment_radiance(direction, roughness);
         let brdf = material_environment_brdf(nv, roughness);
-        result += radiance * (f0 * brdf.x + vec3<f32>(brdf.y)) * occlusion(input.occlusion_uv, gradients.occlusion);
+        result += radiance * (f0 * brdf.x + vec3<f32>(brdf.y)) * factors.occlusion;
     }
     for (var i = 0u; i < params.light_count.x; i += 1u) {
         result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world)) * shadow_visibility(i, world, geometric_normal, gradients.shadow_depth);

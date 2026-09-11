@@ -3,7 +3,7 @@
 pub struct PbrMaterial3d {
     /// Metal fraction in [0, 1]. Zero is dielectric; one has no diffuse response.
     pub metallic: f32,
-    /// Perceptual roughness in [0, 1]; shading uses a minimum of 0.045.
+    /// Perceptual roughness in [0, 1]; built-in PBR shading uses a minimum of 0.045.
     pub roughness: f32,
     /// Additive linear RGB radiance in [0, 65504], independent of scene lights.
     /// Does not illuminate other objects.

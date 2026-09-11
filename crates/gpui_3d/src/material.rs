@@ -168,26 +168,27 @@ impl Material {
         self
     }
     /// Enables metallic-roughness shading, preserving the base color, texture and cutoff.
-    /// Rendering rejects invalid parameters. Unlit mode bypasses PBR, including emission.
+    /// Rendering rejects invalid parameters. Unlit mode bypasses built-in PBR;
+    /// custom shading can still read these factors and their textures.
     pub fn pbr(mut self, parameters: PbrMaterial) -> Self {
         self.pbr = Some(parameters);
         self
     }
     /// Multiplies PBR roughness by linear G and metallic by linear B; R and alpha
-    /// are ignored. Only used when PBR is enabled and the material is lit.
+    /// are ignored. Active for lit PBR or custom shading, including additional passes.
     pub fn metallic_roughness_texture(mut self, texture: MaterialTexture) -> Self {
         self.metallic_roughness_texture = Some(texture);
         self
     }
     /// Multiplies PBR emission by sRGB RGB decoded before filtering. Alpha is
-    /// ignored. Only used when PBR is enabled and the material is lit.
+    /// ignored. Active for lit PBR or custom shading, including additional passes.
     pub fn emissive_texture(mut self, texture: MaterialTexture) -> Self {
         self.emissive_texture = Some(texture);
         self
     }
     /// Uses linear RGB tangent-space normals decoded from [0, 1] to [-1, 1].
     /// Alpha is ignored. Requires mesh tangents for this map's UV set when lit PBR
-    /// and nonzero scale are enabled. Does not change geometry or picking normals.
+    /// or custom shading and nonzero scale are enabled. Does not change picking normals.
     pub fn normal_texture(mut self, texture: MaterialTexture) -> Self {
         self.normal_texture = Some(texture);
         self
@@ -200,7 +201,7 @@ impl Material {
     }
 
     /// Attenuates diffuse ambient and environment light using linear R.
-    /// G, B and alpha are ignored. Works with basic and PBR lit materials.
+    /// G, B and alpha are ignored. Active for lit materials or custom shading.
     pub fn occlusion_texture(mut self, texture: MaterialTexture) -> Self {
         self.occlusion_texture = Some(texture);
         self
@@ -215,6 +216,7 @@ impl Material {
     pub(crate) fn lighting_textures(
         &self,
     ) -> impl Iterator<Item = (TextureSlot, &MaterialTexture)> {
+        let custom_shading = self.custom_material.is_some() || !self.mesh_passes.is_empty();
         [
             (
                 TextureSlot::MetallicRoughness,
@@ -235,13 +237,16 @@ impl Material {
             ),
         ]
         .into_iter()
-        .filter_map(|(slot, texture)| {
+        .filter_map(move |(slot, texture)| {
             texture
-                .filter(|_| !self.unlit && (slot == TextureSlot::Occlusion || self.pbr.is_some()))
+                .filter(|_| {
+                    custom_shading
+                        || (!self.unlit && (slot == TextureSlot::Occlusion || self.pbr.is_some()))
+                })
                 .map(|texture| (slot, texture))
         })
     }
-    /// Bypasses lighting, occlusion, and emission.
+    /// Bypasses built-in lighting, occlusion, and emission. Custom shading remains active.
     pub fn unlit(mut self, unlit: bool) -> Self {
         self.unlit = unlit;
         self

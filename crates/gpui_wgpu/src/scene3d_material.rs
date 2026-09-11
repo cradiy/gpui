@@ -20,6 +20,7 @@ const SHADING_HELPERS: &[&str] = &[
     "builtin_surface",
     "builtin_shading",
     "surface_normal",
+    "material_factors",
     "material_view_direction",
     "material_view_position",
     "material_view_vector",

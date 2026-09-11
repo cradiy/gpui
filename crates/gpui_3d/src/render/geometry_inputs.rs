@@ -83,11 +83,23 @@ mod tests {
             .emissive_texture(MaterialTexture::new("emission.png").uv_set(3))
             .normal_texture(MaterialTexture::new("normal.png").uv_set(4))
             .occlusion_texture(MaterialTexture::new("occlusion.png").uv_set(2));
+        let mut custom = material.clone().unlit(true);
+        custom.pbr = None;
+        custom.custom_material = Some(gpui::MeshMaterial3d::new(std::sync::Arc::new(())));
+        let mut extra = custom.clone();
+        extra.mesh_passes = vec![gpui::MeshPass3d {
+            material: extra.custom_material.take().unwrap(),
+            state: Default::default(),
+            expansion: None,
+        }]
+        .into();
         let mut graph = SceneGraph::new();
         for material in [
             material.clone(),
             material.clone().unlit(true),
             material.normal_scale(0.).occlusion_strength(0.),
+            custom,
+            extra,
             Material::ui().image_uv_set(3),
         ] {
             graph
@@ -98,7 +110,14 @@ mod tests {
         let inputs: Vec<_> = scene.geometry_inputs().unwrap().collect();
         assert_eq!(
             inputs.iter().map(|input| input.uv_sets).collect::<Vec<_>>(),
-            vec![[1, 2, 3, 4, 2], [1, 0, 0, 0, 0], [1, 2, 3, 0, 0], [0; 5]]
+            vec![
+                [1, 2, 3, 4, 2],
+                [1, 0, 0, 0, 0],
+                [1, 2, 3, 0, 0],
+                [1, 2, 3, 4, 2],
+                [1, 2, 3, 4, 2],
+                [0; 5],
+            ]
         );
         let pending = scene
             .prepare(1., None, |_| Ok(TextureState::Pending))

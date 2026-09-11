@@ -621,6 +621,21 @@ mod tests {
             .pbr(PbrMaterial::default())
             .normal_texture(MaterialTexture::new("normal.png"));
         let scene = |material| Scene::new().object(Object::new(mesh.clone(), material));
+        let mut custom = material.clone().unlit(true);
+        custom.pbr = None;
+        custom.custom_material = Some(gpui::MeshMaterial3d::new(std::sync::Arc::new(())));
+        let mut extra = custom.clone();
+        extra.mesh_passes = vec![gpui::MeshPass3d {
+            material: extra.custom_material.take().unwrap(),
+            state: Default::default(),
+            expansion: None,
+        }]
+        .into();
+        for active in [custom, extra] {
+            let error = scene(active.clone()).plan_frame(1., None).unwrap_err();
+            assert!(error.to_string().contains("require mesh tangents"));
+            scene(active.normal_scale(0.)).plan_frame(1., None).unwrap();
+        }
         assert!(
             scene(material.clone())
                 .prepare_frame(1., None, |_, _, _| unreachable!())

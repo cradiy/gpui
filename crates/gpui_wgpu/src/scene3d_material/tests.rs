@@ -38,7 +38,10 @@ fn material_program_compiles_custom_environment_response_without_bindings() {
         }}
         fn material_shading(base: vec3<f32>, input: SurfaceInput, gradients: SurfaceGradients, face_sign: f32) -> vec3<f32> {{
             let normal = surface_normal(input, gradients.normal) * face_sign;
-            return reflected_light(normal, material_view_direction(input.world), base);
+            let factors = material_factors(input, gradients);
+            let f0 = mix(vec3<f32>(0.04), base, factors.metallic);
+            return reflected_light(normal, material_view_direction(input.world), f0)
+                * factors.occlusion * (1.0 - factors.roughness) + factors.emission;
         }}
     "#)).unwrap();
     assert!(program.resources().is_empty());
@@ -108,6 +111,7 @@ fn material_program_checks_transitive_coverage_calls_inside_control_flow() {
         "return material_view_vector(input.normal);",
         "return material_environment_radiance(input.normal, 0.3);",
         "return vec3<f32>(material_environment_brdf(input.color.x, 0.3), 0.0);",
+        "return material_factors(input, SurfaceGradients(mat2x2<f32>(), mat2x2<f32>(), mat2x2<f32>(), mat2x2<f32>(), mat2x2<f32>(), vec2<f32>())).emission;",
         "switch (u32(input.color.x)) { case 0u: { return material_ambient(input.normal); } default: { return vec3<f32>(0.0); } }",
         "loop { if (input.color.x > 0.0) { break; } return material_ambient(input.normal); } return vec3<f32>(0.0);",
         "return vec3<f32>(dpdx(input.world.x));",

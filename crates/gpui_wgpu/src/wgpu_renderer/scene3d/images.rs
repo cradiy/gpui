@@ -50,24 +50,12 @@ impl ImageCache {
                     object.sampling,
                 );
             }
-            let pbr = object.pbr.is_some() && !object.unlit;
-            for (map, srgb, active) in [
-                (object.metallic_roughness_texture, false, pbr),
-                (object.emissive_texture, true, pbr),
-                (
-                    object.normal_texture,
-                    false,
-                    pbr && object.normal_scale > 0.,
-                ),
-                (
-                    object.occlusion_texture,
-                    false,
-                    !object.unlit && object.occlusion_strength > 0.,
-                ),
-            ] {
-                if let Some(map) = map
-                    && active
-                {
+            for (map, srgb) in object
+                .lighting_textures()
+                .into_iter()
+                .zip([false, true, false, false])
+            {
+                if let Some(map) = map {
                     require(map.tile, srgb, map.sampling);
                 }
             }

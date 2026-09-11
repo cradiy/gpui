@@ -686,17 +686,17 @@ pub struct MeshDraw3d {
     pub uv_set: u32,
     /// Image RGB transfer function; does not affect solid colors or captured UI.
     pub image_color_space: crate::TextureColorSpace3d,
-    /// Optional metallic-roughness shading. Unlit materials ignore these parameters.
+    /// Optional metallic-roughness factors. Unlit bypasses only built-in shading.
     pub pbr: Option<crate::PbrMaterial3d>,
-    /// Linear G roughness and B metallic multipliers. Ignored without lit PBR.
+    /// Linear G roughness and B metallic multipliers for lit PBR or custom shading.
     pub metallic_roughness_texture: Option<MaterialTexture3d>,
-    /// sRGB RGB emission multiplier, decoded before filtering. Ignored without lit PBR.
+    /// sRGB RGB emission multiplier for lit PBR or custom shading, decoded before filtering.
     pub emissive_texture: Option<MaterialTexture3d>,
-    /// Linear tangent-space RGB normal map. Requires mesh tangents; lit PBR only.
+    /// Linear tangent-space RGB normal map for lit PBR or custom shading. Requires tangents.
     pub normal_texture: Option<MaterialTexture3d>,
     /// Finite nonnegative scale of normal-map XY. Zero disables the map.
     pub normal_scale: f32,
-    /// Linear R attenuation of indirect light. Ignored for unlit materials.
+    /// Linear R attenuation of indirect light for lit materials or custom shading.
     pub occlusion_texture: Option<MaterialTexture3d>,
     /// Finite occlusion blend in [0, 1]. Zero disables the map.
     pub occlusion_strength: f32,
@@ -798,26 +798,38 @@ impl MeshDraw3d {
         )
     }
 
+    /// Active metallic-roughness, emissive, normal, and occlusion maps, in that order.
+    /// Custom primary or additional passes enable standard inputs independently of
+    /// built-in lighting. Zero normal scale or occlusion strength disables its map.
+    pub fn lighting_textures(&self) -> [Option<MaterialTexture3d>; 4] {
+        let custom = self.custom_material.is_some() || !self.mesh_passes.is_empty();
+        let pbr = custom || (self.pbr.is_some() && !self.unlit);
+        [
+            self.metallic_roughness_texture.filter(|_| pbr),
+            self.emissive_texture.filter(|_| pbr),
+            self.normal_texture
+                .filter(|_| pbr && self.normal_scale > 0.),
+            self.occlusion_texture
+                .filter(|_| (custom || !self.unlit) && self.occlusion_strength > 0.),
+        ]
+    }
+
     /// Active coordinate sets in base-color, metallic-roughness, emissive, normal,
     /// and occlusion order. Inactive slots and captured UI use set zero.
     pub fn texture_uv_sets(&self) -> [u32; 5] {
-        let pbr = self.pbr.is_some() && !self.unlit;
-        let selected = |map: Option<MaterialTexture3d>, active| {
-            map.filter(|_| active).map_or(0, |map| map.uv_set)
-        };
+        let maps = self
+            .lighting_textures()
+            .map(|map| map.map_or(0, |map| map.uv_set));
         [
             if matches!(self.texture, MeshTexture3d::Image(_)) {
                 self.uv_set
             } else {
                 0
             },
-            selected(self.metallic_roughness_texture, pbr),
-            selected(self.emissive_texture, pbr),
-            selected(self.normal_texture, pbr && self.normal_scale > 0.),
-            selected(
-                self.occlusion_texture,
-                !self.unlit && self.occlusion_strength > 0.,
-            ),
+            maps[0],
+            maps[1],
+            maps[2],
+            maps[3],
         ]
     }
 }

@@ -1115,18 +1115,16 @@ impl Scene3dRenderer {
                 }
             };
             let rows = object.sampling.transform.rows();
-            let maps_enabled =
-                object.pbr.is_some() && !object.unlit && self.display_pipeline.is_some();
-            let metallic_roughness_map = object.metallic_roughness_texture.filter(|_| maps_enabled);
-            let emissive_map = object.emissive_texture.filter(|_| maps_enabled);
-            let normal_map = object
-                .normal_texture
-                .filter(|_| maps_enabled && object.normal_scale > 0.);
+            let [
+                metallic_roughness_map,
+                emissive_map,
+                normal_map,
+                occlusion_map,
+            ] = object
+                .lighting_textures()
+                .map(|map| map.filter(|_| self.display_pipeline.is_some()));
             let normal_image =
                 normal_map.map(|map| resolve_image(map, gpui::TextureColorSpace3d::Linear));
-            let occlusion_map = object.occlusion_texture.filter(|_| {
-                !object.unlit && object.occlusion_strength > 0. && self.display_pipeline.is_some()
-            });
             let occlusion_image =
                 occlusion_map.map(|map| resolve_image(map, gpui::TextureColorSpace3d::Linear));
             let metallic_roughness_image = metallic_roughness_map

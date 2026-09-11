@@ -443,26 +443,9 @@ impl WgpuScene3dRenderer {
                 "3D object {} has invalid image sampling",
                 object.output_id
             );
-            for (map, active) in [
-                (
-                    object.metallic_roughness_texture,
-                    object.pbr.is_some() && !object.unlit,
-                ),
-                (
-                    object.emissive_texture,
-                    object.pbr.is_some() && !object.unlit,
-                ),
-                (
-                    object.normal_texture,
-                    object.pbr.is_some() && !object.unlit && object.normal_scale > 0.,
-                ),
-                (
-                    object.occlusion_texture,
-                    !object.unlit && object.occlusion_strength > 0.,
-                ),
-            ] {
+            for map in object.lighting_textures().into_iter().flatten() {
                 ensure!(
-                    !active || map.is_none_or(|map| map.sampling.is_valid()),
+                    map.sampling.is_valid(),
                     "3D object {} has invalid material-map sampling",
                     object.output_id
                 );
@@ -484,11 +467,8 @@ impl WgpuScene3dRenderer {
                 object.output_id
             );
             ensure!(
-                object.normal_texture.is_none()
-                    || object.pbr.is_none()
-                    || object.unlit
-                    || object.normal_scale == 0.
-                    || object.mesh.tangent_uv_set() == object.normal_texture.map(|map| map.uv_set),
+                object.lighting_textures()[2]
+                    .is_none_or(|map| object.mesh.tangent_uv_set() == Some(map.uv_set)),
                 "3D object {}: normal maps require mesh tangents for the selected UV set",
                 object.output_id
             );

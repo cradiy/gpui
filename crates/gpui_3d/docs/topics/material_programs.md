@@ -61,6 +61,23 @@ direction and linear energy with distance/cone attenuation and shadow visibility
 Use `gradients.shadow_depth` for the shadow-depth gradient. Out-of-range light
 indices return zero energy.
 
+`material_factors(input, gradients) -> MaterialFactors` samples standard material
+maps using their selected UV sets and supplied gradients. Its fields are
+`metallic`, `roughness`, `emission` (linear RGB), and `occlusion`. Metallic and
+roughness include their B/G texture multipliers; emission includes its decoded RGB
+multiplier; occlusion includes the material's strength. Missing maps use unit
+multipliers. Missing PBR parameters use metallic 0, roughness 0.5, and zero emission.
+The helper does not impose the built-in PBR roughness floor of 0.045 or apply a
+lighting response. It is shading-only.
+
+Custom primary programs and additional mesh passes activate all configured standard
+material maps, even without PBR or with `.unlit(true)`. These settings select only
+the built-in lighting response. `surface_normal` uses the configured normal map;
+active maps require matching UV sets and normal maps require matching mesh tangents.
+Zero normal scale or occlusion strength disables that map and its resource requests.
+Additional passes share these standard inputs with the primary material; their
+group 1 resources remain independent.
+
 `material_view_position(world)` transforms a world position into camera space.
 `material_view_vector(world_vector)` applies the camera's linear transform without
 translation or normalization. These use the submitted `world_to_view` matrix,

@@ -13,7 +13,7 @@ state and material resources.
 - `Material::image(source)` maps the first decoded image frame onto UVs. Keep the
   image source stable across renders. An object is omitted while its image is unavailable.
 - `Material::ui()` samples the viewport's captured UI without lighting.
-- `.unlit(true)` disables lighting for any material.
+- `.unlit(true)` disables built-in lighting; custom shading remains active.
 - `.tint(color)` sets an sRGB tint, decoded before multiplication; its alpha multiplies texture alpha.
 - `.base_color_texture(texture)` replaces the base image and sampling without
   resetting tint, image encoding, lighting, other maps, alpha mode, or face visibility.
@@ -105,8 +105,8 @@ metallic 0 and roughness 0.5. Shading limits perceptual roughness to at least
 0.045 for finite highlights. Emissive is additive linear RGB radiance, defaults
 to zero, and accepts finite components in `[0, 65504]`. It is independent of base
 color, tint and scene lighting, but receives scene exposure and tone mapping.
-Invalid parameters cause rendering to fail. `.unlit(true)` bypasses all PBR
-terms, including emissive, and displays the sampled base color.
+Invalid parameters cause rendering to fail. For built-in shading, `.unlit(true)`
+bypasses all PBR terms, including emissive, and displays the sampled base color.
 
 Specular response follows the world-space viewing direction. Perspective cameras
 use the eye-to-surface vector; orthographic cameras use a constant direction.
@@ -151,12 +151,12 @@ map uses a multiplier of one. R in the metallic-roughness map and alpha in both
 maps are ignored. Alpha cutout and picking visibility depend only on base-color
 alpha and tint. These maps do not add occlusion, surface displacement, or normals.
 
-Metallic-roughness and emissive maps are loaded only for lit PBR materials.
+Metallic-roughness and emissive maps are loaded for lit PBR materials or custom shading.
 Until all required images are ready, the viewport omits the object from rendering
 and visible picking. Direct
 headless rendering requires decoded `ImageSource::Render` inputs for every map
-and returns an error for unresolved inputs. `.unlit(true)` and diffuse materials
-ignore these maps without requesting their resources.
+and returns an error for unresolved inputs. Built-in unlit and diffuse materials
+without additional passes ignore these maps without requesting their resources.
 
 ## Ambient occlusion maps
 
@@ -178,7 +178,8 @@ An absent map or zero strength leaves indirect lighting unchanged.
 
 Both basic lit and PBR materials apply this multiplier to uniform ambient and
 diffuse environment illumination. Direct diffuse/specular light and PBR
-emission are unaffected. Unlit materials bypass occlusion. The texture does not
+emission are unaffected. Built-in unlit shading bypasses occlusion; custom shading
+can read the multiplier through `material_factors`. The texture does not
 alter base color, transparency, geometry, picking, depth or geometric normals.
 It represents authored or baked occlusion, not dynamic shadows or screen-space AO.
 
@@ -239,8 +240,9 @@ before normalization. It defaults to 1 and accepts finite nonnegative values.
 Zero disables the normal map and its resource requests. A zero decoded vector
 uses the interpolated mesh normal.
 
-Normal maps affect lit PBR shading only. They do not move vertices, alter
-silhouettes or depth, or change object IDs, ray intersections, and picking normals.
+Normal maps affect lit PBR shading and custom programs using `surface_normal`.
+They do not move vertices, alter silhouettes or depth, or change object IDs,
+ray intersections, and picking normals.
 They use independent `MaterialTexture` sampling. UV transforms and addressing
 change sampled locations, not the tangent frame or the decoded vector axes.
 

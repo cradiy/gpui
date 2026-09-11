@@ -199,6 +199,7 @@ impl GpuTangentGroups {
 }
 
 /// Immutable regular-corner groups, retaining their adjacency and deformation inputs.
+#[derive(Clone)]
 pub struct GpuTangentGroupsOutput {
     adjacency: GpuTangentAdjacencyOutput,
     buffer: wgpu::Buffer,

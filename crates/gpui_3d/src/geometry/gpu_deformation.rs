@@ -12,6 +12,7 @@ mod readback;
 pub(super) mod support;
 mod tangent_adjacency;
 mod tangent_derivatives;
+mod tangent_frames;
 mod tangent_groups;
 mod tangent_weld;
 pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
@@ -24,6 +25,9 @@ pub use tangent_adjacency::{
 pub use tangent_derivatives::{
     GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
     GpuTangentDerivativesMemory,
+};
+pub use tangent_frames::{
+    GpuTangentFrame, GpuTangentFrames, GpuTangentFramesMemory, GpuTangentFramesOutput,
 };
 pub use tangent_groups::{
     GpuTangentGroup, GpuTangentGroups, GpuTangentGroupsMemory, GpuTangentGroupsOutput,

@@ -228,10 +228,12 @@ Core implementation order:
          - [x] **Regular corner groups**: Orientation-compatible connected components, deterministic minimum-corner representatives, bounded pointer doubling, and retained adjacency/input snapshots.
          - [ ] **Group GPU validation**: Verify long chains and cycles across workgroups, seams, mirror boundaries, point-only contact, failed/collapsed faces, and changing deformation snapshots on supported adapters.
          - [ ] **Inherited frames and weights**: Assign degenerate-frame directions and accumulate corner-weighted tangent contributions with fixed vertex correspondence.
+           - [x] **Regular corner frames**: Normal-projected angle weights, sorted group-local accumulation, opposing-direction subgroups, retained corner correspondence, and explicit arithmetic/frame status.
+           - [ ] **Corner frame GPU validation**: Verify nonuniform angles, mirrored/opposing directions, deformed normals and positions, numeric failures, and retained snapshots against CPU tangent generation on supported adapters.
          - [ ] **Adjacency GPU validation**: Verify mirrored boundaries, non-manifold ranks, point-only contact, collapsed/collinear and failed faces, dynamic pairing, and retained results on supported adapters.
          - [ ] **Welding GPU validation**: Verify dynamic split/merge, shared indices, seams, signed zero, failed corners, multi-workgroup sorting, and retained frames on supported adapters.
        - [ ] **GPU tangent publication**: Normal-orthogonal frames, imported repair policy, handedness checks, Morph-to-Skin composition, and CPU MikkTSpace parity on supported adapters.
-         - [ ] **Compatibility policies**: Reconcile default CPU legacy welding/edge sorting, signed zero, normalization rounding, and degenerate-frame inheritance before enabling imported generated tangents.
+         - [ ] **CPU/GPU generation parity**: Align welding keys, edge ordering, normalization, and degenerate-frame inheritance across evaluation paths before enabling imported generated tangents.
      - [ ] **Imported GPU validation**: Verify signed/default weights, multiple primitives and instances, direction reconstruction, source identity, and retained outputs against CPU evaluation on supported adapters.
    - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.
    - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.

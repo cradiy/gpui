@@ -39,6 +39,9 @@ faces remain ungrouped. This API does not assign inherited directions, calculate
 corner weights, or publish final vertex tangents. CPU geometry and queries remain
 unchanged, and imported MikkTSpace regeneration is not enabled by this stage.
 
+Use [`GpuTangentFrames`](tangent_frames.md) to project and angle-weight the regular
+groups' face contributions while retaining original corner correspondence.
+
 ## Records
 
 The output contains one 64-byte `GpuTangentGroup` per original triangle corner:

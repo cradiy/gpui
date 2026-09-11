@@ -25,7 +25,8 @@ pub use gpu_deformation::{
     GpuDeformationReadback, GpuDeformationVertex, GpuFlatNormals, GpuFlatNormalsMemory,
     GpuGeometryPreparation, GpuTangentAdjacency, GpuTangentAdjacencyMemory,
     GpuTangentAdjacencyOutput, GpuTangentDerivative, GpuTangentDerivativeOutput,
-    GpuTangentDerivatives, GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentGroup,
+    GpuTangentDerivatives, GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentFrame,
+    GpuTangentFrames, GpuTangentFramesMemory, GpuTangentFramesOutput, GpuTangentGroup,
     GpuTangentGroups, GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld,
     GpuTangentWeldMemory, GpuTangentWeldOutput, GpuTangentWeldRecord, PreparedGpuGeometry,
 };

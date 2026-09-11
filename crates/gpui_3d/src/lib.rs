@@ -36,7 +36,8 @@ pub use geometry::{
     GpuGeometryPreparation, GpuMorph, GpuMorphMemory, GpuSkin, GpuSkinMemory, GpuSkinPalette,
     GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput,
     GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
-    GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentGroup, GpuTangentGroups,
+    GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentFrame, GpuTangentFrames,
+    GpuTangentFramesMemory, GpuTangentFramesOutput, GpuTangentGroup, GpuTangentGroups,
     GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld, GpuTangentWeldMemory,
     GpuTangentWeldOutput, GpuTangentWeldRecord, PreparedGpuGeometry,
 };

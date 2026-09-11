@@ -12,6 +12,10 @@ pub use cosmic_text_system::*;
 #[cfg(not(target_family = "wasm"))]
 pub use id_remap::{IdRemapConfig, WgpuIdRemapper};
 pub use offscreen_renderer::*;
+pub use scene3d_material::{
+    MaterialProgram as Scene3dMaterialProgram, Scene3dMaterialLimits, Scene3dMaterialResource,
+    Scene3dMaterialResourceKind,
+};
 pub use scene3d_renderer::*;
 pub use wgpu;
 pub use wgpu_atlas::*;

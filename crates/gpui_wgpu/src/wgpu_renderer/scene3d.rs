@@ -104,7 +104,7 @@ impl Instance {
     }
 }
 
-fn material_bindings(data_output: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
+pub(crate) fn material_bindings(data_output: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
     let mut bindings = vec![
         wgpu::BindGroupLayoutEntry {
             binding: 0,

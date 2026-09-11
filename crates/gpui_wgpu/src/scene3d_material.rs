@@ -1,10 +1,11 @@
 use anyhow::{Result, ensure};
 use std::sync::{Arc, OnceLock};
 use wgpu::naga::{self, Expression, Function, Handle, Module, Statement};
+mod resources;
+pub use resources::{Scene3dMaterialLimits, Scene3dMaterialResource, Scene3dMaterialResourceKind};
 
 const CORE: &str = include_str!("scene3d.wgsl");
 const DEFAULT: &str = include_str!("scene3d_material.wgsl");
-const MAX_SOURCE_BYTES: usize = 64 * 1024;
 const SURFACE_HELPERS: &[&str] = &["builtin_surface", "unit_vector"];
 const SHADING_HELPERS: &[&str] = &[
     "builtin_surface",
@@ -18,9 +19,12 @@ const SHADING_HELPERS: &[&str] = &[
     "unit_vector",
 ];
 
-/// CPU-validated mesh shader source with renderer-owned entry points and coverage.
-pub(crate) struct MaterialProgram {
+/// Compiled WGSL and reflected material bindings. Compilation performs no GPU work
+/// and does not attach the program to a scene material or create rendering pipelines.
+#[derive(Clone, Debug)]
+pub struct MaterialProgram {
     source: Arc<str>,
+    resources: Arc<[Scene3dMaterialResource]>,
 }
 
 impl MaterialProgram {
@@ -29,13 +33,32 @@ impl MaterialProgram {
         PROGRAM.get_or_init(|| Self::compile(DEFAULT).expect("invalid built-in mesh material"))
     }
 
-    pub(crate) fn source(&self) -> &str {
+    /// Complete renderer and material WGSL, retaining renderer-owned output entry points.
+    pub fn source(&self) -> &str {
         &self.source
     }
 
-    fn compile(material: &str) -> Result<Self> {
+    /// Validates source and reflects group 1 resources under default CPU admission limits.
+    /// Accepts material_surface and material_shading functions, with optional helpers.
+    pub fn compile(material: &str) -> Result<Self> {
+        Self::compile_with_limits(material, Scene3dMaterialLimits::default())
+    }
+
+    /// Resources in ascending binding order, including declarations unused by either evaluator.
+    pub fn resources(&self) -> &[Scene3dMaterialResource] {
+        &self.resources
+    }
+
+    /// Checks enabled device limits including the renderer's standard material bindings.
+    /// This does not validate actual texture formats, handles, or GPU shader compilation.
+    pub fn validate_limits(&self, limits: &wgpu::Limits) -> Result<()> {
+        resources::validate_limits(&self.resources, limits)
+    }
+
+    /// Compiles without creating an adapter or allocating GPU resources.
+    pub fn compile_with_limits(material: &str, limits: Scene3dMaterialLimits) -> Result<Self> {
         ensure!(
-            material.len() <= MAX_SOURCE_BYTES,
+            material.len() <= limits.max_source_bytes,
             "material source exceeds byte limit"
         );
         let source = format!("{CORE}\n{material}");
@@ -51,16 +74,7 @@ impl MaterialProgram {
             module.overrides.is_empty(),
             "material overrides are not supported"
         );
-        for (handle, _) in module.global_variables.iter() {
-            ensure!(
-                module
-                    .global_variables
-                    .get_span(handle)
-                    .to_range()
-                    .is_some_and(|s| s.start < CORE.len()),
-                "material globals and resource declarations are not supported"
-            );
-        }
+        let resources = resources::reflect(&module, &info, limits)?;
         ensure!(
             module.entry_points.len() == 7
                 && module.entry_points.iter().all(|entry| {
@@ -103,7 +117,7 @@ impl MaterialProgram {
             );
             for (_, expression) in function.expressions.iter() {
                 ensure!(
-                    !matches!(expression, Expression::GlobalVariable(_)),
+                    !matches!(expression, Expression::GlobalVariable(global) if module.global_variables[*global].binding.as_ref().is_none_or(|b| b.group != 1)),
                     "material function {:?} accesses a private renderer global",
                     function.name
                 );
@@ -147,11 +161,15 @@ impl MaterialProgram {
                 let function = &module.functions[handle];
                 if entry == "material_surface" {
                     ensure!(
-                        !function
-                            .expressions
-                            .iter()
-                            .any(|(_, e)| matches!(e, Expression::Derivative { .. })),
-                        "surface coverage must use supplied gradients"
+                        !function.expressions.iter().any(|(_, e)| matches!(
+                            e,
+                            Expression::Derivative { .. }
+                                | Expression::ImageSample {
+                                    level: naga::SampleLevel::Auto | naga::SampleLevel::Bias(_),
+                                    ..
+                                }
+                        )),
+                        "surface coverage must use supplied gradients or explicit texture levels"
                     );
                 }
                 for called in calls(&function.body) {
@@ -166,6 +184,7 @@ impl MaterialProgram {
         }
         Ok(Self {
             source: source.into(),
+            resources: resources.into(),
         })
     }
 }
@@ -214,5 +233,7 @@ fn statements(body: &naga::Block) -> Vec<&Statement> {
     result
 }
 
+#[cfg(test)]
+mod resources_tests;
 #[cfg(test)]
 mod tests;

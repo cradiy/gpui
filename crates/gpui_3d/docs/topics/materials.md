@@ -2,6 +2,9 @@
 
 [3D viewports](../viewport.md)
 
+[WGSL material programs](material_programs.md) covers source compilation and
+resource-layout reflection. These programs cannot yet be attached to `Material`.
+
 ## Materials and light
 
 - `Material::color(color)` creates a lit solid surface.

@@ -29,7 +29,7 @@ fn material_program_rejects_renderer_state_and_entry_point_overrides() {
     for (extra, expected) in [
         ("var<private> state: f32;", "globals"),
         (
-            "@group(1) @binding(0) var image_extra: texture_2d<f32>;",
+            "@group(2) @binding(0) var image_extra: texture_2d<f32>;",
             "globals",
         ),
         ("override threshold: f32 = 0.5;", "overrides"),
@@ -57,7 +57,7 @@ fn material_program_rejects_renderer_state_and_entry_point_overrides() {
             .unwrap_or_else(|| panic!("invalid material accepted: {extra}"));
         assert!(error.to_string().contains(expected), "{extra}: {error:#}");
     }
-    let oversized = " ".repeat(MAX_SOURCE_BYTES + 1);
+    let oversized = " ".repeat(Scene3dMaterialLimits::default().max_source_bytes + 1);
     assert!(
         MaterialProgram::compile(&oversized)
             .err()

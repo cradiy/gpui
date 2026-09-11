@@ -41,6 +41,11 @@ pub use geometry::{
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use gpui_wgpu::{
+    Scene3dMaterialLimits, Scene3dMaterialProgram, Scene3dMaterialResource,
+    Scene3dMaterialResourceKind,
+};
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use headless::*;
 pub use lighting::{
     DiffuseEnvironment, DirectionalShadow, EnvironmentBackground, EnvironmentError, EnvironmentMap,

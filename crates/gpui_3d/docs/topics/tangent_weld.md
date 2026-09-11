@@ -48,6 +48,9 @@ not account for triangle adjacency or mirrored orientation: those require separa
 connected groups. It does not compute corner weights, smooth tangent directions,
 inherit degenerate frames, or publish renderable tangents.
 
+[GPU tangent adjacency](tangent_adjacency.md) pairs opposite edges from the retained
+corner map and classifies orientation compatibility before connected-group evaluation.
+
 ## Work and memory
 
 Evaluation builds corner keys, sorts them with a bitonic network, then resolves the

@@ -252,6 +252,7 @@ impl GpuTangentWeld {
 
 /// Original-corner records paired with retained derivatives and input vertices.
 /// This is not a final tangent buffer or a topology replacement.
+#[derive(Clone)]
 pub struct GpuTangentWeldOutput {
     derivatives: GpuTangentDerivativeOutput,
     buffer: wgpu::Buffer,
@@ -269,7 +270,7 @@ impl GpuTangentWeldOutput {
     }
 }
 
-fn passes(corners: u32) -> Vec<[u32; 4]> {
+pub(super) fn passes(corners: u32) -> Vec<[u32; 4]> {
     let capacity = corners.next_power_of_two();
     let mut params = vec![[corners, 0, 0, capacity]];
     let mut width = 2;

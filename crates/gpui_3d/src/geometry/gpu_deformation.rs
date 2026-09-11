@@ -8,11 +8,15 @@ mod bounds;
 mod flat_normals;
 mod readback;
 pub(super) mod support;
+mod tangent_adjacency;
 mod tangent_derivatives;
 mod tangent_weld;
 pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
 pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
 pub use readback::GpuDeformationReadback;
+pub use tangent_adjacency::{
+    GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput, GpuTangentEdge,
+};
 pub use tangent_derivatives::{
     GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
     GpuTangentDerivativesMemory,

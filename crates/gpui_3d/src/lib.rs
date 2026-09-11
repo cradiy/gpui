@@ -32,8 +32,8 @@ pub use geometry::{
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use geometry::{
     GpuDeformationBounds, GpuDeformationBoundsReadback, GpuDeformationLimits, GpuDeformationOutput,
-    GpuDeformationReadback, GpuDeformationVertex, GpuMorph, GpuMorphMemory, GpuSkin, GpuSkinMemory,
-    GpuSkinPalette,
+    GpuDeformationReadback, GpuDeformationVertex, GpuFlatNormals, GpuFlatNormalsMemory, GpuMorph,
+    GpuMorphMemory, GpuSkin, GpuSkinMemory, GpuSkinPalette,
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

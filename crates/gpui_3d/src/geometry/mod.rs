@@ -22,7 +22,7 @@ pub use bounds::Aabb;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpu_deformation::{
     GpuDeformationBounds, GpuDeformationBoundsReadback, GpuDeformationLimits, GpuDeformationOutput,
-    GpuDeformationReadback, GpuDeformationVertex,
+    GpuDeformationReadback, GpuDeformationVertex, GpuFlatNormals, GpuFlatNormalsMemory,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpu_morph::{GpuMorph, GpuMorphMemory};

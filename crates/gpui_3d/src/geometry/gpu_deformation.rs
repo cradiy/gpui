@@ -5,9 +5,11 @@ use gpui_wgpu::{WgpuContext, wgpu};
 use wgpu::util::DeviceExt as _;
 
 mod bounds;
+mod flat_normals;
 mod readback;
 pub(super) mod support;
 pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
+pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
 pub use readback::GpuDeformationReadback;
 
 /// 64-byte storage/vertex-buffer record. XYZ occupies each attribute's first three lanes.
@@ -19,7 +21,8 @@ pub struct GpuDeformationVertex {
     /// W is tangent handedness; zero when the mesh has no tangents.
     pub tangent: [f32; 4],
     /// X: zero for valid output, one for detected nonfinite arithmetic, two for an undefined
-    /// tangent, three for a singular or unrepresentable blended Skin transform.
+    /// tangent, three for a singular or unrepresentable blended Skin transform,
+    /// four for a zero-area triangle during flat normal reconstruction.
     /// Remaining lanes are reserved and zero.
     pub status: [u32; 4],
 }

@@ -42,6 +42,10 @@ produce the complete imported surface: flat normals or MikkTSpace tangents must
 also be regenerated before Skin and rendering. `MorphGeometry::evaluate` performs
 that work on the CPU.
 
+`GpuFlatNormals` can rebuild the flat normals of imported triangle-corner inputs
+without changing their vertex order. It does not replace MikkTSpace tangent
+generation; assets with `regenerates_tangents()` still require that stage.
+
 Generated tangents are absent from `attribute_targets().base_mesh()`, even when
 `MorphGeometry::base_mesh()` contains them. For zero weights, `evaluate` returns
 the complete base mesh, including its generated directions.

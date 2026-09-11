@@ -33,6 +33,42 @@ uses `f32`, unlike the CPU evaluator's widened intermediates, so cancellation,
 overflow, and tiny values can produce different results. CPU evaluation remains
 available through `source().evaluate(weights)`; no automatic fallback is performed.
 
+## Flat normal reconstruction
+
+`GpuFlatNormals` retains triangle topology and rebuilds face normals from a
+`GpuDeformationOutput` on the same device. Each vertex must appear exactly once
+in the index buffer; shared or unused vertices are rejected. Index order may
+differ from vertex order. Prepare triangle-corner geometry and remap external
+Morph/Skin attributes before creating the compute sources.
+
+The input must use the same base mesh allocation and have no tangents. Evaluation
+preserves vertex order, positions, indices, coordinate sets, and colors, and
+returns an independent output. Existing vertex failures propagate to every
+corner of their triangle. Zero-area faces and nonfinite arithmetic produce error
+status; they are not dropped or replaced with an arbitrary normal.
+
+```rust,no_run
+# use gpui_3d::{GpuDeformationOutput, GpuFlatNormals, GpuDeformationLimits, WgpuContext};
+# fn rebuild(context: WgpuContext, morphed: &GpuDeformationOutput) -> anyhow::Result<GpuDeformationOutput> {
+let normals = GpuFlatNormals::new(
+    context, morphed.base_mesh().clone(), GpuDeformationLimits::default(),
+)?;
+let output = normals.evaluate(morphed)?;
+# Ok(output)
+# }
+```
+
+Reuse the source across samples. Run reconstruction after position Morph and
+before Skin when the asset requires generated face normals. This operation does
+not generate smooth normals or MikkTSpace tangents. It runs even for zero Morph
+weights; callers preserving an authored zero-weight base may bypass it.
+
+`GpuFlatNormalsMemory::plan` admits two four-byte topology entries per vertex,
+a 16-byte uniform, and a 64-byte output record per vertex. The input buffer is
+separately owned. Constructors check enabled compute limits and topology before
+GPU allocation. GPU calculations use `f32`, with different numerical limits from
+the CPU normal generator's widened arithmetic. No CPU query or bound is updated.
+
 ## Skin computation
 
 `GpuSkin` uploads a validated `Skin` influence binding. Each vertex retains its
@@ -99,8 +135,9 @@ preserve the buffer and inspect status before using results. They must not mutat
 the buffer through another GPU binding.
 
 Status X is zero for a valid record, one for detected nonfinite arithmetic,
-two for an undefined tangent frame, and three for a singular or unrepresentable
-blended Skin transform. Other lanes are reserved and zero. Submission
+two for an undefined tangent frame, three for a singular or unrepresentable
+blended Skin transform, and four for a zero-area face during flat normal
+reconstruction. Other lanes are reserved and zero. Submission
 validation does not prove that the computed attributes are valid.
 
 `readback()` waits for the GPU, checks record status, validates mesh attributes,

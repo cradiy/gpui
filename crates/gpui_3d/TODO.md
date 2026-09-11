@@ -211,6 +211,8 @@ Core implementation order:
    - [ ] **GPU validation**: Check Morph/Skin output parity, bounds reduction, composition, and retained-output lifetime on supported adapters.
    - [x] **GPU Skin**: Shared influence bindings, per-instance palettes, and Morph-to-Skin buffer composition.
    - [x] **Imported deformation inputs**: Shared glTF attribute targets, explicit direction-regeneration requirements, and instance-mapped final Skin poses in binding joint order.
+   - [x] **GPU flat normals**: Retained triangle-corner topology, source identity and payload admission, and fixed-order reconstruction between Morph and Skin.
+   - [ ] **GPU direction validation**: Verify normal reconstruction, degenerate-face status, retained outputs, and Morph/Skin composition on supported adapters.
    - [ ] **Imported GPU evaluation**: Preserve generated normal/tangent policies, authored Morph defaults, Morph-before-Skin ordering, and source geometry identity when routing imported primitives to GPU draws.
    - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.
    - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.

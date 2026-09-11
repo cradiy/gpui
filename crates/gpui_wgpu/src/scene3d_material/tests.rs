@@ -16,7 +16,10 @@ fn material_program_compiles_custom_light_response_with_shared_coverage() {
                 light += direct.energy * band(dot(normal, direct.direction));
             }}
             let view = material_view_direction(input.world);
-            return base * light + vec3<f32>(pow(1.0 - abs(dot(view, normal)), 3.0) * 0.1);
+            let eye_position = material_view_position(input.world);
+            let eye_vector = material_view_vector(view);
+            return base * light + vec3<f32>(pow(1.0 - abs(dot(view, normal)), 3.0) * 0.1)
+                + abs(eye_vector) / (1.0 + length(eye_position));
         }}
     "#)).unwrap();
     assert!(program.source().contains("fn band"));
@@ -80,6 +83,8 @@ fn material_program_rejects_renderer_state_and_entry_point_overrides() {
 fn material_program_checks_transitive_coverage_calls_inside_control_flow() {
     for body in [
         "if (input.world.x > 0.0) { return material_view_direction(input.world); } return vec3<f32>(0.0);",
+        "return material_view_position(input.world);",
+        "return material_view_vector(input.normal);",
         "switch (u32(input.color.x)) { case 0u: { return material_ambient(input.normal); } default: { return vec3<f32>(0.0); } }",
         "loop { if (input.color.x > 0.0) { break; } return material_ambient(input.normal); } return vec3<f32>(0.0);",
         "return vec3<f32>(dpdx(input.world.x));",

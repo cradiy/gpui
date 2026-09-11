@@ -10,7 +10,17 @@ use gpui_3d::{
 use gpui_platform::application;
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+#[path = "materials/programs.rs"]
+mod programs;
+
 struct Materials {
+    custom: bool,
+    bands: f32,
+    sphere_brightness: f32,
+    program_error: Option<gpui::SharedString>,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    programs: Option<programs::Programs>,
     mesh: Mesh,
     colored_mesh: Mesh,
     colored_strip: Mesh,
@@ -70,6 +80,12 @@ impl Materials {
             )
             .unwrap();
         Self {
+            custom: false,
+            bands: 3.,
+            sphere_brightness: 1.5,
+            program_error: None,
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            programs: None,
             mesh,
             colored_mesh,
             colored_strip,
@@ -136,6 +152,9 @@ impl Materials {
     }
 
     fn scene(&self) -> Scene {
+        if self.custom && self.program_error.is_some() {
+            return Scene::new();
+        }
         let mut scene = Scene::new()
             .camera(self.controls.camera())
             .color_output(ColorOutput {
@@ -164,6 +183,13 @@ impl Materials {
                 roughness: self.roughness,
                 emissive,
             });
+            if self.custom {
+                material = Material::color(rgb(0x7ac9dc)).pbr(PbrMaterial {
+                    metallic: 0.,
+                    roughness: self.roughness,
+                    emissive: [0.; 3],
+                });
+            }
             let sampling = TextureSampling {
                 mag_filter: None,
                 transform: UvTransform::from_scale_rotation_translation(
@@ -188,7 +214,7 @@ impl Materials {
                     MaterialTexture::new(self.metallic_roughness.clone()).sampling(sampling),
                 );
             }
-            if self.maps {
+            if self.maps && !self.custom {
                 material = material
                     .metallic_roughness_texture(
                         MaterialTexture::new(self.metallic_roughness.clone()).sampling(sampling),
@@ -204,6 +230,16 @@ impl Materials {
                             ..sampling
                         }),
                     );
+            }
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            if self.custom
+                && let Some(programs) = &self.programs
+            {
+                material = match name {
+                    "Metal" => material.program(programs.toon.clone()),
+                    "Emission" => material.program(programs.sphere.clone()),
+                    _ => material,
+                };
             }
             scene = scene.object(
                 Object::new(
@@ -258,7 +294,21 @@ impl Materials {
 }
 
 impl Render for Materials {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        if self.custom
+            && self.program_error.is_none()
+            && self
+                .programs
+                .as_ref()
+                .is_none_or(|programs| !programs.matches_window(_window))
+        {
+            self.programs = None;
+            match programs::Programs::new(_window, self.bands, self.sphere_brightness) {
+                Ok(programs) => self.programs = Some(programs),
+                Err(error) => self.program_error = Some(format!("{error:#}").into()),
+            }
+        }
         let bounds = self.bounds.clone();
         let view_id = cx.entity_id();
         div()
@@ -301,6 +351,9 @@ impl Render for Materials {
                         ("reset", "Reset view"),
                     ]
                     .into_iter()
+                    .chain(cfg!(all(feature = "wgpu", not(target_family = "wasm"))).then_some(("programs", "PBR / Custom")))
+                    .chain(self.custom.then_some(("bands", "Toon bands")))
+                    .chain(self.custom.then_some(("sphere", "Sphere brightness")))
                     .map(|(id, label)| {
                         div()
                             .id(id)
@@ -313,6 +366,22 @@ impl Render for Materials {
                             .child(label)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 match id {
+                                    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                                    "programs" => {
+                                        this.custom = !this.custom;
+                                        this.program_error = None;
+                                    }
+                                    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                                    "bands" | "sphere" => {
+                                        let bands = if id == "bands" { if this.bands < 6. { this.bands + 1. } else { 2. } } else { this.bands };
+                                        let brightness = if id == "sphere" { if this.sphere_brightness < 3. { this.sphere_brightness + 0.5 } else { 0.5 } } else { this.sphere_brightness };
+                                        if let Some(programs) = &mut this.programs {
+                                            match programs.update(bands, brightness) {
+                                                Ok(()) => { this.bands = bands; this.sphere_brightness = brightness; }
+                                                Err(error) => this.program_error = Some(format!("{error:#}").into()),
+                                            }
+                                        }
+                                    }
                                     "smooth" => this.roughness = (this.roughness - 0.1).max(0.),
                                     "rough" => this.roughness = (this.roughness + 0.1).min(1.),
                                     "dim" => this.emission = (this.emission - 0.5).max(0.),
@@ -389,6 +458,10 @@ impl Render for Materials {
                     }),
                 ),
             )
+            .when(self.custom, |view| view.child(div().text_color(rgb(0xa8bdd6))
+                .child(format!("Toon: {:.0} bands · Sphere map: {:.1}× · Camera-space reflection", self.bands, self.sphere_brightness))))
+            .when_some(self.program_error.clone(), |view, error| view.child(
+                div().text_color(rgb(0xffa080)).child(error)))
             .child(
                 div()
                     .id("materials")
@@ -469,7 +542,7 @@ impl Render for Materials {
                 div()
                     .flex()
                     .justify_between()
-                    .children(["Dielectric", "Metal", "Emission"]),
+                    .children(if self.custom { ["PBR", "Toon", "Sphere Map"] } else { ["Dielectric", "Metal", "Emission"] }),
             )
             .child(div().text_color(rgb(0xa8bdd6)).child(format!("Normal {} · AO {} · {:?} · {:?} / {:?} · Exposure {:+.0} · {:?}", self.normal, self.ao, self.alpha, self.address, self.filter, self.exposure, self.tone_mapping)))
             .child(div().text_color(rgb(0xa8bdd6)).child(format!("Mip {:?} · Anisotropy {}×", self.mip_filter, self.max_anisotropy)))

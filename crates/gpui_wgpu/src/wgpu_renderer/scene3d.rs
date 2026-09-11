@@ -397,6 +397,7 @@ impl From<gpui::PunctualLight3d> for DirectLight {
 struct Params {
     specular_environment: [f32; 4],
     camera: [[f32; 4]; 4],
+    world_to_view: [[f32; 4]; 4],
     bounds: [f32; 4],
     viewport: [f32; 4],
     ambient: [f32; 4],
@@ -1136,6 +1137,7 @@ impl Scene3dRenderer {
                 .orthographic_view_direction
                 .unwrap_or(frame.camera_position);
             let params = Params {
+                world_to_view: frame.world_to_view,
                 specular_environment: specular_environment.map_or([0.; 4], |e| {
                     [
                         e.rotation_y.cos(),

@@ -55,6 +55,16 @@ direction and linear energy with distance/cone attenuation and shadow visibility
 Use `gradients.shadow_depth` for the shadow-depth gradient. Out-of-range light
 indices return zero energy.
 
+`material_view_position(world)` transforms a world position into camera space.
+`material_view_vector(world_vector)` applies the camera's linear transform without
+translation or normalization. These use the submitted `world_to_view` matrix,
+not the camera projection or the shadow camera. GPUI cameras look along negative Z
+with positive X right and positive Y up; their view matrices are rigid, so the vector
+helper also rotates world-space normals. For a custom non-rigid view transform,
+normal conversion requires the inverse-transpose transform supplied by the application.
+Both helpers are shading-only. `material_view_direction(world)` instead returns the
+normalized world-space direction toward the viewer, including orthographic cameras.
+
 Material code cannot declare shader entry points, overrides, or private globals,
 call private renderer helpers, or discard fragments. The restrictions apply to
 helper functions as well as the two required functions. Source validation is not
@@ -82,3 +92,17 @@ exclude retained compiled-source storage, compiler working memory, and GPU stora
 renderer's standard bindings, the highest custom binding index, and uniform sizes.
 It does not create bind groups or verify actual resource handles, texture formats,
 or driver compilation. Program clones retain the same compiled source and metadata.
+
+## Material comparison
+
+```sh
+cargo run -p gpui_3d --features wgpu --example materials
+```
+
+Select **PBR / Custom** to compare built-in PBR, a stepped direct-light response,
+and a camera-space sphere-map reflection. Right-drag rotates the camera; the
+projection control switches perspective and orthographic views. **Toon bands**
+and **Sphere brightness** update uniform snapshots without recompiling shaders.
+The sphere map uses an sRGB texture view, decoded to linear RGB during sampling.
+The example's WGSL defines the shading styles; the renderer supplies lights,
+coordinate conversion, texture bindings, coverage, and output processing.

@@ -7,6 +7,7 @@ struct DirectLight {
 struct Params {
     specular_environment: vec4<f32>,
     camera: mat4x4<f32>,
+    world_to_view: mat4x4<f32>,
     bounds: vec4<f32>, viewport: vec4<f32>, ambient: vec4<f32>,
     texture_rect: vec4<f32>, flags: vec4<f32>,
     ids: vec4<u32>,
@@ -378,6 +379,12 @@ fn builtin_shading(base: vec3<f32>, input: SurfaceInput, gradients: SurfaceGradi
 
 fn material_view_direction(world: vec3<f32>) -> vec3<f32> {
     return unit_vector(params.view.xyz - world * params.view.w);
+}
+fn material_view_position(world: vec3<f32>) -> vec3<f32> {
+    return (params.world_to_view * vec4<f32>(world, 1.0)).xyz;
+}
+fn material_view_vector(world: vec3<f32>) -> vec3<f32> {
+    return (params.world_to_view * vec4<f32>(world, 0.0)).xyz;
 }
 fn material_light_count() -> u32 { return min(params.light_count.x, 8u); }
 fn material_light(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>, shadow_depth: vec2<f32>) -> LightSample {

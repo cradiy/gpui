@@ -23,6 +23,14 @@ pub enum MorphAttribute {
 /// Invalid morph data or sampled geometry. All offsets are zero-based.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MorphError {
+    VertexCount {
+        expected: usize,
+        actual: usize,
+    },
+    VertexIndex {
+        vertex: usize,
+        vertex_count: usize,
+    },
     EmptyTarget {
         target: usize,
     },
@@ -58,6 +66,17 @@ pub enum MorphError {
 impl fmt::Display for MorphError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::VertexCount { expected, actual } => write!(
+                f,
+                "expected {expected} mapped morph vertices, received {actual}"
+            ),
+            Self::VertexIndex {
+                vertex,
+                vertex_count,
+            } => write!(
+                f,
+                "morph source vertex {vertex} is outside {vertex_count} vertices"
+            ),
             Self::EmptyTarget { target } => write!(f, "morph target {target} has no attributes"),
             Self::AttributeCount {
                 target,
@@ -163,6 +182,63 @@ impl MorphTargets {
 
     pub fn targets(&self) -> &[MorphTarget] {
         &self.targets
+    }
+
+    /// Rebinds targets to a mesh using one output-to-source index per new vertex.
+    /// Reordering, duplication and subsets preserve target order, absent attributes
+    /// and stored delta bits. The caller supplies the matching base attributes;
+    /// this operation neither remaps the base nor transforms deltas between spaces.
+    /// Tangent deltas require tangents on the supplied base. Validation precedes
+    /// target allocation; an identity map shares the original delta storage.
+    pub fn remap_vertices(&self, base: Mesh, source_vertices: &[u32]) -> Result<Self, MorphError> {
+        if source_vertices.len() != base.vertex_count() {
+            return Err(MorphError::VertexCount {
+                expected: base.vertex_count(),
+                actual: source_vertices.len(),
+            });
+        }
+        for &vertex in source_vertices {
+            if vertex as usize >= self.base.vertex_count() {
+                return Err(MorphError::VertexIndex {
+                    vertex: vertex as usize,
+                    vertex_count: self.base.vertex_count(),
+                });
+            }
+        }
+        if base.tangents().is_none()
+            && let Some(target) = self
+                .targets
+                .iter()
+                .position(|target| target.tangents.is_some())
+        {
+            return Err(MorphError::MissingBaseTangents { target });
+        }
+        let identity = source_vertices.len() == self.base.vertex_count()
+            && source_vertices
+                .iter()
+                .enumerate()
+                .all(|(index, &source)| index == source as usize);
+        let remap = |values: &Option<Arc<[[f32; 3]]>>| {
+            values.as_ref().map(|values| {
+                source_vertices
+                    .iter()
+                    .map(|&source| values[source as usize])
+                    .collect()
+            })
+        };
+        let targets = if identity {
+            self.targets.clone()
+        } else {
+            self.targets
+                .iter()
+                .map(|target| MorphTarget {
+                    positions: remap(&target.positions),
+                    normals: remap(&target.normals),
+                    tangents: remap(&target.tangents),
+                })
+                .collect()
+        };
+        Ok(Self { base, targets })
     }
 
     /// Evaluates `base + sum(weight * delta)` before node or skin transforms.

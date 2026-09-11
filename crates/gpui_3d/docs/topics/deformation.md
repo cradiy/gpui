@@ -48,7 +48,9 @@ available through `source().evaluate(weights)`; no automatic fallback is perform
 `GpuDeformationOutput` on the same device. Each vertex must appear exactly once
 in the index buffer; shared or unused vertices are rejected. Index order may
 differ from vertex order. Prepare triangle-corner geometry and remap external
-Morph/Skin attributes before creating the compute sources.
+Morph/Skin attributes before creating the compute sources. The
+[deformation mapping APIs](geometry.md#deformation-mappings) preserve target
+correspondence and normalized Skin weights across vertex splits.
 
 The input must use the same base mesh allocation and have no tangents. Evaluation
 preserves vertex order, positions, indices, coordinate sets, and colors, and

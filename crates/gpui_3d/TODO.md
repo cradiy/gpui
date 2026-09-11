@@ -223,6 +223,7 @@ Core implementation order:
      - [ ] **Generated tangents**: Preserve imported MikkTSpace policies on deformed GPU geometry, including vertex correspondence and handedness.
        - [x] **GPU triangle derivatives**: Retained indices and selected UVs, immutable input/face pairing, derivative directions and magnitudes, mirrored-orientation and degeneracy classification, and bounded payload admission.
        - [x] **Corner source preparation**: Bounded unshared expansion, bit-preserved vertex attributes and tangent-set identity, output-to-source correspondence, and shared glTF Morph topology preparation.
+       - [x] **Deformation source remapping**: Output-to-source Morph/Skin rebinding, exact delta and normalized-weight preservation, shared joint bindings, identity-map sharing, and validation before allocation.
        - [ ] **GPU tangent groups**: Deformed position/normal/UV welding, connected orientation groups, corner weighting, and degenerate-face inheritance with fixed vertex correspondence.
          - [x] **Dynamic corner welding**: Exact deformed keys, normalized normals, selected UVs, deterministic earliest-corner representatives, bounded ping-pong sorting, and retained derivative/input pairing.
          - [x] **GPU edge adjacency**: Opposite-edge rank pairing, deterministic non-manifold relationships, distinct coincident/collinear policies, inherited-frame eligibility, and regular-frame orientation compatibility.

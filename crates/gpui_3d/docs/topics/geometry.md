@@ -77,6 +77,28 @@ index count before output allocation. The vertex limit does not limit bytes or
 handle allocator exhaustion. Output vertex count equals source index count;
 attribute storage grows accordingly.
 
+### Deformation mappings
+
+`MorphTargets::remap_vertices(base, source_vertices)` copies target attributes
+through an output-to-source map and binds them to the supplied mesh. The map must
+have one entry per new base vertex, each referencing the original base. Target
+order, absent attributes and delta bits are preserved. Tangent targets require
+tangents on the new base. The caller supplies corresponding base attributes and
+coordinate spaces; remapping does not transform deltas or regenerate directions.
+
+`Skin::remap_vertices(source_vertices)` copies normalized f64 influences without
+rounding them to f32 or renormalizing. Repeated joints and their order are retained;
+inverse bind matrices remain shared and joint indices are unchanged. Empty maps
+and missing source vertices are errors. The resulting binding can evaluate any
+mesh with the mapped vertex count and matching vertex order.
+
+Both operations support duplicates, subsets and reordered vertices. Validation
+precedes output allocation, original bindings remain unchanged, and identity maps
+share existing attribute storage. Callers bound map sizes and retained bindings;
+Skin also rejects unrepresentable influence/offset buffer sizes. Use the same map
+for every binding attached to an expanded or regenerated mesh. The remapped
+bindings can be passed to CPU evaluation or to `GpuMorph` and `GpuSkin` constructors.
+
 ## Coordinate sets
 
 `Vertex::uv` stores coordinate set zero. `Mesh::with_uv_set(set, coordinates)`

@@ -96,6 +96,175 @@ fn corner_expansion_admission_and_absent_attributes() {
 }
 
 #[test]
+fn vertex_remapping_preserves_morph_skin_composition_and_weight_precision() {
+    let base = Mesh::plane();
+    let morph = MorphTargets::new(
+        base.clone(),
+        [
+            MorphTarget {
+                positions: Some((0..4).map(|i| [0.1 * i as f32, -0., 0.2]).collect()),
+                normals: Some(vec![[0.1, 0.2, 0.]; 4].into()),
+                tangents: Some(vec![[0., 0.1, 0.]; 4].into()),
+            },
+            MorphTarget {
+                positions: Some(vec![[0., 0., -0.3]; 4].into()),
+                ..Default::default()
+            },
+        ],
+    )
+    .unwrap();
+    let skin = Skin::new(
+        [AffineTransform::IDENTITY; 2],
+        (0..4).map(|i| {
+            [
+                SkinInfluence {
+                    joint: 1,
+                    weight: f32::MIN_POSITIVE,
+                },
+                SkinInfluence {
+                    joint: 0,
+                    weight: f32::MAX,
+                },
+                SkinInfluence {
+                    joint: 0,
+                    weight: f32::MAX / (i + 1) as f32,
+                },
+            ]
+        }),
+    )
+    .unwrap();
+    let expanded = base.expand_corners(6).unwrap();
+    let map = expanded.source_vertices();
+    let remapped_morph = morph.remap_vertices(expanded.mesh().clone(), map).unwrap();
+    let remapped_skin = skin.remap_vertices(map).unwrap();
+    assert!(std::ptr::eq(
+        skin.inverse_bind_matrices(),
+        remapped_skin.inverse_bind_matrices()
+    ));
+    for (output, &source) in map.iter().enumerate() {
+        let before = skin.vertex_influences(source as usize).unwrap();
+        let after = remapped_skin.vertex_influences(output).unwrap();
+        assert_eq!(after, before);
+        assert!(after[0].weight > 0.);
+        assert_eq!(after[0].weight as f32, 0.);
+        assert_eq!(
+            remapped_morph.targets()[0].positions.as_ref().unwrap()[output].map(f32::to_bits),
+            morph.targets()[0].positions.as_ref().unwrap()[source as usize].map(f32::to_bits)
+        );
+    }
+    assert!(remapped_morph.targets()[1].normals.is_none());
+    assert!(remapped_morph.targets()[1].tangents.is_none());
+    let joints = [
+        AffineTransform::from_translation([0.4, -0.3, 0.7]).unwrap(),
+        AffineTransform::from_translation([-1., 0.5, 2.]).unwrap(),
+    ];
+    for weights in [[-0.25, 0.7], [0., 0.], [0.5, -1.]] {
+        let original = skin
+            .evaluate(&morph.evaluate(&weights).unwrap(), &joints)
+            .unwrap();
+        let result = remapped_skin
+            .evaluate(&remapped_morph.evaluate(&weights).unwrap(), &joints)
+            .unwrap();
+        for (output, &source) in map.iter().enumerate() {
+            assert_eq!(
+                result.vertices()[output].position,
+                original.vertices()[source as usize].position
+            );
+            assert_eq!(
+                result.vertices()[output].normal,
+                original.vertices()[source as usize].normal
+            );
+            assert_eq!(
+                result.tangents().unwrap()[output],
+                original.tangents().unwrap()[source as usize]
+            );
+        }
+    }
+    let identity = [0, 1, 2, 3];
+    let rebound = morph.remap_vertices(base, &identity).unwrap();
+    assert!(std::ptr::eq(rebound.targets(), morph.targets()));
+    let rebound = skin.remap_vertices(&identity).unwrap();
+    assert!(std::ptr::eq(
+        rebound.vertex_influences(0).unwrap(),
+        skin.vertex_influences(0).unwrap()
+    ));
+}
+
+#[test]
+fn vertex_remapping_validates_indices_counts_and_tangent_requirements() {
+    let base = Mesh::plane();
+    let morph = MorphTargets::new(
+        base.clone(),
+        [MorphTarget {
+            tangents: Some(vec![[0.; 3]; 4].into()),
+            ..Default::default()
+        }],
+    )
+    .unwrap();
+    let skin = Skin::new(
+        [AffineTransform::IDENTITY],
+        vec![
+            vec![SkinInfluence {
+                joint: 0,
+                weight: 1.
+            }];
+            4
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        skin.remap_vertices(&[]).unwrap_err(),
+        SkinError::EmptyVertices
+    );
+    assert_eq!(
+        morph.remap_vertices(base.clone(), &[0, 1, 2]).unwrap_err(),
+        MorphError::VertexCount {
+            expected: 4,
+            actual: 3
+        }
+    );
+    for index in [4, u32::MAX] {
+        let map = [0, 1, 2, index];
+        assert_eq!(
+            skin.remap_vertices(&map).unwrap_err(),
+            SkinError::VertexIndex {
+                vertex: index as usize,
+                vertex_count: 4
+            }
+        );
+        assert_eq!(
+            morph.remap_vertices(base.clone(), &map).unwrap_err(),
+            MorphError::VertexIndex {
+                vertex: index as usize,
+                vertex_count: 4
+            }
+        );
+    }
+    let without_tangents = Mesh::new(base.vertices().to_vec(), base.indices().to_vec());
+    assert_eq!(
+        morph
+            .remap_vertices(without_tangents, &[0, 1, 2, 3])
+            .unwrap_err(),
+        MorphError::MissingBaseTangents { target: 0 }
+    );
+    let subset = Mesh::new(
+        vec![base.vertices()[2], base.vertices()[0], base.vertices()[1]],
+        vec![0, 1, 2],
+    )
+    .with_tangents(vec![[1., 0., 0., 1.]; 3])
+    .unwrap();
+    assert_eq!(
+        morph
+            .remap_vertices(subset, &[2, 0, 1])
+            .unwrap()
+            .base_mesh()
+            .vertex_count(),
+        3
+    );
+    assert_eq!(skin.remap_vertices(&[2, 0, 1]).unwrap().vertex_count(), 3);
+}
+
+#[test]
 fn vertex_colors_validate_and_preserve_immutable_snapshots() {
     use gpui_3d::VertexColorError;
     let plane = Mesh::plane();

@@ -22,6 +22,7 @@ pub struct NormalizedSkinInfluence {
 pub enum SkinError {
     EmptyJoints,
     EmptyVertices,
+    TooLarge,
     VertexIndex {
         vertex: usize,
         vertex_count: usize,
@@ -63,6 +64,7 @@ impl fmt::Display for SkinError {
         match self {
             Self::EmptyJoints => f.write_str("skin requires at least one joint"),
             Self::EmptyVertices => f.write_str("skin requires vertex influences"),
+            Self::TooLarge => f.write_str("skin influence storage exceeds addressable size"),
             Self::VertexIndex {
                 vertex,
                 vertex_count,
@@ -190,6 +192,61 @@ impl Skin {
 
     pub fn inverse_bind_matrices(&self) -> &[AffineTransform] {
         &self.inverse_bind
+    }
+
+    /// Reorders, duplicates or selects vertices using output-to-source indices.
+    /// Normalized f64 weights and influence order are copied without conversion or
+    /// renormalization. Joint bindings remain shared; joint indices do not change.
+    /// Empty maps and missing source vertices are errors. Callers bound map sizes
+    /// and retained results when processing untrusted topology.
+    pub fn remap_vertices(&self, source_vertices: &[u32]) -> Result<Self, SkinError> {
+        if source_vertices.is_empty() {
+            return Err(SkinError::EmptyVertices);
+        }
+        let offsets_len = source_vertices
+            .len()
+            .checked_add(1)
+            .ok_or(SkinError::TooLarge)?;
+        let mut count = 0usize;
+        for &vertex in source_vertices {
+            count = count
+                .checked_add(self.vertex_influences(vertex as usize)?.len())
+                .ok_or(SkinError::TooLarge)?;
+        }
+        for (count, size) in [
+            (offsets_len, std::mem::size_of::<usize>()),
+            (count, std::mem::size_of::<NormalizedSkinInfluence>()),
+        ] {
+            if count
+                .checked_mul(size)
+                .is_none_or(|bytes| bytes > isize::MAX as usize)
+            {
+                return Err(SkinError::TooLarge);
+            }
+        }
+        if source_vertices.len() == self.vertex_count()
+            && source_vertices
+                .iter()
+                .enumerate()
+                .all(|(index, &source)| index == source as usize)
+        {
+            return Ok(self.clone());
+        }
+        let mut offsets = Vec::with_capacity(offsets_len);
+        let mut influences = Vec::with_capacity(count);
+        offsets.push(0);
+        for &vertex in source_vertices {
+            let vertex = vertex as usize;
+            influences.extend_from_slice(
+                &self.influences[self.offsets[vertex]..self.offsets[vertex + 1]],
+            );
+            offsets.push(influences.len());
+        }
+        Ok(Self {
+            inverse_bind: self.inverse_bind.clone(),
+            offsets: offsets.into(),
+            influences: influences.into(),
+        })
     }
 
     /// Borrows the normalized contributions used to evaluate one vertex.

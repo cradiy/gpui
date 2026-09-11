@@ -246,6 +246,12 @@ and active texture sampling are validated before geometry preparation, including
 objects outside the camera volume. Inactive texture slots impose no coordinate
 or sampling requirements.
 
+Custom primary and additional materials are checked for backend type, required
+vertex streams and vertex counts before geometry preparation. Additional pass
+counts, raster state and expansion attributes are checked at the same boundary.
+Material sources must belong to the rendering device and remain valid. These
+checks cover every frame in a material preparation batch before pipeline creation.
+
 ## Viewport effects
 
 Wrap a viewport with `gpui_effects::subtree_effect_chain` to apply Bloom and color

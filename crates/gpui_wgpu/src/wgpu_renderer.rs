@@ -3069,6 +3069,8 @@ impl WgpuRenderer {
                             true,
                         )
                         .and_then(|()| {
+                            #[cfg(not(target_family = "wasm"))]
+                            scene3d::validate_material_devices(frame, &self.resources().device)?;
                             crate::scene3d_renderer::gpu_draws::validate_frame(
                                 &self.resources().device,
                                 frame,

@@ -8,6 +8,9 @@ mod geometry;
 mod images;
 mod instances;
 mod materials;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use materials::validate_material_devices;
+pub(crate) use materials::validate_material_settings;
 mod output_cache;
 mod picking;
 mod specular;
@@ -788,15 +791,6 @@ impl Scene3dRenderer {
         #[cfg(not(target_family = "wasm"))]
         self.materials
             .prepare(device, frames, self.format, self.samples)?;
-        #[cfg(target_family = "wasm")]
-        anyhow::ensure!(
-            frames
-                .iter()
-                .all(|frame| frame.objects.iter().all(
-                    |object| object.custom_material.is_none() && object.mesh_passes.is_empty()
-                )),
-            "custom 3D materials require a native renderer"
-        );
         self.plans.prepare(
             frames.iter().copied(),
             self.blend_pipeline.is_some(),

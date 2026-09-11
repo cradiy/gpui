@@ -2,6 +2,7 @@ use anyhow::{Result, ensure};
 use gpui::MeshDraw3d;
 
 pub(super) fn validate_object_settings(object: &MeshDraw3d) -> Result<()> {
+    crate::wgpu_renderer::scene3d::validate_material_settings(object)?;
     ensure!(
         object
             .render_bounds

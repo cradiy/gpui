@@ -102,24 +102,13 @@ impl MeshPassCache {
         );
         let mut used = HashSet::new();
         for object in frames.iter().flat_map(|frame| frame.objects.iter()) {
-            ensure!(
-                object.mesh_passes.len() <= gpui::MAX_MESH_PASSES_3D,
-                "too many additional mesh passes"
-            );
             for pass in object.mesh_passes.iter() {
-                ensure!(pass.state.is_valid(), "invalid additional mesh pass state");
                 let snapshot = pass_snapshot(pass)?;
-                snapshot.validate_vertex_count(object.mesh.vertices().len())?;
                 let source = snapshot.source();
                 let expansion = Expansion::new(
                     source.program().vertex_attributes(),
                     pass.expansion.as_ref(),
                 )?;
-                ensure!(
-                    !source.context().device_lost()
-                        && std::ptr::eq(device, source.context().device.as_ref()),
-                    "3D mesh pass belongs to a different or lost device"
-                );
                 if !color {
                     continue;
                 }

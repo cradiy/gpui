@@ -1,13 +1,17 @@
 use super::{Instance, Vertex, material_bindings};
 mod mesh_pass;
+mod validation;
 #[cfg(not(target_family = "wasm"))]
 use crate::{Scene3dMaterialSnapshot, Scene3dMaterialSource};
 #[cfg(not(target_family = "wasm"))]
-use anyhow::{Context as _, Result, ensure};
+use anyhow::{Context as _, Result};
 #[cfg(not(target_family = "wasm"))]
 pub(super) use mesh_pass::pass_snapshot;
 #[cfg(not(target_family = "wasm"))]
 use std::collections::{HashMap, HashSet};
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use validation::validate_devices as validate_material_devices;
+pub(crate) use validation::validate_settings as validate_material_settings;
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests;
@@ -49,6 +53,12 @@ impl MaterialCache {
         format: wgpu::TextureFormat,
         samples: u32,
     ) -> Result<()> {
+        for frame in frames {
+            for object in frame.objects.iter() {
+                validate_material_settings(object)?;
+            }
+            validate_material_devices(frame, device)?;
+        }
         self.extra.prepare(device, frames, format, samples)?;
         let mut used = HashSet::new();
         for frame in frames {
@@ -57,12 +67,6 @@ impl MaterialCache {
                     continue;
                 };
                 let source = snapshot.source();
-                snapshot.validate_vertex_count(object.mesh.vertices().len())?;
-                ensure!(
-                    !source.context().device_lost()
-                        && std::ptr::eq(device, source.context().device.as_ref()),
-                    "3D material belongs to a different or lost device"
-                );
                 let identity = source.identity();
                 used.insert(identity);
                 if let std::collections::hash_map::Entry::Vacant(entry) =

@@ -53,6 +53,20 @@ fn scene3d_custom_material_preserves_coverage_and_retained_uniforms() -> Result<
         Some(gpui::MeshMaterial3d::new(Arc::new(changed)));
 
     let mut cache = MaterialCache::default();
+    let mut invalid = input.clone();
+    Arc::make_mut(&mut invalid.objects)[0].custom_material =
+        Some(gpui::MeshMaterial3d::new(Arc::new(())));
+    assert!(
+        cache
+            .prepare(
+                &context.device,
+                &[&retained, &invalid],
+                wgpu::TextureFormat::Rgba8Unorm,
+                1,
+            )
+            .is_err()
+    );
+    assert!(cache.primary.is_empty());
     cache.prepare(
         &context.device,
         &[&retained],

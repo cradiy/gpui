@@ -348,6 +348,8 @@ impl WgpuScene3dRenderer {
             config.channels.shaded(),
         )?;
         ensure!(!self.context.device_lost(), "3D rendering device is lost");
+        #[cfg(not(target_family = "wasm"))]
+        crate::wgpu_renderer::scene3d::validate_material_devices(frame, &self.context.device)?;
         ensure!(
             frame
                 .objects

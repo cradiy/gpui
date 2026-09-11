@@ -1,14 +1,14 @@
 use anyhow::Result;
 use gpui::{EffectShader, EffectTextureOptions, EffectUniforms};
-use gpui_wgpu::{TextureEffectConfig, WgpuContext, WgpuTextureEffect, wgpu};
+use gpui_wgpu::{TextureEffectConfig, WgpuContext, WgpuResource, WgpuTextureEffect, wgpu};
 
 fn upload(
     context: &WgpuContext,
     size: [u32; 2],
     format: wgpu::TextureFormat,
     data: &[f32],
-) -> wgpu::Texture {
-    let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+) -> WgpuResource<wgpu::Texture> {
+    let texture = context.create_texture(&wgpu::TextureDescriptor {
         label: Some("texture effect input"),
         size: wgpu::Extent3d {
             width: size[0],
@@ -154,6 +154,13 @@ fn hdr_depth_processing_preserves_texels_alpha_and_owned_results() -> Result<()>
     )?;
     let resized = identity.render(&[&retained], [6, 4], EffectUniforms::default(), 0.)?;
     drop((identity, fog, tone, color, depth, rows));
+
+    for output in [&retained, &exact, &fogged, &row_fogged, &display, &resized] {
+        output.check_device(&context.device)?;
+        output
+            .create_view(&Default::default())
+            .check_device(&context.device)?;
+    }
 
     for pixel in read(&context, &retained)? {
         near(pixel, [2., 0.5, 0.25, 0.5]);
@@ -302,11 +309,53 @@ fn invalid_gpu_inputs_fail_without_poisoning_the_processor() -> Result<()> {
             .render(&[], [1, 1], EffectUniforms::default(), 0.)
             .is_err()
     );
-    assert!(
-        processor
-            .render(&[&foreign], [1, 1], EffectUniforms::default(), 0.)
-            .is_err()
-    );
+    let source = "fn effect(i: EffectInput, p: EffectParams) -> vec4<f32> { return sample_effect_image(i, i.uv); }";
+    for shader in [
+        EffectShader::wgsl_image(source),
+        EffectShader::wgsl_two_images(source),
+        EffectShader::wgsl_four_images(source),
+    ] {
+        let count = usize::from(shader.image_count());
+        let effect = WgpuTextureEffect::new(
+            context.clone(),
+            &shader,
+            TextureEffectConfig {
+                inputs: vec![EffectTextureOptions::default(); count],
+                output_format: wgpu::TextureFormat::Rgba32Float,
+                ..Default::default()
+            },
+        )?;
+        let mut encoder = context.device.create_command_encoder(&Default::default());
+        for index in 0..count {
+            let mut inputs = vec![&local; count];
+            inputs[index] = &foreign;
+            for error in [
+                effect
+                    .render(&inputs, [1, 1], EffectUniforms::default(), 0.)
+                    .unwrap_err(),
+                effect
+                    .encode(&mut encoder, &inputs, [1, 1], EffectUniforms::default(), 0.)
+                    .unwrap_err(),
+            ] {
+                assert_eq!(
+                    error.to_string(),
+                    format!("invalid texture effect input {index}")
+                );
+                assert!(format!("{error:#}").contains("different device"));
+            }
+        }
+        let result = effect.encode(
+            &mut encoder,
+            &vec![&local; count],
+            [1, 1],
+            EffectUniforms::default(),
+            0.,
+        )?;
+        context.queue.submit(Some(encoder.finish()));
+        result.check_device(&context.device)?;
+        assert!(result.check_device(&other.device).is_err());
+        near(read(&context, &result)?[0], [1.; 4]);
+    }
     assert!(
         processor
             .render(&[&local], [0, 1], EffectUniforms::default(), 0.)

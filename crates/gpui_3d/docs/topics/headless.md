@@ -234,6 +234,12 @@ context's queue. `encode` appends a pass to a caller-owned command encoder, so
 multiple effects can share one submission. Both return new owned textures;
 later calls cannot overwrite an earlier output.
 
+Inputs and outputs use `WgpuResource<wgpu::Texture>`, retaining their creating
+device through effect chains. Use renderer output accessors directly, or create
+application inputs with `WgpuContext::create_texture`. Foreign-device inputs
+return an error identifying the input slot before any input views or bindings
+are created. `raw()` borrows the underlying handle for application commands.
+
 ```no_run
 use gpui::{EffectTextureOptions, EffectUniforms};
 use gpui_3d::{HeadlessRenderer, Scene, Scene3dChannels, Scene3dOutputConfig};

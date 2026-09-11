@@ -1,5 +1,5 @@
 use super::{EffectInstance, GlobalParams, PodBounds, PodTransformationMatrix};
-use crate::WgpuContext;
+use crate::{WgpuContext, WgpuResource};
 use anyhow::{Context as _, Result, ensure};
 use bytemuck::Zeroable as _;
 use gpui::{EffectShader, EffectTextureOptions, EffectUniforms};
@@ -69,6 +69,8 @@ impl TextureEffectConfig {
 /// submits on its queue; `encode` appends work for caller-controlled submission.
 /// Neither waits for GPU completion or reads pixels back. Each result owns fresh
 /// storage and remains valid after subsequent calls or dropping the processor.
+/// Inputs and outputs retain creating-device identity through `WgpuResource`.
+/// Foreign inputs are rejected before view creation or binding.
 /// No native window, atlas, or UI layout is used.
 pub struct WgpuTextureEffect {
     context: WgpuContext,
@@ -239,11 +241,11 @@ impl WgpuTextureEffect {
     /// when an input is produced by work still held in a command encoder.
     pub fn render(
         &self,
-        inputs: &[&wgpu::Texture],
+        inputs: &[&WgpuResource<wgpu::Texture>],
         size: [u32; 2],
         uniforms: EffectUniforms,
         time: f32,
-    ) -> Result<wgpu::Texture> {
+    ) -> Result<WgpuResource<wgpu::Texture>> {
         ensure!(!self.context.device_lost(), "texture effect device is lost");
         let device = &self.context.device;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -269,20 +271,21 @@ impl WgpuTextureEffect {
     /// the caller submits first on the same queue. The returned texture can feed
     /// later passes in this encoder; its pixels are not ready before submission.
     ///
-    /// Dropping an unfinished encoder cancels its work. Metadata and input binding
-    /// validation occur before recording the pass. If encoding fails after recording
-    /// begins, discard the encoder; its earlier commands cannot be rolled back.
+    /// Dropping an unfinished encoder cancels its work. Input device ownership,
+    /// metadata and binding validation occur before recording the pass. If encoding
+    /// fails after recording begins, discard the encoder; its earlier commands
+    /// cannot be rolled back.
     /// The caller owns finish/submission validation and resource ordering.
     /// Encoder ownership cannot be inspected through WGPU's public API; supplying
     /// a different device's encoder follows WGPU's validation-error behavior.
     pub fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        inputs: &[&wgpu::Texture],
+        inputs: &[&WgpuResource<wgpu::Texture>],
         size: [u32; 2],
         uniforms: EffectUniforms,
         time: f32,
-    ) -> Result<wgpu::Texture> {
+    ) -> Result<WgpuResource<wgpu::Texture>> {
         ensure!(!self.context.device_lost(), "texture effect device is lost");
         self.config.output_bytes(size)?;
         let device = &self.context.device;
@@ -300,6 +303,9 @@ impl WgpuTextureEffect {
             "texture effect input count mismatch"
         );
         for (index, texture) in inputs.iter().enumerate() {
+            texture
+                .check_device(&self.context.device)
+                .with_context(|| format!("invalid texture effect input {index}"))?;
             validate_input(
                 texture.dimension(),
                 texture.size(),
@@ -388,7 +394,7 @@ impl WgpuTextureEffect {
             anyhow::bail!("texture effect input validation failed: {error}");
         }
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let output = device.create_texture(&wgpu::TextureDescriptor {
+        let output = self.context.create_texture(&wgpu::TextureDescriptor {
             label: Some("gpui.texture_effect.output"),
             size: wgpu::Extent3d {
                 width: size[0],

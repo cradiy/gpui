@@ -5,6 +5,9 @@ edition.workspace = true
 publish.workspace = true
 license = "MIT"
 
+[features]
+wgpu = ["gpui_3d/wgpu"]
+
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true

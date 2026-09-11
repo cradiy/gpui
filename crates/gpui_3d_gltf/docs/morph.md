@@ -46,6 +46,11 @@ that work on the CPU.
 without changing their vertex order. It does not replace MikkTSpace tangent
 generation; assets with `regenerates_tangents()` still require that stage.
 
+[`GpuSceneDeformation`](gpu_deformation.md) composes imported Morph, flat normal
+reconstruction, and Skin with the native `wgpu` feature. It preserves authored
+defaults and instance mappings, and rejects MikkTSpace regeneration requirements
+before uploading resources.
+
 Generated tangents are absent from `attribute_targets().base_mesh()`, even when
 `MorphGeometry::base_mesh()` contains them. For zero weights, `evaluate` returns
 the complete base mesh, including its generated directions.

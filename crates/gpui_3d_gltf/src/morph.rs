@@ -6,7 +6,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use gltf::{Semantic, accessor::DataType};
 use gpui_3d::{
-    EvaluatedScene, Mesh, MorphTarget, MorphTargets, NodeHandle, NormalMode, SubtreeInstance,
+    EvaluatedScene, Mesh, MorphError, MorphTarget, MorphTargets, NodeHandle, NormalMode,
+    SubtreeInstance,
 };
 
 use crate::{PreparedDocument, SceneAsset, ScenePrimitive, SceneSkin};
@@ -191,26 +192,12 @@ pub(crate) fn deform(
     poses: &EvaluatedScene,
     weights: &[(NodeHandle, Vec<f32>)],
 ) -> Result<Vec<(NodeHandle, Mesh)>> {
+    let weights = resolve_weights(morphs.iter(), &map, weights)?;
     let skins: HashMap<_, _> = skins.iter().map(|skin| (skin.primitive(), skin)).collect();
     let morphs: HashMap<_, _> = morphs
         .iter()
         .map(|morph| (morph.primitive, morph))
         .collect();
-    let targets: HashSet<_> = morphs
-        .values()
-        .map(|morph| map(morph.node).context("morph node is absent from the instance"))
-        .collect::<Result<_>>()?;
-    let mut overrides = HashMap::new();
-    for (node, values) in weights {
-        ensure!(
-            targets.contains(node),
-            "weight target {node:?} is not a morph node in this instance"
-        );
-        ensure!(
-            overrides.insert(*node, values.as_slice()).is_none(),
-            "duplicate weight target {node:?}"
-        );
-    }
     let mut result = Vec::new();
     for primitive in primitives {
         let morph = morphs.get(&primitive.handle);
@@ -225,9 +212,7 @@ pub(crate) fn deform(
                 "primitive is absent from the pose snapshot"
             );
             let mesh = if let Some(morph) = morph {
-                let node = map(morph.node).context("morph node is absent from the instance")?;
-                let weights = overrides.get(&node).copied().unwrap_or(&morph.weights);
-                Some(morph.geometry.evaluate(weights)?)
+                Some(morph.geometry.evaluate(weights[&primitive.handle])?)
             } else {
                 None
             };
@@ -247,6 +232,46 @@ pub(crate) fn deform(
         })?);
     }
     Ok(result)
+}
+
+pub(crate) fn resolve_weights<'a>(
+    morphs: impl Iterator<Item = &'a SceneMorph> + Clone,
+    map: &impl Fn(NodeHandle) -> Option<NodeHandle>,
+    weights: &'a [(NodeHandle, Vec<f32>)],
+) -> Result<HashMap<NodeHandle, &'a [f32]>> {
+    let targets: HashSet<_> = morphs
+        .clone()
+        .map(|morph| map(morph.node).context("morph node is absent from the instance"))
+        .collect::<Result<_>>()?;
+    let mut overrides = HashMap::new();
+    for (node, values) in weights {
+        ensure!(
+            targets.contains(node),
+            "weight target {node:?} is not a morph node in this instance"
+        );
+        ensure!(
+            overrides.insert(*node, values.as_slice()).is_none(),
+            "duplicate weight target {node:?}"
+        );
+    }
+    morphs
+        .map(|morph| {
+            let node = map(morph.node).context("morph node is absent from the instance")?;
+            let values = overrides.get(&node).copied().unwrap_or(&morph.weights);
+            let expected = morph.geometry.targets().len();
+            if values.len() != expected {
+                return Err(MorphError::WeightCount {
+                    expected,
+                    actual: values.len(),
+                }
+                .into());
+            }
+            if let Some(target) = values.iter().position(|weight| !weight.is_finite()) {
+                return Err(MorphError::NonFiniteWeight { target }.into());
+            }
+            Ok((morph.primitive, values))
+        })
+        .collect()
 }
 
 pub(crate) fn target_count(mesh: &gltf::Mesh<'_>) -> Result<usize> {

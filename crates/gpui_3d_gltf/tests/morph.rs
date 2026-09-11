@@ -7,6 +7,10 @@ use gpui_3d_gltf::{
 };
 use serde_json::{Value, json};
 
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+#[path = "morph/gpu.rs"]
+mod gpu;
+
 struct Fixture {
     json: Value,
     bytes: Vec<u8>,

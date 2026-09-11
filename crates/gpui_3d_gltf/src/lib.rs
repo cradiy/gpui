@@ -10,6 +10,8 @@ mod cache;
 mod camera;
 mod diagnostics;
 mod geometry;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+mod gpu_deformation;
 mod image;
 mod image_cache;
 mod instance;
@@ -31,6 +33,8 @@ pub use animation::{
 pub use cache::{ResourceCache, ResourceCacheLimits};
 pub use diagnostics::ImportDiagnostic;
 pub use geometry::{GeometryOptions, PrimitiveGeometry};
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use gpu_deformation::GpuSceneDeformation;
 pub use image::{DecodedScene, ImageDecodeLimits};
 pub use image_cache::{ImageCache, ImageCacheLimits};
 pub use instance::SceneInstance;

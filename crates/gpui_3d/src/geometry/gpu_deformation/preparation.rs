@@ -4,6 +4,9 @@ use anyhow::{Context as _, Result, ensure};
 use gpui_wgpu::{Scene3dGeometryStatusReadback, Scene3dGpuGeometry, WgpuScene3dGeometry};
 use std::sync::Arc;
 
+mod batch;
+pub use batch::GpuGeometryBatchPreparation;
+
 #[cfg(test)]
 mod tests;
 
@@ -50,20 +53,7 @@ impl GpuDeformationOutput {
         bounds: &GpuDeformationBounds,
         max_working_bytes: Option<u64>,
     ) -> Result<GpuGeometryPreparation> {
-        ensure!(
-            !self.context.device_lost(),
-            "GPU deformation device is lost"
-        );
-        ensure!(
-            Arc::ptr_eq(&self.context.device, &bounds.context.device),
-            "GPU bounds reducer belongs to a different device"
-        );
-        let memory = source.memory();
-        let working_bytes = memory
-            .vertex_bytes
-            .checked_add(memory.draw_bytes)
-            .and_then(|bytes| bytes.checked_add(96))
-            .context("GPU preparation payload overflow")?;
+        let working_bytes = self.preparation_bytes(source, bounds)?;
         ensure!(
             max_working_bytes.is_none_or(|limit| working_bytes <= limit),
             "GPU geometry preparation requires {working_bytes} working bytes"
@@ -80,6 +70,24 @@ impl GpuDeformationOutput {
             }),
             working_bytes,
         })
+    }
+
+    fn preparation_bytes(
+        &self,
+        source: &WgpuScene3dGeometry,
+        bounds: &GpuDeformationBounds,
+    ) -> Result<u64> {
+        self.validate_render_source(source)?;
+        ensure!(
+            Arc::ptr_eq(&self.context.device, &bounds.context.device),
+            "GPU bounds reducer belongs to a different device"
+        );
+        let memory = source.memory();
+        memory
+            .vertex_bytes
+            .checked_add(memory.draw_bytes)
+            .and_then(|bytes| bytes.checked_add(96))
+            .context("GPU preparation payload overflow")
     }
 }
 

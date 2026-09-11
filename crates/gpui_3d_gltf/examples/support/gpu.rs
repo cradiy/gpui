@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result, ensure};
 use gpui::Window;
 use gpui_3d::{
     Aabb, Camera, EvaluatedScene, GpuDeformationBounds, GpuDeformationLimits,
-    GpuGeometryPreparation, Mesh, NodeHandle, PreparedGpuGeometry, Scene, Scene3dGpuDraw,
+    GpuGeometryBatchPreparation, Mesh, NodeHandle, PreparedGpuGeometry, Scene, Scene3dGpuDraw,
     Viewport3d, WgpuContext, WgpuScene3dGeometry, viewport3d,
 };
 use gpui_3d_gltf::{GpuSceneDeformation, SceneInstance};
@@ -35,14 +35,8 @@ struct Ready {
 struct Pending {
     revision: u64,
     poses: EvaluatedScene,
-    entries: Vec<PendingEntry>,
-}
-
-struct PendingEntry {
-    node: NodeHandle,
-    uv_sets: [u32; 5],
-    request: Option<GpuGeometryPreparation>,
-    prepared: Option<PreparedGpuGeometry>,
+    entries: Vec<(NodeHandle, [u32; 5])>,
+    request: GpuGeometryBatchPreparation,
 }
 
 impl Deformation {
@@ -114,15 +108,7 @@ impl Deformation {
 
     fn poll_pending(&mut self) -> Result<()> {
         if let Some(mut pending) = self.pending.take() {
-            for entry in &mut pending.entries {
-                if let Some(request) = &mut entry.request
-                    && let Some(value) = request.try_read()?
-                {
-                    entry.prepared = Some(value);
-                    entry.request = None;
-                }
-            }
-            if pending.entries.iter().all(|entry| entry.prepared.is_some()) {
+            if let Some(prepared) = pending.request.try_read()? {
                 let ready = Ready {
                     revision: pending.revision,
                     poses: pending.poses,
@@ -130,15 +116,13 @@ impl Deformation {
                         .entries
                         .iter()
                         .enumerate()
-                        .map(|(index, entry)| (entry.node, index))
+                        .map(|(index, (node, _))| (*node, index))
                         .collect(),
                     entries: pending
                         .entries
                         .into_iter()
-                        .map(|entry| Entry {
-                            uv_sets: entry.uv_sets,
-                            prepared: entry.prepared.unwrap(),
-                        })
+                        .zip(prepared)
+                        .map(|((_, uv_sets), prepared)| Entry { uv_sets, prepared })
                         .collect(),
                 };
                 self.ready = Some(ready);
@@ -176,12 +160,12 @@ impl Deformation {
                 .filter_map(|object| object.node.map(|node| (node, object.uv_sets)))
                 .collect();
             let entries = outputs
-                .into_iter()
+                .iter()
                 .map(|(node, output)| {
                     let uv_sets = *coordinates
-                        .get(&node)
+                        .get(node)
                         .context("GPU primitive is absent from its evaluated scene")?;
-                    let key = (node, uv_sets);
+                    let key = (*node, uv_sets);
                     if self
                         .packing
                         .get(&key)
@@ -198,24 +182,21 @@ impl Deformation {
                         self.packing
                             .insert(key, (output.base_mesh().clone(), source));
                     }
-                    let source = &self.packing[&key].1;
-                    let request = output.prepare_render_geometry(
-                        source,
-                        &self.bounds,
-                        Some(256 * 1024 * 1024),
-                    )?;
-                    Ok(PendingEntry {
-                        node,
-                        uv_sets,
-                        request: Some(request),
-                        prepared: None,
-                    })
+                    Ok(key)
                 })
-                .collect::<Result<_>>()?;
+                .collect::<Result<Vec<_>>>()?;
+            let inputs: Vec<_> = outputs
+                .iter()
+                .zip(&entries)
+                .map(|((_, output), key)| (output, &self.packing[key].1))
+                .collect();
+            let request =
+                GpuGeometryBatchPreparation::new(&inputs, &self.bounds, Some(256 * 1024 * 1024))?;
             self.pending = Some(Pending {
                 revision,
                 poses,
                 entries,
+                request,
             });
         }
         Ok(())

@@ -318,6 +318,21 @@ Use the returned pair with `ObjectUpdate::gpu_geometry` or `Scene3dGpuDraw`; fin
 poses, material snapshots, camera state and publication order remain caller-owned.
 The scene example retains its previous geometry until preparation succeeds.
 
+For multiple outputs, `GpuGeometryBatchPreparation::new(inputs, bounds_reducer,
+limit)` accepts a slice of `(output, render_source)` references. It checks every
+source/device pairing and the sum of all working payloads before packing or
+starting readbacks. Repeated inputs count separately because each entry owns a
+new packed result. Already computed deformation outputs and packing sources are
+excluded; this is not a total scene-residency budget.
+
+Poll the batch's `try_read()` to receive all `PreparedGpuGeometry` values in input
+order. It returns `None` while any entry remains pending. An error identifies the
+input index and drops the remaining mappings without exposing a completed subset.
+Already submitted GPU work cannot be rolled back. Completion and failure are
+terminal; an empty batch completes with an empty vector. `working_bytes()` reports
+the admitted aggregate even after completion. Concurrent batches and application
+frame identities remain caller-owned.
+
 `WgpuScene3dRenderer::render_with_geometry` accepts the same draws for a prepared
 `Scene3dFrame`. Its input must still contain every overridden object; objects
 removed by earlier preparation cannot be recovered. Prepared frames retain packed

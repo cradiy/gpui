@@ -19,7 +19,7 @@ mod tangent_weld;
 mod tangents;
 pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
 pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
-pub use preparation::{GpuGeometryPreparation, PreparedGpuGeometry};
+pub use preparation::{GpuGeometryBatchPreparation, GpuGeometryPreparation, PreparedGpuGeometry};
 pub use readback::GpuDeformationReadback;
 pub use tangent_adjacency::{
     GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput, GpuTangentEdge,
@@ -125,6 +125,15 @@ impl GpuDeformationOutput {
         &self,
         source: &gpui_wgpu::WgpuScene3dGeometry,
     ) -> Result<gpui_wgpu::Scene3dGpuGeometry> {
+        self.validate_render_source(source)?;
+        source.evaluate(&self.buffer)
+    }
+
+    fn validate_render_source(&self, source: &gpui_wgpu::WgpuScene3dGeometry) -> Result<()> {
+        ensure!(
+            !self.context.device_lost(),
+            "GPU deformation device is lost"
+        );
         ensure!(
             std::sync::Arc::ptr_eq(&self.context.device, &source.context().device),
             "GPU render geometry belongs to a different device"
@@ -133,7 +142,7 @@ impl GpuDeformationOutput {
             std::sync::Arc::ptr_eq(&self.base.0, source.base_mesh()),
             "GPU render geometry source mesh mismatch"
         );
-        source.evaluate(&self.buffer)
+        Ok(())
     }
 
     /// Uploads an immutable CPU mesh as input for GPU deformation.

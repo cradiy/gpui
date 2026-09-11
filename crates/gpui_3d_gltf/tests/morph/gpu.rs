@@ -2,6 +2,9 @@ use super::*;
 use gpui_3d::{GpuDeformationLimits, Mesh, WgpuContext};
 use gpui_3d_gltf::{GpuSceneDeformation, SceneAsset};
 
+#[path = "rendering.rs"]
+mod rendering;
+
 fn asset(fixture: &Fixture) -> SceneAsset {
     fixture
         .prepare()

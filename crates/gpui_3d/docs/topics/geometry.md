@@ -78,6 +78,8 @@ image-alpha picking uses the base-color image's selected set.
 
 ## Vertex colors
 
+Render-only updates use [GPU vertex streams](vertex_streams.md).
+
 `Mesh::with_vertex_colors(colors)` attaches linear, straight-alpha RGBA
 multipliers. Supply one color per vertex, including unused vertices, with finite
 components in `[0, 1]`. Invalid counts or components return `VertexColorError`.

@@ -5,6 +5,9 @@
 Application-produced buffers use the [external deformation](external_deformation.md)
 adoption and GPU snapshot interfaces.
 
+[GPU vertex streams](vertex_streams.md) update render-source UVs and colors
+independently of deformation records.
+
 ## Morph computation
 
 With the native `wgpu` feature, `GpuMorph` uploads a `MorphTargets` binding to

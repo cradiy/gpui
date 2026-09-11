@@ -34,7 +34,7 @@ fn packing_preflight_separates_adapter_limits_enabled_limits_and_indirect_suppor
     );
 }
 
-fn mesh() -> Arc<Mesh3d> {
+pub(super) fn mesh() -> Arc<Mesh3d> {
     let mesh = Mesh3d::new(
         vec![
             gpui::MeshVertex3d {
@@ -165,7 +165,7 @@ fn gpu_geometry_admission_includes_material_inputs_indices_and_draw_arguments() 
     }
 }
 
-fn read(context: &WgpuContext, buffer: &wgpu::Buffer) -> Vec<u32> {
+pub(super) fn read(context: &WgpuContext, buffer: &wgpu::Buffer) -> Vec<u32> {
     let staging = context.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: buffer.size(),

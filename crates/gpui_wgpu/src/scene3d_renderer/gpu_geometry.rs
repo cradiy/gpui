@@ -6,8 +6,10 @@ use wgpu::util::DeviceExt as _;
 
 use crate::{WgpuContext, wgpu_renderer::scene3d::Vertex};
 
+mod attributes;
 #[cfg(test)]
 mod tests;
+pub use attributes::Scene3dVertexUpdate;
 
 fn validate_support(
     limits: &wgpu::Limits,
@@ -110,6 +112,7 @@ impl Scene3dGpuGeometryMemory {
 }
 
 /// Reusable material-coordinate and index inputs for GPU vertex packing on one device.
+#[derive(Clone)]
 pub struct WgpuScene3dGeometry {
     context: WgpuContext,
     mesh: Arc<Mesh3d>,
@@ -119,6 +122,7 @@ pub struct WgpuScene3dGeometry {
     indices: wgpu::Buffer,
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::ComputePipeline,
+    attribute_kernel: Arc<parking_lot::Mutex<Option<attributes::AttributeKernel>>>,
 }
 
 impl WgpuScene3dGeometry {
@@ -164,7 +168,7 @@ impl WgpuScene3dGeometry {
         let source = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene3d.geometry.source"),
             contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         });
         let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("scene3d.geometry.indices"),
@@ -220,6 +224,7 @@ impl WgpuScene3dGeometry {
             indices,
             layout,
             pipeline,
+            attribute_kernel: Arc::new(parking_lot::Mutex::new(None)),
         })
     }
 

@@ -11,6 +11,7 @@ use gpui_platform::application;
 use std::{
     cell::Cell,
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -22,6 +23,8 @@ mod gpu;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 #[path = "scene/picking.rs"]
 mod picking;
+#[path = "scene/surface.rs"]
+mod surface;
 
 fn deformation_amount(position: Duration) -> f32 {
     if position == ANIMATION_LENGTH {
@@ -212,13 +215,16 @@ struct SceneDemo {
     skin: Skin,
     skinning: bool,
     gpu_enabled: bool,
+    regenerate_tangents: bool,
+    normal_mapping: bool,
+    normal_image: Arc<gpui::RenderImage>,
     #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
     gpu: Option<gpu::Deformation>,
     #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
     picking: picking::Picking,
     deformation: usize,
     morph_weights: [f32; 2],
-    mesh_sample: (Duration, usize, [f32; 2], bool, bool),
+    mesh_sample: (Duration, usize, [f32; 2], bool, bool, bool),
     selected: usize,
     hovered: Option<usize>,
     raised: [bool; 3],
@@ -256,7 +262,7 @@ impl SceneDemo {
                 Some(root),
                 Node::new()
                     .id("body")
-                    .mesh(geometry.clone(), Material::color(rgb(0x8dd8e8)))
+                    .mesh(geometry.clone(), surface::material(false, None))
                     .transform(local([0., -0.2, 0.], [1.3, 0.9, 1.])),
             )
             .unwrap();
@@ -326,13 +332,16 @@ impl SceneDemo {
             skin,
             skinning: false,
             gpu_enabled: false,
+            regenerate_tangents: false,
+            normal_mapping: false,
+            normal_image: surface::normal_image(),
             #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
             gpu: None,
             #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
             picking: picking::Picking::new(),
             deformation: 0,
             morph_weights: [0.65, 0.35],
-            mesh_sample: (Duration::ZERO, 0, [0.65, 0.35], false, false),
+            mesh_sample: (Duration::ZERO, 0, [0.65, 0.35], false, false, false),
             selected: 1,
             hovered: None,
             raised: [false; 3],
@@ -381,6 +390,7 @@ impl SceneDemo {
             self.morph_weights,
             self.skinning,
             self.gpu_enabled,
+            self.regenerate_tangents,
         );
         if self.mesh_sample != mesh_sample {
             let amount = deformation_amount(position);
@@ -396,6 +406,17 @@ impl SceneDemo {
                     .unwrap(),
                 _ => self.body_mesh.clone(),
             };
+            let remapped_skin = if self.regenerate_tangents && !self.gpu_enabled {
+                let generated = mesh.generate_tangents().unwrap();
+                let skin = self
+                    .skin
+                    .remap_vertices(generated.source_vertices())
+                    .unwrap();
+                mesh = generated.into_parts().0;
+                Some(skin)
+            } else {
+                None
+            };
             if self.skinning && !self.gpu_enabled {
                 let half_angle = 0.6 * amount;
                 let tip = AffineTransform::from_trs(
@@ -404,8 +425,9 @@ impl SceneDemo {
                     [1.; 3],
                 )
                 .unwrap();
-                mesh = self
-                    .skin
+                mesh = remapped_skin
+                    .as_ref()
+                    .unwrap_or(&self.skin)
                     .evaluate(&mesh, &[AffineTransform::IDENTITY, tip])
                     .unwrap();
             }
@@ -492,12 +514,13 @@ impl Render for SceneDemo {
                 if self
                     .gpu
                     .as_ref()
-                    .is_none_or(|gpu| !gpu.matches_window(window))
+                    .is_none_or(|gpu| !gpu.matches(window, self.regenerate_tangents))
                 {
                     self.gpu = Some(gpu::Deformation::new(
                         window,
                         self.morphs.clone(),
                         self.skin.clone(),
+                        self.regenerate_tangents,
                     )?);
                 }
                 let amount = deformation_amount(self.position);
@@ -710,7 +733,7 @@ impl Render for SceneDemo {
                     let index = this.selected;
                     this.tinted[index] = !this.tinted[index];
                     this.graph.set_material(this.instances[index].node(this.body).unwrap(),
-                        Material::color(rgb(if this.tinted[index] { 0xf09e8e } else { 0x8dd8e8 }))).unwrap();
+                        surface::material(this.tinted[index], this.normal_mapping.then_some(&this.normal_image))).unwrap();
                     this.refresh(cx);
                 })))
                 .child(self.button("hide", "Hide / show", self.hidden[self.selected]).on_click(cx.listener(|this, _, _, cx| {
@@ -821,6 +844,18 @@ impl Render for SceneDemo {
                     }))))
                 .child(format!("Weights {:.2} / {:.2}", self.morph_weights[0], self.morph_weights[1]))))
             .child(div().flex().flex_wrap().items_center().gap_3()
+                .child(self.button("tangents", "Regenerate tangents", self.regenerate_tangents).on_click(cx.listener(|this, _, _, cx| {
+                    this.regenerate_tangents = !this.regenerate_tangents;
+                    this.refresh(cx);
+                })))
+                .child(self.button("normal-map", "Normal map", self.normal_mapping).on_click(cx.listener(|this, _, _, cx| {
+                    this.normal_mapping = !this.normal_mapping;
+                    for (index, instance) in this.instances.iter().enumerate() {
+                        this.graph.set_material(instance.node(this.body).unwrap(),
+                            surface::material(this.tinted[index], this.normal_mapping.then_some(&this.normal_image))).unwrap();
+                    }
+                    this.refresh(cx);
+                })))
                 .child(self.button("resolution", ["Resolution 0.5×", "Resolution 1×", "Resolution 2×"][self.resolution], self.resolution != 1)
                     .on_click(cx.listener(|this, _, _, cx| { this.resolution = (this.resolution + 1) % 3; cx.notify(); })))
                 .child(self.button("samples", if self.color_samples == 4 { "Samples 4×" } else { "Samples 1×" }, self.color_samples == 4)

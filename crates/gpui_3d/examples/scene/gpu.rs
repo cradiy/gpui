@@ -2,9 +2,9 @@ use anyhow::{Context as _, Result};
 use gpui::Window;
 use gpui_3d::{
     Aabb, AffineTransform, GpuDeformationBounds, GpuDeformationLimits, GpuDeformationOutput,
-    GpuGeometryPreparation, GpuMorph, GpuSkin, MorphTargets, NodeHandle, ObjectUpdate, Scene,
-    Scene3dDeviceCapabilities, Scene3dGpuGeometry, Skin, Viewport3d, WgpuContext,
-    WgpuScene3dGeometry, viewport3d,
+    GpuGeometryPreparation, GpuMorph, GpuSkin, GpuTangentGeneration, MorphTargets, NodeHandle,
+    ObjectUpdate, Scene, Scene3dDeviceCapabilities, Scene3dGpuGeometry, Skin,
+    TangentGenerationMode, Viewport3d, WgpuContext, WgpuScene3dGeometry, viewport3d,
 };
 use std::sync::Arc;
 
@@ -12,6 +12,7 @@ pub(super) struct Deformation {
     context: WgpuContext,
     morph: GpuMorph,
     skin: GpuSkin,
+    tangents: Option<GpuTangentGeneration>,
     base: GpuDeformationOutput,
     source: WgpuScene3dGeometry,
     bounds: GpuDeformationBounds,
@@ -20,7 +21,7 @@ pub(super) struct Deformation {
 }
 
 struct Output {
-    sample: Sample,
+    sample: Option<Sample>,
     geometry: Arc<Scene3dGpuGeometry>,
     bounds: Aabb,
 }
@@ -37,13 +38,19 @@ pub(super) struct Sample {
 }
 
 impl Deformation {
-    pub(super) fn matches_window(&self, window: &Window) -> bool {
+    pub(super) fn matches(&self, window: &Window, regenerate_tangents: bool) -> bool {
         WgpuContext::for_window(window)
             .is_some_and(|context| Arc::ptr_eq(&context.device, &self.context.device))
             && !self.context.device_lost()
+            && self.tangents.is_some() == regenerate_tangents
     }
 
-    pub(super) fn new(window: &Window, morphs: MorphTargets, skin: Skin) -> Result<Self> {
+    pub(super) fn new(
+        window: &Window,
+        mut morphs: MorphTargets,
+        mut skin: Skin,
+        regenerate_tangents: bool,
+    ) -> Result<Self> {
         let context = WgpuContext::for_window(window).context("A wgpu window is required")?;
         let capabilities = Scene3dDeviceCapabilities::query(&context);
         GpuMorph::check_support(&capabilities)?;
@@ -51,20 +58,47 @@ impl Deformation {
         GpuDeformationBounds::check_support(&capabilities)?;
         WgpuScene3dGeometry::check_support(&capabilities)?;
         let limits = GpuDeformationLimits::default();
+        let tangents = if regenerate_tangents {
+            GpuTangentGeneration::check_support(&capabilities)?;
+            let expanded = morphs.base_mesh().expand_corners(4096)?;
+            morphs = morphs.remap_vertices(expanded.mesh().clone(), expanded.source_vertices())?;
+            skin = skin.remap_vertices(expanded.source_vertices())?;
+            Some(GpuTangentGeneration::new(
+                context.clone(),
+                morphs.base_mesh().clone(),
+                0,
+                TangentGenerationMode::Strict,
+                limits,
+            )?)
+        } else {
+            None
+        };
         let base =
             GpuDeformationOutput::upload(context.clone(), morphs.base_mesh().clone(), limits)?;
-        let source = base.render_source([0; 5], Some(4 * 1024 * 1024))?;
+        let initial = tangents
+            .as_ref()
+            .map(|generator| {
+                GpuDeformationOutput::upload(
+                    context.clone(),
+                    generator.output_mesh().clone(),
+                    limits,
+                )
+            })
+            .transpose()?;
+        let initial = initial.as_ref().unwrap_or(&base);
+        let source = initial.render_source([0; 5], Some(4 * 1024 * 1024))?;
         let output = Output {
-            sample: Sample {
+            sample: tangents.is_none().then_some(Sample {
                 weights: [0.; 2],
                 bend: None,
-            },
-            geometry: Arc::new(base.render_geometry(&source)?),
-            bounds: base.base_mesh().bounds(),
+            }),
+            geometry: Arc::new(initial.render_geometry(&source)?),
+            bounds: initial.base_mesh().bounds(),
         };
         Ok(Self {
             morph: GpuMorph::new(context.clone(), morphs, limits)?,
             skin: GpuSkin::new(context.clone(), skin, limits)?,
+            tangents,
             bounds: GpuDeformationBounds::new(context.clone())?,
             context,
             base,
@@ -86,9 +120,9 @@ impl Deformation {
     ) -> Result<Viewport3d> {
         if let Some(mut pending) = self.pending.take() {
             if let Some(prepared) = pending.preparation.try_read()? {
-                if self.output.sample != sample {
+                if self.output.sample != Some(sample) {
                     self.output = Output {
-                        sample: pending.sample,
+                        sample: Some(pending.sample),
                         geometry: prepared.geometry().clone(),
                         bounds: prepared.bounds(),
                     };
@@ -97,13 +131,23 @@ impl Deformation {
                 self.pending = Some(pending);
             }
         }
-        if self.pending.is_none() && self.output.sample != sample {
+        if self.pending.is_none() && self.output.sample != Some(sample) {
             let morphed = if sample.weights == [0.; 2] {
                 None
             } else {
                 Some(self.morph.evaluate(&sample.weights)?)
             };
             let input = morphed.as_ref().unwrap_or(&self.base);
+            let generated = self
+                .tangents
+                .as_ref()
+                .map(|generator| {
+                    generator
+                        .evaluate(input)
+                        .map(|result| result.into_deformation())
+                })
+                .transpose()?;
+            let input = generated.as_ref().unwrap_or(input);
             let skinned = if let Some(angle) = sample.bend {
                 let tip = AffineTransform::from_trs(
                     [0., -0.25, 0.],

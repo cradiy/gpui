@@ -34,7 +34,8 @@ zero. Every `u32` label is preserved exactly, including values above the exact
 integer range of `f32`. Excluding a foreground object does not reveal surfaces
 behind it. Coverage comes from the original ID channel, not color blending.
 
-`RenderedLabels::texture()` exposes a same-size, single-sampled, single-mip
+`RenderedLabels::texture()` exposes a `WgpuResource<wgpu::Texture>` retaining
+its creating-device identity: a same-size, single-sampled, single-mip
 `R32Uint` texture with `TEXTURE_BINDING`, `RENDER_ATTACHMENT`, and `COPY_SRC`
 usages. Read it in shaders through `texture_2d<u32>` and `textureLoad`, without
 filtering or color conversion. Each call owns a fresh output, independent of
@@ -62,14 +63,16 @@ admit up to 64 MiB of output and 16 MiB of table data per call.
 device limits still apply. These budgets exclude retained outputs, source
 frames, driver overhead, source-identity storage, and callback allocations.
 
-Missing ID channels, unsupported input metadata, budget failures, observed
-device loss, and captured WGPU validation errors return errors. Admission checks
+Missing ID channels, foreign input devices, unsupported input metadata, budget
+failures, observed device loss, and captured WGPU validation errors return errors. Admission checks
 precede callbacks; callback side effects are not rolled back by later failures.
-Metadata admission does not establish device ownership: inputs and encoders
-must belong to the mapper's device.
+The caller-owned encoder must belong to the mapper's device; encoder ownership
+is subject to WGPU validation rather than input admission.
 
 For integer textures outside a `RenderedFrame`, use `WgpuIdRemapper::render` or
-`encode` directly. Inputs must be nonempty, single-layer 2D, single-sampled
+`encode` directly. Inputs use `WgpuResource<wgpu::Texture>` created through the
+mapper's `WgpuContext::create_texture` or retained from its rendering outputs.
+They must be nonempty, single-layer 2D, single-sampled
 `R32Uint` textures with `TEXTURE_BINDING`. Only mip zero is read. Table entry zero
 maps source ID one; source zero and out-of-table IDs produce zero. An empty
 table produces an all-zero image. This low-level interface retains no object

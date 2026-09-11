@@ -115,6 +115,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Direct headless 3D rendering**: Solid and decoded-image scenes without native windows or UI layout; shared viewport preparation and mesh passes, owned GPU outputs, and bounded nonblocking readback.
 - [x] **Color and object ID outputs**: Display-encoded RGBA8 and exact R32Uint IDs, explicit pixel-center/MSAA coverage, zero ID background, and retained node/application identity maps.
 - [x] **GPU label outputs**: Exact R32Uint remapping with bounded label uploads, independent textures, retained camera/source identities, and direct or caller-encoded submission without CPU pixel readback.
+  - [x] **Texture ownership**: Device-owned output textures and label inputs, with foreign-device rejection before resource binding and assignment callbacks.
+  - [ ] **Texture ownership GPU validation**: Verify output-channel identity retention, foreign-device rejection, callback admission, and label resource lifetime on supported adapters.
   - [ ] **GPU label validation**: Verify pixel parity with CPU labels, queue ordering, and retained outputs on supported adapters.
 - [x] **Depth and normal outputs**: Selectable R32Float camera-forward depth and Rgba32Float world-space vertex normals, pixel-center nearest-surface coverage, owned GPU textures, and bounded floating-point readback. Normal maps do not perturb geometry channels.
 - [x] **HDR output**: Independently selectable premultiplied linear RGBA16Float textures, linear MSAA resolve, owned frames, and f32 readback before exposure and display mapping.

@@ -9,7 +9,7 @@ use std::sync::Arc;
 /// submission before use on the GPU; submission does not imply completion.
 pub struct RenderedLabels {
     frame_id: crate::Scene3dFrameId,
-    texture: wgpu::Texture,
+    texture: gpui_wgpu::WgpuResource<wgpu::Texture>,
     camera: Camera,
     labels: Vec<u32>,
     objects: Arc<[RenderObject]>,
@@ -19,8 +19,8 @@ impl RenderedFrame {
     /// Submits integer label remapping without CPU pixel readback. `assign` runs
     /// once per frame object, including zero-coverage objects. Repeated labels
     /// merge objects; zero excludes them. Background remains zero.
-    /// Input metadata and budgets are checked before callbacks. Callback side
-    /// effects are not rolled back if allocation or GPU validation fails.
+    /// Input device ownership, metadata and budgets are checked before callbacks.
+    /// Callback side effects are not rolled back if allocation or GPU validation fails.
     pub fn label_texture(
         &self,
         mapper: &WgpuIdRemapper,
@@ -73,7 +73,7 @@ impl RenderedLabels {
     }
     /// Single-sampled, single-mip R32Uint texture with TEXTURE_BINDING,
     /// RENDER_ATTACHMENT, and COPY_SRC usages. Calls never reuse an older output.
-    pub fn texture(&self) -> &wgpu::Texture {
+    pub fn texture(&self) -> &gpui_wgpu::WgpuResource<wgpu::Texture> {
         &self.texture
     }
     pub fn size(&self) -> [u32; 2] {

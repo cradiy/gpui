@@ -1,4 +1,4 @@
-use crate::WgpuContext;
+use crate::{WgpuContext, WgpuResource};
 use anyhow::{Context as _, Result, ensure};
 use wgpu::util::DeviceExt as _;
 
@@ -184,10 +184,14 @@ impl WgpuIdRemapper {
         &self.config
     }
 
-    /// Checks metadata and budgets before allocation. Device ownership is checked
-    /// by WGPU when binding inputs, not by this metadata-only check.
-    pub fn validate_input(&self, input: &wgpu::Texture, label_count: usize) -> Result<()> {
+    /// Checks creating-device identity, metadata and budgets before allocation or binding.
+    pub fn validate_input(
+        &self,
+        input: &WgpuResource<wgpu::Texture>,
+        label_count: usize,
+    ) -> Result<()> {
         ensure!(!self.context.device_lost(), "ID remap device is lost");
+        input.check_device(&self.context.device)?;
         validate_shape(
             input.dimension(),
             input.size(),
@@ -204,7 +208,11 @@ impl WgpuIdRemapper {
 
     /// Submits one pass. Input writes must already be submitted on this queue.
     /// Does not wait for completion; subsequent calls never overwrite this output.
-    pub fn render(&self, input: &wgpu::Texture, labels: &[u32]) -> Result<wgpu::Texture> {
+    pub fn render(
+        &self,
+        input: &WgpuResource<wgpu::Texture>,
+        labels: &[u32],
+    ) -> Result<WgpuResource<wgpu::Texture>> {
         self.validate_input(input, labels.len())?;
         let device = &self.context.device;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -232,9 +240,9 @@ impl WgpuIdRemapper {
     pub fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        input: &wgpu::Texture,
+        input: &WgpuResource<wgpu::Texture>,
         labels: &[u32],
-    ) -> Result<wgpu::Texture> {
+    ) -> Result<WgpuResource<wgpu::Texture>> {
         self.validate_input(input, labels.len())?;
         let device = &self.context.device;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -266,7 +274,7 @@ impl WgpuIdRemapper {
             anyhow::bail!("ID remap input validation failed: {error}");
         }
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let output = device.create_texture(&wgpu::TextureDescriptor {
+        let output = self.context.create_texture(&wgpu::TextureDescriptor {
             label: Some("gpui.id_remap.output"),
             size: input.size(),
             mip_level_count: 1,

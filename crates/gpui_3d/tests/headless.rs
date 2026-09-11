@@ -6,6 +6,9 @@ use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfi
 #[path = "headless/picking.rs"]
 mod picking;
 
+#[path = "headless/labels.rs"]
+mod labels;
+
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn target_budget_rejects_before_images_and_preserves_retained_outputs() -> anyhow::Result<()> {

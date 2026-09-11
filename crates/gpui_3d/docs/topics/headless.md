@@ -452,7 +452,9 @@ but has a single surface depth and normal.
 ## GPU ownership and readback
 
 `HeadlessRenderer::with_context` accepts an existing `WgpuContext`; `context()`
-exposes the device and queue for GPU consumers. Output textures support sampling
+exposes the device and queue for GPU consumers. Output accessors return
+`WgpuResource<wgpu::Texture>` references retaining the creating device; `raw()`
+borrows the WGPU handle for application commands. Output textures support sampling
 and copying. Treat them as immutable. They belong to that device and must be
 consumed with ordering after the submitted render commands. Do not transfer
 them to another device or destroy them while another consumer holds the frame.

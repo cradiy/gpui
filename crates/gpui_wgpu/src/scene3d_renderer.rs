@@ -575,13 +575,12 @@ impl WgpuScene3dRenderer {
             let renderer = &mut self.color.as_mut().unwrap().1;
             renderer.prepare_frames(device, queue, [frame], [config.size])?;
             draw_statistics += renderer.draw_statistics(frame);
-            let texture = config
-                .channels
-                .color()
-                .then(|| output_texture(device, config.size, wgpu::TextureFormat::Rgba8Unorm));
+            let texture = config.channels.color().then(|| {
+                output_texture(&self.context, config.size, wgpu::TextureFormat::Rgba8Unorm)
+            });
             let view = texture
                 .as_ref()
-                .map(|texture| texture.create_view(&Default::default()));
+                .map(|texture| texture.raw().create_view(&Default::default()));
             renderer.encode_frame(
                 device,
                 queue,
@@ -594,7 +593,8 @@ impl WgpuScene3dRenderer {
                 &mut encoder,
             );
             if config.channels.contains(Scene3dChannels::LINEAR_COLOR) {
-                let output = output_texture(device, config.size, wgpu::TextureFormat::Rgba16Float);
+                let output =
+                    output_texture(&self.context, config.size, wgpu::TextureFormat::Rgba16Float);
                 renderer.copy_linear_color(&output, &mut encoder);
                 linear_color = Some(output);
             }
@@ -621,7 +621,7 @@ impl WgpuScene3dRenderer {
             }
             renderer.prepare_frames(device, queue, [frame], [config.size])?;
             draw_statistics += renderer.draw_statistics(frame);
-            let texture = output_texture(device, config.size, kind.format());
+            let texture = output_texture(&self.context, config.size, kind.format());
             renderer.encode_frame(
                 device,
                 queue,
@@ -710,11 +710,11 @@ fn readback_stride(width: u32, bytes_per_pixel: u32) -> u64 {
 }
 
 fn output_texture(
-    device: &wgpu::Device,
+    context: &WgpuContext,
     [width, height]: [u32; 2],
     format: wgpu::TextureFormat,
-) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+) -> crate::WgpuResource<wgpu::Texture> {
+    context.create_texture(&wgpu::TextureDescriptor {
         label: Some("scene3d.output"),
         size: wgpu::Extent3d {
             width,
@@ -745,11 +745,11 @@ pub struct Scene3dGpuOutput {
     context: WgpuContext,
     draw_statistics: Scene3dDrawStatistics,
     config: Scene3dOutputConfig,
-    color: Option<wgpu::Texture>,
-    linear_color: Option<wgpu::Texture>,
-    ids: Option<wgpu::Texture>,
-    depth: Option<wgpu::Texture>,
-    normals: Option<wgpu::Texture>,
+    color: Option<crate::WgpuResource<wgpu::Texture>>,
+    linear_color: Option<crate::WgpuResource<wgpu::Texture>>,
+    ids: Option<crate::WgpuResource<wgpu::Texture>>,
+    depth: Option<crate::WgpuResource<wgpu::Texture>>,
+    normals: Option<crate::WgpuResource<wgpu::Texture>>,
     readback_busy: Arc<AtomicBool>,
     target_memory: Scene3dTargetMemory,
     geometry_memory: Scene3dGeometryMemory,
@@ -780,29 +780,29 @@ impl Scene3dGpuOutput {
         self.config
     }
     /// Premultiplied display-encoded RGBA8 after the frame's exposure and tone mapping.
-    pub fn color(&self) -> Option<&wgpu::Texture> {
+    pub fn color(&self) -> Option<&crate::WgpuResource<wgpu::Texture>> {
         self.color.as_ref()
     }
     /// Rgba16Float: premultiplied linear HDR before exposure, tone mapping or sRGB encoding.
     /// Four-sample color averages linear samples; the texture itself is single-sampled.
-    pub fn linear_color(&self) -> Option<&wgpu::Texture> {
+    pub fn linear_color(&self) -> Option<&crate::WgpuResource<wgpu::Texture>> {
         self.linear_color.as_ref()
     }
     /// R32Uint with zero background and exact, unfiltered object IDs.
-    pub fn object_ids(&self) -> Option<&wgpu::Texture> {
+    pub fn object_ids(&self) -> Option<&crate::WgpuResource<wgpu::Texture>> {
         self.ids.as_ref()
     }
 
     /// R32Float: nonnegative camera-forward depth in scene units. Consult
     /// `depth_background()` for this frame's no-surface sentinel.
-    pub fn linear_depth(&self) -> Option<&wgpu::Texture> {
+    pub fn linear_depth(&self) -> Option<&crate::WgpuResource<wgpu::Texture>> {
         self.depth.as_ref()
     }
 
     /// Rgba32Float: interpolated world-space vertex normal, normalized and oriented
     /// toward the visible side. W is one for a surface and zero for background.
     /// Normal maps are not applied. Zero-length input normals remain zero XYZ.
-    pub fn world_normals(&self) -> Option<&wgpu::Texture> {
+    pub fn world_normals(&self) -> Option<&crate::WgpuResource<wgpu::Texture>> {
         self.normals.as_ref()
     }
 

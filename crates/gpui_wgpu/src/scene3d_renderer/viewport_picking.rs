@@ -82,7 +82,6 @@ impl WgpuScene3dPickFrame {
         let geometry = gpu_draws::validate_frame(&context.device, frame)?;
         let geometry_memory = gpu_draws::memory(frame, config.channels, &geometry)?;
         geometry_memory.validate(context.device.limits().max_buffer_size, None)?;
-        let device = &context.device;
         Ok(Self {
             output: Scene3dGpuOutput {
                 frame_id: Default::default(),
@@ -91,8 +90,12 @@ impl WgpuScene3dPickFrame {
                 config,
                 color: None,
                 linear_color: None,
-                ids: Some(output_texture(device, size, wgpu::TextureFormat::R32Uint)),
-                depth: Some(output_texture(device, size, wgpu::TextureFormat::R32Float)),
+                ids: Some(output_texture(&context, size, wgpu::TextureFormat::R32Uint)),
+                depth: Some(output_texture(
+                    &context,
+                    size,
+                    wgpu::TextureFormat::R32Float,
+                )),
                 normals: None,
                 readback_busy: busy,
                 target_memory,

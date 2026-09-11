@@ -22,6 +22,11 @@ fn finite(v: vec4<f32>) -> bool {
     return all((bitcast<vec4<u32>>(v) & vec4(0x7f800000u)) != vec4(0x7f800000u));
 }
 fn magnitude(v: vec3<f32>) -> f32 { return max(max(abs(v.x), abs(v.y)), abs(v.z)); }
+fn squared_length(v: vec3<f32>) -> f32 { return (v.x * v.x + v.y * v.y) + v.z * v.z; }
+fn normal_float(v: f32) -> bool {
+    let exponent = bitcast<u32>(v) & 0x7f800000u;
+    return exponent != 0u && exponent != 0x7f800000u;
+}
 
 @compute @workgroup_size(64)
 fn tangent_derivatives(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -66,14 +71,19 @@ fn tangent_derivatives(@builtin(global_invocation_id) id: vec3<u32>) {
     if abs(determinant) <= MIN_NORMAL || ss == 0.0 || ts == 0.0 {
         result.classification.w = 1u;
     } else {
-        let sn = s / ss;
-        let tn = t / ts;
-        let sl = length(sn);
-        let tl = length(tn);
-        result.tangent = vec4(sn / sl * sign(determinant), (ss / abs(determinant)) * sl);
-        result.bitangent = vec4(tn / tl * sign(determinant), (ts / abs(determinant)) * tl);
+        let squared_s = squared_length(s);
+        let squared_t = squared_length(t);
+        if !normal_float(squared_s) || !normal_float(squared_t) {
+            result.status.x = 5u;
+            output[id.x] = result;
+            return;
+        }
+        let sl = sqrt(squared_s);
+        let tl = sqrt(squared_t);
+        result.tangent = vec4((s * (1.0 / sl)) * sign(determinant), sl / abs(determinant));
+        result.bitangent = vec4((t * (1.0 / tl)) * sign(determinant), tl / abs(determinant));
         if !finite(result.tangent) || !finite(result.bitangent) {
-            result.status.x = 1u;
+            result.status.x = 5u;
         } else if result.tangent.w <= MIN_NORMAL || result.bitangent.w <= MIN_NORMAL {
             result.classification.w = 1u;
             result.tangent = vec4(0.0);

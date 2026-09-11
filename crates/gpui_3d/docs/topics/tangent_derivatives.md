@@ -32,7 +32,7 @@ The output buffer contains one 64-byte `GpuTangentDerivative` per source triangl
 | `tangent` | Unit dP/du direction in XYZ and derivative magnitude in W. |
 | `bitangent` | Unit dP/dv direction in XYZ and derivative magnitude in W. |
 | `classification` | Boolean lanes for zero geometric area, zero UV determinant, positive UV orientation, and an undefined derivative pair. |
-| `status` | First failing input corner's status, or `[1, 0, 0, 0]` for detected nonfinite arithmetic. |
+| `status` | First failing input corner's status; X = 1 for detected nonfinite input arithmetic, X = 5 for an unsupported derivative squared length or nonfinite magnitude. Other lanes are zero for locally detected failures. |
 
 Inspect `status` before consuming any other field. Degenerate inputs are classified
 separately, not discarded or repaired. Undefined derivative pairs contain zero
@@ -44,6 +44,13 @@ derivative magnitude to exceed `f32::MIN_POSITIVE` (`2^-126`). Values equal to
 that boundary remain undefined, even when finite and nonzero. The zero-UV lane
 still records exact zero independently of derivative eligibility. Undefined pairs
 participate in frame inheritance rather than seeding regular orientation groups.
+
+Eligible nonzero derivatives use an unscaled f32 squared length, square root,
+and reciprocal multiplication for direction normalization. Magnitude is the
+length divided by the absolute UV determinant. A squared length that is zero,
+subnormal, or nonfinite produces status 5 before grouping; it is not rescued by
+rescaling. A nonfinite resulting magnitude also produces status 5. This status
+remains a failure under every publication repair mode.
 
 These are unprojected triangle derivatives, not final vertex tangents. Welding,
 orientation groups, corner-angle weighting, normal projection, and degenerate-frame

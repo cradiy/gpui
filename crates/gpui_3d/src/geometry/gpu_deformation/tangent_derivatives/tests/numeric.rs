@@ -116,3 +116,68 @@ fn gpu_derivative_eligibility_matches_cpu_at_normal_range_boundaries() -> Result
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires a compute-capable GPU"]
+fn gpu_derivative_range_failures_precede_corner_grouping() -> Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    for base in [
+        triangle(2f32.powi(-65), [1.; 2]),
+        triangle(2f32.powi(65), [1.; 2]),
+        triangle(2f32.powi(62), [2f32.powi(-100), 1.]),
+    ] {
+        for mode in [
+            TangentGenerationMode::Strict,
+            TangentGenerationMode::Inherit,
+            TangentGenerationMode::Repair,
+        ] {
+            assert!(matches!(
+                base.generate_tangents_with_mode(mode),
+                Err(TangentGenerationError::Unrepresentable { triangle: 0 })
+            ));
+        }
+        let source = GpuTangentDerivatives::new(context.clone(), base.clone(), 0, limits)?;
+        let input = GpuDeformationOutput::upload(context.clone(), base, limits)?;
+        let result = source.evaluate(&input)?;
+        assert_eq!(read(&result)?[0].status, [5, 0, 0, 0]);
+    }
+    for scale in [2f32.powi(-62), 1., 2f32.powi(60)] {
+        let base = Mesh::new(
+            [
+                ([0.; 3], [0., 0.]),
+                ([scale, 2. * scale, 3. * scale], [1., 0.]),
+                ([-2. * scale, scale, 0.], [0., 1.]),
+            ]
+            .into_iter()
+            .map(|(position, uv)| Vertex {
+                position,
+                normal: [-3., -6., 5.],
+                uv,
+            })
+            .collect(),
+            vec![0, 1, 2],
+        );
+        assert!(
+            base.generate_tangents_with_mode(TangentGenerationMode::Strict)
+                .is_ok()
+        );
+        let source = GpuTangentDerivatives::new(context.clone(), base.clone(), 0, limits)?;
+        let input = GpuDeformationOutput::upload(context.clone(), base.clone(), limits)?;
+        let result = read(&source.evaluate(&input)?)?[0];
+        assert_eq!(result.status, [0; 4]);
+        assert_eq!(result.classification, [0, 0, 1, 0]);
+        for (actual, vertex) in [result.tangent, result.bitangent]
+            .into_iter()
+            .zip(&base.vertices()[1..])
+        {
+            let length = vertex.position.iter().map(|v| v * v).sum::<f32>().sqrt();
+            let direction = vertex.position.map(|v| v * length.recip());
+            for (actual, expected) in actual[..3].iter().zip(direction) {
+                assert!((actual - expected).abs() < 3e-6, "{actual} != {expected}");
+            }
+            assert!((actual[3] / length - 1.).abs() < 3e-6);
+        }
+    }
+    Ok(())
+}

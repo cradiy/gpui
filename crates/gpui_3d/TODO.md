@@ -242,6 +242,7 @@ Core implementation order:
            - [x] **Regular-frame thresholds**: Strict lower bounds for the UV determinant and derivative magnitudes, independent zero-UV classification, and undefined-frame inheritance eligibility.
            - [x] **Publication numeric admission**: Retained CPU UV-degeneracy classification, edge/derivative range checks, and unrepaired numeric failure status in every generation mode.
            - [x] **Projected normalization**: Unscaled f32 direction normalization, explicit underflow-to-undefined handling, subgroup-local repair eligibility, and independent bitangent validity.
+           - [x] **Derivative normalization**: Unscaled f32 lengths, reciprocal direction normalization, length-before-determinant magnitudes, and early numeric-range failure propagation.
      - [ ] **Imported GPU validation**: Verify signed/default weights, multiple primitives and instances, direction reconstruction, source identity, and retained outputs against CPU evaluation on supported adapters.
    - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.
    - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.

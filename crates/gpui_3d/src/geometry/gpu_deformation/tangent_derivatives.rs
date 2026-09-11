@@ -22,9 +22,11 @@ pub struct GpuTangentDerivative {
     /// Regular pairs require absolute UV determinant and both derivative magnitudes
     /// strictly above f32::MIN_POSITIVE.
     pub classification: [u32; 4],
-    /// First failing input corner's status, or [1, 0, 0, 0] for detected nonfinite
-    /// arithmetic. Inspect this before using other fields. Zero means no detected error;
-    /// degeneracy is classified separately, not repaired or discarded.
+    /// First failing input corner's status; X = 1 for nonfinite input arithmetic,
+    /// X = 5 for unsupported squared lengths or nonfinite derivative magnitudes.
+    /// Locally detected failures leave other lanes zero. Inspect status before other fields.
+    /// Zero means no detected error. Degeneracy is classified separately,
+    /// not repaired or discarded.
     pub status: [u32; 4],
 }
 

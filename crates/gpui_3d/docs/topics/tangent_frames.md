@@ -31,6 +31,12 @@ onto the plane orthogonal to its normalized vertex normal. The angle between the
 projected unit edges supplies the contribution weight. A zero projected edge uses
 a zero direction in the angle calculation.
 
+Projected vectors and accumulated directions use an unscaled f32 squared length
+and reciprocal-square-root normalization. Vectors whose components are all at
+most `f32::MIN_POSITIVE` in magnitude retain their components. When normalization
+is required, a squared length that rounds to zero makes it undefined; the vector
+is not rescaled into a unit direction.
+
 Contributions are sorted by group representative and original corner. Each
 destination corner accepts contributors from its connected group, excluding
 exactly opposing projected tangent or bitangent directions. Its own contribution
@@ -42,6 +48,10 @@ the magnitude lanes.
 A zero accumulated bitangent does not invalidate a usable tangent. Its direction
 remains zero; canonical tangent publication uses the tangent and orientation to
 define the basis. A zero accumulated tangent or zero angle weight is undefined.
+Undefined projected directions do not match regular neighboring subgroups.
+An accepted contribution with an undefined angle or tangent makes the destination
+frame undefined, allowing explicit publication repair. An undefined bitangent
+alone does not invalidate the encoded tangent; its unusable direction is zero.
 
 Assigned corners with undefined derivative frames accept every valid contributor
 in their group, without adding their own direction or angle weight. This also
@@ -87,8 +97,9 @@ Consume a frame only when status is zero and its group is not `u32::MAX`.
 Array indices are destination corners; `identity[0]` differs only for inherited
 frames, including unresolved inherited frames. Unassigned corners use `u32::MAX`
 for both group and orientation, retain input or donor status, and contain zero
-directions and weight. Regular orientations are 0 or 1. A failed contribution
-rejects every frame in its group. Accumulation
+directions and weight. Regular orientations are 0 or 1. A contribution with an
+input or detected nonfinite projection failure rejects every frame in its group.
+Undefined normalization is handled within accepted subgroups. Accumulation
 failures are reported per destination: X = 1 reports detected nonfinite arithmetic
 and X = 2 reports an undefined accumulated frame. These statuses also propagate
 through collapsed-face inheritance. Remaining status lanes are reserved.

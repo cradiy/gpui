@@ -14,11 +14,16 @@ struct Params { corners: u32, distance: u32, width: u32, capacity: u32 }
 fn finite(v: vec4<f32>) -> bool {
     return all((bitcast<vec4<u32>>(v) & vec4(0x7f800000u)) != vec4(0x7f800000u));
 }
-fn unit(v: vec3<f32>) -> vec3<f32> {
-    let scale = max(max(abs(v.x), abs(v.y)), abs(v.z));
-    if scale == 0.0 { return vec3(0.0); }
-    let scaled = v / scale;
-    return scaled / length(scaled);
+// W reports whether normalization is defined. Small components retain their
+// magnitude; rescaling them would alter subgroup membership and corner weights.
+fn unit(v: vec3<f32>) -> vec4<f32> {
+    if !any(abs(v) > vec3(0x1p-126)) { return vec4(v, 1.0); }
+    let squared = (v.x * v.x + v.y * v.y) + v.z * v.z;
+    if squared == 0.0 { return vec4(0.0); }
+    if !finite(vec4(squared)) { return vec4(vec3(0.0), 1.0); }
+    let result = v * (1.0 / sqrt(squared));
+    if !finite(vec4(result, 0.0)) { return vec4(0.0); }
+    return vec4(result, 1.0);
 }
 fn project(v: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
     return v - dot(normal, v) * normal;
@@ -48,9 +53,19 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>) {
                 || !finite(vec4(s, 0.0)) || !finite(vec4(t, 0.0)) {
                 result.status.x = 1u;
             } else {
-                result.weight = acos(clamp(dot(unit(e), unit(f)), -1.0, 1.0));
-                result.tangent = vec4(unit(s), face.tangent.w);
-                result.bitangent = vec4(unit(t), face.bitangent.w);
+                let edge_e = unit(e);
+                let edge_f = unit(f);
+                let tangent = unit(s);
+                let bitangent = unit(t);
+                result.weight = acos(clamp(dot(edge_e.xyz, edge_f.xyz), -1.0, 1.0));
+                result.tangent = vec4(tangent.xyz, face.tangent.w);
+                result.bitangent = vec4(bitangent.xyz, face.bitangent.w);
+                // Scratch-only flags above the orientation bit: undefined S, T,
+                // or angle. Direction failures exclude regular subgroup matches;
+                // angle failures invalidate only groups accepting this corner.
+                if tangent.w == 0.0 { result.identity.z |= 2u; }
+                if bitangent.w == 0.0 { result.identity.z |= 4u; }
+                if edge_e.w == 0.0 || edge_f.w == 0.0 { result.identity.z |= 8u; }
             }
         }
     }
@@ -81,6 +96,8 @@ fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
         output[item.identity.x] = result;
         return;
     }
+    result.identity.z &= 1u;
+    var bitangent_defined = true;
     var lo = 0u;
     var hi = id.x;
     while lo < hi {
@@ -98,8 +115,15 @@ fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         if other.identity.x == item.identity.x || groups[item.identity.x].b.z == 1u ||
             groups[other.identity.x].b.z == 1u ||
-            (dot(item.tangent.xyz, other.tangent.xyz) > -1.0 &&
+            (((item.identity.z | other.identity.z) & 6u) == 0u &&
+             dot(item.tangent.xyz, other.tangent.xyz) > -1.0 &&
              dot(item.bitangent.xyz, other.bitangent.xyz) > -1.0) {
+            if (other.identity.z & 10u) != 0u {
+                result.status.x = 2u;
+                output[item.identity.x] = result;
+                return;
+            }
+            if (other.identity.z & 4u) != 0u { bitangent_defined = false; }
             result.tangent += other.tangent * other.weight;
             result.bitangent += other.bitangent * other.weight;
             result.weight += other.weight;
@@ -110,8 +134,12 @@ fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
     } else if result.weight == 0.0 || all(result.tangent.xyz == vec3(0.0)) {
         result.status.x = 2u;
     } else {
-        result.tangent = vec4(unit(result.tangent.xyz), result.tangent.w / result.weight);
-        result.bitangent = vec4(unit(result.bitangent.xyz), result.bitangent.w / result.weight);
+        let tangent = unit(result.tangent.xyz);
+        let bitangent = unit(result.bitangent.xyz);
+        result.tangent = vec4(tangent.xyz, result.tangent.w / result.weight);
+        result.bitangent = vec4(bitangent.xyz, result.bitangent.w / result.weight);
+        if !bitangent_defined { result.bitangent = vec4(vec3(0.0), result.bitangent.w); }
+        if tangent.w == 0.0 || all(tangent.xyz == vec3(0.0)) { result.status.x = 2u; }
     }
     output[item.identity.x] = result;
 }

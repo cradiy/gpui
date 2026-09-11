@@ -25,7 +25,7 @@ pub use gpu_geometry::{Scene3dGpuGeometry, Scene3dGpuGeometryMemory, WgpuScene3d
 pub(crate) mod gpu_draws;
 pub use gpu_draws::Scene3dGpuDraw;
 mod readback;
-pub use readback::{Scene3dReadbackConfig, Scene3dReadbackMemory};
+pub use readback::{Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dReadbackRegion};
 
 bitflags::bitflags! {
     /// Independently selectable outputs. Non-color channels use the pixel center.
@@ -823,8 +823,26 @@ impl Scene3dGpuOutput {
     /// payload budgets and device buffer limits before acquiring the queue permit
     /// or allocating staging buffers. Does not modify or release source textures.
     pub fn readback_with(&self, config: Scene3dReadbackConfig) -> Result<Scene3dReadback> {
+        self.readback_region(
+            Scene3dReadbackRegion {
+                origin: [0, 0],
+                size: self.config.size,
+            },
+            config,
+        )
+    }
+
+    /// Copies selected channels inside a physical pixel rectangle, without rerendering.
+    /// Region containment and region-sized payloads are checked before acquiring the
+    /// renderer's shared readback permit. Results use region-local pixel coordinates.
+    pub fn readback_region(
+        &self,
+        region: Scene3dReadbackRegion,
+        config: Scene3dReadbackConfig,
+    ) -> Result<Scene3dReadback> {
+        region.validate(self.config.size)?;
         let memory = config.validate(
-            self.config.size,
+            region.size,
             self.config.channels,
             self.context.device.limits().max_buffer_size,
         )?;
@@ -839,13 +857,13 @@ impl Scene3dGpuOutput {
         let mut pending = Scene3dReadback {
             depth_background: self.depth_background,
             context: self.context.clone(),
-            size: self.config.size,
+            region,
             slots: Vec::new(),
             permit: Some(Arc::new(ReadbackPermit(self.readback_busy.clone()))),
             finished: false,
             memory,
         };
-        let [width, height] = self.config.size;
+        let [width, height] = region.size;
         let mut encoder =
             self.context
                 .device
@@ -873,7 +891,14 @@ impl Scene3dGpuOutput {
                 mapped_at_creation: false,
             });
             encoder.copy_texture_to_buffer(
-                texture.as_image_copy(),
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d {
+                        x: region.origin[0],
+                        y: region.origin[1],
+                        z: 0,
+                    },
+                    ..texture.as_image_copy()
+                },
                 wgpu::TexelCopyBufferInfo {
                     buffer: &buffer,
                     layout: wgpu::TexelCopyBufferLayout {
@@ -882,7 +907,11 @@ impl Scene3dGpuOutput {
                         rows_per_image: Some(height),
                     },
                 },
-                texture.size(),
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
             );
             pending.slots.push(ReadbackSlot {
                 buffer,
@@ -943,13 +972,17 @@ pub struct Scene3dPixels {
 pub struct Scene3dReadback {
     depth_background: gpui::DepthBackground3d,
     context: WgpuContext,
-    size: [u32; 2],
+    region: Scene3dReadbackRegion,
     slots: Vec<ReadbackSlot>,
     permit: Option<Arc<ReadbackPermit>>,
     finished: bool,
     memory: Scene3dReadbackMemory,
 }
 impl Scene3dReadback {
+    /// Physical source rectangle, independent of region-local result coordinates.
+    pub fn region(&self) -> Scene3dReadbackRegion {
+        self.region
+    }
     /// Payload admitted for this request, independent of later renderer changes.
     pub fn memory(&self) -> Scene3dReadbackMemory {
         self.memory
@@ -987,7 +1020,7 @@ impl Scene3dReadback {
         }
         let mut pixels = Scene3dPixels {
             depth_background: self.depth_background,
-            size: self.size,
+            size: self.region.size,
             rgba: None,
             linear_rgba: None,
             object_ids: None,

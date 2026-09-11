@@ -52,6 +52,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
 - [x] **Frame coverage queries**: Single-pass CPU object-ID counts, fractions of the physical output, exclusive pixel bounds, background and zero-count records, retained camera/identity snapshots, and structured malformed-data errors with explicit sampling and transparency semantics.
   - [x] **Point depth comparisons**: Constant-time world-point projection into retained depth frames, explicit background/front/tolerance/behind results, half-open pixel bounds, and typed input/channel errors without continuous-visibility claims.
   - [x] **CPU label images**: Bounded object-ID remapping to exact caller-defined u32 labels, merged primitive groups, zero exclusion, retained source identities, and composition with per-object coverage after readback.
+- [x] **Rendered-frame picking**: Bounded one-pixel ID/depth readback, nonblocking completion, retained source camera/identity mapping, and world reconstruction independent of CPU geometry.
+  - [ ] **Picking GPU validation**: Verify regional copy parity, GPU-deformed surface selection, background, and retained-frame ownership on supported adapters.
 - [x] **Mesh query acceleration**: Shared lazy CPU BVHs, explicit preparation, conservative transformed bounds, and original triangle identities for picking and world rays.
 - [x] **Scene query acceleration**: Lazy object BVHs shared by scene clones and camera views of evaluated states, fresh indices after graph evaluation or object insertion, and preserved snapshot queries.
 - [x] **Spatial index refitting**: Explicit previous-snapshot preparation, shared partitions with independent changed bounds, stable hidden-node slots, current-order query identities, topology-change rebuilds, and CPU build/refit benchmarks.
@@ -149,6 +151,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Direct target admission**: CPU-only output/attachment/shadow payload reports, optional per-request byte limits before uploads, preserved cache/frame ownership, and submission-local reports independent of cache hits.
   - [x] **Direct geometry admission**: CPU-only vertex/index payload reports with shared mesh/UV accounting, camera/shadow eligibility, per-buffer device checks, optional per-request totals before geometry allocation, and retained output reports.
   - [x] **Selective readback admission**: Available-channel subsets, aligned staging and widened CPU payload budgets before allocation, retained request reports, and direct decoding with the shared pending/cancellation limit.
+  - [x] **Regional readback**: Checked physical pixel rectangles, region-sized channel budgets, copy origins and extents, and shared completion/cancellation behavior with full-frame reads.
 - [ ] **Platform coverage**: Add macOS and Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
 - [ ] **Cross-platform validation**: Cover depth, transparency, texture colors, nested composition, input mapping, and high DPI; distinguish automated checks from manual visual confirmation.
 
@@ -223,6 +226,7 @@ Core implementation order:
      - [x] **GPU vertex packing**: Shared material-coordinate and index inputs, retained render-format vertices, and indirect draw suppression for invalid deformation results.
      - [x] **Headless draw routing**: Bind packed outputs to objects across render channels, with conservative render bounds and explicit CPU query materialization.
      - [x] **Viewport draw routing**: Window-device sharing, frame-local packed resources, conservative bounds, cache invalidation, and explicit CPU interaction limits.
+     - [ ] **GPU viewport interaction**: Associate displayed deformation frames with ID/depth queries, pointer coordinates, and asynchronous selection results without using original CPU mesh hits.
      - [x] **Interactive deformation comparison**: Shared CPU/GPU timeline, Morph/Skin controls, retained sources, paired GPU bounds, bounded pending work, and explicit backend failures in the scene example.
      - [ ] **Viewport GPU validation**: Verify multiple viewports, retained outputs, replacement, shadows, nested captures, and device recovery on supported adapters.
 

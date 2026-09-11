@@ -6,11 +6,13 @@ mod gpu_geometry;
 mod gpu_labels;
 mod images;
 mod labels;
+mod picking;
 pub use coverage::{CoverageError, FrameCoverage, ObjectCoverage};
 pub use depth::{DepthComparison, DepthQueryError, DepthRelation};
 pub use gpu_labels::RenderedLabels;
 pub use images::{ImageCacheLimits, ImageCacheUsage};
 pub use labels::{FrameLabels, LabelError};
+pub use picking::{FramePick, FramePickHit, FramePickReadback};
 
 use std::sync::Arc;
 
@@ -25,8 +27,8 @@ pub use gpui_wgpu::{
     IdRemapConfig, Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities,
     Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dGeometryMemory, Scene3dGpuDraw,
     Scene3dGpuGeometry, Scene3dGpuGeometryMemory, Scene3dOutputConfig, Scene3dPixels,
-    Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dTargetMemory, WgpuContext, WgpuIdRemapper,
-    WgpuScene3dGeometry,
+    Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dReadbackRegion, Scene3dTargetMemory,
+    WgpuContext, WgpuIdRemapper, WgpuScene3dGeometry,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load

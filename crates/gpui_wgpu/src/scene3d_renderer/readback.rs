@@ -1,6 +1,27 @@
 use super::{OutputKind, Scene3dChannels, Scene3dPixels, readback_stride};
 use anyhow::{Context as _, Result, ensure};
 
+/// A nonempty rectangle in top-left-origin physical output pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scene3dReadbackRegion {
+    pub origin: [u32; 2],
+    pub size: [u32; 2],
+}
+
+impl Scene3dReadbackRegion {
+    /// Checks containment without clipping or allocating resources.
+    pub fn validate(self, output_size: [u32; 2]) -> Result<()> {
+        for ((origin, length), available) in self.origin.into_iter().zip(self.size).zip(output_size)
+        {
+            ensure!(
+                length > 0 && origin < available && length <= available - origin,
+                "3D readback region is empty or outside the output"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Per-request channel selection and payload admission. `None` disables a
 /// payload limit, not device limits or the renderer's pending-readback limit.
 #[derive(Clone, Copy, Debug)]
@@ -204,6 +225,74 @@ impl Scene3dReadbackConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn region_admission_preserves_edges_and_bounds_small_readback_payloads() {
+        let output = [4096, 2160];
+        let edge = Scene3dReadbackRegion {
+            origin: [4095, 2159],
+            size: [1, 1],
+        };
+        edge.validate(output).unwrap();
+        let config = Scene3dReadbackConfig {
+            channels: Scene3dChannels::OBJECT_ID | Scene3dChannels::LINEAR_DEPTH,
+            max_staging_bytes: Some(512),
+            max_cpu_bytes: Some(8),
+        };
+        let memory = config.validate(edge.size, config.channels, 256).unwrap();
+        assert_eq!(memory.staging_bytes, 512);
+        assert_eq!(memory.cpu_bytes, 8);
+        assert!(config.memory(output).is_err());
+        for region in [
+            Scene3dReadbackRegion {
+                origin: [4096, 0],
+                size: [1, 1],
+            },
+            Scene3dReadbackRegion {
+                origin: [0, 2160],
+                size: [1, 1],
+            },
+            Scene3dReadbackRegion {
+                size: [0, 1],
+                ..edge
+            },
+            Scene3dReadbackRegion {
+                size: [1, 0],
+                ..edge
+            },
+            Scene3dReadbackRegion {
+                size: [2, 1],
+                ..edge
+            },
+            Scene3dReadbackRegion {
+                size: [1, 2],
+                ..edge
+            },
+            Scene3dReadbackRegion {
+                origin: [u32::MAX, 1],
+                size: [2, 1],
+            },
+            Scene3dReadbackRegion {
+                origin: [1, 1],
+                size: [u32::MAX, 1],
+            },
+        ] {
+            assert!(region.validate(output).is_err(), "{region:?}");
+        }
+        assert!(edge.validate([0, 0]).is_err());
+        Scene3dReadbackRegion {
+            origin: [0, 0],
+            size: output,
+        }
+        .validate(output)
+        .unwrap();
+        Scene3dReadbackRegion {
+            origin: [u32::MAX - 1; 2],
+            size: [1; 2],
+        }
+        .validate([u32::MAX; 2])
+        .unwrap();
+    }
 
     #[test]
     fn readback_admission_counts_selected_padded_buffers_and_widened_hdr_pixels() {

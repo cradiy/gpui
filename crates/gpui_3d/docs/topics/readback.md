@@ -25,6 +25,25 @@ textures remain on the GPU; they are not copied or mapped. No rerender occurs.
 `Scene3dReadbackConfig::new(channels)` disables the optional payload limits with
 `None`; device limits and the single-pending-request rule still apply.
 
+## Regions
+
+`frame.gpu().readback_region(region, config)` copies a nonempty rectangle from
+selected channels. `Scene3dReadbackRegion { origin, size }` uses top-left-origin
+physical pixels. `region.validate(output_size)` checks containment without a
+device. Invalid rectangles are rejected rather than clipped, including empty
+sizes and overflowing extents.
+
+Admission uses `config.memory(region.size)`, not full output dimensions. The
+result's `Scene3dPixels::size` equals the rectangle size, and pixel coordinates
+are local to that rectangle. `Scene3dReadback::region()` retains the original
+source rectangle after completion. No camera is cropped or recomputed; use the
+full source dimensions and add `region.origin` when reconstructing world points.
+
+Regional reads share the same pending-request permit and cancellation behavior
+as full-frame reads. All available channel formats are supported. For an ID/depth
+query with retained object and camera metadata, use
+[`RenderedFrame::pick`](picking.md).
+
 ## Memory admission
 
 `config.memory(size)` computes a `Scene3dReadbackMemory` report and checks the

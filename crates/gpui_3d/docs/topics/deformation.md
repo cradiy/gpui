@@ -256,6 +256,10 @@ an `Arc<Scene3dGpuGeometry>`, and conservative mesh-local `bounds` as `[min, max
 IDs are scene object indices plus one. Geometry must share the object's base mesh
 allocation, active material coordinate sets, and renderer device.
 
+Render Object ID and linear depth to use [single-pixel picking](picking.md) on
+deformed surfaces without materializing CPU meshes. Results retain the submitted
+frame's camera and object mapping; viewport pointer routing is independent.
+
 Bounds are finite and ordered. They control camera and shadow culling and
 transparent-object sorting, including objects whose original mesh is outside the
 camera. Each overridden object draws independently; shared source meshes can use

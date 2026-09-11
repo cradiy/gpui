@@ -15,6 +15,7 @@ mod target;
 mod viewport;
 
 pub(super) use output_cache::OutputBudget;
+pub(super) use picking::fail_pick_captures;
 pub(crate) use target::RenderRegion;
 pub(super) use viewport::ViewportRenderer;
 
@@ -1622,6 +1623,7 @@ pub(crate) mod tests {
     use super::*;
     mod geometry_memory;
     mod material_shader;
+    mod picking;
 
     fn output_layer(texture: MeshTexture3d) -> SubtreeLayer {
         let mut object = object();

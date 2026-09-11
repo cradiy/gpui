@@ -11,6 +11,13 @@ pub(super) struct UiCapture {
 }
 
 impl UiCapture {
+    pub(super) fn invalidate_encoding(&mut self) {
+        self.validity = OutputValidity::default();
+        for capture in &mut self.renderer.resources_mut().ui_captures {
+            capture.invalidate_encoding();
+        }
+    }
+
     pub(super) fn invalidate_scene3d_outputs(&mut self) {
         self.renderer.invalidate_scene3d_outputs();
     }

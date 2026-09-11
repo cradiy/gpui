@@ -11,6 +11,20 @@ use gpui::{Scene, Scene3dFrame, Scene3dViewportCapabilities, SubtreeLayer};
 use super::{RenderRegion, Scene3dRenderer, WgpuAtlas, viewport::visit_scenes};
 use crate::{Scene3dCapabilities, Scene3dDeviceCapabilities, WgpuContext, WgpuScene3dPickFrame};
 
+pub(in crate::wgpu_renderer) fn fail_pick_captures(scene: &Scene, error: gpui::SharedString) {
+    scene.visit(&mut |scene| {
+        for layer in &scene.subtree_layers {
+            if let Some(capture) = layer
+                .scene3d
+                .as_ref()
+                .and_then(|frame| frame.pick_capture.as_ref())
+            {
+                capture.publish::<WgpuScene3dPickFrame>(Err(error.clone()));
+            }
+        }
+    });
+}
+
 struct Entry {
     frame: Arc<Scene3dFrame>,
     region: RenderRegion,

@@ -2984,6 +2984,36 @@ impl WgpuRenderer {
         load: wgpu::LoadOp<wgpu::Color>,
         retain_outputs: bool,
     ) -> bool {
+        let encoded = self.encode_scene_inner(
+            scene,
+            target_texture,
+            target_view,
+            encoder,
+            load,
+            retain_outputs,
+        );
+        if !encoded {
+            let error = self.last_error.lock().unwrap().clone().map_or_else(
+                || "3D picking frame was not submitted".into(),
+                gpui::SharedString::from,
+            );
+            scene3d::fail_pick_captures(scene, error);
+            for capture in &mut self.resources_mut().ui_captures {
+                capture.invalidate_encoding();
+            }
+        }
+        encoded
+    }
+
+    fn encode_scene_inner(
+        &mut self,
+        scene: &Scene,
+        target_texture: &wgpu::Texture,
+        target_view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        load: wgpu::LoadOp<wgpu::Color>,
+        retain_outputs: bool,
+    ) -> bool {
         let mut has_scene3d = false;
         scene.visit(&mut |scene| {
             has_scene3d |= scene

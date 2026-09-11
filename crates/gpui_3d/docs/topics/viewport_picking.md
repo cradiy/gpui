@@ -76,13 +76,15 @@ with `capture.read::<gpui_wgpu::WgpuScene3dPickFrame>()`.
 
 - `None` means no result has been published.
 - `Some(Ok(output))` retains the submitted ID/depth textures.
-- `Some(Err(error))` reports capture admission or preparation failure.
+- `Some(Err(error))` reports capture admission, preparation, or scene encoding failure.
 
 Publication follows renderer-owned queue submission, not GPU completion or display
-presentation. Window drawing and `WgpuRenderer::draw_external` publish results;
-`encode_external` and direct headless rendering do not. Failed capture admission
-does not disable the color viewport. An abandoned encoding does not replace the
-last submitted result with a new successful output.
+presentation. Window drawing and `WgpuRenderer::draw_external` publish successful
+outputs; `encode_external` and direct headless rendering do not. Failed capture
+admission does not disable the color viewport. Failed scene encoding publishes an
+error to its captures, including nested UI scenes, without revoking retained
+outputs. A successful renderer-owned resubmission replaces the error. Unsubmitted
+commands never publish a new successful output.
 
 `output.matches_frame(&frame)` checks the original immutable frame allocation.
 Retain the source camera, object-ID mapping, and layout alongside that frame.

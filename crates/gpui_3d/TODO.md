@@ -352,6 +352,7 @@ contract. Core APIs do not own a physics world, character controller, or editor 
 - [ ] **Deformed custom-material picking**: Bind regional ID/depth and coverage results to the submitted geometry, material resources, camera, and viewport identity; reject stale results and preserve retained-frame reads after updates.
   - [x] **Output provenance**: Opaque output identities carried through regional/full readbacks, picks, CPU coverage/labels and GPU labels, with mounted-viewport freshness checks before or after completion.
   - [x] **Regional metadata**: Headless and viewport region reads retain output extent, camera projection, identities and source rectangle for world reconstruction, depth comparison, coverage and labels.
+  - [x] **Encoding failure publication**: Failed viewport scene encoding publishes capture errors across nested inputs, preserves retained results, and allows later submitted outputs to replace failures.
   - [ ] **Picking acceptance**: Verify output identity propagation and stale-result rejection with combined GPU deformation, custom material clipping, retained frames, viewport layout changes and device replacement.
 
 Toon responses, sphere-map coordinate generation, outline styles, and character-specific

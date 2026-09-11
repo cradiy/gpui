@@ -77,10 +77,19 @@ fn shader_layout_matches_face_and_vertex_records() {
         front::wgsl,
         valid::{Capabilities, ValidationFlags, Validator},
     };
-    let module = wgsl::parse_str(include_str!("../tangent_derivatives.wgsl")).unwrap();
-    Validator::new(ValidationFlags::all(), Capabilities::empty())
+    let module = wgsl::parse_str(SHADER).unwrap();
+    assert!(
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .is_err()
+    );
+    let info = Validator::new(ValidationFlags::all(), Capabilities::FLOAT64)
         .validate(&module)
         .unwrap();
+    #[cfg(target_os = "linux")]
+    wgpu::naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
+    #[cfg(not(target_os = "linux"))]
+    let _ = info;
     let globals: Vec<_> = module
         .global_variables
         .iter()

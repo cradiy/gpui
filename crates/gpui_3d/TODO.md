@@ -248,6 +248,7 @@ Core implementation order:
            - [x] **Normal-key precision**: Device-admitted f64 square sums and normalization, exact f32 input decoding, and ties-to-even key encoding with signed-zero and subnormal preservation.
            - [x] **CPU topology rules**: Exact-bit corner welding, deterministic representatives, and face-ordered opposite-edge pairing, including non-manifold edges.
            - [x] **Publication precision**: Device-admitted f64 normal projection and relative degeneracy threshold, wide geometric-area classification, and CPU-ordered derivative repair rounding.
+           - [x] **Derivative area classification**: Shared f64 geometric-area rules across derivative records and tangent publication, independent of f32 direction eligibility and UV orientation.
      - [ ] **Imported GPU validation**: Verify signed/default weights, multiple primitives and instances, direction reconstruction, source identity, and retained outputs against CPU evaluation on supported adapters.
    - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.
    - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.

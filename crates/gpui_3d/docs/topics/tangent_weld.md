@@ -71,7 +71,8 @@ overhead. Bound concurrent evaluations and retained results separately.
 bindings, one uniform binding, and 64-invocation workgroups. WGPU exposes
 `SHADER_F64` on supported Vulkan adapters. `WgpuContext` requests it when advertised;
 externally supplied devices must enable it themselves. There is no lower-precision
-welding fallback. [Tangent publication](tangent_publication.md) also requires this
-feature; Morph and Skin do not.
+welding fallback. [Surface derivatives](tangent_derivatives.md) and
+[tangent publication](tangent_publication.md) also require this feature; Morph and
+Skin do not.
 Construction also checks enabled buffer sizes and dispatch limits. Device
 replacement requires rebuilding the source.

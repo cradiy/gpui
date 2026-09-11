@@ -8,6 +8,11 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
+const SHADER: &str = concat!(
+    include_str!("tangent_precision.wgsl"),
+    include_str!("tangent_derivatives.wgsl")
+);
+
 /// One 64-byte face record, in source triangle order. These are unprojected
 /// surface derivatives, not smoothed or normal-orthogonal vertex tangents.
 #[repr(C)]
@@ -19,6 +24,8 @@ pub struct GpuTangentDerivative {
     pub bitangent: [f32; 4],
     /// Boolean lanes: zero geometric area, zero UV determinant, positive UV
     /// orientation, and undefined derivative pair. Undefined pairs have zero vectors.
+    /// Geometric area uses f64 position differences and products; UV classification
+    /// follows the f32 derivative calculation.
     /// Regular pairs require absolute UV determinant and both derivative magnitudes
     /// strictly above f32::MIN_POSITIVE.
     pub classification: [u32; 4],
@@ -70,6 +77,7 @@ impl GpuTangentDerivativesMemory {
 /// Retained triangle indices and one UV set for derivative evaluation after deformation.
 /// Shared vertices and arbitrary triangle order are supported. This stage performs no
 /// welding, corner grouping, smoothing, normal projection, or degenerate-frame repair.
+/// Requires device-enabled `SHADER_F64` for geometric-area classification.
 pub struct GpuTangentDerivatives {
     context: WgpuContext,
     base: Mesh,
@@ -84,6 +92,12 @@ pub struct GpuTangentDerivatives {
 impl GpuTangentDerivatives {
     /// Checks compute requirements without creating GPU resources.
     pub fn check_support(capabilities: &gpui_wgpu::Scene3dDeviceCapabilities) -> Result<()> {
+        ensure!(
+            capabilities
+                .enabled_features
+                .contains(wgpu::Features::SHADER_F64),
+            "GPU tangent derivatives require enabled SHADER_F64"
+        );
         super::support::validate(capabilities, 4, 1, 0)
     }
 
@@ -109,12 +123,7 @@ impl GpuTangentDerivatives {
         )?;
         let uv = coordinates(&base, uv_set)?;
         let device = &context.device;
-        let kernel = ComputeKernel::new(
-            device,
-            include_str!("tangent_derivatives.wgsl"),
-            "tangent_derivatives",
-            [64, 8, 4],
-        )?;
+        let kernel = ComputeKernel::new(device, SHADER, "tangent_derivatives", [64, 8, 4])?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let uv = buffer(
             device,

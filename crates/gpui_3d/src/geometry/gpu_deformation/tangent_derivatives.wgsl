@@ -61,10 +61,9 @@ fn tangent_derivatives(@builtin(global_invocation_id) id: vec3<u32>) {
         output[id.x] = result;
         return;
     }
-    let es = magnitude(e);
-    let fs = magnitude(f);
-    var zero_area = es == 0.0 || fs == 0.0;
-    if !zero_area { zero_area = all(cross(e / es, f / fs) == vec3(0.0)); }
+    let wide_e = wide_vector(b.xyz) - wide_vector(a.xyz);
+    let wide_f = wide_vector(c.xyz) - wide_vector(a.xyz);
+    let zero_area = all(cross(wide_e, wide_f) == vec3(f64(0.0)));
     result.classification = vec4(u32(zero_area), u32(determinant == 0.0), u32(determinant > 0.0), 0u);
     let ss = magnitude(s);
     let ts = magnitude(t);

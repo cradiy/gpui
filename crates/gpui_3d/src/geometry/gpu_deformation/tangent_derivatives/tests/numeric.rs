@@ -31,6 +31,50 @@ fn cases() -> [(Mesh, bool); 4] {
 }
 
 #[test]
+#[ignore = "requires a compute-capable GPU with SHADER_F64"]
+fn gpu_derivative_area_distinguishes_thin_and_collinear_triangles() -> Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    for scale in [2f32.powi(-60), 1., 2f32.powi(60)] {
+        let base = triangle(scale, [1.; 2]);
+        let source = GpuTangentDerivatives::new(context.clone(), base.clone(), 0, limits)?;
+        for collinear in [false, true] {
+            let mut records = crate::geometry::gpu_deformation::pack_mesh(&base);
+            records[1].position = [(1. + f32::EPSILON) * scale, scale, 0., 0.];
+            records[2].position = if collinear {
+                records[1].position.map(|v| v * 2.)
+            } else {
+                [
+                    (1. + 2. * f32::EPSILON) * scale,
+                    (1. + f32::EPSILON) * scale,
+                    0.,
+                    0.,
+                ]
+            };
+            let input = GpuDeformationOutput {
+                context: context.clone(),
+                base: base.clone(),
+                buffer: buffer(
+                    &context.device,
+                    "triangle area input",
+                    bytemuck::cast_slice(&records),
+                    wgpu::BufferUsages::STORAGE,
+                ),
+            };
+            let result = read(&source.evaluate(&input)?)?[0];
+            assert_eq!(result.status, [0; 4], "{scale}, {collinear}");
+            assert_eq!(
+                result.classification,
+                [u32::from(collinear), 0, 1, 0],
+                "{scale}, {collinear}"
+            );
+            assert!(result.tangent[3] > 0. && result.bitangent[3] > 0.);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn cpu_normal_range_boundaries_distinguish_undefined_frames_from_invalid_arithmetic() {
     for (base, undefined) in cases() {
         for mirrored in [false, true] {

@@ -36,8 +36,11 @@ The output buffer contains one 64-byte `GpuTangentDerivative` per source triangl
 
 Inspect `status` before consuming any other field. Degenerate inputs are classified
 separately, not discarded or repaired. Undefined derivative pairs contain zero
-vectors. Classification and arithmetic use `f32`; this stage does not establish
-equivalence with CPU tangent-generation policies at numeric limits.
+vectors. Geometric-area classification uses `f64` differences and cross products
+decoded from the original position bits, matching the publication stage's area
+rule. UV classification and derivative directions and magnitudes use `f32`.
+This stage does not establish equivalence with CPU tangent-generation policies
+at numeric limits.
 
 A regular derivative pair requires both the absolute UV determinant and each
 derivative magnitude to exceed `f32::MIN_POSITIVE` (`2^-126`). Values equal to
@@ -74,7 +77,9 @@ Output payload is 64 bytes per triangle. The input buffer, retained CPU mesh, an
 driver overhead are excluded; limits are per source/result, not aggregate residency.
 Callers bound concurrently retained outputs and their input snapshots.
 
-`check_support` requires compute support, four storage bindings, one uniform
-binding, and 64-invocation workgroups. Construction checks enabled storage sizes
-and dispatch limits before uploading topology. Device loss and cross-device input
-are errors; rebuild sources on the replacement device.
+`check_support` requires device-enabled `SHADER_F64`, compute support, four storage
+bindings, one uniform binding, and 64-invocation workgroups. `WgpuContext` requests
+`SHADER_F64` when advertised; externally supplied devices must enable it themselves.
+Construction checks enabled storage sizes and dispatch limits before uploading
+topology. Device loss and cross-device input are errors; rebuild sources on the
+replacement device.

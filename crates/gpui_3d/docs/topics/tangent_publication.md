@@ -12,7 +12,8 @@ publication stages. Construct it once for an unshared mesh and reuse it for
 subsequent deformation snapshots from the same device and base mesh allocation.
 It preserves input normals; run any required normal reconstruction beforehand.
 The combined pipeline requires device-enabled `SHADER_F64` for
-[normalized welding keys](tangent_weld.md#matching-and-records) and tangent
+[geometric-area classification](tangent_derivatives.md#records),
+[normalized welding keys](tangent_weld.md#matching-and-records), and tangent
 publication.
 
 ```rust,no_run
@@ -160,7 +161,7 @@ triangle; the fixed corner mapping makes its output vertices disjoint. Evaluatio
 uses one linear compute pass and returns independent buffers that may outlive the source.
 Rebuild compute sources after replacing the device.
 
-Derivative and frame accumulation stages use `f32` arithmetic. The pipeline follows
-its documented welding and inheritance rules; CPU MikkTSpace equivalence is not
-guaranteed. Imported primitives requiring MikkTSpace regeneration remain rejected
-by the glTF GPU adapter.
+Derivative directions, magnitudes and frame accumulation use `f32` arithmetic.
+The pipeline follows its documented welding and inheritance rules; CPU MikkTSpace
+equivalence is not guaranteed. Imported primitives requiring MikkTSpace regeneration
+remain rejected by the glTF GPU adapter.

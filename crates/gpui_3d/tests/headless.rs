@@ -546,7 +546,7 @@ fn directional_shadows_preserve_indirect_light_geometry_channels_and_alpha_masks
                 emissive: [0.03, 0.01, 0.02],
             });
         }
-        for softness in [0., 1.5] {
+        for softness in [0., 1.5, 4.] {
             let mut outputs = Vec::new();
             for case in 0..9 {
                 let caster_material = if case == 6 || case == 7 {

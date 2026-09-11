@@ -96,6 +96,10 @@ view camera. The volume does not automatically follow the camera or fit scene bo
 The default is 2048. A smaller covered volume or larger map gives finer detail.
 `softness` accepts `[0, 4]` in shadow texels: zero uses one hard depth comparison;
 positive values spread a 3-by-3 PCF kernel with bilinear depth comparisons.
+Each comparison uses receiver-plane depth at the sampled texel center, including
+the four texels of a bilinear lookup. The plane comes from projected position
+derivatives, independently of shading normals and normal maps. Nearly edge-on
+or undefined projected planes use the center depth with the configured bias.
 This is filtered shadow mapping, not physical area-light penumbra simulation.
 
 `depth_bias` offsets receiver depth toward the source in normalized light depth;

@@ -142,7 +142,30 @@ fn shadow_fragment(input: Output, @builtin(front_facing) front: bool) {
     let base = base_color(input, gradients, front);
 }
 
-fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>) -> f32 {
+fn shadow_compare_texel(pixel: vec2<i32>, origin: vec2<f32>, reference: f32, depth_gradient: vec2<f32>, extent: vec2<f32>) -> f32 {
+    let clamped = clamp(pixel, vec2<i32>(0), vec2<i32>(extent) - vec2<i32>(1));
+    let center = (vec2<f32>(clamped) + vec2<f32>(0.5)) / extent;
+    let receiver = reference + dot(depth_gradient, center - origin);
+    return select(0.0, 1.0, receiver <= textureLoad(shadow_image, clamped, 0));
+}
+
+fn shadow_compare_linear(uv: vec2<f32>, origin: vec2<f32>, reference: f32, depth_gradient: vec2<f32>, extent: vec2<f32>) -> f32 {
+    if (all(depth_gradient == vec2<f32>(0.0))) {
+        return textureSampleCompareLevel(shadow_image, shadow_sampler, uv, reference);
+    }
+    let location = uv * extent - vec2<f32>(0.5);
+    let pixel = vec2<i32>(floor(location));
+    let weight = fract(location);
+    let top = mix(
+        shadow_compare_texel(pixel, origin, reference, depth_gradient, extent),
+        shadow_compare_texel(pixel + vec2<i32>(1, 0), origin, reference, depth_gradient, extent), weight.x);
+    let bottom = mix(
+        shadow_compare_texel(pixel + vec2<i32>(0, 1), origin, reference, depth_gradient, extent),
+        shadow_compare_texel(pixel + vec2<i32>(1, 1), origin, reference, depth_gradient, extent), weight.x);
+    return mix(top, bottom, weight.y);
+}
+
+fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>, depth_gradient: vec2<f32>) -> f32 {
     if (params.shadow_flags.x == 0u || index != params.shadow_flags.y) { return 1.0; }
     let light_direction = unit_vector(params.lights[index].direction_range.xyz);
     let n = unit_vector(geometric_normal);
@@ -154,8 +177,7 @@ fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>) 
     let reference = p.z - params.shadow_settings.x;
     let extent = vec2<f32>(textureDimensions(shadow_image));
     if (params.shadow_settings.z == 0.0) {
-        let pixel = clamp(vec2<i32>(uv * extent), vec2<i32>(0), vec2<i32>(extent) - vec2<i32>(1));
-        return select(0.0, 1.0, reference <= textureLoad(shadow_image, pixel, 0));
+        return shadow_compare_texel(vec2<i32>(uv * extent), uv, reference, depth_gradient, extent);
     }
     var visibility = 0.0;
     for (var y = -1; y <= 1; y += 1) {
@@ -164,7 +186,7 @@ fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>) 
             if (any(sample_uv < vec2<f32>(0.0)) || any(sample_uv > vec2<f32>(1.0))) {
                 visibility += 1.0;
             } else {
-                visibility += textureSampleCompareLevel(shadow_image, shadow_sampler, sample_uv, reference);
+                visibility += shadow_compare_linear(sample_uv, uv, reference, depth_gradient, extent);
             }
         }
     }
@@ -274,20 +296,28 @@ fn pbr_direct(diffuse: vec3<f32>, f0: vec3<f32>, roughness: f32, normal: vec3<f3
     return reflected * light.energy * nl;
 }
 
-struct UvGradients {
+struct SurfaceGradients {
     base: mat2x2<f32>, surface: mat2x2<f32>, emission: mat2x2<f32>,
     normal: mat2x2<f32>, occlusion: mat2x2<f32>,
+    shadow_depth: vec2<f32>,
 };
-fn uv_gradients(input: Output) -> UvGradients {
-    return UvGradients(
+fn surface_gradients(input: Output) -> SurfaceGradients {
+    let clip = params.shadow_camera * vec4<f32>(input.world, 1.0);
+    let position = clip.xyz / select(1.0, clip.w, clip.w != 0.0);
+    let plane = cross(unit_vector(dpdx(position)), unit_vector(dpdy(position)));
+    var shadow_depth = vec2<f32>(0.0);
+    if (abs(plane.z) > 0.000001) {
+        shadow_depth = vec2<f32>(-2.0 * plane.x, 2.0 * plane.y) / plane.z;
+    }
+    return SurfaceGradients(
         mat2x2<f32>(dpdx(input.uv.xy), dpdy(input.uv.xy)),
         mat2x2<f32>(dpdx(input.uv.zw), dpdy(input.uv.zw)),
         mat2x2<f32>(dpdx(input.detail_uv.xy), dpdy(input.detail_uv.xy)),
         mat2x2<f32>(dpdx(input.detail_uv.zw), dpdy(input.detail_uv.zw)),
-        mat2x2<f32>(dpdx(input.occlusion_uv), dpdy(input.occlusion_uv)));
+        mat2x2<f32>(dpdx(input.occlusion_uv), dpdy(input.occlusion_uv)), shadow_depth);
 }
 
-fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, input: Output, gradients: UvGradients) -> vec3<f32> {
+fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, input: Output, gradients: SurfaceGradients) -> vec3<f32> {
     let world = input.world;
     let factors = sample_image(metallic_roughness_image, metallic_roughness_sampler, params.metallic_roughness_map, input.uv.zw, gradients.surface);
     let metal = params.pbr.x * factors.b;
@@ -308,14 +338,14 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>,
         result += radiance * settings.z * (f0 * brdf.x + vec3<f32>(brdf.y)) * occlusion(input.occlusion_uv, gradients.occlusion);
     }
     for (var i = 0u; i < params.light_count.x; i += 1u) {
-        result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world)) * shadow_visibility(i, world, geometric_normal);
+        result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world)) * shadow_visibility(i, world, geometric_normal, gradients.shadow_depth);
     }
     return result;
 }
 
 @fragment
 fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let gradients = uv_gradients(input);
+    let gradients = surface_gradients(input);
     let base = base_color(input, gradients.base, front);
     var illumination = vec3<f32>(1.0);
     if (params.flags.y < 0.5) {
@@ -328,7 +358,7 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
         illumination = (vec3<f32>(params.ambient.x) + diffuse_environment(normal)) * occlusion(input.occlusion_uv, gradients.occlusion);
         for (var i = 0u; i < params.light_count.x; i += 1u) {
             let light = sample_light(params.lights[i], input.world);
-            illumination += light.energy * max(dot(normal, light.direction), 0.0) * shadow_visibility(i, input.world, normal);
+            illumination += light.energy * max(dot(normal, light.direction), 0.0) * shadow_visibility(i, input.world, normal, gradients.shadow_depth);
         }
     }
     return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);

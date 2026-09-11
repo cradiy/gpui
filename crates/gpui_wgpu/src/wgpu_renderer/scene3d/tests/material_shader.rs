@@ -22,14 +22,21 @@ fn scene3d_material_coverage_is_shared_and_shading_cannot_discard() {
     .unwrap();
     let surface = function(&module, "material_surface");
     let coverage = function(&module, "apply_coverage");
+    let additional_coverage = function(&module, "apply_mesh_pass_coverage");
+    let alpha_coverage = function(&module, "apply_alpha_coverage");
     let shading = function(&module, "material_shading");
     for (handle, function) in module.functions.iter() {
         assert_eq!(
             info[handle].may_kill,
-            handle == coverage,
+            [coverage, additional_coverage, alpha_coverage].contains(&handle),
             "only renderer coverage may discard: {:?}",
             function.name
         );
+    }
+    for wrapper in [coverage, additional_coverage] {
+        assert_eq!(module.functions[wrapper].body.iter().filter(|statement| {
+            matches!(statement, Statement::Call { function, .. } if *function == alpha_coverage)
+        }).count(), 1, "coverage wrappers must share alpha interpretation");
     }
     let TypeInner::Vector { size, scalar } =
         module.types[module.functions[shading].result.as_ref().unwrap().ty].inner
@@ -44,6 +51,11 @@ fn scene3d_material_coverage_is_shared_and_shading_cannot_discard() {
         .iter()
         .filter(|e| e.stage == ShaderStage::Fragment)
     {
+        let coverage = if entry.name == "mesh_pass_fragment" {
+            additional_coverage
+        } else {
+            coverage
+        };
         // Each entry must evaluate and clip unconditionally before producing its output.
         let calls: Vec<_> = entry
             .function
@@ -85,7 +97,10 @@ fn scene3d_material_coverage_is_shared_and_shading_cannot_discard() {
         );
         assert_eq!(
             calls.iter().filter(|call| call.0 == shading).count(),
-            usize::from(entry.name == "fragment")
+            usize::from(matches!(
+                entry.name.as_str(),
+                "fragment" | "mesh_pass_fragment"
+            ))
         );
     }
 }

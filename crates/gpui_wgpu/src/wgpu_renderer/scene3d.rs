@@ -782,10 +782,11 @@ impl Scene3dRenderer {
             .prepare(device, frames, self.format, self.samples)?;
         #[cfg(target_family = "wasm")]
         anyhow::ensure!(
-            frames.iter().all(|frame| frame
-                .objects
+            frames
                 .iter()
-                .all(|object| object.custom_material.is_none())),
+                .all(|frame| frame.objects.iter().all(
+                    |object| object.custom_material.is_none() && object.mesh_passes.is_empty()
+                )),
             "custom 3D materials require a native renderer"
         );
         self.plans.prepare(
@@ -1441,16 +1442,51 @@ impl Scene3dRenderer {
                 pass.set_bind_group(0, group, &[]);
                 pass.draw(0..3, 0..1);
             }
+            #[cfg(not(target_family = "wasm"))]
+            let mut extra_drawn = false;
             for (index, batch) in plan.batches.iter().enumerate() {
                 if !plan.passes[batch.start].camera {
                     continue;
                 }
                 let object = &frame.objects[plan.order[batch.start]];
+                #[cfg(not(target_family = "wasm"))]
+                if self.display_pipeline.is_some()
+                    && !extra_drawn
+                    && object.alpha_mode == gpui::AlphaMode3d::Blend
+                {
+                    self.draw_mesh_passes(
+                        &mut pass,
+                        frame,
+                        &groups,
+                        start,
+                        gpui::MeshPassStage3d::AfterOpaque,
+                    );
+                    extra_drawn = true;
+                }
                 let group = &groups[index];
                 self.bind_material_pipeline(&mut pass, object, false);
                 pass.set_bind_group(0, group, &[]);
                 pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
                 self.draw_geometry(&mut pass, object, batch.len() as u32);
+            }
+            #[cfg(not(target_family = "wasm"))]
+            if self.display_pipeline.is_some() {
+                if !extra_drawn {
+                    self.draw_mesh_passes(
+                        &mut pass,
+                        frame,
+                        &groups,
+                        start,
+                        gpui::MeshPassStage3d::AfterOpaque,
+                    );
+                }
+                self.draw_mesh_passes(
+                    &mut pass,
+                    frame,
+                    &groups,
+                    start,
+                    gpui::MeshPassStage3d::AfterTransparent,
+                );
             }
         }
         drop(pass);
@@ -1817,6 +1853,7 @@ pub(crate) mod tests {
 
     pub(crate) fn object() -> gpui::MeshDraw3d {
         gpui::MeshDraw3d {
+            mesh_passes: Default::default(),
             custom_material: None,
             gpu_geometry: None,
             render_bounds: None,

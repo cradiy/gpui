@@ -100,7 +100,7 @@ fn scene3d_custom_material_preserves_coverage_and_retained_uniforms() -> Result<
         }
     }
     cache.prepare(&context.device, &[], wgpu::TextureFormat::Rgba8Unorm, 1)?;
-    assert!(cache.0.is_empty());
+    assert!(cache.primary.is_empty());
     Ok(())
 }
 

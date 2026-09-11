@@ -1,8 +1,11 @@
 use super::{Instance, Vertex, material_bindings};
+mod mesh_pass;
 #[cfg(not(target_family = "wasm"))]
 use crate::{Scene3dMaterialSnapshot, Scene3dMaterialSource};
 #[cfg(not(target_family = "wasm"))]
 use anyhow::{Context as _, Result, ensure};
+#[cfg(not(target_family = "wasm"))]
+pub(super) use mesh_pass::pass_snapshot;
 #[cfg(not(target_family = "wasm"))]
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +22,10 @@ pub(super) struct Pipelines {
 
 #[derive(Default)]
 #[cfg(not(target_family = "wasm"))]
-pub(super) struct MaterialCache(HashMap<usize, Pipelines>);
+pub(super) struct MaterialCache {
+    primary: HashMap<usize, Pipelines>,
+    pub extra: mesh_pass::MeshPassCache,
+}
 
 #[cfg(not(target_family = "wasm"))]
 pub(super) fn snapshot(object: &gpui::MeshDraw3d) -> Result<Option<&Scene3dMaterialSnapshot>> {
@@ -43,6 +49,7 @@ impl MaterialCache {
         format: wgpu::TextureFormat,
         samples: u32,
     ) -> Result<()> {
+        self.extra.prepare(device, frames, format, samples)?;
         let mut used = HashSet::new();
         for frame in frames {
             for object in frame.objects.iter() {
@@ -58,17 +65,19 @@ impl MaterialCache {
                 );
                 let identity = source.identity();
                 used.insert(identity);
-                if let std::collections::hash_map::Entry::Vacant(entry) = self.0.entry(identity) {
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    self.primary.entry(identity)
+                {
                     entry.insert(Pipelines::new(device, source, format, samples)?);
                 }
             }
         }
-        self.0.retain(|shader, _| used.contains(shader));
+        self.primary.retain(|shader, _| used.contains(shader));
         Ok(())
     }
 
     pub fn get(&self, snapshot: &Scene3dMaterialSnapshot) -> &Pipelines {
-        &self.0[&snapshot.source().identity()]
+        &self.primary[&snapshot.source().identity()]
     }
 }
 
@@ -77,6 +86,7 @@ pub(super) enum Pass {
     Opaque,
     Blend,
     Shadow,
+    Additional(gpui::MeshPassState3d),
 }
 
 pub(super) fn create_pipeline(
@@ -90,6 +100,10 @@ pub(super) fn create_pipeline(
 ) -> wgpu::RenderPipeline {
     let shadow = matches!(pass, Pass::Shadow);
     let blend = matches!(pass, Pass::Blend);
+    let extra = match pass {
+        Pass::Additional(state) => Some(state),
+        _ => None,
+    };
     let fragment = match format {
         wgpu::TextureFormat::R32Uint => "object_id",
         wgpu::TextureFormat::R32Float => "linear_depth",
@@ -97,6 +111,11 @@ pub(super) fn create_pipeline(
         _ => "fragment",
     };
     let data = fragment != "fragment";
+    let constants = extra.map(mesh_pass::constants).unwrap_or_default();
+    let compilation = wgpu::PipelineCompilationOptions {
+        constants: &constants,
+        ..Default::default()
+    };
     let standard = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("scene3d_material_standard"),
         entries: &material_bindings(data || shadow),
@@ -119,7 +138,10 @@ pub(super) fn create_pipeline(
         } else {
             wgpu::TextureFormat::Rgba16Float
         },
-        blend: blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        blend: extra.map_or_else(
+            || blend.then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            |state| mesh_pass::blend(state.blend),
+        ),
         write_mask: wgpu::ColorWrites::ALL,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -133,8 +155,14 @@ pub(super) fn create_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(if shadow { "shadow_fragment" } else { fragment }),
-            compilation_options: Default::default(),
+            entry_point: Some(if shadow {
+                "shadow_fragment"
+            } else if extra.is_some() {
+                "mesh_pass_fragment"
+            } else {
+                fragment
+            }),
+            compilation_options: compilation,
             targets: if shadow {
                 &[]
             } else {
@@ -142,13 +170,16 @@ pub(super) fn create_pipeline(
             },
         }),
         primitive: Default::default(),
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(!blend),
-            depth_compare: Some(wgpu::CompareFunction::Less),
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
+        depth_stencil: Some(extra.map_or(
+            wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(!blend),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            },
+            mesh_pass::depth,
+        )),
         multisample: wgpu::MultisampleState {
             count: if shadow { 1 } else { samples },
             ..Default::default()

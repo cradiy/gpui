@@ -2,6 +2,36 @@ use super::Scene3dRenderer;
 use crate::Scene3dGpuGeometry;
 
 impl Scene3dRenderer {
+    #[cfg(not(target_family = "wasm"))]
+    pub(super) fn draw_mesh_passes(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        frame: &gpui::Scene3dFrame,
+        groups: &[wgpu::BindGroup],
+        start: usize,
+        stage: gpui::MeshPassStage3d,
+    ) {
+        let plan = self.plan(frame);
+        for &index in &plan.extra_batches {
+            let object = &frame.objects[plan.order[plan.batches[index].start]];
+            for extra in object
+                .mesh_passes
+                .iter()
+                .filter(|extra| extra.state.stage == stage)
+            {
+                let material = super::materials::pass_snapshot(extra).expect("validated mesh pass");
+                pass.set_pipeline(self.materials.extra.get(extra));
+                pass.set_bind_group(0, &groups[index], &[]);
+                pass.set_bind_group(1, material.bind_group(), &[]);
+                if let Some(streams) = material.vertex_streams() {
+                    pass.set_bind_group(2, streams.bind_group(), &[]);
+                }
+                pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
+                self.draw_geometry(pass, object, 1);
+            }
+        }
+    }
+
     pub(super) fn bind_material_pipeline(
         &self,
         pass: &mut wgpu::RenderPass<'_>,

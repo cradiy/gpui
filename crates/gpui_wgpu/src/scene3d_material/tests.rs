@@ -36,6 +36,10 @@ fn material_program_rejects_renderer_state_and_entry_point_overrides() {
             "globals",
         ),
         ("override threshold: f32 = 0.5;", "overrides"),
+        (
+            "fn hidden() -> u32 { return mesh_pass_cull; }",
+            "private renderer override",
+        ),
         ("@compute @workgroup_size(1) fn extra() {}", "entry points"),
         (
             "fn hidden() -> f32 { return params.ambient.x; }",

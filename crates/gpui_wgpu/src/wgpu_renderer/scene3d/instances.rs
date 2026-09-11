@@ -104,6 +104,8 @@ impl BatchPlanCache {
 }
 
 pub(super) struct BatchPlan {
+    color: bool,
+    pub extra_batches: Vec<usize>,
     pub order: Vec<usize>,
     pub batches: Vec<Range<usize>>,
     pub passes: Vec<Visibility>,
@@ -149,9 +151,14 @@ impl BatchPlan {
                 as u64
                 * instances;
             if visibility.camera {
-                statistics.camera_draws += 1;
-                statistics.camera_instances += instances;
-                statistics.camera_triangles += triangles;
+                let draws = 1 + if self.color {
+                    frame.objects[self.order[batch.start]].mesh_passes.len() as u64
+                } else {
+                    0
+                };
+                statistics.camera_draws += draws;
+                statistics.camera_instances += instances * draws;
+                statistics.camera_triangles += triangles * draws;
             }
             if visibility.shadow {
                 statistics.shadow_draws += 1;
@@ -192,7 +199,20 @@ impl BatchPlan {
                 batches.push(position..position + 1);
             }
         }
+        let mut extra_batches: Vec<_> = batches
+            .iter()
+            .enumerate()
+            .filter_map(|(index, batch)| {
+                (color
+                    && passes[batch.start].camera
+                    && !objects[order[batch.start]].mesh_passes.is_empty())
+                .then_some(index)
+            })
+            .collect();
+        extra_batches.sort_by_key(|&index| order[batches[index].start]);
         Self {
+            color,
+            extra_batches,
             order,
             batches,
             passes,
@@ -209,7 +229,9 @@ fn compatible(a: &MeshDraw3d, b: &MeshDraw3d) -> bool {
         (None, None) => true,
         (Some(a), Some(b)) => a.same_snapshot(b),
         _ => false,
-    }) && a.render_bounds.is_none()
+    }) && a.mesh_passes.is_empty()
+        && b.mesh_passes.is_empty()
+        && a.render_bounds.is_none()
         && b.render_bounds.is_none()
         && a.gpu_geometry.is_none()
         && b.gpu_geometry.is_none()
@@ -260,6 +282,33 @@ pub(super) fn retained_capacity(current: usize, required: usize, limit: usize) -
 mod tests {
     use super::super::tests::{IDENTITY, frame, object};
     use super::*;
+
+    #[test]
+    fn scene3d_mesh_passes_keep_submission_order_and_separate_instance_batches() {
+        let mut a = object();
+        a.alpha_mode = AlphaMode3d::Blend;
+        a.sort_depth = 1.;
+        a.mesh_passes = vec![gpui::MeshPass3d {
+            material: gpui::MeshMaterial3d::new(Arc::new(())),
+            state: Default::default(),
+        }]
+        .into();
+        let mut b = a.clone();
+        b.alpha_mode = AlphaMode3d::Opaque;
+        b.mesh_passes = vec![b.mesh_passes[0].clone(); 2].into();
+        let mut c = a.clone();
+        c.sort_depth = 3.;
+        let frame = frame(&[a, b, c]);
+        let plan = BatchPlan::new(&frame, true, 100);
+        assert_eq!(plan.order, [1, 2, 0]);
+        assert_eq!(plan.batches, [0..1, 1..2, 2..3]);
+        assert_eq!(plan.extra_batches, [2, 0, 1]);
+        assert_eq!(plan.statistics(&frame).camera_draws, 7);
+        let data = BatchPlan::new(&frame, false, 100);
+        assert!(data.extra_batches.is_empty());
+        assert_eq!(data.statistics(&frame).camera_draws, 3);
+        assert!(!compatible(&frame.objects[1], &frame.objects[1]));
+    }
 
     #[test]
     fn explicit_render_bounds_separate_instances_and_control_camera_and_shadow_passes() {

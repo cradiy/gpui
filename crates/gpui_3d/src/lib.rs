@@ -56,7 +56,10 @@ pub use lighting::{
     SpecularPrefilter,
 };
 pub(crate) use material::Texture;
-pub use material::{Material, MaterialTexture, TextureSlot};
+pub use material::{
+    Material, MaterialTexture, MeshPass, MeshPassBlend, MeshPassCull, MeshPassDepth, MeshPassStage,
+    MeshPassState, TextureSlot,
+};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use render::headless;
 pub use render::{

@@ -1,4 +1,7 @@
 // MATERIAL_ATTRIBUTE_DECLARATIONS
+override mesh_pass_cull: u32 = 0u;
+override mesh_pass_alpha_mode: u32 = 2u;
+override mesh_pass_alpha_cutoff: f32 = 0.5;
 struct ImageParams {
     rect: vec4<f32>, uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
 };
@@ -169,12 +172,20 @@ fn builtin_surface(input: SurfaceInput, gradients: mat2x2<f32>) -> vec4<f32> {
     }
     return sampled * input.color;
 }
+fn apply_alpha_coverage(base: vec4<f32>, mode: u32, cutoff: f32) -> vec4<f32> {
+    let alpha = clamp(base.a, 0.0, 1.0);
+    if (mode == 1u && alpha < cutoff) { discard; }
+    if (mode == 2u && alpha <= 0.0) { discard; }
+    return vec4<f32>(base.rgb, select(1.0, alpha, mode == 2u));
+}
 fn apply_coverage(base: vec4<f32>, orientation: f32, front: bool) -> vec4<f32> {
     if (params.ids.z == 0u && front != (orientation > 0.0)) { discard; }
-    let alpha = clamp(base.a, 0.0, 1.0);
-    if (params.ids.y == 1u && alpha < params.flags.x) { discard; }
-    if (params.ids.y == 2u && alpha <= 0.0) { discard; }
-    return vec4<f32>(base.rgb, select(1.0, alpha, params.ids.y == 2u));
+    return apply_alpha_coverage(base, params.ids.y, params.flags.x);
+}
+fn apply_mesh_pass_coverage(base: vec4<f32>, orientation: f32, front: bool) -> vec4<f32> {
+    let local_front = front == (orientation > 0.0);
+    if ((mesh_pass_cull == 1u && local_front) || (mesh_pass_cull == 2u && !local_front)) { discard; }
+    return apply_alpha_coverage(base, mesh_pass_alpha_mode, mesh_pass_alpha_cutoff);
 }
 @vertex
 fn shadow_vertex(/* MATERIAL_ATTRIBUTE_INDEX */ @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
@@ -432,6 +443,15 @@ fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) v
     let gradients = surface_gradients(input);
     let surface = surface_input(input);
     let base = apply_coverage(material_surface(surface, gradients.base), input.orientation, front);
+    let color = material_shading(base.rgb, surface, gradients, select(-1.0, 1.0, front) * input.orientation);
+    return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
+}
+
+@fragment
+fn mesh_pass_fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let gradients = surface_gradients(input);
+    let surface = surface_input(input);
+    let base = apply_mesh_pass_coverage(material_surface(surface, gradients.base), input.orientation, front);
     let color = material_shading(base.rgb, surface, gradients, select(-1.0, 1.0, front) * input.orientation);
     return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
 }

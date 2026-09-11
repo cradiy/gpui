@@ -3,7 +3,9 @@
 [3D viewports](../viewport.md)
 
 [WGSL material programs](material_programs.md) covers source compilation and
-resource-layout reflection. These programs cannot yet be attached to `Material`.
+resource-layout reflection. Attach a device-local snapshot with `Material::program()`.
+[Additional mesh passes](mesh_passes.md) reuse geometry with independent color-pass
+state and material resources.
 
 ## Materials and light
 

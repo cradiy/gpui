@@ -53,9 +53,13 @@ impl MaterialTexture {
     }
 }
 
+mod mesh_pass;
+pub use mesh_pass::*;
+
 /// Solid or textured material with explicit alpha interpretation.
 #[derive(Clone)]
 pub struct Material {
+    pub(crate) mesh_passes: std::sync::Arc<[gpui::MeshPass3d]>,
     pub(crate) custom_material: Option<gpui::MeshMaterial3d>,
     pub(crate) color: Rgba,
     pub(crate) texture: Texture,
@@ -78,6 +82,7 @@ impl Material {
     /// Creates a lit solid material from an sRGB color.
     pub fn color(color: impl Into<Rgba>) -> Self {
         Self {
+            mesh_passes: Default::default(),
             color: color.into(),
             custom_material: None,
             texture: Texture::None,
@@ -96,6 +101,12 @@ impl Material {
             occlusion_texture: None,
             occlusion_strength: 1.,
         }
+    }
+    /// Replaces additional color draws. Rendering admits at most eight passes per mesh.
+    /// Passes share geometry and standard inputs; primary shadow/data coverage is unchanged.
+    pub fn mesh_passes(mut self, passes: impl IntoIterator<Item = MeshPass>) -> Self {
+        self.mesh_passes = passes.into_iter().map(|pass| pass.0).collect();
+        self
     }
     /// Uses a device-local material snapshot for color, shadow and data outputs.
     /// Custom coverage requires GPU picking; viewport CPU interaction is disabled.

@@ -112,18 +112,25 @@ impl MaterialProgram {
         .validate(&module)
         .map_err(|error| anyhow::anyhow!("{error:#}"))?;
         ensure!(
-            module.overrides.is_empty(),
+            module.overrides.iter().all(|(handle, _)| {
+                module
+                    .overrides
+                    .get_span(handle)
+                    .to_range()
+                    .is_some_and(|span| span.end <= core.len())
+            }),
             "material overrides are not supported"
         );
         let resources = resources::reflect(&module, &info, limits, core.len())?;
         ensure!(
-            module.entry_points.len() == 7
+            module.entry_points.len() == 8
                 && module.entry_points.iter().all(|entry| {
                     matches!(
                         (entry.name.as_str(), entry.stage),
                         ("vertex" | "shadow_vertex", naga::ShaderStage::Vertex)
                             | (
                                 "fragment"
+                                    | "mesh_pass_fragment"
                                     | "shadow_fragment"
                                     | "object_id"
                                     | "linear_depth"
@@ -157,6 +164,11 @@ impl MaterialProgram {
                 function.name
             );
             for (_, expression) in function.expressions.iter() {
+                ensure!(
+                    !matches!(expression, Expression::Override(_)),
+                    "material function {:?} accesses a private renderer override",
+                    function.name
+                );
                 ensure!(
                     !matches!(expression, Expression::GlobalVariable(global) if module.global_variables[*global].binding.as_ref().is_none_or(|b| b.group != 1)),
                     "material function {:?} accesses a private renderer global",

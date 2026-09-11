@@ -83,6 +83,15 @@ impl Scene {
         let mut objects = Vec::with_capacity(self.objects.len());
         for (index, object) in self.objects.iter().enumerate() {
             ensure!(
+                object.material.mesh_passes.len() <= gpui::MAX_MESH_PASSES_3D
+                    && object
+                        .material
+                        .mesh_passes
+                        .iter()
+                        .all(|pass| pass.state.is_valid()),
+                "object {index} has invalid additional mesh passes"
+            );
+            ensure!(
                 !matches!(object.material.texture, crate::Texture::Image(_))
                     || object.material.sampling.is_valid(),
                 "object {index} has invalid image sampling"
@@ -194,6 +203,7 @@ impl Scene {
                 continue;
             }
             objects.push(MeshDraw3d {
+                mesh_passes: object.material.mesh_passes.clone(),
                 custom_material: object.material.custom_material.clone(),
                 gpu_geometry: object.gpu_geometry.clone(),
                 render_bounds: object
@@ -273,6 +283,55 @@ mod tests {
     use super::*;
     use crate::{AffineTransform, Camera, Material, Mesh, Node, Object, SceneGraph};
     use gpui::rgb;
+
+    #[test]
+    fn mesh_passes_retain_order_and_reject_invalid_states_before_preparation() {
+        let pass = gpui::MeshPass3d {
+            material: gpui::MeshMaterial3d::new(std::sync::Arc::new(())),
+            state: Default::default(),
+        };
+        let mut material = Material::color(rgb(0xffffff));
+        material.mesh_passes = vec![
+            pass.clone(),
+            gpui::MeshPass3d {
+                state: gpui::MeshPassState3d {
+                    stage: gpui::MeshPassStage3d::AfterTransparent,
+                    ..pass.state
+                },
+                ..pass.clone()
+            },
+        ]
+        .into();
+        let scene = Scene::new().object(Object::new(Mesh::plane(), material.clone()));
+        let frame = scene
+            .prepare_frame(1., None, |_, _, _| Ok(Some(MeshTexture3d::None)))
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            &material.mesh_passes,
+            &frame.objects[0].mesh_passes
+        ));
+        assert_eq!(frame.objects[0].output_id, 1);
+        for invalid in [
+            vec![pass.clone(); gpui::MAX_MESH_PASSES_3D + 1],
+            vec![gpui::MeshPass3d {
+                state: gpui::MeshPassState3d {
+                    alpha_cutoff: f32::NAN,
+                    ..pass.state
+                },
+                ..pass
+            }],
+        ] {
+            material.mesh_passes = invalid.into();
+            let scene = Scene::new().object(Object::new(Mesh::plane(), material.clone()));
+            assert!(
+                scene
+                    .prepare_frame(1., None, |_, _, _| panic!(
+                        "invalid pass requested textures"
+                    ))
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn independent_coordinate_sets_reach_all_material_slots() {

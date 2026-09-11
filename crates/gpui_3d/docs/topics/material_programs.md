@@ -11,6 +11,9 @@ and attach it with `Material::program()`.
 [Custom vertex inputs](material_attributes.md) define typed attributes and
 interpolation for program compilation.
 
+[Additional mesh passes](mesh_passes.md) use these programs for independent color
+draws while preserving primary shadow and data-channel ownership.
+
 ```rust
 use gpui_3d::Scene3dMaterialProgram;
 

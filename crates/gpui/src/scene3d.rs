@@ -652,9 +652,14 @@ impl DirectionalShadow3d {
     }
 }
 
+mod mesh_pass;
+pub use mesh_pass::*;
+
 /// One indexed mesh and its material parameters.
 #[derive(Clone, Debug)]
 pub struct MeshDraw3d {
+    /// Additional color passes in declaration order, at most MAX_MESH_PASSES_3D.
+    pub mesh_passes: Arc<[MeshPass3d]>,
     /// Immutable backend material snapshot shared by all output passes.
     pub custom_material: Option<MeshMaterial3d>,
     /// Immutable backend-owned geometry. Requires explicit render bounds and backend validation.

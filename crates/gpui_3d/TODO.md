@@ -270,6 +270,7 @@ contract. Core APIs do not own a physics world, character controller, or editor 
 
 - [ ] **Extensible material shading**:
   - [ ] **Surface coverage contract**: One alpha/cutout evaluator for color, shadow, depth, object ID, and normal outputs; explicit allowed inputs and consistent deformed geometry. Keep view-dependent shading separate from coverage and define camera/light-view sampling behavior.
+    - [x] **Backend surface separation**: Shared world-space vertex payloads for camera/shadow passes, one material surface evaluator, renderer-owned clipping, and RGB-only shading with centralized HDR clamping and alpha premultiplication.
   - [ ] **Shading contract**: Application WGSL functions with versioned inputs for world/view position, geometric and shading normals, tangents, UVs, vertex color, and camera data. Return linear HDR color; the backend owns output encoding and alpha premultiplication.
   - [ ] **Lighting access**: Reusable direct-light direction, energy, attenuation, shadow visibility, and environment helpers without requiring the built-in PBR response.
   - [ ] **Material resources**: Declared bounded parameter layouts, textures and samplers, immutable per-frame binding snapshots, independent data updates, and explicit format/color-space/UV requirements.

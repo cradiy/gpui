@@ -44,19 +44,34 @@ struct InstanceInput {
     @location(12) color: vec4<f32>, @location(13) ids: vec4<u32>,
 };
 struct Output { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec4<f32>, @location(2) world: vec3<f32>, @location(3) tangent: vec4<f32>, @location(4) @interpolate(flat) orientation: f32, @location(5) color: vec4<f32>, @location(6) @interpolate(flat) output_id: u32, @location(7) detail_uv: vec4<f32>, @location(8) occlusion_uv: vec2<f32> };
-@vertex
-fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
+struct SurfaceInput {
+    world: vec3<f32>, normal: vec3<f32>, tangent: vec4<f32>,
+    uv: vec4<f32>, detail_uv: vec4<f32>, occlusion_uv: vec2<f32>, color: vec4<f32>,
+};
+fn surface_input(input: Output) -> SurfaceInput {
+    return SurfaceInput(input.world, input.normal, input.tangent,
+        input.uv, input.detail_uv, input.occlusion_uv, input.color);
+}
+fn world_vertex(position: vec3<f32>, normal: vec3<f32>, uv: vec4<f32>, tangent: vec4<f32>, detail_uv: vec4<f32>, occlusion_uv: vec2<f32>, vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
     let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
     let normal_matrix = mat3x3<f32>(instance.normal_0.xyz, instance.normal_1.xyz, instance.normal_2.xyz);
+    let world = model * vec4<f32>(position, 1.0);
+    let handedness = sign(dot(cross(unit_vector(model[0].xyz), unit_vector(model[1].xyz)), unit_vector(model[2].xyz)));
+    let world_tangent = vec4<f32>((model * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w * handedness);
+    let color = vertex_color * vec4<f32>(srgb_to_linear(instance.color.rgb), instance.color.a);
+    return Output(world, normal_matrix * normal, uv, world.xyz, world_tangent, handedness, color, instance.ids.x, detail_uv, occlusion_uv);
+}
+@vertex
+fn vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
+    var output = world_vertex(position, normal, uv, tangent, detail_uv, occlusion_uv, vertex_color, instance);
+    let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
     var clip = params.camera * model * vec4<f32>(position, 1.0);
     let origin = params.bounds.xy / params.viewport.xy;
     let extent = params.bounds.zw / params.viewport.xy;
     clip.x = (origin.x * 2.0 - 1.0) * clip.w + (clip.x + clip.w) * extent.x;
     clip.y = (1.0 - origin.y * 2.0) * clip.w + (clip.y - clip.w) * extent.y;
-    let handedness = sign(dot(cross(unit_vector(model[0].xyz), unit_vector(model[1].xyz)), unit_vector(model[2].xyz)));
-    let world_tangent = vec4<f32>((model * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w * handedness);
-    let color = vertex_color * vec4<f32>(srgb_to_linear(instance.color.rgb), instance.color.a);
-    return Output(clip, normal_matrix * normal, uv, (model * vec4<f32>(position, 1.0)).xyz, world_tangent, handedness, color, instance.ids.x, detail_uv, occlusion_uv);
+    output.position = clip;
+    return output;
 }
 fn address_coordinate(value: f32, mode: u32) -> f32 {
     if (mode == 1u) { return value - floor(value); }
@@ -110,8 +125,7 @@ fn sample_image(source: texture_2d<f32>, source_sampler: sampler, config: ImageP
     return mix(mix(image_texel(source, config, low, extent), image_texel(source, config, low + vec2<i32>(1, 0), extent), weight.x),
         mix(image_texel(source, config, low + vec2<i32>(0, 1), extent), image_texel(source, config, low + vec2<i32>(1, 1), extent), weight.x), weight.y);
 }
-fn base_color(input: Output, gradients: mat2x2<f32>, front: bool) -> vec4<f32> {
-    if (params.ids.z == 0u && front != (input.orientation > 0.0)) { discard; }
+fn material_surface(input: SurfaceInput, gradients: mat2x2<f32>) -> vec4<f32> {
     var sampled: vec4<f32>;
     if (params.flags.w > 0.5) {
         sampled = sample_image(image, image_sampler, ImageParams(params.texture_rect, params.uv_u, params.uv_v, params.sampling), input.uv.xy, gradients);
@@ -122,24 +136,25 @@ fn base_color(input: Output, gradients: mat2x2<f32>, front: bool) -> vec4<f32> {
         if (params.flags.z > 0.5) { sampled = vec4<f32>(sampled.rgb / max(sampled.a, 0.00001), sampled.a); }
         sampled = vec4<f32>(srgb_to_linear(sampled.rgb), sampled.a);
     }
-    let base = sampled * input.color;
+    return sampled * input.color;
+}
+fn apply_coverage(base: vec4<f32>, orientation: f32, front: bool) -> vec4<f32> {
+    if (params.ids.z == 0u && front != (orientation > 0.0)) { discard; }
     let alpha = clamp(base.a, 0.0, 1.0);
     if (params.ids.y == 1u && alpha < params.flags.x) { discard; }
     if (params.ids.y == 2u && alpha <= 0.0) { discard; }
     return vec4<f32>(base.rgb, select(1.0, alpha, params.ids.y == 2u));
 }
 @vertex
-fn shadow_vertex(@location(0) position: vec3<f32>, @location(2) uv: vec4<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
-    let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
-    let world = model * vec4<f32>(position, 1.0);
-    let handedness = sign(dot(cross(unit_vector(model[0].xyz), unit_vector(model[1].xyz)), unit_vector(model[2].xyz)));
-    let color = vertex_color * vec4<f32>(srgb_to_linear(instance.color.rgb), instance.color.a);
-    return Output(params.shadow_camera * world, vec3<f32>(0.0), uv, world.xyz, vec4<f32>(0.0), handedness, color, instance.ids.x, vec4<f32>(0.0), vec2<f32>(0.0));
+fn shadow_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec4<f32>, @location(3) tangent: vec4<f32>, @location(14) detail_uv: vec4<f32>, @location(15) occlusion_uv: vec2<f32>, @location(11) vertex_color: vec4<f32>, instance: InstanceInput) -> Output {
+    var output = world_vertex(position, normal, uv, tangent, detail_uv, occlusion_uv, vertex_color, instance);
+    output.position = params.shadow_camera * output.position;
+    return output;
 }
 @fragment
 fn shadow_fragment(input: Output, @builtin(front_facing) front: bool) {
     let gradients = mat2x2<f32>(dpdx(input.uv.xy), dpdy(input.uv.xy));
-    let base = base_color(input, gradients, front);
+    let base = apply_coverage(material_surface(surface_input(input), gradients), input.orientation, front);
 }
 
 fn shadow_compare_texel(pixel: vec2<i32>, origin: vec2<f32>, reference: f32, depth_gradient: vec2<f32>, extent: vec2<f32>) -> f32 {
@@ -195,21 +210,21 @@ fn shadow_visibility(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>, 
 @fragment
 fn object_id(input: Output, @builtin(front_facing) front: bool) -> @location(0) u32 {
     let gradients = mat2x2<f32>(dpdx(input.uv.xy), dpdy(input.uv.xy));
-    let base = base_color(input, gradients, front);
+    let base = apply_coverage(material_surface(surface_input(input), gradients), input.orientation, front);
     return input.output_id;
 }
 
 @fragment
 fn linear_depth(input: Output, @builtin(front_facing) front: bool) -> @location(0) f32 {
     let gradients = mat2x2<f32>(dpdx(input.uv.xy), dpdy(input.uv.xy));
-    let base = base_color(input, gradients, front);
+    let base = apply_coverage(material_surface(surface_input(input), gradients), input.orientation, front);
     return max(dot(params.depth_plane, vec4<f32>(input.world, 1.0)), 0.0);
 }
 
 @fragment
 fn world_normal(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let gradients = mat2x2<f32>(dpdx(input.uv.xy), dpdy(input.uv.xy));
-    let base = base_color(input, gradients, front);
+    let base = apply_coverage(material_surface(surface_input(input), gradients), input.orientation, front);
     let normal = unit_vector(input.normal) * select(-1.0, 1.0, front) * input.orientation;
     return vec4<f32>(normal, 1.0);
 }
@@ -221,7 +236,7 @@ fn unit_vector(value: vec3<f32>) -> vec3<f32> {
     return scaled / length(scaled);
 }
 
-fn surface_normal(input: Output, gradients: mat2x2<f32>) -> vec3<f32> {
+fn surface_normal(input: SurfaceInput, gradients: mat2x2<f32>) -> vec3<f32> {
     let n = unit_vector(input.normal);
     if (params.normal_settings.y < 0.5) { return n; }
     let t0 = unit_vector(input.tangent.xyz);
@@ -317,7 +332,7 @@ fn surface_gradients(input: Output) -> SurfaceGradients {
         mat2x2<f32>(dpdx(input.occlusion_uv), dpdy(input.occlusion_uv)), shadow_depth);
 }
 
-fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, input: Output, gradients: SurfaceGradients) -> vec3<f32> {
+fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>, input: SurfaceInput, gradients: SurfaceGradients) -> vec3<f32> {
     let world = input.world;
     let factors = sample_image(metallic_roughness_image, metallic_roughness_sampler, params.metallic_roughness_map, input.uv.zw, gradients.surface);
     let metal = params.pbr.x * factors.b;
@@ -343,23 +358,29 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>,
     return result;
 }
 
-@fragment
-fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let gradients = surface_gradients(input);
-    let base = base_color(input, gradients.base, front);
+fn material_shading(base: vec3<f32>, input: SurfaceInput, gradients: SurfaceGradients, face_sign: f32) -> vec3<f32> {
     var illumination = vec3<f32>(1.0);
     if (params.flags.y < 0.5) {
         if (params.pbr.z > 0.5) {
-            let normal = surface_normal(input, gradients.normal) * select(-1.0, 1.0, front) * input.orientation;
-            let geometric_normal = unit_vector(input.normal) * select(-1.0, 1.0, front) * input.orientation;
-            return vec4<f32>(clamp(pbr_lighting(base.rgb, normal, geometric_normal, input, gradients), vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
+            let normal = surface_normal(input, gradients.normal) * face_sign;
+            let geometric_normal = unit_vector(input.normal) * face_sign;
+            return pbr_lighting(base, normal, geometric_normal, input, gradients);
         }
-        let normal = input.normal / max(length(input.normal), 0.00001) * select(-1.0, 1.0, front) * input.orientation;
+        let normal = input.normal / max(length(input.normal), 0.00001) * face_sign;
         illumination = (vec3<f32>(params.ambient.x) + diffuse_environment(normal)) * occlusion(input.occlusion_uv, gradients.occlusion);
         for (var i = 0u; i < params.light_count.x; i += 1u) {
             let light = sample_light(params.lights[i], input.world);
             illumination += light.energy * max(dot(normal, light.direction), 0.0) * shadow_visibility(i, input.world, normal, gradients.shadow_depth);
         }
     }
-    return vec4<f32>(clamp(base.rgb * illumination, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
+    return base * illumination;
+}
+
+@fragment
+fn fragment(input: Output, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let gradients = surface_gradients(input);
+    let surface = surface_input(input);
+    let base = apply_coverage(material_surface(surface, gradients.base), input.orientation, front);
+    let color = material_shading(base.rgb, surface, gradients, select(-1.0, 1.0, front) * input.orientation);
+    return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(65504.0)) * base.a, base.a);
 }

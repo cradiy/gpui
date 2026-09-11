@@ -1670,6 +1670,7 @@ fn color_draw_order(objects: &[gpui::MeshDraw3d]) -> Vec<usize> {
 pub(crate) mod tests {
     use super::*;
     mod geometry_memory;
+    mod material_shader;
 
     fn output_layer(texture: MeshTexture3d) -> SubtreeLayer {
         let mut object = object();

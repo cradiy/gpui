@@ -261,10 +261,28 @@ contract. Core APIs do not own a physics world, character controller, or editor 
 
 ## Near-Term Core Order
 
-1. Resource interfaces and accelerated spatial queries for external loaders and editors.
-2. Texture sampling, linear HDR color, PBR, and transparent materials.
-3. Depth/normal outputs, environment lighting, and directional shadows.
-4. Explicit pose/deformation inputs and absolute-time evaluation, followed by attachments and constraints.
+1. **Material extension contract**: Shared surface coverage, application shading, and backend-owned render state.
+2. **Material resources and standard inputs**: Retained parameter/texture bindings, lighting access, and pipeline variants.
+3. **External deformation and attribute streams**: Reusable geometry processing with independent attribute updates.
+4. **Additional mesh passes and frame consistency**: Outline-capable draws and coherent coverage/picking snapshots.
+
+### Application Rendering Extensions
+
+- [ ] **Extensible material shading**:
+  - [ ] **Surface coverage contract**: One alpha/cutout evaluator for color, shadow, depth, object ID, and normal outputs; explicit allowed inputs and consistent deformed geometry. Keep view-dependent shading separate from coverage and define camera/light-view sampling behavior.
+  - [ ] **Shading contract**: Application WGSL functions with versioned inputs for world/view position, geometric and shading normals, tangents, UVs, vertex color, and camera data. Return linear HDR color; the backend owns output encoding and alpha premultiplication.
+  - [ ] **Lighting access**: Reusable direct-light direction, energy, attenuation, shadow visibility, and environment helpers without requiring the built-in PBR response.
+  - [ ] **Material resources**: Declared bounded parameter layouts, textures and samplers, immutable per-frame binding snapshots, independent data updates, and explicit format/color-space/UV requirements.
+  - [ ] **Pipeline integration**: Shared viewport/headless variants keyed by shader/layout and render state; resource-aware batching, admission, compilation diagnostics, cache reclamation, and device replacement. Invalid extensions fail explicitly.
+  - [ ] **Coverage validation**: Compare masked coverage across outputs on supported adapters; define blended-surface ID/depth selection and shadow participation separately from color accumulation. Do not assume arbitrary shader coverage can be reproduced by CPU mesh queries.
+- [ ] **External GPU deformation results**: Adopt application-produced attribute buffers through a checked result contract covering device ownership, vertex layout/count, base topology, submission ordering, status, and retained lifetime. Reuse bounds reduction, direction processing, and render packing without full vertex readback; define bounds invalidation and publication explicitly.
+- [ ] **Dynamic attribute streams**: Independent UV-set, vertex-color, and declared custom-attribute updates with format/stride/count validation, stable topology, retained frame versions, and matching custom-shader inputs. Avoid rebuilding unchanged mesh attributes and indices.
+- [ ] **Additional mesh passes**: Reuse geometry with explicit culling, depth comparison/write/bias, blending, vertex offsets, and width attributes. Define pass ordering, expanded bounds, shadow participation, and object-ID ownership independently of color-only outlines.
+- [ ] **Coherent evaluated frames**: Compose final transforms, geometry/attribute results, material snapshots, and bounds into a retained submission with transactional validation and no application animation or physics policy in the renderer.
+- [ ] **Deformed custom-material picking**: Bind regional ID/depth and coverage results to the submitted geometry, material resources, camera, and viewport identity; reject stale results and preserve retained-frame reads after updates.
+
+Toon responses, sphere-map coordinate generation, outline styles, and character-specific
+material conventions belong to application or extension code built on these interfaces.
 
 Keep multiple UI textures, capture-alpha picking, and focus/overlay support as independent GUI extensions.
 

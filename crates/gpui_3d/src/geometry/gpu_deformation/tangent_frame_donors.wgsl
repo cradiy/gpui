@@ -20,7 +20,7 @@ fn clear_donors(@builtin(global_invocation_id) id: vec3<u32>) {
 fn select_donors(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.corners { return; }
     let frame = source[id.x];
-    if groups[id.x].b.z == 0u && frame.identity.y != 0xffffffffu &&
+    if groups[id.x].b.z <= 1u && frame.identity.y != 0xffffffffu &&
         all(frame.status == vec4(0u)) {
         atomicMin(&donors[weld[id.x].c.z], id.x);
     }

@@ -67,6 +67,14 @@ fn pass_bound_covers_bidirectional_chains_cycles_and_disconnected_vertices() {
             memory.output_bytes as usize,
             count * std::mem::size_of::<GpuTangentGroup>()
         );
+        assert_eq!(
+            memory.inheritance_flags_bytes,
+            ((count as u64).div_ceil(64) * 4).max(64)
+        );
+        assert_eq!(
+            memory.scratch_bytes,
+            memory.output_bytes + memory.inheritance_flags_bytes
+        );
         assert!(GpuTangentGroupsMemory::plan(count, limits).is_ok());
         assert!(
             GpuTangentGroupsMemory::plan(
@@ -91,6 +99,70 @@ fn pass_bound_covers_bidirectional_chains_cycles_and_disconnected_vertices() {
     }
     for count in [0, 1, 4, usize::MAX] {
         assert!(GpuTangentGroupsMemory::plan(count, GpuDeformationLimits::default()).is_err());
+    }
+}
+
+#[test]
+fn inheritance_shaders_validate_and_match_group_scratch_layout() {
+    use wgpu::naga::{
+        TypeInner,
+        front::wgsl,
+        valid::{Capabilities, ValidationFlags, Validator},
+    };
+    for (source, flag_binding, names) in [
+        (
+            include_str!("../tangent_group_flags.wgsl"),
+            3,
+            "detect_inheritance",
+        ),
+        (include_str!("../tangent_group_inherit.wgsl"), 0, "inherit"),
+    ] {
+        let module = wgsl::parse_str(source).unwrap();
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .unwrap();
+        for (_, variable) in module.global_variables.iter() {
+            let Some(binding) = &variable.binding else {
+                continue;
+            };
+            assert_eq!(binding.group, 0);
+            let ty = &module.types[variable.ty].inner;
+            if binding.binding == 4 {
+                assert!(matches!(ty, TypeInner::Struct { span: 16, .. }));
+            } else {
+                let TypeInner::Array { base, stride, .. } = ty else {
+                    panic!("array required")
+                };
+                assert_eq!(
+                    *stride,
+                    if binding.binding == flag_binding {
+                        4
+                    } else {
+                        64
+                    }
+                );
+                if binding.binding == 3 && flag_binding == 0 {
+                    let TypeInner::Struct { members, span: 64 } = &module.types[*base].inner else {
+                        panic!("group scratch record required")
+                    };
+                    assert_eq!(
+                        members
+                            .iter()
+                            .map(|v| v.offset as usize)
+                            .collect::<Vec<_>>(),
+                        [
+                            std::mem::offset_of!(GpuTangentGroup, identity),
+                            std::mem::offset_of!(GpuTangentGroup, neighbors),
+                            std::mem::offset_of!(GpuTangentGroup, reserved),
+                            std::mem::offset_of!(GpuTangentGroup, status),
+                        ]
+                    );
+                }
+            }
+        }
+        assert_eq!(module.entry_points.len(), 1);
+        assert_eq!(module.entry_points[0].name, names);
+        assert_eq!(module.entry_points[0].workgroup_size, [64, 1, 1]);
     }
 }
 

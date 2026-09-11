@@ -50,6 +50,15 @@ fn propagate(@builtin(global_invocation_id) id: vec3<u32>) {
 fn finalize(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.corners { return; }
     var result = source[id.x];
+    if result.a.z != 0xffffffffu {
+        result.b.x = 0xffffffffu;
+        result.b.y = 0xffffffffu;
+        let outgoing = edges[id.x].b.x;
+        let previous = id.x / 3u * 3u + (id.x % 3u + 2u) % 3u;
+        let incoming = edges[previous].b.y;
+        if outgoing != 0xffffffffu && source[outgoing].a.z == result.a.z { result.b.x = outgoing; }
+        if incoming != 0xffffffffu && source[incoming].a.z == result.a.z { result.b.y = incoming; }
+    }
     result.c = vec4(0u);
     output[id.x] = result;
 }

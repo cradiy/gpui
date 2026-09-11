@@ -33,7 +33,7 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>) {
         let group = groups[id.x];
         result.identity = vec3(id.x, group.a.zw);
         result.status = group.status;
-        if group.a.z != 0xffffffffu && all(result.status == vec4(0u)) {
+        if group.a.z != 0xffffffffu && group.b.z == 0u && all(result.status == vec4(0u)) {
             let face = source[id.x / 3u];
             let corner = weld[id.x];
             let normal = bitcast<vec3<f32>>(vec3(corner.a.w, corner.b.xy));
@@ -96,7 +96,8 @@ fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
             output[item.identity.x] = result;
             return;
         }
-        if other.identity.x == item.identity.x ||
+        if other.identity.x == item.identity.x || groups[item.identity.x].b.z == 1u ||
+            groups[other.identity.x].b.z == 1u ||
             (dot(item.tangent.xyz, other.tangent.xyz) > -1.0 &&
              dot(item.bitangent.xyz, other.bitangent.xyz) > -1.0) {
             result.tangent += other.tangent * other.weight;

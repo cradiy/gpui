@@ -517,3 +517,77 @@ fn gpu_collapsed_frames_choose_valid_donors_without_crossing_attribute_seams() -
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires a compute-capable GPU"]
+fn gpu_uv_inheritance_connects_groups_and_preserves_one_face_orientation() -> Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    for (same_orientation, padding) in [(false, 0), (true, 22)] {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for face in 0..padding {
+            let x = 10. + face as f32 * 4.;
+            for (position, uv) in [
+                ([x, 0., 0.], [0., 0.]),
+                ([x + 1., 0., 0.], [1., 0.]),
+                ([x, 1., 0.], [0., 1.]),
+            ] {
+                indices.push(vertices.len() as u32);
+                vertices.push(Vertex {
+                    position,
+                    normal: [0., 0., 1.],
+                    uv,
+                });
+            }
+        }
+        let start = vertices.len();
+        for (position, uv) in [
+            ([0., 0., 0.], [0., 0.]),
+            ([1., 0., 0.], [1., 0.]),
+            ([0., 1., 0.], [0., 1.]),
+            ([1., -1., 0.], [2., 0.]),
+            ([0., -1., 0.], [0., if same_orientation { -1. } else { 1. }]),
+        ] {
+            vertices.push(Vertex {
+                position,
+                normal: [0., 0., 1.],
+                uv,
+            });
+        }
+        indices.extend([0, 1, 2, 1, 0, 3, 3, 0, 4].map(|index| start as u32 + index));
+        let uv = vertices.iter().map(|v| v.uv).collect();
+        let base = Mesh::new(vertices, indices).with_uv_set(2, uv)?;
+        let (derivatives, weld, adjacency, groups, frames) = sources(&context, &base)?;
+        let input = GpuDeformationOutput::upload(context.clone(), base.clone(), limits)?;
+        let output = frames
+            .evaluate(&groups.evaluate(
+                &adjacency.evaluate(&weld.evaluate(&derivatives.evaluate(&input)?)?)?,
+            )?)?;
+        drop((input, derivatives, weld, adjacency, groups, frames));
+        let records = read(&output)?;
+        assert!(records.iter().all(|record| record.status == [0; 4]));
+        assert_eq!(records[start + 3].identity[1], (start + 1) as u32);
+        assert_eq!(records[start + 4].identity[1], start as u32);
+        assert_eq!(records[start + 3].identity[2], 1);
+        assert_eq!(records[start + 4].identity[2], 1);
+        if same_orientation {
+            assert_eq!(records[start + 5].identity[1], (start + 6) as u32);
+            assert_eq!(records[start + 7].identity[1], start as u32);
+            let cpu = base.generate_tangents_for_uv_set(2, TangentGenerationMode::Inherit)?;
+            for (corner, record) in records.iter().enumerate() {
+                let tangent = cpu.mesh().tangents().unwrap()[cpu.mesh().indices()[corner] as usize];
+                for (a, b) in record.tangent[..3].iter().zip(tangent) {
+                    close(*a, b);
+                }
+                assert_eq!(record.identity[2], u32::from(tangent[3] > 0.));
+            }
+        } else {
+            assert_eq!(records[start + 5].identity[1..], [u32::MAX; 2]);
+            assert_eq!(records[start + 7].identity[1], (start + 7) as u32);
+            assert_eq!(records[start + 7].identity[2], 0);
+            close(records[start + 4].tangent[0], 1.);
+        }
+    }
+    Ok(())
+}

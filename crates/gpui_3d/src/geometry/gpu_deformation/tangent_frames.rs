@@ -76,9 +76,10 @@ impl GpuTangentFramesMemory {
 /// Angle-weighted regular corner frames. Contributions are ordered by original
 /// corner within each connected group; exactly opposing projected tangent or
 /// bitangent directions are excluded per destination corner. No float atomics are used.
-/// Faces with coincident positions inherit the earliest valid regular frame with
-/// the same welded vertex. UV-degenerate grouping, repair and vertex publication
-/// are separate stages.
+/// Undefined UV frames average all valid contributions in their assigned group
+/// without contributing a direction. Faces with coincident positions inherit the
+/// earliest valid noncollapsed frame with the same welded vertex. Repair and
+/// vertex publication are separate stages.
 pub struct GpuTangentFrames {
     context: WgpuContext,
     base: Mesh,

@@ -39,11 +39,16 @@ corner order, and normalized independently. Derivative magnitudes are averaged
 using the same weights. UV orientation comes from the connected group, not from
 the magnitude lanes.
 
+Assigned corners with undefined derivative frames accept every valid contributor
+in their group, without adding their own direction or angle weight. This also
+allows otherwise separated regular contributions to connect through an undefined
+frame with a compatible inherited orientation. Unassigned corners remain unresolved.
+
 ## Collapsed-face inheritance
 
 After regular frames are evaluated, faces containing coincident positions can
 inherit them. Each corner selects the smallest original corner index with a valid
-regular frame and the same [welded position, normal, and UV key](tangent_weld.md).
+noncollapsed frame and the same [welded position, normal, and UV key](tangent_weld.md).
 An integer minimum reduction makes donor selection independent of workgroup order.
 No edge connection is required. Attribute seams still prevent matching.
 
@@ -54,9 +59,9 @@ remains unresolved; no default basis is substituted. Corners of one collapsed
 triangle can inherit different orientations, which final vertex publication must
 validate rather than silently changing the signs.
 
-Faces with distinct positions and undefined UV frames are not handled by this
-rule. Their connected-group inheritance, frame repair, fixed-vertex publication,
-and imported MikkTSpace regeneration remain separate operations. CPU meshes,
+Faces with distinct positions and undefined UV frames use their assigned groups
+instead of this donor rule. Frame repair, fixed-vertex publication, and imported
+MikkTSpace regeneration remain separate operations. CPU meshes,
 bounds, and picking are unchanged. Do not bind this corner buffer as render vertices.
 
 ## Records

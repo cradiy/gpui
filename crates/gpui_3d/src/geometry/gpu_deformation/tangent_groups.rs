@@ -10,15 +10,15 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
-/// A 64-byte regular-face component record in original triangle-corner order.
+/// A 64-byte tangent component record in original triangle-corner order.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuTangentGroup {
     /// Original corner, welded vertex representative, connected group representative,
-    /// and UV orientation. Nonregular corners use u32::MAX for group and orientation.
+    /// and UV orientation. Unassigned corners use u32::MAX for group and orientation.
     pub identity: [u32; 4],
     /// Outgoing and incoming neighboring corners within the group, adjacency eligibility
-    /// (0 regular, 1 needs inheritance, 2 coincident positions, 3 failed), and zero.
+    /// (0 regular, 1 undefined derivative, 2 coincident positions, 3 failed), and zero.
     /// Missing neighbors use u32::MAX.
     pub neighbors: [u32; 4],
     pub reserved: [u32; 4],
@@ -27,11 +27,14 @@ pub struct GpuTangentGroup {
 }
 
 /// Payload admission for one source and one evaluation. Excludes retained input
-/// snapshots, CPU data, and driver overhead. Two equal buffers alternate; one is returned.
+/// snapshots, CPU data, and driver overhead. Two equal corner buffers alternate;
+/// one is returned. Scratch admission also includes inheritance detection flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GpuTangentGroupsMemory {
     pub uniform_bytes: u64,
     pub scratch_bytes: u64,
+    /// Included in scratch_bytes; one flag per 64 corners, with a 64-byte minimum.
+    pub inheritance_flags_bytes: u64,
     pub output_bytes: u64,
     pub propagation_passes: u32,
 }
@@ -41,9 +44,11 @@ impl GpuTangentGroupsMemory {
             corners > 0 && corners <= u32::MAX as usize && corners.is_multiple_of(3),
             "GPU tangent groups require a positive u32 triangle-corner count"
         );
+        let inheritance_flags_bytes = ((corners as u64).div_ceil(64) * 4).max(64);
         let memory = Self {
             uniform_bytes: 16,
-            scratch_bytes: corners as u64 * 64,
+            scratch_bytes: corners as u64 * 64 + inheritance_flags_bytes,
+            inheritance_flags_bytes,
             output_bytes: corners as u64 * 64,
             propagation_passes: u32::BITS - (corners as u32 - 1).leading_zeros(),
         };
@@ -59,9 +64,10 @@ impl GpuTangentGroupsMemory {
     }
 }
 
-/// Connected groups of regular corners across orientation-compatible adjacency.
-/// Pointer doubling follows the two directed neighbors with a fixed logarithmic
-/// pass bound. Degenerate-frame inheritance and final tangent averaging are separate.
+/// Orientation-compatible connected corner groups. Regular-only inputs use parallel
+/// pointer doubling. Inputs needing frame inheritance use an ordered GPU traversal:
+/// the first regular seed reaching an undefined face establishes its orientation.
+/// Coincident-position and failed faces remain excluded. No CPU readback occurs.
 pub struct GpuTangentGroups {
     context: WgpuContext,
     base: Mesh,
@@ -71,10 +77,12 @@ pub struct GpuTangentGroups {
     initialize: ComputeKernel,
     propagate: ComputeKernel,
     finalize: ComputeKernel,
+    detect_inheritance: ComputeKernel,
+    inherit: ComputeKernel,
 }
 impl GpuTangentGroups {
     pub fn check_support(capabilities: &gpui_wgpu::Scene3dDeviceCapabilities) -> Result<()> {
-        super::support::validate(capabilities, 4, 1, 0)
+        super::support::validate(capabilities, 4, 1, 4)
     }
     pub fn new(
         context: WgpuContext,
@@ -91,7 +99,7 @@ impl GpuTangentGroups {
         let memory = GpuTangentGroupsMemory::plan(base.index_count(), limits)?;
         validate_storage(
             &context.device.limits(),
-            &[memory.output_bytes],
+            &[memory.output_bytes, memory.inheritance_flags_bytes],
             base.index_count(),
         )?;
         let device = &context.device;
@@ -99,6 +107,18 @@ impl GpuTangentGroups {
         let initialize = ComputeKernel::new(device, shader, "initialize", [64; 3])?;
         let propagate = ComputeKernel::new(device, shader, "propagate", [64; 3])?;
         let finalize = ComputeKernel::new(device, shader, "finalize", [64; 3])?;
+        let detect_inheritance = ComputeKernel::new(
+            device,
+            include_str!("tangent_group_flags.wgsl"),
+            "detect_inheritance",
+            [64; 3],
+        )?;
+        let inherit = ComputeKernel::new(
+            device,
+            include_str!("tangent_group_inherit.wgsl"),
+            "inherit",
+            [64; 3],
+        )?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let params = buffer(
             device,
@@ -118,6 +138,8 @@ impl GpuTangentGroups {
             initialize,
             propagate,
             finalize,
+            detect_inheritance,
+            inherit,
         })
     }
     pub fn memory(&self) -> GpuTangentGroupsMemory {
@@ -125,8 +147,9 @@ impl GpuTangentGroups {
     }
 
     /// Returns immutable corner groups paired with the exact adjacency snapshot.
-    /// A group's representative is its minimum original corner, not a compact index
-    /// or a stable application identifier. CPU geometry and queries remain unchanged.
+    /// A group's representative is its first regular seed in original corner order,
+    /// not a compact index or stable application identifier. CPU queries are unchanged.
+    /// Inheritance traversal is serial O(corners) GPU work after parallel detection.
     pub fn evaluate(
         &self,
         adjacency: &GpuTangentAdjacencyOutput,
@@ -160,6 +183,12 @@ impl GpuTangentGroups {
         };
         let mut a = allocate("gpui_3d.groups.a");
         let mut b = allocate("gpui_3d.groups.b");
+        let flags = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gpui_3d.groups.inheritance_flags"),
+            size: self.memory.inheritance_flags_bytes,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("gpui_3d.groups"),
         });
@@ -181,6 +210,18 @@ impl GpuTangentGroups {
             );
             std::mem::swap(&mut a, &mut b);
         }
+        self.detect_inheritance.encode(
+            device,
+            &mut encoder,
+            corners,
+            [edges, edges, weld, &flags, &self.params],
+        );
+        self.inherit.encode(
+            device,
+            &mut encoder,
+            1,
+            [&flags, edges, weld, &a, &self.params],
+        );
         self.finalize.encode(
             device,
             &mut encoder,
@@ -198,7 +239,7 @@ impl GpuTangentGroups {
     }
 }
 
-/// Immutable regular-corner groups, retaining their adjacency and deformation inputs.
+/// Immutable corner groups, retaining their adjacency and deformation inputs.
 #[derive(Clone)]
 pub struct GpuTangentGroupsOutput {
     adjacency: GpuTangentAdjacencyOutput,

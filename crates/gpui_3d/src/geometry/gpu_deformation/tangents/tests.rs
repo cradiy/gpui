@@ -118,10 +118,19 @@ fn admission_includes_repair_output_and_shader_matches_host_layout() {
         front::wgsl,
         valid::{Capabilities, ValidationFlags, Validator},
     };
-    let module = wgsl::parse_str(include_str!("../tangents.wgsl")).unwrap();
-    Validator::new(ValidationFlags::all(), Capabilities::empty())
+    let module = wgsl::parse_str(SHADER).unwrap();
+    assert!(
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .is_err()
+    );
+    let info = Validator::new(ValidationFlags::all(), Capabilities::FLOAT64)
         .validate(&module)
         .unwrap();
+    #[cfg(target_os = "linux")]
+    wgpu::naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
+    #[cfg(not(target_os = "linux"))]
+    let _ = info;
     for (_, variable) in module.global_variables.iter() {
         let binding = variable.binding.as_ref().unwrap();
         assert_eq!(binding.group, 0);

@@ -12,7 +12,8 @@ publication stages. Construct it once for an unshared mesh and reuse it for
 subsequent deformation snapshots from the same device and base mesh allocation.
 It preserves input normals; run any required normal reconstruction beforehand.
 The combined pipeline requires device-enabled `SHADER_F64` for
-[normalized welding keys](tangent_weld.md#matching-and-records).
+[normalized welding keys](tangent_weld.md#matching-and-records) and tangent
+publication.
 
 ```rust,no_run
 # use gpui_3d::{GpuDeformationLimits, GpuDeformationOutput, GpuTangentGeneration, TangentGenerationMode};
@@ -94,9 +95,11 @@ queries still describe initial geometry until explicitly updated.
 
 ## Policies
 
-Every usable corner tangent is normalized and projected against its current
-vertex normal. A projected length at or below one millionth of the incoming
-direction's length is undefined. UV orientation determines handedness.
+Every usable corner tangent is projected against its current vertex normal in
+`f64`, then normalized and rounded to `f32`. A projected length at or below one
+millionth of the original incoming direction's length is undefined. UV orientation
+determines handedness. Normalization and projection decode the original `f32` bits,
+including subnormals; output components use ties-to-even rounding.
 
 | Mode | Behavior |
 | --- | --- |
@@ -105,6 +108,8 @@ direction's length is undefined. UV orientation determines handedness.
 | `Repair` | Replaces unresolved frames with a projected triangle derivative when usable, otherwise a normal-orthogonal basis. |
 
 Repair chooses the least-aligned normal axis, breaking ties by X, then Y, then Z.
+Triangle-derivative repair computes position and UV differences in `f64`, normalizes
+the derivative and rounds it to `f32` before projection against the vertex normal.
 Repaired signs use the first usable frame in triangle-corner order; without one,
 they use the UV determinant sign, or positive handedness for a zero determinant.
 Existing usable signs are not changed. Incompatible signs within a triangle reject
@@ -123,7 +128,8 @@ squared lengths must be positive normal `f32` values. Zero vectors are allowed
 only on geometrically degenerate or zero-UV faces. Regular faces also require
 finite derivative magnitudes. Underflow, overflow, and nonzero subnormal squared
 lengths are rejected in every mode before repair. Dynamic geometric degeneracy
-uses scaled `f32` cross products; CPU geometry classification uses wider arithmetic.
+uses `f64` position differences and cross products, independently of the `f32`
+numeric-range checks.
 
 `GpuTangentsOutput::repair_buffer()` is a read-only storage/copy-source buffer
 containing one `u32` per original source vertex:
@@ -148,12 +154,13 @@ uniform. Output admission covers `64 * V` vertex bytes plus `4 * V` repair bytes
 CPU mesh generation, retained inputs, pipelines, and driver overhead are excluded.
 Callers separately bound retained outputs and concurrent evaluations.
 
-Construction requires five storage bindings, one uniform binding, and
-64-invocation compute workgroups. Each invocation owns one triangle; the fixed
-corner mapping makes its output vertices disjoint. Evaluation uses one linear
-compute pass and returns independent buffers that may outlive the source.
+Construction requires device-enabled `SHADER_F64`, five storage bindings, one
+uniform binding, and 64-invocation compute workgroups. Each invocation owns one
+triangle; the fixed corner mapping makes its output vertices disjoint. Evaluation
+uses one linear compute pass and returns independent buffers that may outlive the source.
 Rebuild compute sources after replacing the device.
 
-The GPU pipeline uses `f32` arithmetic and its documented welding and inheritance
-rules. CPU MikkTSpace equivalence is not guaranteed. Imported primitives requiring
-MikkTSpace regeneration remain rejected by the glTF GPU adapter.
+Derivative and frame accumulation stages use `f32` arithmetic. The pipeline follows
+its documented welding and inheritance rules; CPU MikkTSpace equivalence is not
+guaranteed. Imported primitives requiring MikkTSpace regeneration remain rejected
+by the glTF GPU adapter.

@@ -19,6 +19,71 @@ fn scaled_triangle(position_scale: f32, uv_scale: f32) -> Mesh {
     )
 }
 
+fn thin_triangle() -> Mesh {
+    let mut vertices = scaled_triangle(1., 1.).vertices().to_vec();
+    vertices[1].position = [1. + f32::EPSILON, 1., 0.];
+    vertices[2].position = [1. + 2. * f32::EPSILON, 1. + f32::EPSILON, 0.];
+    Mesh::new(vertices, vec![0, 1, 2])
+}
+
+#[test]
+fn cpu_thin_triangle_retains_nonzero_area_and_usable_frames() {
+    let base = thin_triangle();
+    let x = f64::from(1. + f32::EPSILON);
+    let length = x.hypot(1.);
+    let expected = [(x / length) as f32, (1. / length) as f32, 0., 1.];
+    for mode in [
+        TangentGenerationMode::Strict,
+        TangentGenerationMode::Inherit,
+        TangentGenerationMode::Repair,
+    ] {
+        let generated = base.generate_tangents_with_mode(mode).unwrap();
+        assert!(generated.repairs().is_empty());
+        assert_eq!(generated.mesh().indices(), base.indices());
+        for (generated, original) in generated.mesh().vertices().iter().zip(base.vertices()) {
+            assert_eq!(generated.position, original.position);
+        }
+        for tangent in generated.mesh().tangents().unwrap() {
+            for (actual, expected) in tangent.iter().zip(expected) {
+                assert!((actual - expected).abs() < 1e-7);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU with SHADER_F64"]
+fn gpu_thin_triangle_retains_area_classification_during_publication() -> Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let limits = GpuDeformationLimits::default();
+    let base = scaled_triangle(1., 1.);
+    let changed = thin_triangle();
+    let records = super::super::super::pack_mesh(&changed);
+    let input = GpuDeformationOutput {
+        context: context.clone(),
+        base: base.clone(),
+        buffer: buffer(
+            &context.device,
+            "thin tangent triangle",
+            bytemuck::cast_slice(&records),
+            wgpu::BufferUsages::STORAGE,
+        ),
+    };
+    let frames = frames(&input, 0)?;
+    for mode in [
+        TangentGenerationMode::Strict,
+        TangentGenerationMode::Inherit,
+        TangentGenerationMode::Repair,
+    ] {
+        let source = GpuTangents::new(context.clone(), base.clone(), 0, mode, limits)?;
+        let output = source.evaluate(&frames)?;
+        assert_eq!(repair_tags(&output)?, [0; 3]);
+        let (_, expected) = prepare(&changed, 0, mode)?;
+        compare(&output.deformation().readback()?, &expected);
+    }
+    Ok(())
+}
+
 #[test]
 fn cpu_repair_does_not_override_tangent_numeric_admission() {
     for (position, uv) in [

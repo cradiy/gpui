@@ -10,6 +10,11 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
+const SHADER: &str = concat!(
+    include_str!("tangent_precision.wgsl"),
+    include_str!("tangent_weld.wgsl")
+);
+
 /// A 64-byte record in original triangle-corner order. Matching does not change
 /// mesh topology or combine orientation groups.
 #[repr(C)]
@@ -128,7 +133,7 @@ impl GpuTangentWeld {
         )?;
         let uv = super::tangent_derivatives::coordinates(&base, uv_set)?;
         let device = &context.device;
-        let shader = include_str!("tangent_weld.wgsl");
+        let shader = SHADER;
         let initialize = ComputeKernel::new(device, shader, "initialize", [64, 8, 4])?;
         let sort = ComputeKernel::new(device, shader, "sort_pairs", [64, 8, 4])?;
         let resolve = ComputeKernel::new(device, shader, "resolve", [64, 8, 4])?;

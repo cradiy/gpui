@@ -10,6 +10,11 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
+const SHADER: &str = concat!(
+    include_str!("tangent_precision.wgsl"),
+    include_str!("tangents.wgsl")
+);
+
 /// Payload admission for tangent publication. CPU mesh preparation, input snapshots,
 /// pipeline storage and driver overhead are excluded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +63,7 @@ struct Topology {
 /// Construction generates initial CPU tangents using the selected policy and
 /// retains a render mesh with their coordinate metadata. Evaluation preserves
 /// source vertex order and publishes that mesh identity without CPU vertex readback.
+/// Requires device-enabled `SHADER_F64` for projection and geometric classification.
 pub struct GpuTangents {
     context: WgpuContext,
     base: Mesh,
@@ -71,6 +77,12 @@ pub struct GpuTangents {
 }
 impl GpuTangents {
     pub fn check_support(capabilities: &gpui_wgpu::Scene3dDeviceCapabilities) -> Result<()> {
+        ensure!(
+            capabilities
+                .enabled_features
+                .contains(wgpu::Features::SHADER_F64),
+            "GPU tangent publication requires enabled SHADER_F64"
+        );
         super::support::validate(capabilities, 5, 1, 0)
     }
     pub fn new(
@@ -126,7 +138,7 @@ impl GpuTangents {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_3d.tangents.shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("tangents.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("gpui_3d.tangents"),

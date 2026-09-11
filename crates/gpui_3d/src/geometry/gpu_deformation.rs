@@ -9,12 +9,16 @@ mod flat_normals;
 mod readback;
 pub(super) mod support;
 mod tangent_derivatives;
+mod tangent_weld;
 pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
 pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
 pub use readback::GpuDeformationReadback;
 pub use tangent_derivatives::{
     GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
     GpuTangentDerivativesMemory,
+};
+pub use tangent_weld::{
+    GpuTangentWeld, GpuTangentWeldMemory, GpuTangentWeldOutput, GpuTangentWeldRecord,
 };
 
 /// 64-byte storage/vertex-buffer record. XYZ occupies each attribute's first three lanes.
@@ -294,9 +298,31 @@ impl ComputeKernel {
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let entries: Vec<_> = inputs
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("gpui_3d.deformation"),
+        });
+        self.encode(
+            device,
+            &mut encoder,
+            records as u32,
+            [inputs[0], inputs[1], inputs[2], &output, params],
+        );
+        context.queue.submit(Some(encoder.finish()));
+        if let Some(error) = gpui::block_on(scope.pop()) {
+            anyhow::bail!("GPU deformation submission: {error}");
+        }
+        Ok(output)
+    }
+
+    fn encode(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        records: u32,
+        buffers: [&wgpu::Buffer; 5],
+    ) {
+        let entries: Vec<_> = buffers
             .into_iter()
-            .chain([&output, params])
             .enumerate()
             .map(|(binding, buffer)| wgpu::BindGroupEntry {
                 binding: binding as u32,
@@ -308,9 +334,6 @@ impl ComputeKernel {
             layout: &self.layout,
             entries: &entries,
         });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("gpui_3d.deformation"),
-        });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("gpui_3d.deformation"),
@@ -318,13 +341,8 @@ impl ComputeKernel {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups((records as u32).div_ceil(64), 1, 1);
+            pass.dispatch_workgroups(records.div_ceil(64), 1, 1);
         }
-        context.queue.submit(Some(encoder.finish()));
-        if let Some(error) = gpui::block_on(scope.pop()) {
-            anyhow::bail!("GPU deformation submission: {error}");
-        }
-        Ok(output)
     }
 }
 pub(super) fn buffer(

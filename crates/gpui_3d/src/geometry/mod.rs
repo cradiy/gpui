@@ -24,7 +24,8 @@ pub use gpu_deformation::{
     GpuDeformationBounds, GpuDeformationBoundsReadback, GpuDeformationLimits, GpuDeformationOutput,
     GpuDeformationReadback, GpuDeformationVertex, GpuFlatNormals, GpuFlatNormalsMemory,
     GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
-    GpuTangentDerivativesMemory,
+    GpuTangentDerivativesMemory, GpuTangentWeld, GpuTangentWeldMemory, GpuTangentWeldOutput,
+    GpuTangentWeldRecord,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpu_morph::{GpuMorph, GpuMorphMemory};

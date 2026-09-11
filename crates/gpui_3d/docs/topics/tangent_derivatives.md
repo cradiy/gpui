@@ -44,6 +44,10 @@ orientation groups, corner-angle weighting, normal projection, and degenerate-fr
 inheritance are outside this API. Do not bind its buffer as a renderable mesh or
 substitute its directions for MikkTSpace tangents.
 
+Use [GPU tangent welding](tangent_weld.md) to derive exact position/normal/UV
+corner matches from the paired input snapshot. Orientation groups and final
+tangent generation remain separate operations.
+
 `input_buffer()` retains the exact immutable vertex snapshot used for evaluation.
 `base_mesh()` supplies topology and attribute identity; `uv_set()` identifies the
 coordinate selection. The result remains valid after later evaluations or source

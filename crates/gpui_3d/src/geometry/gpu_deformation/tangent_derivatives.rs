@@ -178,6 +178,7 @@ impl GpuTangentDerivatives {
 
 /// Immutable intermediate records. Retains the input vertex buffer and device; remains
 /// valid after later evaluations or source destruction. Not a renderable vertex buffer.
+#[derive(Clone)]
 pub struct GpuTangentDerivativeOutput {
     context: WgpuContext,
     base: Mesh,
@@ -211,7 +212,7 @@ impl GpuTangentDerivativeOutput {
     }
 }
 
-fn coordinates(mesh: &Mesh, set: u32) -> Result<Vec<[f32; 2]>> {
+pub(super) fn coordinates(mesh: &Mesh, set: u32) -> Result<Vec<[f32; 2]>> {
     (0..mesh.vertex_count())
         .map(|index| {
             mesh.uv_at(set, index)

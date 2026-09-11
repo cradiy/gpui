@@ -2,6 +2,40 @@ use super::*;
 use gpui::{point, px, size};
 
 #[test]
+fn logical_selection_clips_before_applying_the_retained_device_scale() {
+    let layout = PickLayout {
+        bounds: Bounds::new(point(px(20.5), px(-10.)), size(px(80.), px(50.))),
+        scale: 1.25,
+        surface: size(px(500.), px(300.)),
+    };
+    let bounds = |x, y, w, h| Bounds::new(point(px(x), px(y)), size(px(w), px(h)));
+    assert_eq!(
+        layout.surface_region(bounds(0., 0., 60.5, 100.)),
+        Some([25.625, 0., 50., 50.])
+    );
+    assert_eq!(
+        layout.surface_region(bounds(30., -20., 10., 15.)),
+        Some([37.5, -12.5, 12.5, 6.25])
+    );
+    for selection in [
+        bounds(100.5, 0., 10., 10.),
+        bounds(30., 40., 10., 10.),
+        bounds(30., 0., 0., 10.),
+        bounds(30., 0., -10., 10.),
+        bounds(f32::NAN, 0., 10., 10.),
+        bounds(30., 0., f32::INFINITY, 10.),
+    ] {
+        assert_eq!(layout.surface_region(selection), None);
+    }
+    for scale in [0., -1., f32::NAN, f32::INFINITY] {
+        assert_eq!(
+            PickLayout { scale, ..layout }.surface_region(layout.bounds),
+            None
+        );
+    }
+}
+
+#[test]
 fn capture_errors_follow_source_frames() {
     let scene = crate::Scene::new();
     let prepared = scene

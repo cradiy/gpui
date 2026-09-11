@@ -17,6 +17,42 @@ pub(super) struct PickLayout {
     pub surface: Size<Pixels>,
 }
 
+impl PickLayout {
+    fn surface_region(&self, selection: Bounds<Pixels>) -> Option<[f32; 4]> {
+        let rect = |bounds: Bounds<Pixels>| {
+            [
+                f32::from(bounds.origin.x),
+                f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+            ]
+        };
+        let viewport = rect(self.bounds);
+        let selection = rect(selection);
+        if !self.scale.is_finite()
+            || self.scale <= 0.
+            || viewport.iter().chain(&selection).any(|v| !v.is_finite())
+        {
+            return None;
+        }
+        let mut surface = [0.; 4];
+        for axis in 0..2 {
+            if viewport[axis + 2] <= 0. || selection[axis + 2] <= 0. {
+                return None;
+            }
+            let start = f64::from(selection[axis]).max(f64::from(viewport[axis]));
+            let end = (f64::from(selection[axis]) + f64::from(selection[axis + 2]))
+                .min(f64::from(viewport[axis]) + f64::from(viewport[axis + 2]));
+            if end <= start {
+                return None;
+            }
+            surface[axis] = (start * f64::from(self.scale)) as f32;
+            surface[axis + 2] = ((end - start) * f64::from(self.scale)) as f32;
+        }
+        surface.iter().all(|v| v.is_finite()).then_some(surface)
+    }
+}
+
 struct Snapshot {
     frame: Arc<Scene3dFrame>,
     objects: Arc<[RenderObject]>,
@@ -179,6 +215,16 @@ impl ViewportPickFrame {
             f32::from(position.x) * self.snapshot.layout.scale,
             f32::from(position.y) * self.snapshot.layout.scale,
         ])
+    }
+
+    /// Maps a logical input rectangle to an outward-rounded capture-pixel region.
+    /// Clips to this frame's viewport and render surface. Empty, nonfinite or fully
+    /// clipped rectangles return None. Border pixels may only partially intersect
+    /// the rectangle; outer effects and UI hit eligibility remain caller-owned.
+    /// Does not allocate resources or start a readback.
+    pub fn region_at(&self, bounds: Bounds<Pixels>) -> Option<crate::Scene3dReadbackRegion> {
+        self.output
+            .region_at_surface(self.snapshot.layout.surface_region(bounds)?)
     }
 
     /// Retains the selected frame even if subsequent viewport renders replace it.

@@ -51,6 +51,19 @@ impl WgpuScene3dPickFrame {
         )
     }
 
+    /// Maps a source-surface rectangle [x, y, width, height] to capture pixels.
+    /// Intersects the viewport and output extent, rounding outward to include
+    /// partially intersected pixels. Empty, nonfinite and fully clipped regions
+    /// return None. This starts no GPU work and does not apply outer compositing.
+    pub fn region_at_surface(&self, bounds: [f32; 4]) -> Option<super::Scene3dReadbackRegion> {
+        surface_region(
+            self.source_rect,
+            self.rect,
+            self.output.config().size,
+            bounds,
+        )
+    }
+
     pub(crate) fn allocate(
         context: WgpuContext,
         capabilities: Scene3dCapabilities,
@@ -150,9 +163,87 @@ fn surface_pixel(
     Some(pixel)
 }
 
+fn surface_region(
+    source: [f32; 4],
+    rect: [f32; 4],
+    size: [u32; 2],
+    bounds: [f32; 4],
+) -> Option<super::Scene3dReadbackRegion> {
+    if source
+        .iter()
+        .chain(&rect)
+        .chain(&bounds)
+        .any(|v| !v.is_finite())
+    {
+        return None;
+    }
+    let mut region = super::Scene3dReadbackRegion {
+        origin: [0; 2],
+        size: [0; 2],
+    };
+    for axis in 0..2 {
+        if source[axis + 2] <= 0. || rect[axis + 2] <= 0. || bounds[axis + 2] <= 0. {
+            return None;
+        }
+        let source_start = f64::from(source[axis]);
+        let source_length = f64::from(source[axis + 2]);
+        let start = f64::from(bounds[axis]).max(source_start);
+        let end = (f64::from(bounds[axis]) + f64::from(bounds[axis + 2]))
+            .min(source_start + source_length);
+        if end <= start {
+            return None;
+        }
+        let raster = |value: f64| {
+            (f64::from(rect[axis])
+                + (value - source_start) * f64::from(rect[axis + 2]) / source_length)
+                .clamp(0., f64::from(size[axis]))
+        };
+        let start = raster(start);
+        let end = raster(end);
+        if end <= start {
+            return None;
+        }
+        region.origin[axis] = start.floor() as u32;
+        region.size[axis] = end.ceil() as u32 - region.origin[axis];
+    }
+    Some(region)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rectangle_mapping_clips_and_encloses_partial_raster_pixels() {
+        let source = [-10., 20., 100., 80.];
+        let rect = [-5., 0., 50., 40.];
+        let size = [45, 30];
+        let mapped = surface_region(source, rect, size, [0., 30., 21., 21.]).unwrap();
+        assert_eq!(mapped.origin, [0, 5]);
+        assert_eq!(mapped.size, [11, 11]);
+        mapped.validate(size).unwrap();
+        for point in [[0., 30.], [20.99, 30.], [0., 50.99], [20.99, 50.99]] {
+            let pixel = surface_pixel(source, rect, size, point).unwrap();
+            for axis in 0..2 {
+                assert!(pixel[axis] >= mapped.origin[axis]);
+                assert!(pixel[axis] < mapped.origin[axis] + mapped.size[axis]);
+            }
+        }
+        let full = surface_region(source, rect, size, [-100., -100., 500., 500.]).unwrap();
+        assert_eq!(full.origin, [0; 2]);
+        assert_eq!(full.size, size);
+        for bounds in [
+            [90., 30., 10., 10.],
+            [0., 80., 20., 20.],
+            [-10., 30., 9., 10.],
+            [0., 30., 0., 10.],
+            [0., 30., 10., -1.],
+            [f32::NAN, 30., 10., 10.],
+            [0., 30., f32::INFINITY, 10.],
+        ] {
+            assert_eq!(surface_region(source, rect, size, bounds), None);
+        }
+    }
 
     #[test]
     fn physical_pointer_mapping_uses_snapped_bounds_and_raster_density() {

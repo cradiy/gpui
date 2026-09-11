@@ -56,6 +56,15 @@ pixels and retains the capture's camera, projection, object mapping, and frame I
 The rectangle uses capture-texture coordinates within `frame.size()`, not logical
 window coordinates. `frame.pixel_at(position)` converts a logical input position
 without reading the GPU; out-of-bounds or clipped positions return `None`.
+
+`frame.region_at(bounds)` converts a logical input rectangle using the retained
+layout, device scale, snapped viewport bounds, and capture resolution. It clips
+to the viewport and render surface, then rounds outward to include partially
+intersected pixels. Empty, nonfinite, or fully clipped rectangles return `None`.
+Pass the result to the same frame's `readback_region()`; conversion performs no
+GPU work or allocation. Pixel coverage statistics include the complete returned
+pixels, including those only partly intersected by the logical rectangle.
+
 Only the ID and linear-depth channels are available. The
 returned `FrameReadback` shares the capture's pending-readback permit and supports
 the same [regional queries](readback.md#regions) as headless output. Use
@@ -112,6 +121,10 @@ the matching viewport bounds first; apply inverse outer effect mappings separate
 `pixel_at_surface([x, y])` accepts physical source-surface coordinates directly and
 accounts for snapped viewport bounds. `ViewportPickCapture` uses this path with
 the retained logical-to-physical scale.
+
+`region_at_surface([x, y, width, height])` maps a physical source-surface rectangle
+with viewport/output clipping and outward pixel rounding. It does not apply
+outer effects, overlay visibility, or UI hit eligibility.
 
 The output texture size includes surface clipping and actual raster density.
 `projection_rect()` gives the full viewport projection rectangle within those

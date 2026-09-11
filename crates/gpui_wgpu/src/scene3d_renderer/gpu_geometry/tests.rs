@@ -204,6 +204,25 @@ pub(super) fn read(context: &WgpuContext, buffer: &wgpu::Buffer) -> Vec<u32> {
 
 #[test]
 #[ignore = "requires a compute-capable GPU"]
+fn gpu_geometry_rejects_foreign_device_attributes_before_binding() {
+    let context = WgpuContext::new_headless().unwrap();
+    let geometry = WgpuScene3dGeometry::new(context, mesh(), [0; 5], None).unwrap();
+    let foreign = WgpuContext::new_headless().unwrap();
+    let buffer = foreign.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: geometry.base_mesh().vertices().len() as u64 * 64,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
+    let error = geometry.evaluate(&buffer).err().unwrap();
+    assert_eq!(
+        error.to_string(),
+        "GPU resource belongs to a different device"
+    );
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU"]
 fn source_rebinding_shares_kernels_and_topology_without_inheriting_stream_updates() {
     let context = WgpuContext::new_headless().unwrap();
     let mesh = mesh();
@@ -278,13 +297,11 @@ fn gpu_geometry_preserves_material_attributes_and_gates_invalid_draws() {
         })
         .collect();
     let evaluate = |records: &[[u32; 16]]| {
-        let buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(records),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+        let buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(records),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         geometry.evaluate(&buffer).unwrap()
     };
     let valid = evaluate(&attributes);

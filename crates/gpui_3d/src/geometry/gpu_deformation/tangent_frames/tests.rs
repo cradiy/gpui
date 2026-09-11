@@ -222,7 +222,7 @@ fn gpu_frames_weight_corners_preserve_subgroups_and_retain_deformed_inputs() -> 
                 .weld()
                 .derivatives()
                 .input_buffer(),
-            input.buffer()
+            input.buffer().raw()
         );
         retained.push((weight, output));
     }
@@ -242,12 +242,11 @@ fn gpu_frames_weight_corners_preserve_subgroups_and_retain_deformed_inputs() -> 
     let collapsed = GpuDeformationOutput {
         context: context.clone(),
         base: base.clone(),
-        buffer: buffer(
-            &context.device,
-            "collapsed frame input",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("collapsed frame input"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     let collapsed = read(&frames.evaluate(&grouped(&collapsed)?)?)?;
     assert_eq!(collapsed[3].identity, collapsed[0].identity);
@@ -263,12 +262,11 @@ fn gpu_frames_weight_corners_preserve_subgroups_and_retain_deformed_inputs() -> 
     let invalid = GpuDeformationOutput {
         context: context.clone(),
         base,
-        buffer: buffer(
-            &context.device,
-            "invalid frame input",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("invalid frame input"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     for record in read(&frames.evaluate(&grouped(&invalid)?)?)? {
         assert_eq!(record.status, [2, 0, 0, 0]);

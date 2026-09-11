@@ -54,12 +54,11 @@ fn gpu_derivative_area_distinguishes_thin_and_collinear_triangles() -> Result<()
             let input = GpuDeformationOutput {
                 context: context.clone(),
                 base: base.clone(),
-                buffer: buffer(
-                    &context.device,
-                    "triangle area input",
-                    bytemuck::cast_slice(&records),
-                    wgpu::BufferUsages::STORAGE,
-                ),
+                buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("triangle area input"),
+                    contents: bytemuck::cast_slice(&records),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }),
             };
             let result = read(&source.evaluate(&input)?)?[0];
             assert_eq!(result.status, [0; 4], "{scale}, {collinear}");

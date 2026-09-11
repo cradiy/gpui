@@ -260,7 +260,6 @@ mod tests {
             Scene3dGpuOutput, Scene3dOutputConfig, Scene3dPixels, WgpuScene3dGeometry,
             WgpuScene3dRenderer,
         };
-        use wgpu::util::DeviceExt as _;
         let context = WgpuContext::new_headless()?;
         let mut renderer = WgpuScene3dRenderer::new(context.clone())?;
         let first = object();
@@ -294,13 +293,11 @@ mod tests {
                     record
                 })
                 .collect();
-            let buffer = context
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(&attributes),
-                    usage: wgpu::BufferUsages::STORAGE,
-                });
+            let buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&attributes),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
             let geometry = Arc::new(template.evaluate(&buffer)?);
             draws.push(Scene3dGpuDraw {
                 output_id: index as u32 + 1,

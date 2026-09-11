@@ -453,7 +453,10 @@ fn gpu_weld_tracks_deformed_keys_seams_failures_and_retained_frames() -> Result<
     let uploaded = GpuDeformationOutput::upload(context.clone(), base.clone(), limits)?;
     let initial_faces = derivatives.evaluate(&uploaded)?;
     let initial = weld.evaluate(&initial_faces)?;
-    assert_eq!(initial.derivatives().input_buffer(), uploaded.buffer());
+    assert_eq!(
+        initial.derivatives().input_buffer(),
+        uploaded.buffer().raw()
+    );
     assert_eq!(initial.derivatives().buffer(), initial_faces.buffer());
     assert_eq!(
         read(&initial)?
@@ -500,12 +503,11 @@ fn gpu_weld_tracks_deformed_keys_seams_failures_and_retained_frames() -> Result<
     let invalid = GpuDeformationOutput {
         context: context.clone(),
         base: base.clone(),
-        buffer: buffer(
-            &context.device,
-            "weld failures",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("weld failures"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     let result = read(&weld.evaluate(&derivatives.evaluate(&invalid)?)?)?;
     for (corner, status) in [

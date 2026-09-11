@@ -197,7 +197,7 @@ fn gpu_derivatives_follow_morph_uv_orientation_and_report_degeneracy_and_failure
     let input = morph.evaluate(&[0.])?;
     let positive =
         GpuTangentDerivatives::new(context.clone(), base.clone(), 3, limits)?.evaluate(&input)?;
-    assert_eq!(positive.input_buffer(), input.buffer());
+    assert_eq!(positive.input_buffer(), input.buffer().raw());
     for record in read(&positive)? {
         assert_eq!(record.classification, [0, 0, 1, 0]);
         assert_eq!(record.status, [0; 4]);
@@ -226,12 +226,11 @@ fn gpu_derivatives_follow_morph_uv_orientation_and_report_degeneracy_and_failure
         let input = GpuDeformationOutput {
             context: context.clone(),
             base: base.clone(),
-            buffer: buffer(
-                &context.device,
-                "tangent derivative input",
-                bytemuck::cast_slice(&records),
-                wgpu::BufferUsages::STORAGE,
-            ),
+            buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("tangent derivative input"),
+                contents: bytemuck::cast_slice(&records),
+                usage: wgpu::BufferUsages::STORAGE,
+            }),
         };
         for record in read(&derivatives.evaluate(&input)?)? {
             assert_eq!(record.status, expected_status);

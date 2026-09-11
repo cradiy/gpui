@@ -137,8 +137,10 @@ fn external_buffers_share_processing_and_copy_snapshots_survive_producer_reuse()
     context.queue.submit([]);
     let adopted =
         GpuDeformationOutput::from_buffer(context.clone(), base.clone(), buffer.clone(), limits)?;
-    assert_eq!(adopted.buffer(), buffer.raw());
-    assert_ne!(copied.buffer(), buffer.raw());
+    assert_eq!(adopted.buffer().raw(), buffer.raw());
+    assert_ne!(copied.buffer().raw(), buffer.raw());
+    adopted.buffer().check_device(&context.device)?;
+    copied.buffer().check_device(&context.device)?;
     let old = copied.readback()?;
     let new = adopted.readback()?;
     assert_eq!(old.vertices()[1].position[2], 0.5);

@@ -288,13 +288,11 @@ fn gpu_attribute_versions_preserve_geometry_and_share_packing_resources() {
             record
         })
         .collect();
-    let buffer = context
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&attributes),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+    let buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&attributes),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
     let packed = next.evaluate(&buffer).unwrap();
     let external_packed = external.evaluate(&buffer).unwrap();
     for update in [

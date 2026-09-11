@@ -196,8 +196,8 @@ pub struct GpuTangentDerivativeOutput {
     context: WgpuContext,
     base: Mesh,
     uv_set: u32,
-    input: wgpu::Buffer,
-    buffer: wgpu::Buffer,
+    input: gpui_wgpu::WgpuResource<wgpu::Buffer>,
+    buffer: gpui_wgpu::WgpuResource<wgpu::Buffer>,
 }
 
 impl GpuTangentDerivativeOutput {

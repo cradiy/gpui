@@ -137,8 +137,10 @@ the compute dispatch.
 
 ## Outputs and CPU queries
 
-`GpuDeformationOutput::buffer()` exposes storage/vertex/copy-source data in source vertex
-order. Each 64-byte `GpuDeformationVertex` contains position, normal, tangent,
+`GpuDeformationOutput::buffer()` returns a `WgpuResource<wgpu::Buffer>` retaining
+the creating device. `raw()` borrows its WGPU handle. The buffer exposes
+storage/vertex/copy-source data in source vertex order.
+Each 64-byte `GpuDeformationVertex` contains position, normal, tangent,
 and status vectors at offsets 0, 16, 32, and 48. Attribute XYZ uses the first
 three lanes; tangent W is handedness. Indices, UV sets, and vertex colors remain
 in `base_mesh()` and are not duplicated in this buffer. External consumers must
@@ -239,6 +241,9 @@ and occlusion inputs. `output.render_geometry(&source)` combines those inputs
 with GPU positions, normals, and tangents, returning a `Scene3dGpuGeometry` without
 CPU readback. Reuse the source across outputs from the same base mesh allocation
 and device; mismatches are rejected.
+
+Direct `WgpuScene3dGeometry::evaluate` inputs must be device-owned resources created
+through `WgpuContext`. Device identity is checked before binding or submission.
 
 `output.rebind_render_source(&source, uv_sets, byte_limit)` creates a source for
 the output's base mesh on the same device, sharing the existing packing kernels.

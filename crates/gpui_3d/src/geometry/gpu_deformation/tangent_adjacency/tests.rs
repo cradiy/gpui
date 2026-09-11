@@ -245,7 +245,10 @@ fn gpu_adjacency_preserves_nonmanifold_rank_mirrors_degeneracy_and_input_frames(
     let corners = weld.evaluate(&derivatives.evaluate(&input)?)?;
     let initial = adjacency.evaluate(&corners)?;
     assert_eq!(initial.weld().buffer(), corners.buffer());
-    assert_eq!(initial.weld().derivatives().input_buffer(), input.buffer());
+    assert_eq!(
+        initial.weld().derivatives().input_buffer(),
+        input.buffer().raw()
+    );
     let mut delta = vec![[0.; 3]; base.vertex_count()];
     delta[3] = [0.25, 0., 0.];
     let morph = GpuMorph::new(
@@ -270,12 +273,11 @@ fn gpu_adjacency_preserves_nonmanifold_rank_mirrors_degeneracy_and_input_frames(
     let invalid = GpuDeformationOutput {
         context: context.clone(),
         base,
-        buffer: buffer(
-            &context.device,
-            "adjacency failures",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("adjacency failures"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     let invalid = read(&adjacency.evaluate(&weld.evaluate(&derivatives.evaluate(&invalid)?)?)?)?;
     for edge in &invalid[..3] {

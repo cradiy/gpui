@@ -332,12 +332,11 @@ fn gpu_publication_reports_repairs_without_clearing_input_failures() -> Result<(
     let input = |records: &[crate::GpuDeformationVertex]| GpuDeformationOutput {
         context: context.clone(),
         base: base.clone(),
-        buffer: buffer(
-            &context.device,
-            "tangent input",
-            bytemuck::cast_slice(records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("tangent input"),
+            contents: bytemuck::cast_slice(records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     let collapsed = frames(&input(&records), 2)?;
     assert!(
@@ -440,12 +439,11 @@ fn gpu_publication_rejects_conflicting_inherited_handedness() -> Result<()> {
     let input = GpuDeformationOutput {
         context: context.clone(),
         base,
-        buffer: buffer(
-            &context.device,
-            "mixed tangent orientation",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("mixed tangent orientation"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     let output = source.evaluate(&frames(&input, 0)?)?;
     assert_eq!(repair_tags(&output)?, [0; 9]);

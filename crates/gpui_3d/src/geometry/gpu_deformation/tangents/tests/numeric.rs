@@ -62,12 +62,11 @@ fn gpu_thin_triangle_retains_area_classification_during_publication() -> Result<
     let input = GpuDeformationOutput {
         context: context.clone(),
         base: base.clone(),
-        buffer: buffer(
-            &context.device,
-            "thin tangent triangle",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("thin tangent triangle"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     let frames = frames(&input, 0)?;
     for mode in [
@@ -141,12 +140,11 @@ fn gpu_tangent_publication_enforces_numeric_domain_in_every_mode() -> Result<()>
             let input = GpuDeformationOutput {
                 context: context.clone(),
                 base,
-                buffer: buffer(
-                    &context.device,
-                    "tangent numeric range",
-                    bytemuck::cast_slice(&records),
-                    wgpu::BufferUsages::STORAGE,
-                ),
+                buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("tangent numeric range"),
+                    contents: bytemuck::cast_slice(&records),
+                    usage: wgpu::BufferUsages::STORAGE,
+                }),
             };
             let output = publisher.evaluate(&frames(&input, 0)?)?;
             assert_eq!(repair_tags(&output)?, [0; 3]);

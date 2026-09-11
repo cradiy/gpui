@@ -134,7 +134,6 @@ fn assert_pixel(pixels: &Scene3dPixels, x: usize, covered: bool, blue: bool) {
 fn scene3d_custom_vertex_streams_preserve_versions_across_mesh_and_gpu_draws() -> Result<()> {
     use crate::Scene3dVertexStreamValue::{Bytes, CopiedBuffer, SharedBuffer};
     use crate::{Scene3dVertexAttribute, WgpuScene3dGeometry};
-    use wgpu::util::DeviceExt as _;
     let context = WgpuContext::new_headless()?;
     let program = Scene3dMaterialProgram::compile_with_attributes(
         r#"
@@ -216,13 +215,11 @@ fn scene3d_custom_vertex_streams_preserve_versions_across_mesh_and_gpu_draws() -
         record[4..7].copy_from_slice(&vertex.normal);
         records.push(record);
     }
-    let attributes = context
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&records),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+    let attributes = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&records),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
     let geometry = Arc::new(
         WgpuScene3dGeometry::new(context.clone(), object.mesh.clone(), [0; 5], None)?
             .evaluate(&attributes)?,

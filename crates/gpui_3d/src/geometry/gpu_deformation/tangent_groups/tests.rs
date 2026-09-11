@@ -319,7 +319,7 @@ fn gpu_groups_cover_fan_cycles_mirror_boundaries_degeneracy_and_retained_deforma
     assert_eq!(initial.adjacency().buffer(), edges.buffer());
     assert_eq!(
         initial.adjacency().weld().derivatives().input_buffer(),
-        input.buffer()
+        input.buffer().raw()
     );
     let mut delta = vec![[0.; 3]; base.vertex_count()];
     delta[1] = [-1., 0., 0.];
@@ -347,12 +347,11 @@ fn gpu_groups_cover_fan_cycles_mirror_boundaries_degeneracy_and_retained_deforma
     let invalid = GpuDeformationOutput {
         context: context.clone(),
         base,
-        buffer: buffer(
-            &context.device,
-            "group failures",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("group failures"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     let invalid = read(&groups.evaluate(&edges_for(&invalid)?)?)?;
     for record in &invalid[..6] {

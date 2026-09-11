@@ -141,12 +141,11 @@ fn gpu_dynamic_projection_underflow_requires_repair_mode() -> Result<()> {
     let input = GpuDeformationOutput {
         context: context.clone(),
         base: base.clone(),
-        buffer: buffer(
-            &context.device,
-            "projected tangent range",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE,
-        ),
+        buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("projected tangent range"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        }),
     };
     let frames = frames(&input, 0)?;
     for mode in [

@@ -192,12 +192,11 @@ fn gpu_flat_normals_compose_morph_and_skin_and_preserve_retained_outputs() -> Re
         let invalid = GpuDeformationOutput {
             context: context.clone(),
             base: base.clone(),
-            buffer: buffer(
-                &context.device,
-                "normal failures",
-                bytemuck::cast_slice(&records),
-                wgpu::BufferUsages::STORAGE,
-            ),
+            buffer: context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("normal failures"),
+                contents: bytemuck::cast_slice(&records),
+                usage: wgpu::BufferUsages::STORAGE,
+            }),
         };
         let error = normals
             .evaluate(&invalid)?

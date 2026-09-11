@@ -149,13 +149,11 @@ fn gpu_bounds_match_retained_morph_outputs_and_reject_invalid_vertices() {
         } else {
             record.position[0] = f32::NAN;
         }
-        let buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("invalid bounds input"),
-                contents: bytemuck::cast_slice(&records),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+        let buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("invalid bounds input"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         let output = GpuDeformationOutput {
             context: context.clone(),
             base: mesh.clone(),

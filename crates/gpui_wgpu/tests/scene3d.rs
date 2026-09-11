@@ -147,7 +147,7 @@ fn viewport_pick_outputs_retain_frame_identity_across_resize_and_capture_errors(
 #[test]
 #[ignore = "requires a compute-capable GPU"]
 fn gpu_viewports_keep_frame_local_geometry_and_invalidate_replaced_outputs() -> anyhow::Result<()> {
-    use gpui_wgpu::wgpu::{self, util::DeviceExt as _};
+    use gpui_wgpu::wgpu;
     use gpui_wgpu::{WgpuContext, WgpuScene3dGeometry};
     let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(64)))?;
     let context = renderer
@@ -182,13 +182,11 @@ fn gpu_viewports_keep_frame_local_geometry_and_invalidate_replaced_outputs() -> 
                 ]
             })
             .collect();
-        let buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&records),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+        let buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         let mut gpu = base.clone();
         gpu.gpu_geometry = Some(gpui::MeshGpuGeometry3d::new(Arc::new(
             source.evaluate(&buffer)?,

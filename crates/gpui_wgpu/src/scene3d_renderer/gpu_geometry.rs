@@ -219,11 +219,16 @@ impl WgpuScene3dGeometry {
     }
 
     /// Consumes 64-byte records: position/normal/tangent `vec4<f32>`, then status `vec4<u32>`.
-    /// The buffer must belong to this device and remain immutable. Nonzero status,
-    /// nonfinite attributes, or inconsistent triangle tangent signs disable the entire draw.
+    /// The creating device is checked before backend access. The buffer must remain
+    /// immutable. Nonzero status, nonfinite attributes, or inconsistent triangle
+    /// tangent signs disable the entire draw.
     /// No CPU geometry or bounds are updated and no GPU readback is performed.
-    pub fn evaluate(&self, attributes: &wgpu::Buffer) -> Result<Scene3dGpuGeometry> {
+    pub fn evaluate(
+        &self,
+        attributes: &crate::WgpuResource<wgpu::Buffer>,
+    ) -> Result<Scene3dGpuGeometry> {
         ensure!(!self.context.device_lost(), "GPU geometry device is lost");
+        attributes.check_device(&self.context.device)?;
         ensure!(
             attributes.size() == self.mesh.vertices().len() as u64 * 64,
             "GPU geometry attribute count mismatch"

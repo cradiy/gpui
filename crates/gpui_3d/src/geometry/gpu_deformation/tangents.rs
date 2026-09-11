@@ -211,7 +211,7 @@ impl GpuTangents {
         let device = &self.context.device;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let allocate = |size, label, usage| {
-            device.create_buffer(&wgpu::BufferDescriptor {
+            self.context.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | usage,
@@ -271,7 +271,7 @@ impl GpuTangents {
                 base: self.output_mesh.clone(),
                 buffer: output,
             },
-            repairs,
+            repairs: repairs.raw().clone(),
         })
     }
 }

@@ -32,7 +32,7 @@ impl GpuDeformationOutput {
         Ok(Self {
             context,
             base,
-            buffer: buffer.raw().clone(),
+            buffer,
         })
     }
 
@@ -59,7 +59,7 @@ impl GpuDeformationOutput {
         )?;
         let device = &context.device;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let buffer = context.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gpui_3d.deformation.snapshot"),
             size: bytes,
             usage: wgpu::BufferUsages::STORAGE

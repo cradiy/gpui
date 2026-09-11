@@ -78,7 +78,7 @@ impl Default for GpuDeformationLimits {
 pub struct GpuDeformationOutput {
     pub(super) context: WgpuContext,
     pub(super) base: Mesh,
-    pub(super) buffer: wgpu::Buffer,
+    pub(super) buffer: gpui_wgpu::WgpuResource<wgpu::Buffer>,
 }
 impl GpuDeformationOutput {
     /// Device and queue shared by producers and downstream consumers.
@@ -149,12 +149,13 @@ impl GpuDeformationOutput {
         let scope = context
             .device
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        let buffer = buffer(
-            &context.device,
-            "gpui_3d.deformation.upload",
-            bytemuck::cast_slice(&records),
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
-        );
+        let buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("gpui_3d.deformation.upload"),
+            contents: bytemuck::cast_slice(&records),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_SRC,
+        });
         if let Some(error) = gpui::block_on(scope.pop()) {
             anyhow::bail!("GPU deformation upload: {error}");
         }
@@ -167,7 +168,8 @@ impl GpuDeformationOutput {
 
     /// Read-only by contract; records use `GpuDeformationVertex` layout and source vertex order.
     /// External consumers must inspect status before using results. No indices/UVs are stored.
-    pub fn buffer(&self) -> &wgpu::Buffer {
+    /// The resource retains its creating device; `raw()` borrows the WGPU handle.
+    pub fn buffer(&self) -> &gpui_wgpu::WgpuResource<wgpu::Buffer> {
         &self.buffer
     }
     pub fn base_mesh(&self) -> &Mesh {
@@ -330,11 +332,11 @@ impl ComputeKernel {
         records: usize,
         inputs: [&wgpu::Buffer; 3],
         params: &wgpu::Buffer,
-    ) -> Result<wgpu::Buffer> {
+    ) -> Result<gpui_wgpu::WgpuResource<wgpu::Buffer>> {
         ensure!(!context.device_lost(), "GPU deformation device is lost");
         let device = &context.device;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let output = device.create_buffer(&wgpu::BufferDescriptor {
+        let output = context.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gpui_3d.deformation.output"),
             size: records as u64 * 64,
             usage: wgpu::BufferUsages::STORAGE

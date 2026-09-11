@@ -40,8 +40,10 @@ fn poll(pending: &mut FramePickReadback) -> anyhow::Result<()> {
 `try_read()` returns `None` while pending. A completed background query returns
 `Some(FramePick { hit: None, .. })`. A surface result contains the original
 `RenderObject`, camera-forward `linear_depth`, and pixel-center `world_position`.
-The result also retains the full output `size`, queried `pixel`, and source
-camera through `camera()`.
+The result also retains the full output `size`, queried `pixel`, source camera
+through `camera()`, and `projection_rect()`. Headless frames use the full output
+rectangle; viewport captures preserve the full projected extent within a clipped
+texture.
 
 Unknown nonzero IDs, malformed samples, inconsistent background ID/depth,
 nonfinite or invalid surface depths, and unrepresentable world positions are
@@ -80,6 +82,7 @@ CPU `PickBehavior` and query filters do not change rendered IDs.
 Results identify objects and world positions, not triangle indices, barycentric
 coordinates, or surface UVs. They do not route captured-UI events or update CPU
 BVHs. GPU overrides disable `Viewport3d` CPU hit handling.
-Viewport event scheduling, selection state, and synchronization with the displayed
-frame remain caller-owned. Use final mesh readback for CPU queries that require
-deformed topology.
+Use [viewport capture](viewport_picking.md) to pair submitted viewport outputs
+with logical pointer queries, retained identities, and freshness checks. Event
+scheduling and selection state remain caller-owned. Use final mesh readback for
+CPU queries that require deformed topology.

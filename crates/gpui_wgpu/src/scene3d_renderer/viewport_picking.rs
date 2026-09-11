@@ -15,6 +15,7 @@ pub struct WgpuScene3dPickFrame {
     output: Scene3dGpuOutput,
     source: Weak<Scene3dFrame>,
     rect: [f32; 4],
+    source_rect: [f32; 4],
 }
 
 impl WgpuScene3dPickFrame {
@@ -39,12 +40,24 @@ impl WgpuScene3dPickFrame {
         pixel_at(self.rect, self.output.config().size, uv)
     }
 
+    /// Maps physical coordinates on the source render surface, using its snapped
+    /// viewport bounds. Nested UI captures use their own render-surface coordinates.
+    pub fn pixel_at_surface(&self, position: [f32; 2]) -> Option<[u32; 2]> {
+        surface_pixel(
+            self.source_rect,
+            self.rect,
+            self.output.config().size,
+            position,
+        )
+    }
+
     pub(crate) fn allocate(
         context: WgpuContext,
         capabilities: Scene3dCapabilities,
         frame: &Arc<Scene3dFrame>,
         size: [u32; 2],
         rect: [f32; 4],
+        source_rect: [f32; 4],
         busy: Arc<AtomicBool>,
     ) -> Result<Self> {
         let config = Scene3dOutputConfig {
@@ -87,6 +100,7 @@ impl WgpuScene3dPickFrame {
             },
             source: Arc::downgrade(frame),
             rect,
+            source_rect,
         })
     }
 
@@ -110,9 +124,48 @@ fn pixel_at(rect: [f32; 4], size: [u32; 2], uv: [f32; 2]) -> Option<[u32; 2]> {
     Some(pixel)
 }
 
+fn surface_pixel(
+    source: [f32; 4],
+    rect: [f32; 4],
+    size: [u32; 2],
+    position: [f32; 2],
+) -> Option<[u32; 2]> {
+    let mut pixel = [0; 2];
+    for axis in 0..2 {
+        let offset = f64::from(position[axis]) - f64::from(source[axis]);
+        if !offset.is_finite() || offset < 0. || offset >= f64::from(source[axis + 2]) {
+            return None;
+        }
+        let raster = f64::from(rect[axis])
+            + offset * f64::from(rect[axis + 2]) / f64::from(source[axis + 2]);
+        if !raster.is_finite() || raster < 0. || raster >= f64::from(size[axis]) {
+            return None;
+        }
+        pixel[axis] = raster.floor() as u32;
+    }
+    Some(pixel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_pointer_mapping_uses_snapped_bounds_and_raster_density() {
+        let source = [-10., 21., 101., 60.];
+        let rect = [-20., 0., 202., 120.];
+        assert_eq!(
+            surface_pixel(source, rect, [182, 120], [40., 51.]),
+            Some([80, 60])
+        );
+        assert_eq!(surface_pixel(source, rect, [182, 120], [-1., 51.]), None);
+        assert_eq!(surface_pixel(source, rect, [182, 120], [91., 51.]), None);
+        assert_eq!(surface_pixel(source, rect, [182, 120], [40., 81.]), None);
+        assert_eq!(
+            surface_pixel(source, rect, [182, 120], [f32::NAN, 30.]),
+            None
+        );
+    }
 
     #[test]
     fn pointer_pixels_follow_projection_rect_and_surface_clipping() {

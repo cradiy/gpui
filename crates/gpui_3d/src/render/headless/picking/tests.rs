@@ -23,6 +23,44 @@ fn object() -> RenderObject {
 }
 
 #[test]
+fn clipped_raster_reconstruction_preserves_the_source_projection_aspect() {
+    let bounds = Bounds::new(point(px(30.), px(-10.)), size(px(80.5), px(60.5)));
+    let rect = [-10.25, -20.5, 81.25, 61.75];
+    let pixel = [30, 20];
+    for projection in [
+        Projection::Perspective { vertical_fov: 1.1 },
+        Projection::Orthographic { vertical_size: 4. },
+    ] {
+        let camera = Camera {
+            projection,
+            aspect_ratio: Some(80.5 / 60.5),
+            lens_shift: [0.2, -0.3],
+            ..Default::default()
+        };
+        let result = resolve_projected(
+            camera,
+            [70, 40],
+            pixel,
+            &[object()],
+            &pixels(1, 4., DepthBackground::Zero),
+            rect,
+        )
+        .unwrap();
+        let projected = camera
+            .world_to_screen(bounds, result.hit.as_ref().unwrap().world_position)
+            .unwrap()
+            .unwrap();
+        let expected = point(
+            bounds.origin.x + bounds.size.width * ((pixel[0] as f32 + 0.5 - rect[0]) / rect[2]),
+            bounds.origin.y + bounds.size.height * ((pixel[1] as f32 + 0.5 - rect[1]) / rect[3]),
+        );
+        assert!(f32::from(projected.position.x - expected.x).abs() < 1e-4);
+        assert!(f32::from(projected.position.y - expected.y).abs() < 1e-4);
+        assert_eq!(result.projection_rect(), rect);
+    }
+}
+
+#[test]
 fn pick_reconstruction_uses_original_extent_pixel_center_and_camera_optics() {
     for projection in [
         Projection::Perspective { vertical_fov: 1.1 },

@@ -14,3 +14,9 @@ pub mod headless;
 mod ui_input;
 mod viewport;
 pub use viewport::{Viewport3d, viewport3d};
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+mod viewport_picking;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use viewport_picking::{
+    ViewportPick, ViewportPickCapture, ViewportPickFrame, ViewportPickReadback,
+};

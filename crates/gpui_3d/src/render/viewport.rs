@@ -1,4 +1,6 @@
 use super::ui_input::UiInput;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+use super::viewport_picking::PickLayout;
 use crate::spatial::picking::{PickSnapshot, PickSurface};
 use crate::{
     Hit, ObjectId, PickBehavior, PreparationCache, PreparedScene, Scene, Texture, TextureSlot,
@@ -18,6 +20,10 @@ type ClickListener = Box<dyn Fn(&Hit, &mut Window, &mut App)>;
 struct ViewportPreparation {
     cache: PreparationCache,
     output: Option<(Arc<PreparedScene>, Arc<gpui::Scene3dFrame>)>,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    pick_binding: Option<(crate::ViewportPickCapture, PickLayout)>,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    pick_owner: Rc<()>,
 }
 
 /// Creates a layout-sized 3D viewport. The caller owns camera interaction and animation.
@@ -34,6 +40,8 @@ pub fn viewport3d(id: impl Into<ElementId>, scene: Scene) -> Viewport3d {
         on_hover: None,
         on_click: None,
         pick_snapshot: Rc::new(RefCell::new(None)),
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        rendered_picks: None,
     }
 }
 
@@ -50,8 +58,19 @@ pub struct Viewport3d {
     on_hover: Option<HoverListener>,
     on_click: Option<ClickListener>,
     pick_snapshot: Rc<RefCell<Option<PickSnapshot>>>,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    rendered_picks: Option<crate::ViewportPickCapture>,
 }
 impl Viewport3d {
+    /// Publishes ID/depth queries paired with this viewport's submitted frame.
+    /// Reuse a dedicated capture across renders. Does not enable CPU/UI hit routing
+    /// or schedule readback polling; query the capture from input handlers.
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    pub fn pick_capture(mut self, capture: crate::ViewportPickCapture) -> Self {
+        self.rendered_picks = Some(capture);
+        self
+    }
+
     /// Draws packed geometry without vertex readback. IDs are scene object indices plus one.
     /// Create resources with `WgpuContext::for_window`; the renderer rejects wrong-device,
     /// source-mesh, and material-coordinate bindings. Bounds are conservative and mesh-local.
@@ -355,6 +374,10 @@ impl Element for Content {
     ) {
         if !window.supports_scene3d() || bounds.is_empty() {
             *self.0.pick_snapshot.borrow_mut() = None;
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            if let Some(capture) = &self.0.rendered_picks {
+                capture.clear();
+            }
             return;
         }
         let scene = &self.0.scene;
@@ -363,6 +386,22 @@ impl Element for Content {
         let (prepared, frame) =
             window.with_element_state(id.unwrap(), |state: Option<ViewportPreparation>, window| {
                 let mut state = state.unwrap_or_default();
+                #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                let layout = PickLayout {
+                    bounds,
+                    scale: window.scale_factor(),
+                    surface: window.viewport_size(),
+                };
+                #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                let binding_matches = match (&state.pick_binding, &self.0.rendered_picks) {
+                    (None, None) => true,
+                    (Some((old, old_layout)), Some(capture)) => {
+                        old.same(capture) && *old_layout == layout
+                    }
+                    _ => false,
+                };
+                #[cfg(not(all(feature = "wgpu", not(target_family = "wasm"))))]
+                let binding_matches = true;
                 let prepared = state
                     .cache
                     .prepare(
@@ -404,15 +443,41 @@ impl Element for Content {
                     .output
                     .as_ref()
                     .filter(|(previous, frame)| {
-                        Arc::ptr_eq(previous, &prepared) && frame.viewport_quality == self.0.quality
+                        binding_matches
+                            && Arc::ptr_eq(previous, &prepared)
+                            && frame.viewport_quality == self.0.quality
                     })
                     .map(|(_, frame)| frame.clone())
                     .unwrap_or_else(|| {
                         let mut frame = prepared.frame().clone();
                         frame.viewport_quality = self.0.quality;
+                        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                        {
+                            frame.pick_capture = self
+                                .0
+                                .rendered_picks
+                                .as_ref()
+                                .map(|capture| capture.backend());
+                        }
                         Arc::new(frame)
                     });
                 state.output = Some((prepared.clone(), frame.clone()));
+                #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                {
+                    if !binding_matches && let Some((old, _)) = &state.pick_binding {
+                        old.clear();
+                    }
+                    state.pick_binding = self.0.rendered_picks.as_ref().map(|capture| {
+                        capture.bind(
+                            frame.clone(),
+                            &prepared,
+                            scene.camera,
+                            layout,
+                            &state.pick_owner,
+                        );
+                        (capture.clone(), layout)
+                    });
+                }
                 ((prepared, frame), state)
             });
         *self.0.pick_snapshot.borrow_mut() = pick_snapshot(scene, bounds, surfaces, &prepared);

@@ -18,11 +18,17 @@ pub struct FramePick {
     pub size: [u32; 2],
     pub hit: Option<FramePickHit>,
     camera: Camera,
+    projection_rect: [f32; 4],
 }
 
 impl FramePick {
     pub fn camera(&self) -> Camera {
         self.camera
+    }
+
+    /// Full camera projection rectangle in source texture pixels, including clipping.
+    pub fn projection_rect(&self) -> [f32; 4] {
+        self.projection_rect
     }
 }
 
@@ -41,6 +47,7 @@ pub struct FramePickReadback {
     objects: Arc<[RenderObject]>,
     camera: Camera,
     size: [u32; 2],
+    projection_rect: Option<[f32; 4]>,
 }
 
 impl RenderedFrame {
@@ -49,22 +56,35 @@ impl RenderedFrame {
     /// Uses 512 staging bytes and eight decoded channel bytes, excluding metadata
     /// and allocation overhead. Shares the renderer's single pending-readback permit.
     pub fn pick(&self, pixel: [u32; 2]) -> Result<FramePickReadback> {
+        FramePickReadback::new(&self.output, self.objects.clone(), self.camera, pixel, None)
+    }
+}
+
+impl FramePickReadback {
+    pub(in crate::render) fn new(
+        output: &gpui_wgpu::Scene3dGpuOutput,
+        objects: Arc<[RenderObject]>,
+        camera: Camera,
+        pixel: [u32; 2],
+        projection_rect: Option<[f32; 4]>,
+    ) -> Result<Self> {
         let config = Scene3dReadbackConfig {
             channels: Scene3dChannels::OBJECT_ID | Scene3dChannels::LINEAR_DEPTH,
             max_staging_bytes: Some(512),
             max_cpu_bytes: Some(8),
         };
         Ok(FramePickReadback {
-            pending: self.output.readback_region(
+            pending: output.readback_region(
                 Scene3dReadbackRegion {
                     origin: pixel,
                     size: [1, 1],
                 },
                 config,
             )?,
-            objects: self.objects.clone(),
-            camera: self.camera,
-            size: self.output.config().size,
+            objects,
+            camera,
+            size: output.config().size,
+            projection_rect,
         })
     }
 }
@@ -81,6 +101,16 @@ impl FramePickReadback {
         self.pending
             .try_read()?
             .map(|pixels| {
+                if let Some(rect) = self.projection_rect {
+                    return resolve_projected(
+                        self.camera,
+                        self.size,
+                        self.pending.region().origin,
+                        &self.objects,
+                        &pixels,
+                        rect,
+                    );
+                }
                 resolve(
                     self.camera,
                     self.size,
@@ -100,6 +130,28 @@ fn resolve(
     objects: &[RenderObject],
     pixels: &Scene3dPixels,
 ) -> Result<FramePick> {
+    resolve_projected(
+        camera,
+        output_size,
+        pixel,
+        objects,
+        pixels,
+        [0., 0., output_size[0] as f32, output_size[1] as f32],
+    )
+}
+
+fn resolve_projected(
+    camera: Camera,
+    output_size: [u32; 2],
+    pixel: [u32; 2],
+    objects: &[RenderObject],
+    pixels: &Scene3dPixels,
+    rect: [f32; 4],
+) -> Result<FramePick> {
+    ensure!(
+        rect.iter().all(|v| v.is_finite()) && rect[2] > 0. && rect[3] > 0.,
+        "invalid pick projection rectangle"
+    );
     Scene3dReadbackRegion {
         origin: pixel,
         size: [1, 1],
@@ -133,8 +185,8 @@ fn resolve(
         let object = lookup(objects, *output_id).context("3D pick has an unknown object ID")?;
         let world_position = camera.screen_to_world(
             Bounds::new(
-                point(px(0.), px(0.)),
-                size(px(output_size[0] as f32), px(output_size[1] as f32)),
+                point(px(rect[0]), px(rect[1])),
+                size(px(rect[2]), px(rect[3])),
             ),
             point(px(pixel[0] as f32 + 0.5), px(pixel[1] as f32 + 0.5)),
             *depth,
@@ -150,6 +202,7 @@ fn resolve(
         size: output_size,
         hit,
         camera,
+        projection_rect: rect,
     })
 }
 

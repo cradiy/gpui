@@ -82,6 +82,7 @@ impl PickRenderer {
                         frame,
                         region.size,
                         region.rect,
+                        region.source_rect,
                         self.busy.clone(),
                     )?;
                     Ok(Entry {

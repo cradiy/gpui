@@ -51,6 +51,8 @@ pub use render::{
     PendingTexture, PreparationCache, PrepareError, PreparedScene, RenderObject, TextureRequest,
     TextureSource, TextureState, Viewport3d, viewport3d,
 };
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use render::{ViewportPick, ViewportPickCapture, ViewportPickFrame, ViewportPickReadback};
 pub use scene::{
     ConstraintStatus, EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ReparentMode, Scene,
     SceneError, SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode, TransformConstraint,

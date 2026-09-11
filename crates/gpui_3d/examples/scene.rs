@@ -19,6 +19,9 @@ const ANIMATION_LENGTH: Duration = Duration::from_secs(4);
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 #[path = "scene/gpu.rs"]
 mod gpu;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+#[path = "scene/picking.rs"]
+mod picking;
 
 fn deformation_amount(position: Duration) -> f32 {
     if position == ANIMATION_LENGTH {
@@ -211,6 +214,8 @@ struct SceneDemo {
     gpu_enabled: bool,
     #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
     gpu: Option<gpu::Deformation>,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    picking: picking::Picking,
     deformation: usize,
     morph_weights: [f32; 2],
     mesh_sample: (Duration, usize, [f32; 2], bool, bool),
@@ -323,6 +328,8 @@ impl SceneDemo {
             gpu_enabled: false,
             #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
             gpu: None,
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            picking: picking::Picking::new(),
             deformation: 0,
             morph_weights: [0.65, 0.35],
             mesh_sample: (Duration::ZERO, 0, [0.65, 0.35], false, false),
@@ -444,6 +451,19 @@ impl SceneDemo {
 }
 impl Render for SceneDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        if self.gpu_enabled {
+            if let Some(hit) = self.picking.poll(window)
+                && let Some(index) = self.instances.iter().position(|instance| {
+                    instance.mappings().any(|(_, node)| Some(node) == hit.node)
+                })
+            {
+                self.selected = index;
+            }
+        } else {
+            self.picking.cancel();
+            self.picking.capture.clear();
+        }
         let now = Instant::now();
         self.advance_camera(now);
         if self.controls.is_animating() {
@@ -499,7 +519,7 @@ impl Render for SceneDemo {
                 if gpu.is_pending() {
                     window.request_animation_frame();
                 }
-                Ok(viewport)
+                Ok(viewport.pick_capture(self.picking.capture.clone()))
             })()
         } else {
             Ok(viewport3d("scene", scene))
@@ -551,6 +571,24 @@ impl Render for SceneDemo {
             .rounded(px(24.))
             .overflow_hidden()
             .bg(rgb(0x142237));
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        {
+            stage = stage.on_click(cx.listener(|this, event, _, cx| {
+                if !this.gpu_enabled {
+                    return;
+                }
+                let gpui::ClickEvent::Mouse(event) = event else {
+                    return;
+                };
+                let delta = event.up.position - event.down.position;
+                if event.down.button == MouseButton::Left
+                    && f32::from(delta.x).hypot(f32::from(delta.y)) <= 4.
+                {
+                    this.picking.click(event.up.position);
+                    cx.notify();
+                }
+            }));
+        }
         for button in [MouseButton::Right, MouseButton::Middle] {
             stage = stage
                 .on_mouse_down(
@@ -640,10 +678,14 @@ impl Render for SceneDemo {
                 .inset_0()
                 .size_full(),
             );
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        let pick_error = self.picking.error.clone();
+        #[cfg(not(all(feature = "wgpu", not(target_family = "wasm"))))]
+        let pick_error: Option<String> = None;
         div().size_full().p_6().flex().flex_col().gap_4().bg(rgb(0x0b1422)).text_color(rgb(0xeaf2fc))
             .child(div().text_size(px(30.)).child("Shared shapes, independent nodes"))
             .child(div().text_color(rgb(0x9eb1cb)).child(if self.gpu_enabled {
-                "GPU deformation · Select 1 / 2 / 3 with the buttons · Orbit controls remain available outside Rig camera"
+                "GPU deformation · Click an assembly to select · Right-drag to orbit outside Rig camera"
             } else if self.rig_camera {
                 "Camera follows the selected assembly · Select 1 / 2 / 3 to switch · Disable Rig camera for orbit controls"
             } else {
@@ -651,7 +693,11 @@ impl Render for SceneDemo {
             }))
             .child(div().flex().flex_wrap().gap_3()
                 .children([("one", "1 · Step"), ("two", "2 · Linear"), ("three", "3 · Cubic")].into_iter().enumerate().map(|(index, (id, label))| {
-                    self.button(id, label, self.selected == index || self.hovered == Some(index)).on_click(cx.listener(move |this, _, _, cx| { this.selected = index; cx.notify(); }))
+                    self.button(id, label, self.selected == index || self.hovered == Some(index)).on_click(cx.listener(move |this, _, _, cx| {
+                        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+                        this.picking.cancel();
+                        this.selected = index; cx.notify();
+                    }))
                 }))
                 .child(self.button("move", "Move body", self.raised[self.selected]).on_click(cx.listener(|this, _, _, cx| {
                     let index = this.selected;
@@ -781,6 +827,7 @@ impl Render for SceneDemo {
                     .on_click(cx.listener(|this, _, _, cx| { this.color_samples = if this.color_samples == 4 { 1 } else { 4 }; cx.notify(); })))
                 .child(format!("Effective samples: {}", window.scene3d_support().capabilities().map_or(0, |caps| caps.color_samples_for(gpui_3d::ViewportQuality::new([0.5, 1., 2.][self.resolution], self.color_samples))))))
             .child(stage)
+            .when_some(pick_error, |root, error| root.child(div().text_sm().text_color(rgb(0xf09e8e)).child(error)))
             .child(div().text_sm().text_color(rgb(0xa4bad2)).child(format!("Instance {} selected · 3 editable subtrees · Shared mesh topology", self.selected + 1)))
             .when(!window.supports_scene3d(), |root| root.child("3D viewports are unavailable on this renderer."))
     }

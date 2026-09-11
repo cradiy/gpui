@@ -2,7 +2,49 @@
 
 [Rendered-frame picking](picking.md) · [GPU deformation](deformation.md)
 
-The WGPU viewport renderer can publish paired Object ID and camera-forward depth
+`Viewport3d::pick_capture` binds a retained `ViewportPickCapture` to a viewport.
+Use one handle per viewport and reuse it across renders. It supports CPU and
+GPU-deformed geometry without using CPU mesh hits.
+
+```rust
+use gpui_3d::{Scene, Viewport3d, ViewportPickCapture, viewport3d};
+
+fn view(scene: Scene, picks: &ViewportPickCapture) -> Viewport3d {
+    viewport3d("model", scene).pick_capture(picks.clone())
+}
+```
+
+Create the handle with an explicit target payload budget, for example
+`ViewportPickCapture::new(64 * 1024 * 1024)`. Call `picks.pick(position)` from a
+pointer handler, then poll the returned request with `try_read()`. Positions use
+logical viewport input coordinates. No polling or redraw scheduling is implicit.
+The capture, retained frames, and requests are UI-thread-owned.
+
+`pick()` returns `Ok(None)` when no matching submitted frame exists or the
+position lies outside the viewport/render surface. Capture and readback failures
+return errors. `try_read()` returns `Ok(None)` while pending; a completed
+background query has `result.frame.hit == None`. Surface results contain the
+source `RenderObject`, linear depth, and world position. `result.position` and
+`bounds()` retain the logical query position and source layout.
+
+`picks.frame()` retains a `ViewportPickFrame` for a delayed query. Frame/camera,
+object mapping, layout, DPI, and render-surface dimensions are paired at paint;
+layout changes require a matching backend submission. Pointer conversion uses the
+renderer’s snapped physical viewport bounds. Effective camera aspect is retained
+independently of raster rounding. Removing the element's retained state
+expires the current binding; `clear()` releases it explicitly. Retained frames
+and in-flight queries remain usable. Completed results use weak freshness tokens
+and do not retain the GPU textures themselves.
+
+`picks.is_current(&result)` requires the same live binding and backend submission.
+It becomes false after replacement, including a repaint with new UI texture
+pixels. Applications may accept an older click-time result while animation runs;
+resolve its original object identity and reject superseded requests. The scene
+example uses one pending request and retains only the latest queued click.
+
+## Backend capture
+
+The WGPU viewport renderer publishes paired Object ID and camera-forward depth
 textures through `gpui::Scene3dFrame::pick_capture`. Both passes use the same frame,
 GPU geometry, UI texture, and raster projection as the viewport's color submission.
 They use single-sample pixel-center coverage, independently of color MSAA.
@@ -35,6 +77,9 @@ effects; callers must account for those when accepting a pointer query.
 pixel. The normalized domain is half-open `[0, 1)`. Nonfinite, out-of-domain, and
 surface-clipped positions return `None`. Convert logical pointer positions using
 the matching viewport bounds first; apply inverse outer effect mappings separately.
+`pixel_at_surface([x, y])` accepts physical source-surface coordinates directly and
+accounts for snapped viewport bounds. `ViewportPickCapture` uses this path with
+the retained logical-to-physical scale.
 
 The output texture size includes surface clipping and actual raster density.
 `projection_rect()` gives the full viewport projection rectangle within those
@@ -59,6 +104,8 @@ transient overlap, readback staging, geometry, images, pipelines, color-renderin
 resources, and driver overhead. Zero rejects capture allocation. Frames require
 unique nonzero object IDs and supported data-output formats.
 
-This interface exposes backend data. It does not install `Viewport3d` event
-handlers, resolve IDs to scene nodes, or route captured-UI input. GPU geometry
-overrides continue to disable CPU hit handling.
+The backend interface exposes raw data. `ViewportPickCapture` pairs it with scene
+identities and camera reconstruction. Neither interface installs event handlers
+or routes captured-UI input. GPU geometry overrides continue to disable CPU hit
+handling. Apply outer effect-coordinate mappings and UI hit eligibility before
+requesting a pick.

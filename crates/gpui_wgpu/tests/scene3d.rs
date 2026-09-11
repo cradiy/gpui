@@ -88,6 +88,7 @@ fn viewport_pick_outputs_retain_frame_identity_across_resize_and_capture_errors(
     assert!(retained.matches_frame(&original));
     assert_eq!(retained.projection_rect(), [-16., 0., 64., 64.]);
     assert_eq!(retained.pixel_at([0.5, 0.5]), Some([16, 32]));
+    assert_eq!(retained.pixel_at_surface([16., 32.]), Some([16, 32]));
     assert_eq!(retained.pixel_at([0.1, 0.5]), None);
     renderer.render_rgba(&first_scene)?;
     let replayed = capture.read::<WgpuScene3dPickFrame>().unwrap().unwrap();

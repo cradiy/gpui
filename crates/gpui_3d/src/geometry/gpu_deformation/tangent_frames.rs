@@ -17,6 +17,7 @@ pub struct GpuTangentFrame {
     /// Normalized normal-orthogonal direction and mean derivative magnitude.
     pub tangent: [f32; 4],
     /// Independently normalized bitangent and mean derivative magnitude.
+    /// XYZ is zero when projected contributions cancel; tangent publication uses handedness.
     pub bitangent: [f32; 4],
     /// Frame source corner, source group representative, and UV orientation (0 or 1).
     /// The source is the destination corner unless a collapsed face inherits a donor.
@@ -24,8 +25,8 @@ pub struct GpuTangentFrame {
     pub identity: [u32; 3],
     /// Sum of the accepted contributors' projected corner angles, in radians.
     pub angle_weight: f32,
-    /// Preserved input status, or X = 1 for nonfinite arithmetic, X = 2 for an
-    /// undefined regular frame. Nonregular corners retain their input status.
+    /// Preserved input or donor status, or X = 1 for nonfinite arithmetic,
+    /// X = 2 for an undefined accumulated frame.
     pub status: [u32; 4],
 }
 
@@ -78,8 +79,8 @@ impl GpuTangentFramesMemory {
 /// bitangent directions are excluded per destination corner. No float atomics are used.
 /// Undefined UV frames average all valid contributions in their assigned group
 /// without contributing a direction. Faces with coincident positions inherit the
-/// earliest valid noncollapsed frame with the same welded vertex. Repair and
-/// vertex publication are separate stages.
+/// earliest noncollapsed corner with the same welded vertex, including an undefined
+/// frame. Repair and vertex publication are separate stages.
 pub struct GpuTangentFrames {
     context: WgpuContext,
     base: Mesh,

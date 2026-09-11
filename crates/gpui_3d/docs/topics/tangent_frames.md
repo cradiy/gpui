@@ -39,6 +39,10 @@ corner order, and normalized independently. Derivative magnitudes are averaged
 using the same weights. UV orientation comes from the connected group, not from
 the magnitude lanes.
 
+A zero accumulated bitangent does not invalidate a usable tangent. Its direction
+remains zero; canonical tangent publication uses the tangent and orientation to
+define the basis. A zero accumulated tangent or zero angle weight is undefined.
+
 Assigned corners with undefined derivative frames accept every valid contributor
 in their group, without adding their own direction or angle weight. This also
 allows otherwise separated regular contributions to connect through an undefined
@@ -47,14 +51,17 @@ frame with a compatible inherited orientation. Unassigned corners remain unresol
 ## Collapsed-face inheritance
 
 After regular frames are evaluated, faces containing coincident positions can
-inherit them. Each corner selects the smallest original corner index with a valid
-noncollapsed frame and the same [welded position, normal, and UV key](tangent_weld.md).
+inherit them. Each corner selects the smallest original corner index on a
+noncollapsed face with the same [welded position, normal, and UV key](tangent_weld.md).
 An integer minimum reduction makes donor selection independent of workgroup order.
 No edge connection is required. Attribute seams still prevent matching.
 
 Inherited frames copy the donor's directions, magnitudes, orientation, weight,
-and source identity. They never donate to another corner. Failed frames and
-failed destinations do not participate. If no valid donor exists, the destination
+source identity, and status. Donor selection does not skip undefined or failed
+frame accumulation in favor of a later usable frame. Undefined donors remain
+undefined until explicit publication repair; arithmetic failures remain failures.
+Faces with failed input geometry and failed destinations do not participate.
+Collapsed faces never donate to another corner. If no donor exists, the destination
 remains unresolved; no default basis is substituted. Corners of one collapsed
 triangle can inherit different orientations, which final vertex publication must
 validate rather than silently changing the signs.
@@ -78,11 +85,13 @@ There is one 64-byte `GpuTangentFrame` per original triangle corner:
 
 Consume a frame only when status is zero and its group is not `u32::MAX`.
 Array indices are destination corners; `identity[0]` differs only for inherited
-frames. Unresolved corners use `u32::MAX` for both group and orientation, retain
-their input status, and contain zero directions and weight. Regular orientations are
-0 or 1. A failed contribution rejects every frame in its group. Accumulation
+frames, including unresolved inherited frames. Unassigned corners use `u32::MAX`
+for both group and orientation, retain input or donor status, and contain zero
+directions and weight. Regular orientations are 0 or 1. A failed contribution
+rejects every frame in its group. Accumulation
 failures are reported per destination: X = 1 reports detected nonfinite arithmetic
-and X = 2 reports an undefined regular frame. Remaining status lanes are reserved.
+and X = 2 reports an undefined accumulated frame. These statuses also propagate
+through collapsed-face inheritance. Remaining status lanes are reserved.
 Failed frame directions and weights must not be used.
 
 ## Admission and work

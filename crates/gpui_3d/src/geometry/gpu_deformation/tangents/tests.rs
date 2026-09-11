@@ -1,4 +1,5 @@
 use super::*;
+mod parity;
 use crate::{
     AffineTransform, GpuMorph, GpuSkin, GpuTangentAdjacency, GpuTangentDerivatives,
     GpuTangentFrames, GpuTangentGroups, GpuTangentWeld, MorphTarget, MorphTargets, Skin,
@@ -350,7 +351,7 @@ fn gpu_publication_reports_repairs_without_clearing_input_failures() -> Result<(
     records[1].position = [2., 0., 0., 0.];
     records[2].position = [1., 0., 0., 0.];
     let collinear = repair.evaluate(&frames(&input(&records), 2)?)?;
-    assert_eq!(repair_tags(&collinear)?, [1; 3]);
+    assert_eq!(repair_tags(&collinear)?, [1, 1, 0]);
     assert_eq!(
         collinear.deformation().readback()?.tangents().unwrap(),
         [[1., 0., 0., 1.]; 3]

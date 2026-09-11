@@ -410,7 +410,7 @@ fn inheritance_shaders_match_frame_and_donor_buffers() {
 
 #[test]
 #[ignore = "requires a compute-capable GPU"]
-fn gpu_collapsed_frames_choose_valid_donors_without_crossing_attribute_seams() -> Result<()> {
+fn gpu_collapsed_frames_preserve_first_donors_without_crossing_attribute_seams() -> Result<()> {
     let context = WgpuContext::new_headless()?;
     let limits = GpuDeformationLimits::default();
     let positions = [
@@ -509,11 +509,12 @@ fn gpu_collapsed_frames_choose_valid_donors_without_crossing_attribute_seams() -
             )?)?;
     let records = read(&output)?;
     assert_eq!(records[0].status, [2, 0, 0, 0]);
-    assert_eq!(records[6].identity, records[3].identity);
-    close(records[6].tangent[1], 1.);
-    assert_eq!(records[6].status, [0; 4]);
+    assert_eq!(records[6].identity, records[0].identity);
+    assert_eq!(records[6].tangent, records[0].tangent);
+    assert_eq!(records[6].status, [2, 0, 0, 0]);
     for record in &records[7..] {
-        assert_eq!(record.identity[1..], [u32::MAX; 2]);
+        assert_eq!(record.identity, records[1].identity);
+        assert_eq!(record.status, records[1].status);
     }
     Ok(())
 }

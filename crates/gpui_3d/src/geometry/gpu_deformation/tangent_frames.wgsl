@@ -107,8 +107,7 @@ fn accumulate(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     if !finite(result.tangent) || !finite(result.bitangent) || !finite(vec4(result.weight)) {
         result.status.x = 1u;
-    } else if result.weight == 0.0 || all(result.tangent.xyz == vec3(0.0)) ||
-        all(result.bitangent.xyz == vec3(0.0)) {
+    } else if result.weight == 0.0 || all(result.tangent.xyz == vec3(0.0)) {
         result.status.x = 2u;
     } else {
         result.tangent = vec4(unit(result.tangent.xyz), result.tangent.w / result.weight);

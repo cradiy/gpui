@@ -1,4 +1,5 @@
 mod evaluation;
+pub use evaluation::TransformOverride;
 #[cfg(test)]
 mod evaluation_tests;
 mod meshes;

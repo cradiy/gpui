@@ -3,7 +3,7 @@ mod graph;
 pub use constraints::{ConstraintStatus, TransformConstraint};
 pub use graph::{
     EvaluatedNode, EvaluatedScene, Node, NodeHandle, ReparentMode, SceneError, SceneGraph,
-    SceneSubtree, SubtreeInstance, SubtreeNode,
+    SceneSubtree, SubtreeInstance, SubtreeNode, TransformOverride,
 };
 
 use crate::{

@@ -1,5 +1,14 @@
 use super::*;
 
+/// A replacement node transform in parent-local or world coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TransformOverride {
+    /// Composed with the parent's final world transform.
+    Local(AffineTransform),
+    /// Used directly, independently of the parent's transform.
+    World(AffineTransform),
+}
+
 impl SceneGraph {
     /// Resolves world matrices, cameras, lights, visibility, and bounds in parent-first order.
     /// No playback history, window, layout, or GPU work is required.
@@ -27,21 +36,48 @@ impl SceneGraph {
         transforms: impl IntoIterator<Item = (NodeHandle, AffineTransform)>,
         meshes: impl IntoIterator<Item = (NodeHandle, Mesh)>,
     ) -> Result<EvaluatedScene, SceneError> {
-        let mut locals = HashMap::new();
+        self.evaluate_transform_overrides(
+            transforms
+                .into_iter()
+                .map(|(node, transform)| (node, TransformOverride::Local(transform))),
+            meshes,
+        )
+    }
+
+    /// Evaluates mixed local/world transforms without mutating the graph.
+    /// Input order is irrelevant. Omitted nodes use authored local transforms
+    /// composed with their parent's final world transform. World overrides do not
+    /// bypass inherited visibility. Bounds, cameras, lights and queries use the
+    /// resulting poses. Duplicate, foreign and expired handles return errors.
+    /// This performs no constraint solving or skinning; attach final deformed
+    /// meshes with `EvaluatedScene::with_meshes`.
+    pub fn evaluate_with_transform_overrides(
+        &self,
+        transforms: impl IntoIterator<Item = (NodeHandle, TransformOverride)>,
+    ) -> Result<EvaluatedScene, SceneError> {
+        self.evaluate_transform_overrides(transforms, [])
+    }
+
+    fn evaluate_transform_overrides(
+        &self,
+        transforms: impl IntoIterator<Item = (NodeHandle, TransformOverride)>,
+        meshes: impl IntoIterator<Item = (NodeHandle, Mesh)>,
+    ) -> Result<EvaluatedScene, SceneError> {
+        let mut overrides = HashMap::new();
         for (handle, transform) in transforms {
             let key = self.key(handle)?;
-            if locals.insert(key, transform).is_some() {
+            if overrides.insert(key, transform).is_some() {
                 return Err(SceneError::DuplicateTransform(handle));
             }
         }
         self.evaluate_using(meshes, |handle, parent| {
+            let local = match overrides.get(&handle.key) {
+                Some(TransformOverride::World(world)) => return Ok(*world),
+                Some(TransformOverride::Local(local)) => *local,
+                None => self.nodes[handle.key].node.local,
+            };
             parent
-                .compose(
-                    locals
-                        .get(&handle.key)
-                        .copied()
-                        .unwrap_or(self.nodes[handle.key].node.local),
-                )
+                .compose(local)
                 .map_err(|source| SceneError::InvalidTransform {
                     node: handle,
                     source,

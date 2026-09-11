@@ -45,6 +45,7 @@ pub use render::{
 pub use scene::{
     ConstraintStatus, EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ReparentMode, Scene,
     SceneError, SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode, TransformConstraint,
+    TransformOverride,
 };
 pub use spatial::{Hit, PickBehavior, QueryObject};
 

@@ -180,6 +180,45 @@ from the live graph; validate it through `graph.node` before editing.
 The viewport resolves image resources during rendering. Constraints and asset
 readiness are independent of hierarchy evaluation.
 
+### Local and world pose overrides
+
+`SceneGraph::evaluate_with_transform_overrides` accepts `TransformOverride::Local`
+and `TransformOverride::World` in one batch. Local inputs are composed with their
+parent's final world transform. World inputs specify the node's final transform
+directly, even when its parent also has an override. Input order does not affect
+evaluation; omitted nodes keep authored local transforms and follow their final
+parent poses.
+
+```rust
+use gpui_3d::{AffineTransform, Node, SceneGraph, TransformOverride};
+
+let mut graph = SceneGraph::new();
+let root = graph.insert(None, Node::new())?;
+let joint = graph.insert(Some(root), Node::new())?;
+let poses = graph.evaluate_with_transform_overrides([
+    (joint, TransformOverride::World(
+        AffineTransform::from_translation([2., 1., 0.])?,
+    )),
+    (root, TransformOverride::Local(
+        AffineTransform::from_translation([5., 0., 0.])?,
+    )),
+])?;
+# let _ = poses;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The joint's world position is `[2, 1, 0]`. Its parent does not add another offset.
+Map `Pose::transforms()` to local overrides to supply an animation pose; replace
+selected entries with world overrides before evaluation. Each node may appear
+only once. Duplicate, foreign, and expired handles return `SceneError` without
+modifying the graph or previous snapshots.
+
+World overrides do not change parent links or inherited visibility. Mesh bounds,
+camera/light transforms, and spatial queries use the final world poses. This API
+does not apply Follow/Aim constraints, solve IK, or perform skinning. Supply solved
+transforms explicitly, evaluate Morph/Skin against the returned snapshot, and
+attach the resulting meshes with `EvaluatedScene::with_meshes`.
+
 ## Camera and light nodes
 
 `Node::camera` and `Node::light` attach local-space properties independently of

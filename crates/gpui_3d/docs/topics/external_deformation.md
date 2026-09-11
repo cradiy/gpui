@@ -15,6 +15,13 @@ application records, and alternate strides must be converted before adoption.
 The mesh retains topology, UV sets, colors, and tangent presence. Adoption does not
 infer a different topology or modify CPU geometry.
 
+Create buffers with `WgpuContext::create_buffer()` or `create_buffer_init()`.
+They return `WgpuResource<wgpu::Buffer>` handles retaining the actual creating
+device; constructors check this identity before any backend resource access.
+Clones preserve the identity and share the allocation. `raw()` and dereferencing
+expose the buffer for application compute bindings, copies, and uploads. Raw WGPU
+buffers without retained creation identity are not accepted.
+
 ## Record layout
 
 Each record occupies 64 bytes:

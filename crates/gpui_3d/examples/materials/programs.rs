@@ -49,7 +49,7 @@ impl Programs {
             .map(|value| (value.min(1.0) * 255.0).round() as u8);
             image::Rgba([color[0], color[1], color[2], 255])
         });
-        let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+        let texture = context.create_texture(&wgpu::TextureDescriptor {
             label: Some("sphere map"),
             size: wgpu::Extent3d {
                 width: 128,
@@ -73,7 +73,7 @@ impl Programs {
             },
             texture.size(),
         );
-        let sampler = context.device.create_sampler(&wgpu::SamplerDescriptor {
+        let sampler = context.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()

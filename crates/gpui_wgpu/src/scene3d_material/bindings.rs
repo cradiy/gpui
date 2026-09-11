@@ -1,5 +1,5 @@
 use super::{MaterialProgram, Scene3dMaterialResourceKind};
-use crate::WgpuContext;
+use crate::{WgpuContext, WgpuResource};
 use anyhow::{Result, ensure};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -14,8 +14,8 @@ pub enum Scene3dMaterialValue {
     /// Exact WGSL uniform struct bytes, including padding.
     Uniform(Arc<[u8]>),
     /// Retains the view and its texture, without copying pixels.
-    Texture(wgpu::TextureView),
-    Sampler(wgpu::Sampler),
+    Texture(WgpuResource<wgpu::TextureView>),
+    Sampler(WgpuResource<wgpu::Sampler>),
 }
 
 /// Payload budget for one complete binding snapshot, including shared uniforms.
@@ -95,7 +95,8 @@ impl Scene3dMaterialSource {
     }
 
     /// Binds every declared resource exactly once. Input order is arbitrary.
-    /// WGPU validates view dimensions/formats, sampler kinds, usage and device ownership.
+    /// Creating devices are checked before backend access. WGPU validates view
+    /// dimensions/formats, sampler kinds, and usage.
     pub fn bind(
         &self,
         values: impl IntoIterator<Item = (u32, Scene3dMaterialValue)>,
@@ -118,6 +119,13 @@ impl Scene3dMaterialSource {
                 supplied.len() < resources.len(),
                 "too many material bindings"
             );
+            match &value.1 {
+                Scene3dMaterialValue::Texture(view) => view.check_device(&self.context().device)?,
+                Scene3dMaterialValue::Sampler(sampler) => {
+                    sampler.check_device(&self.context().device)?
+                }
+                Scene3dMaterialValue::Uniform(_) => {}
+            }
             supplied.push(value);
         }
         let (mapping, uniform_bytes) = plan::resolve(
@@ -156,8 +164,10 @@ impl Scene3dMaterialSource {
                             usage: wgpu::BufferUsages::UNIFORM,
                         }),
                     },
-                    Scene3dMaterialValue::Texture(view) => BoundValue::Texture(view.clone()),
-                    Scene3dMaterialValue::Sampler(sampler) => BoundValue::Sampler(sampler.clone()),
+                    Scene3dMaterialValue::Texture(view) => BoundValue::Texture(view.raw().clone()),
+                    Scene3dMaterialValue::Sampler(sampler) => {
+                        BoundValue::Sampler(sampler.raw().clone())
+                    }
                 },
                 None => previous.expect("validated partial binding").0.slots[index].clone(),
             })

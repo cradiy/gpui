@@ -43,6 +43,8 @@ fn scene3d_custom_material_preserves_coverage_and_retained_uniforms() -> Result<
     let changed = original.with_values([(0, value(0.0, 1.0, 0.8))], limits)?;
     let mut object = object();
     object.model[3][2] = 0.5;
+    object.alpha_mode = gpui::AlphaMode3d::Mask;
+    object.alpha_cutoff = 0.5;
     object.custom_material = Some(gpui::MeshMaterial3d::new(Arc::new(original.clone())));
     let mut input = frame(&[object]);
     input.world_to_view[2][2] = -1.0;

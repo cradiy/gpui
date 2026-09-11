@@ -1,7 +1,7 @@
 use super::{GpuDeformationLimits, GpuDeformationOutput, GpuDeformationVertex, validate_storage};
 use crate::Mesh;
 use anyhow::{Result, ensure};
-use gpui_wgpu::{WgpuContext, wgpu};
+use gpui_wgpu::{WgpuContext, WgpuResource, wgpu};
 
 #[cfg(test)]
 mod tests;
@@ -9,18 +9,19 @@ mod tests;
 impl GpuDeformationOutput {
     /// Retains an application-produced buffer without copying or submitting GPU work.
     /// Requires exactly one `GpuDeformationVertex` per base vertex, in base vertex order,
-    /// with STORAGE and COPY_SRC usage. Device ownership is checked through WGPU binding
-    /// validation; record contents are not read or validated by this constructor.
+    /// with STORAGE and COPY_SRC usage. The resource's creating device is checked before
+    /// backend access; record contents are not read or validated by this constructor.
     /// Submit producers on this context's queue before adoption. Do not mutate, map, or
     /// destroy the buffer while this output or any queued consumer can still use it.
     pub fn from_buffer(
         context: WgpuContext,
         base: Mesh,
-        buffer: wgpu::Buffer,
+        buffer: WgpuResource<wgpu::Buffer>,
         limits: GpuDeformationLimits,
     ) -> Result<Self> {
         ensure!(!context.device_lost(), "GPU deformation device is lost");
-        let bytes = admit(
+        buffer.check_device(&context.device)?;
+        admit(
             &context.device.limits(),
             base.vertex_count(),
             buffer.size(),
@@ -28,37 +29,10 @@ impl GpuDeformationOutput {
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             limits,
         )?;
-        let device = &context.device;
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("gpui_3d.deformation.external.layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(bytes),
-                },
-                count: None,
-            }],
-        });
-        let _binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("gpui_3d.deformation.external"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
-        if let Some(error) = gpui::block_on(scope.pop()) {
-            anyhow::bail!("GPU deformation buffer adoption: {error}");
-        }
-        ensure!(!context.device_lost(), "GPU deformation device is lost");
         Ok(Self {
             context,
             base,
-            buffer,
+            buffer: buffer.raw().clone(),
         })
     }
 
@@ -70,10 +44,11 @@ impl GpuDeformationOutput {
     pub fn copy_from_buffer(
         context: WgpuContext,
         base: Mesh,
-        source: &wgpu::Buffer,
+        source: &WgpuResource<wgpu::Buffer>,
         limits: GpuDeformationLimits,
     ) -> Result<Self> {
         ensure!(!context.device_lost(), "GPU deformation device is lost");
+        source.check_device(&context.device)?;
         let bytes = admit(
             &context.device.limits(),
             base.vertex_count(),

@@ -78,7 +78,7 @@ fn material_bindings_reject_missing_duplicate_unknown_and_mistyped_values() {
 fn material_binding_snapshots_retain_uniform_buffers_and_validate_gpu_resources() -> Result<()> {
     let context = WgpuContext::new_headless()?;
     let source = Scene3dMaterialSource::new(context.clone(), program())?;
-    let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+    let texture = context.create_texture(&wgpu::TextureDescriptor {
         label: Some("material input"),
         size: wgpu::Extent3d {
             width: 2,
@@ -93,7 +93,7 @@ fn material_binding_snapshots_retain_uniform_buffers_and_validate_gpu_resources(
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
-    let sampler = context.device.create_sampler(&Default::default());
+    let sampler = context.create_sampler(&Default::default());
     let limits = Scene3dMaterialBindingLimits::default();
     let original = source.bind(
         [
@@ -122,7 +122,7 @@ fn material_binding_snapshots_retain_uniform_buffers_and_validate_gpu_resources(
         assert_eq!(a == b, equal);
         assert_eq!(a.usage(), wgpu::BufferUsages::UNIFORM);
     }
-    let comparison = context.device.create_sampler(&wgpu::SamplerDescriptor {
+    let comparison = context.create_sampler(&wgpu::SamplerDescriptor {
         compare: Some(wgpu::CompareFunction::Less),
         ..Default::default()
     });
@@ -141,14 +141,36 @@ fn material_binding_snapshots_retain_uniform_buffers_and_validate_gpu_resources(
             .is_err()
     );
     let foreign = WgpuContext::new_headless()?;
-    let foreign_sampler = foreign.device.create_sampler(&Default::default());
+    let foreign_sampler = foreign.create_sampler(&Default::default());
     assert!(
         original
             .with_values(
                 [(4, Scene3dMaterialValue::Sampler(foreign_sampler))],
                 limits
             )
-            .is_err()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("different device")
+    );
+    let foreign_texture = foreign.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: texture.size(),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let foreign_view = foreign_texture.create_view(&Default::default());
+    assert!(
+        original
+            .with_values([(2, Scene3dMaterialValue::Texture(foreign_view))], limits)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("different device")
     );
     drop(source);
     drop(texture);

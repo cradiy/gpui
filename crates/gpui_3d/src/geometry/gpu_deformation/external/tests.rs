@@ -1,6 +1,5 @@
 use super::*;
 use crate::{GpuDeformationBounds, GpuFlatNormals, Vertex};
-use wgpu::util::DeviceExt as _;
 
 const PRODUCER: &str = r#"
 struct Vertex { position: vec4<f32>, normal: vec4<f32>, tangent: vec4<f32>, status: vec4<u32> }
@@ -90,13 +89,11 @@ fn external_buffers_share_processing_and_copy_snapshots_survive_producer_reuse()
     let mut records = super::super::pack_mesh(&base);
     let usage =
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
-    let buffer = context
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("external deformation"),
-            contents: bytemuck::cast_slice(&records),
-            usage,
-        });
+    let buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("external deformation"),
+        contents: bytemuck::cast_slice(&records),
+        usage,
+    });
     let shader = context
         .device
         .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -140,8 +137,8 @@ fn external_buffers_share_processing_and_copy_snapshots_survive_producer_reuse()
     context.queue.submit([]);
     let adopted =
         GpuDeformationOutput::from_buffer(context.clone(), base.clone(), buffer.clone(), limits)?;
-    assert_eq!(adopted.buffer(), &buffer);
-    assert_ne!(copied.buffer(), &buffer);
+    assert_eq!(adopted.buffer(), buffer.raw());
+    assert_ne!(copied.buffer(), buffer.raw());
     let old = copied.readback()?;
     let new = adopted.readback()?;
     assert_eq!(old.vertices()[1].position[2], 0.5);
@@ -169,19 +166,24 @@ fn external_buffers_share_processing_and_copy_snapshots_survive_producer_reuse()
     let foreign = WgpuContext::new_headless()?;
     assert!(
         GpuDeformationOutput::from_buffer(foreign.clone(), base.clone(), buffer.clone(), limits)
-            .is_err()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("different device")
     );
     assert!(
-        GpuDeformationOutput::copy_from_buffer(foreign, base.clone(), &buffer, limits).is_err()
+        GpuDeformationOutput::copy_from_buffer(foreign, base.clone(), &buffer, limits)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("different device")
     );
     records[0].status[0] = 7;
-    let invalid = context
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("invalid deformation"),
-            contents: bytemuck::cast_slice(&records),
-            usage,
-        });
+    let invalid = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("invalid deformation"),
+        contents: bytemuck::cast_slice(&records),
+        usage,
+    });
     let invalid = GpuDeformationOutput::from_buffer(context.clone(), base, invalid, limits)?;
     assert!(invalid.readback().is_err());
     let mut invalid_bounds = reduced.request(&invalid, None)?;

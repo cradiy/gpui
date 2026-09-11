@@ -14,6 +14,9 @@ use gpui_3d::{
 };
 
 let source = Scene3dMaterialSource::new(context, program)?;
+let image = source.context().create_texture(&image_descriptor);
+let image_view = image.create_view(&Default::default());
+let image_sampler = source.context().create_sampler(&sampler_descriptor);
 let limits = Scene3dMaterialBindingLimits::default();
 let bindings = source.bind([
     (0, Scene3dMaterialValue::Uniform(parameter_bytes.into())),
@@ -78,12 +81,19 @@ different image or immutable texture revision can be supplied through a new view
 matching shader and layout. Resources belong to the source device. Recreate the
 source and bindings after device replacement.
 
+Texture and sampler values use `WgpuResource` handles created by
+`WgpuContext::create_texture()` and `create_sampler()`. Texture views inherit the
+creating device. These handles retain that identity across clones and expose
+`raw()` or dereferencing for application uploads and commands. Arbitrary raw WGPU
+handles cannot be relabeled with an application-supplied device identity.
+
 ## Validation and budgets
 
 Unknown, missing, duplicate, mistyped, and incorrectly sized values are rejected
-before parameter allocation. WGPU validation checks actual view dimensions,
-filterability, usage, sampler compatibility, and device ownership when creating
-the bind group; validation failures are returned as errors.
+before parameter allocation. Resource device identities are checked before backend
+binding operations. WGPU validation checks actual view dimensions, filterability,
+usage, and sampler compatibility when creating the bind group; validation failures
+are returned as errors.
 
 `Scene3dMaterialBindingLimits` defaults to 64 KiB of uniform payload per complete
 snapshot. `uniform_bytes()` reports that payload, counting shared buffers in every

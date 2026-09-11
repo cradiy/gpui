@@ -14,12 +14,10 @@ use crate::{Scene3dCapabilities, Scene3dDeviceCapabilities, WgpuContext, WgpuSce
 pub(in crate::wgpu_renderer) fn fail_pick_captures(scene: &Scene, error: gpui::SharedString) {
     scene.visit(&mut |scene| {
         for layer in &scene.subtree_layers {
-            if let Some(capture) = layer
-                .scene3d
-                .as_ref()
-                .and_then(|frame| frame.pick_capture.as_ref())
+            if let Some(frame) = &layer.scene3d
+                && let Some(capture) = &frame.pick_capture
             {
-                capture.publish::<WgpuScene3dPickFrame>(Err(error.clone()));
+                capture.publish::<WgpuScene3dPickFrame>(frame, Err(error.clone()));
             }
         }
     });
@@ -111,9 +109,8 @@ impl PickRenderer {
                     Ok(entry) => {
                         self.entries.insert(layer as *const _ as usize, entry);
                     }
-                    Err(error) => {
-                        capture.publish::<WgpuScene3dPickFrame>(Err(format!("{error:#}").into()))
-                    }
+                    Err(error) => capture
+                        .publish::<WgpuScene3dPickFrame>(frame, Err(format!("{error:#}").into())),
                 }
             }
         });
@@ -194,7 +191,7 @@ impl PickRenderer {
                     .pick_capture
                     .as_ref()
                     .unwrap()
-                    .publish(Ok(entry.output.clone()));
+                    .publish(&entry.frame, Ok(entry.output.clone()));
             }
         }
     }

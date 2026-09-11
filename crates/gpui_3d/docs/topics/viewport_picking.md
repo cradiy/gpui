@@ -74,7 +74,14 @@ Attach a `gpui::Scene3dPickCapture::new(max_bytes)` to the frame before sharing 
 Use a distinct capture for each simultaneous viewport. Read the backend result
 with `capture.read::<gpui_wgpu::WgpuScene3dPickFrame>()`.
 
-- `None` means no result has been published.
+`capture.read_for_frame::<gpui_wgpu::WgpuScene3dPickFrame>(&frame)` filters the
+latest publication by its exact source frame. Outputs and errors from other
+frames return `None`. Backend `publish(&frame, result)` retains the source frame
+weakly; publishing does not keep that frame alive. `ViewportPickCapture` uses
+frame-filtered reads, so an earlier frame's failure is not reported for a new binding.
+
+- `None` means no result has been published, or no publication matches the
+  requested frame when using `read_for_frame`.
 - `Some(Ok(output))` retains the submitted ID/depth textures.
 - `Some(Err(error))` reports capture admission, preparation, or scene encoding failure.
 

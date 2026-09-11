@@ -53,7 +53,10 @@ impl ViewportPickCapture {
         else {
             return Ok(None);
         };
-        let Some(output) = self.backend.read::<WgpuScene3dPickFrame>() else {
+        let Some(output) = self
+            .backend
+            .read_for_frame::<WgpuScene3dPickFrame>(&snapshot.frame)
+        else {
             return Ok(None);
         };
         let output = output.map_err(|error| anyhow::anyhow!(error.to_string()))?;

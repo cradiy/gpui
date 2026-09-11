@@ -6,8 +6,9 @@ use std::rc::Rc;
 fn failed_scene_replaces_nested_pick_publications_without_revoking_retained_results() {
     let captures = std::array::from_fn::<_, 4, _>(|_| Scene3dPickCapture::new(4096));
     let retained = Arc::new(vec![3_u32, 7]);
-    captures[1].publish(Ok(retained.clone()));
-    captures[3].publish(Ok(retained.clone()));
+    let previous = Arc::new(frame(&[]));
+    captures[1].publish(&previous, Ok(retained.clone()));
+    captures[3].publish(&previous, Ok(retained.clone()));
     let layer = |index: usize| {
         let mut layer = output_layer(MeshTexture3d::None);
         Arc::make_mut(layer.scene3d.as_mut().unwrap()).pick_capture = Some(captures[index].clone());
@@ -31,14 +32,28 @@ fn failed_scene_replaces_nested_pick_publications_without_revoking_retained_resu
     fail_pick_captures(&scene, error.clone());
     for capture in &captures[..3] {
         assert_eq!(capture.read::<Vec<u32>>().unwrap().unwrap_err(), error);
+        assert!(capture.read_for_frame::<Vec<u32>>(&previous).is_none());
     }
+    scene.visit(&mut |scene| {
+        for layer in &scene.subtree_layers {
+            let frame = layer.scene3d.as_ref().unwrap();
+            let capture = frame.pick_capture.as_ref().unwrap();
+            assert_eq!(
+                capture
+                    .read_for_frame::<Vec<u32>>(frame)
+                    .unwrap()
+                    .unwrap_err(),
+                error
+            );
+        }
+    });
     assert!(Arc::ptr_eq(
         &captures[3].read::<Vec<u32>>().unwrap().unwrap(),
         &retained,
     ));
     assert_eq!(&*retained, &[3, 7]);
 
-    captures[1].publish(Ok(Arc::new(vec![11_u32])));
+    captures[1].publish(&previous, Ok(Arc::new(vec![11_u32])));
     assert_eq!(*captures[1].read::<Vec<u32>>().unwrap().unwrap(), vec![11]);
     assert_eq!(captures[0].read::<Vec<u32>>().unwrap().unwrap_err(), error);
 }

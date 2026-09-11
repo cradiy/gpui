@@ -52,6 +52,7 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
     };
     let viewport = Bounds::new(point(px(0.), px(0.)), size(px(96.), px(80.)));
     let mut retained = Vec::new();
+    let mut packing = None;
     for (index, weight) in [None, Some(-0.4), Some(0.), Some(0.8)]
         .into_iter()
         .enumerate()
@@ -115,8 +116,12 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
                 .iter()
                 .find(|input| input.node == Some(node))
                 .unwrap();
-            let source = output.render_source(input.uv_sets, None)?;
+            let source = match &packing {
+                Some(source) => output.rebind_render_source(source, input.uv_sets, None)?,
+                None => output.render_source(input.uv_sets, None)?,
+            };
             let mut pending = output.prepare_render_geometry(&source, &bounds, None)?;
+            packing = Some(source);
             let prepared = read(|| pending.try_read())?;
             draws.push(Scene3dGpuDraw {
                 output_id: input.output_id,
@@ -128,6 +133,7 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
         retained.push((frame, cpu_frame, pixel, camera, expected_hit.position));
     }
     drop(deformation);
+    drop(packing);
     drop(bounds);
     drop(asset);
     drop(graph);

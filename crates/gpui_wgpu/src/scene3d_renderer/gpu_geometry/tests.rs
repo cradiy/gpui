@@ -204,6 +204,59 @@ pub(super) fn read(context: &WgpuContext, buffer: &wgpu::Buffer) -> Vec<u32> {
 
 #[test]
 #[ignore = "requires a compute-capable GPU"]
+fn source_rebinding_shares_kernels_and_topology_without_inheriting_stream_updates() {
+    let context = WgpuContext::new_headless().unwrap();
+    let mesh = mesh();
+    let source = WgpuScene3dGeometry::new(context.clone(), mesh.clone(), [0; 5], None).unwrap();
+    let updated = source
+        .with_attributes(&[Scene3dVertexUpdate::Color(&[[1., 0., 0., 1.]; 3])], None)
+        .unwrap();
+    let old_values = read(&context, &updated.source);
+    let replacement = mesh.with_uv_set(2, vec![[0.1, 0.9]; 3]).unwrap();
+    let rebound = updated
+        .with_mesh(replacement.clone(), [2; 5], None)
+        .unwrap();
+    assert!(Arc::ptr_eq(rebound.base_mesh(), &replacement));
+    assert_eq!(rebound.pipeline, source.pipeline);
+    assert_eq!(rebound.layout, source.layout);
+    assert_eq!(rebound.indices, source.indices);
+    assert!(Arc::ptr_eq(
+        &rebound.attribute_kernel,
+        &updated.attribute_kernel
+    ));
+    assert_ne!(rebound.source, updated.source);
+    let expected: Vec<_> = (0..3)
+        .map(|i| Vertex::new(&replacement, i, [2; 5]))
+        .collect();
+    assert_eq!(
+        read(&context, &rebound.source),
+        bytemuck::cast_slice::<_, u32>(&expected)
+    );
+    assert_ne!(read(&context, &rebound.source), old_values);
+    assert_eq!(read(&context, &updated.source), old_values);
+    assert!(
+        updated
+            .with_mesh(replacement.clone(), [9; 5], None)
+            .is_err()
+    );
+    assert!(
+        updated
+            .with_mesh(replacement, [2; 5], Some(rebound.memory.total_bytes - 1))
+            .is_err()
+    );
+
+    let reindexed = Mesh3d::new(mesh.vertices().to_vec(), vec![0, 2, 1]);
+    let different = rebound.with_mesh(reindexed, [0; 5], None).unwrap();
+    assert_eq!(different.pipeline, rebound.pipeline);
+    assert_ne!(different.indices, rebound.indices);
+    drop(source);
+    drop(updated);
+    drop(rebound);
+    assert_eq!(read(&context, &different.indices), [0, 2, 1]);
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU"]
 fn gpu_geometry_preserves_material_attributes_and_gates_invalid_draws() {
     let context = WgpuContext::new_headless().unwrap();
     let mesh = mesh();

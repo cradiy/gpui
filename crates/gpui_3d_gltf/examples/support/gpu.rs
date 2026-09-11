@@ -187,7 +187,14 @@ impl Deformation {
                         .get(&key)
                         .is_none_or(|(mesh, _)| !mesh.ptr_eq(output.base_mesh()))
                     {
-                        let source = output.render_source(uv_sets, Some(256 * 1024 * 1024))?;
+                        let source = match self.packing.get(&key) {
+                            Some((_, source)) => output.rebind_render_source(
+                                source,
+                                uv_sets,
+                                Some(256 * 1024 * 1024),
+                            )?,
+                            None => output.render_source(uv_sets, Some(256 * 1024 * 1024))?,
+                        };
                         self.packing
                             .insert(key, (output.base_mesh().clone(), source));
                     }

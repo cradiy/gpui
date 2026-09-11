@@ -7,6 +7,7 @@ use wgpu::util::DeviceExt as _;
 use crate::{WgpuContext, wgpu_renderer::scene3d::Vertex};
 
 mod attributes;
+mod source;
 mod status;
 pub use status::{Scene3dGeometryIssues, Scene3dGeometryStatus, Scene3dGeometryStatusReadback};
 #[cfg(test)]
@@ -148,35 +149,9 @@ impl WgpuScene3dGeometry {
     ) -> Result<Self> {
         ensure!(!context.device_lost(), "GPU geometry device is lost");
         Self::check_support(&super::Scene3dDeviceCapabilities::query(&context))?;
-        for set in uv_sets {
-            ensure!(
-                mesh.uv_at(set, 0).is_some(),
-                "GPU geometry missing UV set {set}"
-            );
-        }
-        let memory = Scene3dGpuGeometryMemory::plan(mesh.vertices().len(), mesh.indices().len())?;
+        let (memory, source, indices) = source::upload(&context, &mesh, uv_sets, byte_limit, None)?;
         let device = &context.device;
-        let limits = device.limits();
-        memory.validate(
-            &limits,
-            mesh.vertices().len(),
-            mesh.indices().len(),
-            byte_limit,
-        )?;
-        let vertices: Vec<_> = (0..mesh.vertices().len())
-            .map(|index| Vertex::new(&mesh, index, uv_sets))
-            .collect();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let source = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("scene3d.geometry.source"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
-        let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("scene3d.geometry.indices"),
-            contents: bytemuck::cast_slice(mesh.indices()),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDEX,
-        });
         let entries: Vec<_> = [4, 64, 4, 4, 32]
             .into_iter()
             .enumerate()

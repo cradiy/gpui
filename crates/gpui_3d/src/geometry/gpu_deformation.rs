@@ -102,6 +102,23 @@ impl GpuDeformationOutput {
         )
     }
 
+    /// Rebinds a same-device source to this output's base mesh and coordinate selection.
+    /// Reuses packing kernels and shared index storage, with fresh base-mesh UV/colors.
+    /// Earlier source updates are not inherited. The budget includes the complete source
+    /// and one packed result, not only newly allocated storage.
+    pub fn rebind_render_source(
+        &self,
+        source: &gpui_wgpu::WgpuScene3dGeometry,
+        uv_sets: [u32; 5],
+        byte_limit: Option<u64>,
+    ) -> Result<gpui_wgpu::WgpuScene3dGeometry> {
+        ensure!(
+            std::sync::Arc::ptr_eq(&self.context.device, &source.context().device),
+            "GPU render geometry belongs to a different device"
+        );
+        source.with_mesh(self.base.0.clone(), uv_sets, byte_limit)
+    }
+
     /// Packs this output into render vertex/index/indirect buffers without CPU readback.
     /// The source must match the original CPU mesh allocation and device.
     pub fn render_geometry(

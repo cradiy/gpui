@@ -240,6 +240,13 @@ with GPU positions, normals, and tangents, returning a `Scene3dGpuGeometry` with
 CPU readback. Reuse the source across outputs from the same base mesh allocation
 and device; mismatches are rejected.
 
+`output.rebind_render_source(&source, uv_sets, byte_limit)` creates a source for
+the output's base mesh on the same device, sharing the existing packing kernels.
+Index buffers are shared when the meshes reference the same index storage. UV and
+color data are uploaded from the new base mesh; prior `with_attributes` updates
+are not inherited. Earlier sources and packed results remain valid. Admission
+counts the complete replacement source plus one result, including shared indices.
+
 `Scene::geometry_inputs()` exposes every object's output ID, optional node and
 application identity, source mesh, and active coordinate sets before image
 resolution or raster culling. Use these inputs to bind GPU geometry even while

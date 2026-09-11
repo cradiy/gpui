@@ -15,6 +15,7 @@ mod tangent_derivatives;
 mod tangent_frames;
 mod tangent_groups;
 mod tangent_weld;
+mod tangents;
 pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
 pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
 pub use preparation::{GpuGeometryPreparation, PreparedGpuGeometry};
@@ -35,6 +36,7 @@ pub use tangent_groups::{
 pub use tangent_weld::{
     GpuTangentWeld, GpuTangentWeldMemory, GpuTangentWeldOutput, GpuTangentWeldRecord,
 };
+pub use tangents::{GpuTangents, GpuTangentsMemory, GpuTangentsOutput};
 
 /// 64-byte storage/vertex-buffer record. XYZ occupies each attribute's first three lanes.
 #[repr(C)]
@@ -46,7 +48,7 @@ pub struct GpuDeformationVertex {
     pub tangent: [f32; 4],
     /// X: zero for valid output, one for detected nonfinite arithmetic, two for an undefined
     /// tangent, three for a singular or unrepresentable blended Skin transform,
-    /// four for a zero-area triangle during flat normal reconstruction.
+    /// four for a rejected zero-area triangle during normal or tangent generation.
     /// Remaining lanes are reserved and zero.
     pub status: [u32; 4],
 }

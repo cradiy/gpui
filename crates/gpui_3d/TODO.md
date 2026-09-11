@@ -235,6 +235,8 @@ Core implementation order:
          - [ ] **Adjacency GPU validation**: Verify mirrored boundaries, non-manifold ranks, point-only contact, collapsed/collinear and failed faces, dynamic pairing, and retained results on supported adapters.
          - [ ] **Welding GPU validation**: Verify dynamic split/merge, shared indices, seams, signed zero, failed corners, multi-workgroup sorting, and retained frames on supported adapters.
        - [ ] **GPU tangent publication**: Normal-orthogonal frames, imported repair policy, handedness checks, Morph-to-Skin composition, and CPU MikkTSpace parity on supported adapters.
+         - [x] **Fixed-order tangent vertices**: Initial tangent-source metadata, normal projection, explicit Strict/Inherit/Repair modes, triangle handedness rejection, independent repair tags, and canonical deformation output for Skin and render packing.
+         - [ ] **Publication GPU validation**: Verify deformed frame projection, repair selection, mixed signs, original failure propagation, retained outputs, and Morph/Skin/render composition on supported adapters.
          - [ ] **CPU/GPU generation parity**: Align welding keys, edge ordering, normalization, and degenerate-frame inheritance across evaluation paths before enabling imported generated tangents.
      - [ ] **Imported GPU validation**: Verify signed/default weights, multiple primitives and instances, direction reconstruction, source identity, and retained outputs against CPU evaluation on supported adapters.
    - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.

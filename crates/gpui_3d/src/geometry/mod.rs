@@ -28,7 +28,8 @@ pub use gpu_deformation::{
     GpuTangentDerivatives, GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentFrame,
     GpuTangentFrames, GpuTangentFramesMemory, GpuTangentFramesOutput, GpuTangentGroup,
     GpuTangentGroups, GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld,
-    GpuTangentWeldMemory, GpuTangentWeldOutput, GpuTangentWeldRecord, PreparedGpuGeometry,
+    GpuTangentWeldMemory, GpuTangentWeldOutput, GpuTangentWeldRecord, GpuTangents,
+    GpuTangentsMemory, GpuTangentsOutput, PreparedGpuGeometry,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpu_morph::{GpuMorph, GpuMorphMemory};

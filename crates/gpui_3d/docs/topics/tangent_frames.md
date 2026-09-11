@@ -60,8 +60,8 @@ triangle can inherit different orientations, which final vertex publication must
 validate rather than silently changing the signs.
 
 Faces with distinct positions and undefined UV frames use their assigned groups
-instead of this donor rule. Frame repair, fixed-vertex publication, and imported
-MikkTSpace regeneration remain separate operations. CPU meshes,
+instead of this donor rule. [Frame repair and fixed-vertex publication](tangent_publication.md)
+consume the corner output separately from imported MikkTSpace regeneration. CPU meshes,
 bounds, and picking are unchanged. Do not bind this corner buffer as render vertices.
 
 ## Records

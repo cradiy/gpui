@@ -8,6 +8,9 @@ adoption and GPU snapshot interfaces.
 [GPU vertex streams](vertex_streams.md) update render-source UVs and colors
 independently of deformation records.
 
+[GPU tangent publication](tangent_publication.md) converts connected corner
+frames into deformation vertices with explicit inheritance and repair policies.
+
 ## Morph computation
 
 With the native `wgpu` feature, `GpuMorph` uploads a `MorphTargets` binding to
@@ -142,8 +145,8 @@ the buffer through another GPU binding.
 
 Status X is zero for a valid record, one for detected nonfinite arithmetic,
 two for an undefined tangent frame, three for a singular or unrepresentable
-blended Skin transform, and four for a zero-area face during flat normal
-reconstruction. Other lanes are reserved and zero. Submission
+blended Skin transform, and four for a rejected zero-area face during normal or
+tangent generation. Other lanes are reserved and zero. Submission
 validation does not prove that the computed attributes are valid.
 
 `readback()` waits for the GPU, checks record status, validates mesh attributes,

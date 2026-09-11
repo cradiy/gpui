@@ -39,7 +39,8 @@ pub use geometry::{
     GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentFrame, GpuTangentFrames,
     GpuTangentFramesMemory, GpuTangentFramesOutput, GpuTangentGroup, GpuTangentGroups,
     GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld, GpuTangentWeldMemory,
-    GpuTangentWeldOutput, GpuTangentWeldRecord, PreparedGpuGeometry,
+    GpuTangentWeldOutput, GpuTangentWeldRecord, GpuTangents, GpuTangentsMemory, GpuTangentsOutput,
+    PreparedGpuGeometry,
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

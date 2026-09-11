@@ -80,20 +80,21 @@ pub struct GpuMorph {
 }
 
 impl GpuMorph {
+    /// Checks enabled compute limits without allocating resources or submitting work.
+    /// Mesh size, payload admission, device health, and output validity are checked separately.
+    pub fn check_support(capabilities: &gpui_wgpu::Scene3dDeviceCapabilities) -> Result<()> {
+        super::gpu_deformation::support::validate(capabilities, 4, 1, 0)
+    }
+
     pub fn new(
         context: WgpuContext,
         source: MorphTargets,
         limits: GpuDeformationLimits,
     ) -> Result<Self> {
         ensure!(!context.device_lost(), "GPU Morph device is lost");
+        Self::check_support(&gpui_wgpu::Scene3dDeviceCapabilities::query(&context))?;
         let device = &context.device;
         let capabilities = device.limits();
-        ensure!(
-            capabilities.max_storage_buffers_per_shader_stage >= 4
-                && capabilities.max_compute_invocations_per_workgroup >= 64
-                && capabilities.max_compute_workgroup_size_x >= 64,
-            "GPU Morph compute limits are unsupported"
-        );
         let memory = GpuMorphMemory::plan(
             source.base_mesh().vertex_count(),
             source.targets().len(),

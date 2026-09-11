@@ -3003,6 +3003,25 @@ impl WgpuRenderer {
         } else {
             None
         };
+        if has_scene3d {
+            let mut failure = None;
+            scene.visit(&mut |scene| {
+                for layer in &scene.subtree_layers {
+                    if let Some(frame) = &layer.scene3d
+                        && let Err(error) = crate::scene3d_renderer::gpu_draws::validate_frame(
+                            &self.resources().device,
+                            frame,
+                        )
+                    {
+                        failure = Some(error);
+                    }
+                }
+            });
+            if let Some(error) = failure {
+                *self.last_error.lock().unwrap() = Some(error.to_string());
+                return false;
+            }
+        }
         if !self.encode_ui_captures(scene, encoder, retain_outputs) {
             return false;
         }

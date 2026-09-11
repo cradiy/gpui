@@ -212,6 +212,7 @@ fn scene_skins_cancel_mesh_node_transforms_and_keep_instances_and_snapshots_inde
     let base = graph.evaluate().unwrap();
     let first_primitive = first.node(skin.primitive()).unwrap();
     let second_primitive = second.node(skin.primitive()).unwrap();
+    let retained_pose = skin.pose(&first, &base).unwrap();
     let rest = base.scene(Camera::default());
     let hit = rest
         .raycast(Ray::new([5.25, 0.75, 5.], [0., 0., -1.]).unwrap())
@@ -240,6 +241,46 @@ fn scene_skins_cancel_mesh_node_transforms_and_keep_instances_and_snapshots_inde
         let poses = graph.evaluate_with_transforms(locals).unwrap();
         let first_mesh = skin.evaluate(&first, &poses).unwrap();
         let second_mesh = skin.evaluate(&second, &poses).unwrap();
+        let first_pose = skin.pose(&first, &poses).unwrap();
+        let second_pose = skin.pose(&second, &poses).unwrap();
+        assert_eq!(first_pose.primitive, first_primitive);
+        assert_eq!(second_pose.primitive, second_primitive);
+        near(
+            first_pose.mesh_world.transform_point([0.; 3]),
+            [105., 0., 0.],
+        );
+        near(
+            second_pose.mesh_world.transform_point([0.; 3]),
+            [115., 0., 0.],
+        );
+        near(
+            first_pose.joint_world[0].transform_point([0.; 3]),
+            [5., height, 0.],
+        );
+        near(
+            first_pose.joint_world[1].transform_point([0.; 3]),
+            [5., 0., 0.],
+        );
+        near(
+            second_pose.joint_world[0].transform_point([0.; 3]),
+            [15., 2., 0.],
+        );
+        near(
+            second_pose.joint_world[1].transform_point([0.; 3]),
+            [15., 0., 0.],
+        );
+        let via_inputs = skin
+            .binding()
+            .evaluate_world(
+                skin.base_mesh(),
+                first_pose.mesh_world,
+                &first_pose.joint_world,
+            )
+            .unwrap();
+        for (actual, expected) in via_inputs.vertices().iter().zip(first_mesh.1.vertices()) {
+            near(actual.position, expected.position);
+            near(actual.normal, expected.normal);
+        }
         graph.set_mesh(first_mesh.0, first_mesh.1).unwrap();
         graph.set_mesh(second_mesh.0, second_mesh.1).unwrap();
         let evaluated = graph.evaluate_with_transforms(locals).unwrap();
@@ -263,9 +304,16 @@ fn scene_skins_cancel_mesh_node_transforms_and_keep_instances_and_snapshots_inde
             .is_none()
     );
     let foreign = SceneGraph::new();
+    assert!(skin.pose(&first, &foreign.evaluate().unwrap()).is_err());
     assert!(skin.evaluate(&first, &foreign.evaluate().unwrap()).is_err());
     graph.remove_subtree(first.root()).unwrap();
     let remaining = graph.evaluate().unwrap();
+    assert!(skin.pose(&first, &remaining).is_err());
+    assert!(skin.pose(&second, &remaining).is_ok());
+    near(
+        retained_pose.joint_world[0].transform_point([0.; 3]),
+        [5., 2., 0.],
+    );
     assert!(skin.evaluate(&first, &remaining).is_err());
     assert!(skin.evaluate(&second, &remaining).is_ok());
 }

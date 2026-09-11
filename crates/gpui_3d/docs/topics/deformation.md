@@ -116,6 +116,68 @@ loop. Retaining only the GPU buffer does not synchronize CPU bounds or picking.
 Device loss, weight mismatches, malformed output, and invalid mesh attributes
 are returned as errors.
 
+### Nonblocking readback
+
+`request_readback(max_staging_bytes)` returns an owned `GpuDeformationReadback`.
+The optional staging limit is checked before allocation; `staging_bytes()` reports
+the admitted payload. Each request owns its own staging buffer and may outlive the
+deformation output and compute source. Concurrent requests are independent;
+the caller controls their count and total memory use.
+
+`try_read()` pumps device callbacks without waiting for GPU completion. It returns
+`Ok(None)` while pending and `Ok(Some(mesh))` once the attributes have been validated
+and materialized. CPU decoding and mesh validation occur during the ready call and
+scale with vertex count. Use a worker thread when this work exceeds the interaction
+budget. Success or failure releases staging resources; subsequent calls return an
+error. Dropping a pending request cancels mapping and releases its resources without
+canceling already submitted GPU commands.
+
+The returned mesh has fresh bounds and query state. Publishing it to a scene or
+pose snapshot is explicit; no existing scene or query is mutated. Keep the last
+accepted snapshot while waiting, and associate requests with application revisions
+when older results must not replace newer poses.
+
+### Bounds readback
+
+`GpuDeformationBounds` reduces mesh-local bounds on the GPU. Reuse the reducer
+for outputs on the same device. Each request allocates a 32-byte result buffer
+and 32-byte staging buffer, independently of vertex count. The optional working
+byte limit covers both buffers, excluding the existing input, pipeline, workgroup
+memory, and driver overhead. The caller controls concurrent requests and total
+residency.
+
+```rust,no_run
+# use gpui_3d::{GpuDeformationBounds, GpuDeformationOutput, WgpuContext};
+# fn example(context: WgpuContext, output: &GpuDeformationOutput) -> anyhow::Result<()> {
+let reducer = GpuDeformationBounds::new(context)?;
+let mut request = reducer.request(output, Some(64))?;
+
+// Poll during a later application update, retaining the request while pending.
+if let Some(bounds) = request.try_read()? {
+    let local_bounds = [bounds.min(), bounds.max()];
+    // Use local_bounds with the packed geometry from this output.
+}
+# Ok(())
+# }
+```
+
+The reduction includes every vertex, including vertices not referenced by
+triangles. Nonzero vertex status or nonfinite positions fail the entire result.
+Bounds describe positions only; they do not validate other vertex attributes or
+materialize CPU geometry. Mesh queries and existing scene snapshots remain
+unchanged.
+
+`try_read()` does not wait for GPU completion and decodes a fixed-size payload.
+Success or failure releases staging storage and makes the request terminal.
+Requests may outlive the reducer and input. Dropping a request cancels mapping,
+not already submitted commands.
+
+Associate each result with its original deformation output. A previous pose's
+bounds need not contain a newer pose. While awaiting a result, render the last
+complete geometry/bounds pair or provide a conservative envelope for the current
+pose. Pass the accepted bounds as `[min, max]` to `Scene3dGpuDraw`; do not substitute
+them for the undeformed CPU mesh's query bounds.
+
 ## Render vertex packing
 
 `output.render_source(uv_sets, byte_limit)` creates a reusable
@@ -167,11 +229,14 @@ CPU queries at the deformed pose.
 
 `WgpuScene3dRenderer::render_with_geometry` accepts the same draws for a prepared
 `Scene3dFrame`. Its input must still contain every overridden object; objects
-removed by earlier preparation cannot be recovered. `Viewport` requires CPU mesh
-inputs and does not accept packed overrides.
+removed by earlier preparation cannot be recovered. Prepared frames retain packed
+resources on their individual objects. `WgpuScene3dRenderer::render` also accepts
+frames with those resources attached. An empty override list preserves the frame's
+existing geometry.
 
 Rendered geometry memory includes packed vertices, indices, and indirect arguments,
-counted once per distinct active packed output. Source upload buffers and deformation
+counted once per distinct active packed output. Index buffers shared by multiple
+outputs are counted once across those outputs. Source upload buffers and deformation
 attributes have separate admission limits. Draw statistics count submissions,
 including indirect draws suppressed by invalid GPU attributes.
 
@@ -182,7 +247,91 @@ all retained results or the separate 64-byte deformation attributes. Compute,
 indirect execution, five storage bindings, and device buffer/dispatch limits are
 required. No global cache retains these objects.
 
+## Window viewports
+
+`WgpuContext::for_window(window)` shares the window's current device and queue.
+Use this context for Morph/Skin sources and packed geometry. A separately created
+headless context is not interchangeable, even on the same adapter. Unsupported
+backends return `None`. After device recovery, reacquire the context and recreate
+device-local sources and outputs.
+
+`viewport3d(id, scene).gpu_geometry(&draws)?` attaches packed outputs before scene
+preparation. IDs are scene object indices plus one; conservative local bounds
+control culling and transparent sorting. The renderer validates device identity,
+source meshes, coordinate sets, and bounds before encoding. Invalid bindings fail
+rendering instead of drawing the original mesh.
+
+```rust
+# use gpui_3d::{Scene, Scene3dGpuDraw, Viewport3d, viewport3d};
+# fn view(scene: Scene, draws: &[Scene3dGpuDraw]) -> anyhow::Result<Viewport3d> {
+let viewport = viewport3d("deformation", scene)
+    .gpu_geometry(draws)?
+    .color_samples(4);
+# Ok(viewport)
+# }
+```
+
+Geometry is retained by each frame object, not a window-wide object-ID table.
+Separate viewports may reuse the same IDs with different outputs. Treat buffers
+as immutable and replace frame snapshots when geometry changes; unchanged frames
+can reuse cached output pixels.
+
+GPU overrides disable CPU object hover/click picking and captured-UI pointer
+routing for the entire viewport. This avoids reporting bind-pose hits or selecting
+objects through unqueried deformed surfaces. Ordinary surrounding 2D controls and
+caller-owned camera gestures remain available. Materialize CPU meshes and use a
+viewport without GPU overrides when CPU mesh interactions are required.
+
+### Interactive example
+
+```sh
+cargo run -p gpui_3d --example scene --features wgpu
+```
+
+Enable **Blend shapes**, **Bend skin**, or both, then switch **CPU deformation**
+to **GPU deformation**. Both paths use the same timeline, weights, camera, and
+transforms. Pause or step the timeline to compare a fixed pose. **Taper mesh** uses
+CPU mesh updates and selects CPU mode. In GPU mode, use the numbered buttons for
+assembly selection; orbit, pan, zoom, material edits, and visibility controls remain
+available.
+
+GPU sources and packed outputs are retained between unchanged samples. Device
+replacement recreates those resources. The example displays preparation failures
+in the viewport and pauses playback; it does not substitute CPU deformation.
+
+GPU mode publishes geometry with bounds reduced from the same output. While its
+single bounds request is pending, the last complete pair remains visible; playback
+samples are coalesced to the latest requested pose. The initial pair uses the
+uploaded base mesh. Bounds polling continues when playback is paused, so a seek or
+weight change can finish without another input event.
+
 ## Resource admission
+
+`Scene3dDeviceCapabilities::query(&context)` reports both `adapter_limits` and
+device-enabled `limits`. Check the latter when deciding whether an existing
+device can run a pipeline. Adapter support does not enable additional device
+limits automatically.
+
+```rust,no_run
+# use gpui_3d::{GpuDeformationBounds, GpuMorph, GpuSkin, Scene3dDeviceCapabilities, WgpuContext, WgpuScene3dGeometry};
+# fn example(context: &WgpuContext) -> anyhow::Result<()> {
+let capabilities = Scene3dDeviceCapabilities::query(context);
+GpuMorph::check_support(&capabilities)?;
+GpuSkin::check_support(&capabilities)?;
+GpuDeformationBounds::check_support(&capabilities)?;
+WgpuScene3dGeometry::check_support(&capabilities)?;
+# Ok(())
+# }
+```
+
+Check only the operations used by the application. Morph and Skin require four
+storage buffers and one uniform buffer per compute stage. Bounds reduction uses
+two storage buffers and workgroup storage. Render vertex packing requires five
+storage buffers and indirect execution. These checks create no GPU resources or
+submissions. Errors name the missing feature or limit, including required,
+device-enabled, and adapter-advertised values for limit failures. Constructors
+perform the same checks; payload size, allocation success, device health,
+render-target support, and computed vertex validity remain separate concerns.
 
 `GpuMorphMemory::plan(vertices, targets, limits)` checks counts and payload budgets
 without a GPU. Vertex count must be positive; vertex, target, and flattened-delta
@@ -222,5 +371,6 @@ The compute comparison requires an explicit GPU run:
 ```sh
 cargo test -p gpui_3d --features wgpu --lib compute_morph_matches_cpu -- --ignored
 cargo test -p gpui_3d --features wgpu --lib compute_skin_composes_morph -- --ignored
+cargo test -p gpui_3d --features wgpu --lib gpu_bounds_match_retained_morph -- --ignored
 cargo test -p gpui_wgpu --lib gpu_geometry_preserves_material -- --ignored
 ```

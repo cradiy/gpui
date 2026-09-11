@@ -164,6 +164,7 @@ impl ViewportRenderer {
                     .get(frame, true, limit)
                     .order
                     .iter()
+                    .filter(|&&index| frame.objects[index].gpu_geometry.is_none())
                     .map(|&index| {
                         let object = &frame.objects[index];
                         (object.mesh.clone(), object.texture_uv_sets())

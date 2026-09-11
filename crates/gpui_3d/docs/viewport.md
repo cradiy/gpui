@@ -34,7 +34,7 @@ The viewport does not schedule animation frames itself.
 | [Cameras](topics/camera.md) | Projection, optics, framing, Orbit controls, and damping. |
 | [Animation](topics/animation.md) | Transform and weight tracks, pose blending, Morph, and skinning. |
 | [Constraints](topics/constraints.md) | Follow, Aim, joint limits, and IK chains. |
-| [GPU deformation](topics/deformation.md) | Morph/Skin computation, retained buffers, resource admission, and CPU readback. |
+| [GPU deformation](topics/deformation.md) | Morph/Skin computation, viewport/headless geometry, retained buffers, and CPU readback. |
 | [Materials](topics/materials.md) | PBR, transparency, texture sampling, tangent frames, and color output. |
 | [Lighting](topics/lighting.md) | Direct lights, shadows, HDR backgrounds, and diffuse/specular environments. |
 | [Queries](topics/queries.md) | Rays, bounds, spatial indices, filtering, and object picking. |

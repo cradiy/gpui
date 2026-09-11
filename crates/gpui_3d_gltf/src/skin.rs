@@ -97,6 +97,16 @@ pub struct SceneSkin {
     pub(crate) base: Mesh,
 }
 
+/// Instance-mapped world transforms from one final evaluated scene snapshot.
+/// Inverse binds and mesh-space cancellation have not been applied.
+#[derive(Clone, Debug)]
+pub struct SceneSkinPose {
+    pub primitive: NodeHandle,
+    pub mesh_world: AffineTransform,
+    /// World matrices in the binding's joint order, not glTF node order.
+    pub joint_world: Vec<AffineTransform>,
+}
+
 impl SceneSkin {
     pub fn skin_index(&self) -> usize {
         self.index
@@ -112,6 +122,17 @@ impl SceneSkin {
     }
     pub fn base_mesh(&self) -> &Mesh {
         &self.base
+    }
+
+    /// Resolves the primitive and ordered joints without evaluating vertices or changing a graph.
+    /// The instance and snapshot must contain every required handle. The owned result remains
+    /// valid for that snapshot after later graph edits; it does not track a newer pose.
+    pub fn pose(
+        &self,
+        instance: &SubtreeInstance,
+        poses: &EvaluatedScene,
+    ) -> Result<SceneSkinPose> {
+        self.pose_using(|source| instance.node(source), poses)
     }
 
     /// Skins the undeformed base from final world poses without mutating the graph.
@@ -139,6 +160,19 @@ impl SceneSkin {
         poses: &EvaluatedScene,
         mesh: &Mesh,
     ) -> Result<(NodeHandle, Mesh)> {
+        let pose = self.pose_using(map, poses)?;
+        let mesh = self
+            .binding
+            .evaluate_world(mesh, pose.mesh_world, &pose.joint_world)
+            .with_context(|| format!("skin {} primitive {:?}", self.index, self.primitive))?;
+        Ok((pose.primitive, mesh))
+    }
+
+    fn pose_using(
+        &self,
+        map: impl Fn(NodeHandle) -> Option<NodeHandle>,
+        poses: &EvaluatedScene,
+    ) -> Result<SceneSkinPose> {
         let evaluate = (|| -> Result<_> {
             let primitive = map(self.primitive).context("primitive is absent from the instance")?;
             let mesh_world = poses
@@ -156,10 +190,11 @@ impl SceneSkin {
                         .world)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Ok((
+            Ok(SceneSkinPose {
                 primitive,
-                self.binding.evaluate_world(mesh, mesh_world, &joints)?,
-            ))
+                mesh_world,
+                joint_world: joints,
+            })
         })();
         evaluate.with_context(|| format!("skin {} primitive {:?}", self.index, self.primitive))
     }

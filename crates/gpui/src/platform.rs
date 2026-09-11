@@ -1305,6 +1305,11 @@ impl From<RenderImageParams> for AtlasKey {
 
 #[expect(missing_docs)]
 pub trait PlatformAtlas {
+    /// Backend-owned context for device-local resource creation. Unsupported backends return None.
+    fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        None
+    }
+
     fn get_or_insert_with<'a>(
         &self,
         key: &AtlasKey,

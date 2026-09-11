@@ -61,6 +61,22 @@ impl MorphGeometry {
     pub fn targets(&self) -> &[MorphTarget] {
         self.targets.targets()
     }
+    /// Shared, validated inputs for attribute-delta evaluation, before direction regeneration.
+    /// Generated tangents are absent from this input mesh. Clone this value for a retained
+    /// compute source; inspect the regeneration requirements before using its output directly.
+    pub fn attribute_targets(&self) -> &MorphTargets {
+        &self.targets
+    }
+
+    /// Whether nonzero-weight samples rebuild flat normals from deformed triangle positions.
+    pub fn regenerates_normals(&self) -> bool {
+        self.flat_normals
+    }
+
+    /// Whether nonzero-weight samples rebuild MikkTSpace tangents using the selected UV set.
+    pub fn regenerates_tangents(&self) -> bool {
+        self.generated_tangents
+    }
     /// Total retained VEC3 elements across all target attributes.
     pub fn attribute_vertex_count(&self) -> usize {
         self.attribute_count

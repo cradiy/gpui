@@ -653,6 +653,8 @@ impl DirectionalShadow3d {
 /// One indexed mesh and its material parameters.
 #[derive(Clone, Debug)]
 pub struct MeshDraw3d {
+    /// Immutable backend-owned geometry. Requires explicit render bounds and backend validation.
+    pub gpu_geometry: Option<MeshGpuGeometry3d>,
     /// Optional conservative mesh-local render bounds, independent of CPU vertex/query data.
     /// Bounds must be finite and ordered. Objects with explicit bounds draw independently.
     pub render_bounds: Option<[[f32; 3]; 2]>,
@@ -705,6 +707,36 @@ pub struct MeshDraw3d {
     pub cast_shadows: bool,
     /// Receive direct-light shadows; ignored by unlit materials.
     pub receive_shadows: bool,
+}
+
+/// Owned device-local geometry payload. The renderer validates its concrete backend type,
+/// device, and source mesh. Replacing geometry requires a fresh frame snapshot.
+#[derive(Clone)]
+pub struct MeshGpuGeometry3d(Arc<dyn std::any::Any + Send + Sync>);
+
+impl MeshGpuGeometry3d {
+    /// Wraps an immutable backend geometry allocation.
+    pub fn new<T: std::any::Any + Send + Sync>(geometry: Arc<T>) -> Self {
+        Self(geometry)
+    }
+
+    /// Borrows a payload understood by the current renderer.
+    pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
+
+    /// Retains a typed backend allocation when its type matches.
+    pub fn downcast<T: std::any::Any + Send + Sync>(&self) -> Option<Arc<T>> {
+        self.0.clone().downcast().ok()
+    }
+}
+
+impl std::fmt::Debug for MeshGpuGeometry3d {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("MeshGpuGeometry3d")
+            .field(&Arc::as_ptr(&self.0))
+            .finish()
+    }
 }
 
 impl MeshDraw3d {

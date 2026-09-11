@@ -9,6 +9,43 @@ use crate::{WgpuContext, wgpu_renderer::scene3d::Vertex};
 #[cfg(test)]
 mod tests;
 
+fn validate_support(
+    limits: &wgpu::Limits,
+    adapter: &wgpu::Limits,
+    flags: wgpu::DownlevelFlags,
+) -> Result<()> {
+    for flag in [
+        wgpu::DownlevelFlags::COMPUTE_SHADERS,
+        wgpu::DownlevelFlags::INDIRECT_EXECUTION,
+    ] {
+        ensure!(flags.contains(flag), "GPU geometry requires {flag:?}");
+    }
+    macro_rules! require {
+        ($field:ident, $minimum:expr) => {
+            ensure!(
+                limits.$field >= $minimum,
+                "GPU geometry requires {} >= {}; device enabled {}, adapter supports {}",
+                stringify!($field),
+                $minimum,
+                limits.$field,
+                adapter.$field
+            );
+        };
+    }
+    require!(max_storage_buffers_per_shader_stage, 5);
+    require!(max_bind_groups, 1);
+    require!(max_bindings_per_bind_group, 5);
+    require!(max_buffers_and_acceleration_structures_per_shader_stage, 5);
+    require!(max_storage_buffer_binding_size, 64);
+    require!(max_buffer_size, 64);
+    require!(max_compute_invocations_per_workgroup, 64);
+    require!(max_compute_workgroup_size_x, 64);
+    require!(max_compute_workgroup_size_y, 1);
+    require!(max_compute_workgroup_size_z, 1);
+    require!(max_compute_workgroups_per_dimension, 1);
+    Ok(())
+}
+
 /// One source and one packed result, excluding external attribute buffers and driver overhead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scene3dGpuGeometryMemory {
@@ -85,6 +122,16 @@ pub struct WgpuScene3dGeometry {
 }
 
 impl WgpuScene3dGeometry {
+    /// Checks enabled packing and indirect-draw support without creating resources.
+    /// Mesh size, payload admission, device health, and render-target support are separate checks.
+    pub fn check_support(capabilities: &super::Scene3dDeviceCapabilities) -> Result<()> {
+        validate_support(
+            &capabilities.limits,
+            &capabilities.adapter_limits,
+            capabilities.downlevel.flags,
+        )
+    }
+
     /// Coordinate sets select base, metallic/roughness, emission, normal, and occlusion UVs.
     /// The byte limit admits this source plus one result; retained results are additional.
     pub fn new(
@@ -94,12 +141,7 @@ impl WgpuScene3dGeometry {
         byte_limit: Option<u64>,
     ) -> Result<Self> {
         ensure!(!context.device_lost(), "GPU geometry device is lost");
-        ensure!(
-            context.adapter.get_downlevel_capabilities().flags.contains(
-                wgpu::DownlevelFlags::COMPUTE_SHADERS | wgpu::DownlevelFlags::INDIRECT_EXECUTION
-            ),
-            "GPU geometry requires compute and indirect execution"
-        );
+        Self::check_support(&super::Scene3dDeviceCapabilities::query(&context))?;
         for set in uv_sets {
             ensure!(
                 mesh.uv_at(set, 0).is_some(),
@@ -115,12 +157,6 @@ impl WgpuScene3dGeometry {
             mesh.indices().len(),
             byte_limit,
         )?;
-        ensure!(
-            limits.max_storage_buffers_per_shader_stage >= 5
-                && limits.max_compute_invocations_per_workgroup >= 64
-                && limits.max_compute_workgroup_size_x >= 64,
-            "GPU geometry compute limits are unsupported"
-        );
         let vertices: Vec<_> = (0..mesh.vertices().len())
             .map(|index| Vertex::new(&mesh, index, uv_sets))
             .collect();

@@ -36,6 +36,19 @@ mesh-node transform is canceled during skinning; rendering under that same
 transform applies only the joint transforms to the final surface. Transforms on
 a shared instance ancestor still move the whole rig.
 
+`SceneSkin::pose(instance, poses)` returns the mapped primitive handle, its world
+transform, and joint world transforms in binding order. It uses the same handle
+resolution as `evaluate`, but does not evaluate vertices, apply inverse binds,
+upload buffers, or mutate the graph. The owned result retains that snapshot's
+transforms after later graph edits; obtain another pose for a newer sample.
+
+Pass `pose.mesh_world` and `&pose.joint_world` to `binding().evaluate_world`, or
+to `GpuSkin::palette` for a GPU binding created from the same `SceneSkin::binding`
+with the `gpui_3d/wgpu` feature. Both apply inverse binds and mesh-space
+cancellation. Do not preapply either transform to the returned joint matrices.
+Morph output must preserve the binding's vertex order and include any required
+[direction regeneration](morph.md#attribute-inputs) before Skin evaluation.
+
 ```no_run
 use gpui_3d::{EvaluatedScene, NodeHandle, Pose, SceneGraph, SubtreeInstance, TransformConstraint};
 use gpui_3d_gltf::SceneAsset;

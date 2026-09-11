@@ -578,7 +578,7 @@ validation failures remain subject to WGPU's device error handling.
 ### Device capabilities
 
 `device_capabilities()` exposes a snapshot of the current WGPU context: adapter
-name, backend and device type, advertised and enabled features, enabled limits,
+name, backend and device type, advertised and enabled features and limits,
 downlevel flags, atlas format, effective image anisotropy, and per-format usage
 and feature flags. Each format distinguishes adapter support from features
 enabled on the device. Inspect the device flags for filtering, blending, sample

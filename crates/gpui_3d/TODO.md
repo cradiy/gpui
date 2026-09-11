@@ -206,13 +206,20 @@ Core implementation order:
    - [x] **Constrained chains**: Multi-joint solving with local rotation limits, explicit convergence/reach diagnostics, and no internal playback history.
 5. [x] **Deformation measurements**: Reproducible CPU Skin/Morph workloads covering mesh size, active influences, target counts, and concurrent instances; distinguish evaluation from upload/render time.
 6. [ ] **GPU deformation**: Shared skin palettes and Morph inputs, bounded GPU buffers, retained outputs, and explicit CPU bounds/picking synchronization. Preserve CPU evaluation for callers requiring final geometry.
+   - [x] **Capability preflight**: Per-operation compute checks shared with constructors, adapter/enabled limit reporting, and independent indirect-execution requirements for vertex packing.
    - [x] **GPU Morph**: Reusable uploaded targets, signed per-evaluation weights, retained attribute buffers, payload admission, and explicit CPU mesh readback.
-   - [ ] **GPU validation**: Check Morph/Skin output parity, composition, and retained-output lifetime on supported adapters.
+   - [ ] **GPU validation**: Check Morph/Skin output parity, bounds reduction, composition, and retained-output lifetime on supported adapters.
    - [x] **GPU Skin**: Shared influence bindings, per-instance palettes, and Morph-to-Skin buffer composition.
+   - [x] **Imported deformation inputs**: Shared glTF attribute targets, explicit direction-regeneration requirements, and instance-mapped final Skin poses in binding joint order.
+   - [ ] **Imported GPU evaluation**: Preserve generated normal/tangent policies, authored Morph defaults, Morph-before-Skin ordering, and source geometry identity when routing imported primitives to GPU draws.
+   - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.
+   - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.
    - [ ] **Render integration**: Consume deformation buffers without CPU readback, with explicit bounds and query synchronization policies.
      - [x] **GPU vertex packing**: Shared material-coordinate and index inputs, retained render-format vertices, and indirect draw suppression for invalid deformation results.
      - [x] **Headless draw routing**: Bind packed outputs to objects across render channels, with conservative render bounds and explicit CPU query materialization.
-     - [ ] **Viewport draw routing**: Supply device-local packed geometry to window rendering with explicit bounds and interaction policies.
+     - [x] **Viewport draw routing**: Window-device sharing, frame-local packed resources, conservative bounds, cache invalidation, and explicit CPU interaction limits.
+     - [x] **Interactive deformation comparison**: Shared CPU/GPU timeline, Morph/Skin controls, retained sources, paired GPU bounds, bounded pending work, and explicit backend failures in the scene example.
+     - [ ] **Viewport GPU validation**: Verify multiple viewports, retained outputs, replacement, shadows, nested captures, and device recovery on supported adapters.
 
 Independent extensions:
 

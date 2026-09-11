@@ -17,6 +17,9 @@ pub struct Scene3dDeviceCapabilities {
     pub adapter_info: wgpu::AdapterInfo,
     pub adapter_features: wgpu::Features,
     pub enabled_features: wgpu::Features,
+    /// Hardware-advertised limits, which may exceed those enabled on the device.
+    pub adapter_limits: wgpu::Limits,
+    /// Limits actually enabled when the device was requested.
     pub limits: wgpu::Limits,
     pub downlevel: wgpu::DownlevelCapabilities,
     pub color_atlas_format: F,
@@ -65,6 +68,7 @@ impl Scene3dDeviceCapabilities {
             adapter_info: context.adapter.get_info(),
             adapter_features: context.adapter.features(),
             enabled_features,
+            adapter_limits: context.adapter.limits(),
             limits: context.device.limits(),
             max_image_anisotropy: if downlevel
                 .flags

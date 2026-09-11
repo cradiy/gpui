@@ -207,6 +207,8 @@ fn same_map(a: Option<MaterialTexture3d>, b: Option<MaterialTexture3d>) -> bool 
 fn compatible(a: &MeshDraw3d, b: &MeshDraw3d) -> bool {
     a.render_bounds.is_none()
         && b.render_bounds.is_none()
+        && a.gpu_geometry.is_none()
+        && b.gpu_geometry.is_none()
         && a.alpha_mode != AlphaMode3d::Blend
         && Arc::ptr_eq(&a.mesh, &b.mesh)
         && a.alpha_mode == b.alpha_mode

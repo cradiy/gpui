@@ -41,4 +41,4 @@ pub use morph::{MorphGeometry, SceneMorph};
 pub use playback::AnimationPlayback;
 pub use resources::{Document, EncodedImage, Limits, PreparedDocument, ResourceRequest};
 pub use scene::{SceneAsset, SceneDefinition, SceneNode, SceneOptions, ScenePrimitive};
-pub use skin::{SceneSkin, SkinDefinition, SkinOptions};
+pub use skin::{SceneSkin, SceneSkinPose, SkinDefinition, SkinOptions};

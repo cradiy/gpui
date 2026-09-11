@@ -3606,6 +3606,12 @@ impl Window {
         self.platform_window.scene3d_support()
     }
 
+    /// Returns the current backend context for device-local resource extensions.
+    /// The concrete type is backend-specific and may change after device recovery.
+    pub fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        self.sprite_atlas.renderer_context()
+    }
+
     /// Releases mesh-rendering caches for all 3D viewports in this window.
     /// Shared 2D atlas and UI capture resources remain valid. The next mesh draw
     /// rebuilds caches lazily; this does not schedule a frame or wait for the GPU.

@@ -20,7 +20,10 @@ mod transform;
 pub use aim::{AimError, AimResult, AimSettings, AimStatus};
 pub use bounds::Aabb;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
-pub use gpu_deformation::{GpuDeformationLimits, GpuDeformationOutput, GpuDeformationVertex};
+pub use gpu_deformation::{
+    GpuDeformationBounds, GpuDeformationBoundsReadback, GpuDeformationLimits, GpuDeformationOutput,
+    GpuDeformationReadback, GpuDeformationVertex,
+};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpu_morph::{GpuMorph, GpuMorphMemory};
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

@@ -52,6 +52,17 @@ pub struct Viewport3d {
     pick_snapshot: Rc<RefCell<Option<PickSnapshot>>>,
 }
 impl Viewport3d {
+    /// Draws packed geometry without vertex readback. IDs are scene object indices plus one.
+    /// Create resources with `WgpuContext::for_window`; the renderer rejects wrong-device,
+    /// source-mesh, and material-coordinate bindings. Bounds are conservative and mesh-local.
+    /// GPU overrides disable CPU object picking and captured-UI pointer routing for this
+    /// viewport. Materialize CPU meshes to use those interactions at the deformed pose.
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    pub fn gpu_geometry(mut self, draws: &[crate::Scene3dGpuDraw]) -> anyhow::Result<Self> {
+        self.scene = super::gpu_geometry::with_geometry(&self.scene, draws)?;
+        Ok(self)
+    }
+
     /// Sets mesh raster density relative to physical render-surface pixels. Defaults to one.
     /// Must be finite and positive; dimensions are capped uniformly by the device.
     /// Does not change layout, camera projection, picking, or UI capture density.
@@ -280,7 +291,10 @@ impl Element for Content {
         if let Some(input) = &input {
             input.read(cx).prepare(
                 target.filter(|_| {
-                    capabilities.is_some() && self.0.texture.is_some() && !bounds.is_empty()
+                    capabilities.is_some()
+                        && self.0.texture.is_some()
+                        && !bounds.is_empty()
+                        && cpu_interaction_enabled(&self.0.scene)
                 }),
                 self.0.texture_size.unwrap_or(bounds.size),
                 window,
@@ -401,8 +415,7 @@ impl Element for Content {
                 state.output = Some((prepared.clone(), frame.clone()));
                 ((prepared, frame), state)
             });
-        *self.0.pick_snapshot.borrow_mut() =
-            Some(pick_snapshot(scene, bounds, surfaces, &prepared));
+        *self.0.pick_snapshot.borrow_mut() = pick_snapshot(scene, bounds, surfaces, &prepared);
         if let Some(state) = texture_state
             && let Some(input) = &state.input
         {
@@ -423,20 +436,30 @@ impl Element for Content {
     }
 }
 
+fn cpu_interaction_enabled(scene: &Scene) -> bool {
+    scene
+        .objects
+        .iter()
+        .all(|object| object.gpu_geometry.is_none())
+}
+
 fn pick_snapshot(
     scene: &Scene,
     bounds: Bounds<Pixels>,
     mut surfaces: Vec<PickSurface>,
     prepared: &PreparedScene,
-) -> PickSnapshot {
+) -> Option<PickSnapshot> {
+    if !cpu_interaction_enabled(scene) {
+        return None;
+    }
     for pending in prepared.pending_textures() {
         surfaces[pending.object_index] = PickSurface::Absent;
     }
-    PickSnapshot {
+    Some(PickSnapshot {
         scene: scene.clone(),
         bounds,
         surfaces,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -444,6 +467,38 @@ mod tests {
     use super::*;
     use crate::{Material, MaterialTexture, Mesh, Object, PbrMaterial};
     use gpui::{DevicePixels, point, px, rgb, size};
+
+    #[test]
+    fn gpu_geometry_disables_cpu_hits_without_changing_source_queries() {
+        let source =
+            Scene::new().object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))));
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let prepared = PreparationCache::new()
+            .prepare(&source, 1., None, |_| {
+                Ok(TextureState::Ready(MeshTexture3d::None))
+            })
+            .unwrap();
+        assert!(
+            pick_snapshot(&source, bounds, vec![PickSurface::Solid], &prepared)
+                .unwrap()
+                .pick(point(px(50.), px(50.)))
+                .is_some()
+        );
+        let mut render_scene = source.clone();
+        render_scene.objects[0].gpu_geometry = Some(gpui::MeshGpuGeometry3d::new(Arc::new(())));
+        assert!(
+            pick_snapshot(&render_scene, bounds, vec![PickSurface::Solid], &prepared).is_none()
+        );
+        assert!(cpu_interaction_enabled(&source));
+        assert!(!cpu_interaction_enabled(&render_scene));
+        render_scene.objects[0].gpu_geometry = None;
+        assert!(
+            pick_snapshot(&render_scene, bounds, vec![PickSurface::Solid], &prepared)
+                .unwrap()
+                .pick(point(px(50.), px(50.)))
+                .is_some()
+        );
+    }
 
     #[test]
     fn viewport_quality_validates_requests_and_resolves_device_sampling() {
@@ -526,7 +581,7 @@ mod tests {
                 vec![PickSurface::Solid, PickSurface::Solid],
                 &prepared,
             );
-            let hit = snapshot.pick(point(px(50.), px(50.))).unwrap();
+            let hit = snapshot.unwrap().pick(point(px(50.), px(50.))).unwrap();
             assert_eq!(
                 hit.object_id,
                 Some(if ready { "front" } else { "back" }.into())

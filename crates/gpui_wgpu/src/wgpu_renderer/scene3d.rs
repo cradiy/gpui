@@ -494,7 +494,6 @@ pub(crate) struct Scene3dRenderer {
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
     geometry: geometry::GeometryCache<Geometry>,
-    gpu_geometry: crate::scene3d_renderer::gpu_draws::GpuGeometryMap,
     images: Arc<parking_lot::Mutex<images::ImageCache>>,
     slots: Vec<BatchSlot>,
     offsets: HashMap<usize, usize>,
@@ -724,7 +723,6 @@ impl Scene3dRenderer {
             }),
             white: white.create_view(&Default::default()),
             geometry: geometry::GeometryCache::default(),
-            gpu_geometry: Default::default(),
             images: Default::default(),
             slots: Vec::new(),
             offsets: HashMap::new(),
@@ -896,11 +894,7 @@ impl Scene3dRenderer {
                 self.plan(frame)
                     .order
                     .iter()
-                    .filter(|&&index| {
-                        !self
-                            .gpu_geometry
-                            .contains_key(&frame.objects[index].output_id)
-                    })
+                    .filter(|&&index| frame.objects[index].gpu_geometry.is_none())
                     .map(|&index| {
                         let object = &frame.objects[index];
                         (object.mesh.clone(), object.texture_uv_sets())
@@ -1103,7 +1097,7 @@ impl Scene3dRenderer {
         let mut uploaded = HashSet::new();
         for &index in &plan.order {
             let object = &frame.objects[index];
-            if !self.gpu_geometry.contains_key(&object.output_id)
+            if object.gpu_geometry.is_none()
                 && uploaded.insert((Arc::as_ptr(&object.mesh), object.texture_uv_sets()))
             {
                 self.geometry
@@ -1903,6 +1897,7 @@ pub(crate) mod tests {
 
     pub(crate) fn object() -> gpui::MeshDraw3d {
         gpui::MeshDraw3d {
+            gpu_geometry: None,
             render_bounds: None,
             cast_shadows: true,
             receive_shadows: true,

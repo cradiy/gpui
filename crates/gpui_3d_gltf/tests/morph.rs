@@ -119,6 +119,11 @@ fn bent_faces_regenerate_directions_without_changing_corner_correspondence() {
         assert_eq!(geometry.source_vertices(), [0, 1, 2, 0, 2, 3]);
         assert_eq!(geometry.mesh().vertex_count(), 6);
         let morph = geometry.morph().unwrap();
+        assert!(morph.regenerates_normals());
+        assert_eq!(morph.regenerates_tangents(), generate_tangents);
+        let attributes = morph.attribute_targets().evaluate(&[1.]).unwrap();
+        near(attributes.vertices()[3].normal, [0., 0., 1.]);
+        near(attributes.vertices()[5].position, [0., 1., 1.]);
         for weight in [1., -1., 0., 1.] {
             let mesh = morph.evaluate(&[weight]).unwrap();
             assert_eq!(mesh.indices(), geometry.mesh().indices());
@@ -188,6 +193,14 @@ fn authored_direction_deltas_keep_signed_weights_and_tangent_handedness() {
         geometry.mesh().vertices().as_ptr()
     ));
     let mesh = morph.evaluate(&[-1.]).unwrap();
+    assert!(!morph.regenerates_normals());
+    assert!(!morph.regenerates_tangents());
+    let attributes = morph.attribute_targets().evaluate(&[-1.]).unwrap();
+    for (actual, expected) in attributes.vertices().iter().zip(mesh.vertices()) {
+        near(actual.position, expected.position);
+        near(actual.normal, expected.normal);
+    }
+    assert_eq!(attributes.tangents(), mesh.tangents());
     near(mesh.vertices()[3].position, [0., 1., -1.]);
     near(
         mesh.vertices()[0].normal,
@@ -371,7 +384,11 @@ fn regenerated_tangents_use_changed_positions_with_authored_normal_deltas() {
         )
         .unwrap();
     assert_eq!(geometry.source_vertices(), [0, 1, 2, 0, 2, 3]);
-    let mesh = geometry.morph().unwrap().evaluate(&[0.5]).unwrap();
+    let morph = geometry.morph().unwrap();
+    assert!(!morph.regenerates_normals());
+    assert!(morph.regenerates_tangents());
+    assert!(morph.attribute_targets().base_mesh().tangents().is_none());
+    let mesh = morph.evaluate(&[0.5]).unwrap();
     assert_eq!(mesh.indices(), geometry.mesh().indices());
     for (vertex, tangent) in mesh.vertices().iter().zip(mesh.tangents().unwrap()) {
         near(

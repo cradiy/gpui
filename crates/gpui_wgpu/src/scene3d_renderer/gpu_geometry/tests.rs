@@ -1,5 +1,39 @@
 use super::*;
 
+#[test]
+fn packing_preflight_separates_adapter_limits_enabled_limits_and_indirect_support() {
+    let adapter = wgpu::Limits::default();
+    let mut device = wgpu::Limits::downlevel_defaults();
+    let flags = wgpu::DownlevelFlags::all();
+    let error = validate_support(&device, &adapter, flags)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("max_storage_buffers_per_shader_stage >= 5"));
+    assert!(error.contains("device enabled 4"));
+    assert!(error.contains(&format!(
+        "adapter supports {}",
+        adapter.max_storage_buffers_per_shader_stage
+    )));
+    device.max_storage_buffers_per_shader_stage = 5;
+    validate_support(&device, &adapter, flags).unwrap();
+    for flag in [
+        wgpu::DownlevelFlags::COMPUTE_SHADERS,
+        wgpu::DownlevelFlags::INDIRECT_EXECUTION,
+    ] {
+        let error = validate_support(&device, &adapter, flags - flag)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&format!("{flag:?}")));
+    }
+    device.max_bindings_per_bind_group = 4;
+    assert!(
+        validate_support(&device, &adapter, flags)
+            .unwrap_err()
+            .to_string()
+            .contains("max_bindings_per_bind_group")
+    );
+}
+
 fn mesh() -> Arc<Mesh3d> {
     let mesh = Mesh3d::new(
         vec![

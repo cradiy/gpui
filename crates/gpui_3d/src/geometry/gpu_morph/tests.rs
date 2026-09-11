@@ -204,6 +204,16 @@ fn readback_decoding_rebuilds_bounds_and_rejects_invalid_records() {
 #[test]
 #[ignore = "requires a compute-capable GPU"]
 fn compute_morph_matches_cpu_and_retains_independent_outputs() {
+    let read = |request: &mut crate::GpuDeformationReadback| -> anyhow::Result<Mesh> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(mesh) = request.try_read()? {
+                return Ok(mesh);
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::yield_now();
+        }
+    };
     let source = source();
     let context = WgpuContext::new_headless().unwrap();
     let gpu = GpuMorph::new(
@@ -217,13 +227,29 @@ fn compute_morph_matches_cpu_and_retains_independent_outputs() {
     let first = gpu.evaluate(&[0.75, -0.5]).unwrap();
     let zero = gpu.evaluate(&[0., 0.]).unwrap();
     let second = gpu.evaluate(&[-0.2, 0.9]).unwrap();
+    let bytes = first.buffer().size();
+    assert!(first.request_readback(Some(bytes - 1)).is_err());
+    let mut request = first.request_readback(Some(bytes)).unwrap();
+    assert_eq!(request.staging_bytes(), bytes);
+    let canceled = second.request_readback(None).unwrap();
+    drop(canceled);
+    let mut second_request = second.request_readback(None).unwrap();
+    drop(first);
+    drop(second);
     drop(gpu);
     near_mesh(
-        &first.readback().unwrap(),
+        &read(&mut request).unwrap(),
         &source.evaluate(&[0.75, -0.5]).unwrap(),
     );
+    assert!(
+        request
+            .try_read()
+            .unwrap_err()
+            .to_string()
+            .contains("finished")
+    );
     near_mesh(
-        &second.readback().unwrap(),
+        &read(&mut second_request).unwrap(),
         &source.evaluate(&[-0.2, 0.9]).unwrap(),
     );
     near_mesh(&zero.readback().unwrap(), source.base_mesh());
@@ -247,5 +273,18 @@ fn compute_morph_matches_cpu_and_retains_independent_outputs() {
     )
     .unwrap();
     let gpu = GpuMorph::new(context, invalid, GpuDeformationLimits::default()).unwrap();
-    assert!(gpu.evaluate(&[1.]).unwrap().readback().is_err());
+    let mut failed = gpu.evaluate(&[1.]).unwrap().request_readback(None).unwrap();
+    assert!(
+        read(&mut failed)
+            .unwrap_err()
+            .to_string()
+            .contains("status")
+    );
+    assert!(
+        failed
+            .try_read()
+            .unwrap_err()
+            .to_string()
+            .contains("finished")
+    );
 }

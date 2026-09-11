@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::{HeadlessRenderer, RenderedFrame};
-use crate::{Aabb, Scene, Scene3dGpuDraw, Scene3dOutputConfig};
+use crate::render::gpu_geometry::with_bounds;
+use crate::{Scene, Scene3dGpuDraw, Scene3dOutputConfig};
 use anyhow::{Result, ensure};
 
 impl HeadlessRenderer {
@@ -24,7 +25,7 @@ impl HeadlessRenderer {
             config,
             scene.directional_shadow.map(|shadow| shadow.resolution),
         )?;
-        let mut render_scene = with_bounds(
+        let render_scene = with_bounds(
             scene,
             draws.iter().map(|draw| (draw.output_id, draw.bounds)),
         )?;
@@ -40,8 +41,6 @@ impl HeadlessRenderer {
                 draw.output_id
             );
         }
-        // A render-only snapshot must not reuse the source scene's cached culling plan.
-        render_scene.preparation_revision = Arc::new(());
         let atlas = self.renderer.sprite_atlas();
         let max_dimension = self.capabilities().max_dimension;
         let prepared = self.images.prepare(
@@ -71,29 +70,6 @@ impl HeadlessRenderer {
             camera: scene.camera,
         })
     }
-}
-
-fn with_bounds(
-    scene: &Scene,
-    bounds: impl IntoIterator<Item = (u32, [[f32; 3]; 2])>,
-) -> Result<Scene> {
-    let mut output = scene.clone();
-    let mut seen = HashSet::new();
-    for (id, bounds) in bounds {
-        ensure!(seen.insert(id), "duplicate GPU draw object {id}");
-        let index =
-            id.checked_sub(1)
-                .ok_or_else(|| anyhow::anyhow!("GPU draw IDs start at one"))? as usize;
-        let object = output
-            .objects
-            .get_mut(index)
-            .ok_or_else(|| anyhow::anyhow!("GPU draw object {id} is absent from the scene"))?;
-        object.render_bounds = Some(
-            Aabb::new(bounds[0], bounds[1])
-                .ok_or_else(|| anyhow::anyhow!("GPU draw object {id} has invalid bounds"))?,
-        );
-    }
-    Ok(output)
 }
 
 #[cfg(test)]

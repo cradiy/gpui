@@ -1,6 +1,8 @@
 mod binding;
 mod cache;
 mod frame;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+mod gpu_geometry;
 pub use cache::PreparationCache;
 mod preparation;
 pub use preparation::{

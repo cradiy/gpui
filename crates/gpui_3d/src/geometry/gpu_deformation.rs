@@ -2,8 +2,13 @@ use crate::Mesh;
 use anyhow::{Result, ensure};
 use bytemuck::{Pod, Zeroable};
 use gpui_wgpu::{WgpuContext, wgpu};
-use std::{sync::mpsc, time::Duration};
 use wgpu::util::DeviceExt as _;
+
+mod bounds;
+mod readback;
+pub(super) mod support;
+pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
+pub use readback::GpuDeformationReadback;
 
 /// 64-byte storage/vertex-buffer record. XYZ occupies each attribute's first three lanes.
 #[repr(C)]
@@ -117,38 +122,7 @@ impl GpuDeformationOutput {
     /// validates records, and constructs a fresh CPU mesh.
     /// No existing mesh or scene is changed. Do not call on an interactive render loop.
     pub fn readback(&self) -> Result<Mesh> {
-        ensure!(
-            !self.context.device_lost(),
-            "GPU deformation device is lost"
-        );
-        let device = &self.context.device;
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gpui_3d.deformation.readback"),
-            size: self.buffer.size(),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("gpui_3d.deformation.readback"),
-        });
-        encoder.copy_buffer_to_buffer(&self.buffer, 0, &staging, 0, self.buffer.size());
-        let submission = self.context.queue.submit(Some(encoder.finish()));
-        let (send, receive) = mpsc::channel();
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = send.send(result);
-            });
-        device.poll(wgpu::PollType::Wait {
-            submission_index: Some(submission),
-            timeout: Some(Duration::from_secs(30)),
-        })?;
-        receive.recv_timeout(Duration::from_secs(1))??;
-        let bytes = staging.slice(..).get_mapped_range()?;
-        let result = decode(&self.base, &bytes);
-        drop(bytes);
-        staging.unmap();
-        result
+        self.request_readback(None)?.wait()
     }
 }
 
@@ -228,13 +202,6 @@ impl ComputeKernel {
         entry: &str,
         minimums: [u64; 3],
     ) -> Result<Self> {
-        let limits = device.limits();
-        ensure!(
-            limits.max_storage_buffers_per_shader_stage >= 4
-                && limits.max_compute_invocations_per_workgroup >= 64
-                && limits.max_compute_workgroup_size_x >= 64,
-            "GPU deformation compute limits are unsupported"
-        );
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let entries: Vec<_> = minimums
             .into_iter()

@@ -85,8 +85,15 @@ pub struct GpuSkinPalette {
 }
 
 impl GpuSkin {
+    /// Checks enabled compute limits without allocating resources or submitting work.
+    /// Binding size, payload admission, device health, and output validity are checked separately.
+    pub fn check_support(capabilities: &gpui_wgpu::Scene3dDeviceCapabilities) -> Result<()> {
+        super::gpu_deformation::support::validate(capabilities, 4, 1, 0)
+    }
+
     pub fn new(context: WgpuContext, source: Skin, limits: GpuDeformationLimits) -> Result<Self> {
         ensure!(!context.device_lost(), "GPU Skin device is lost");
+        Self::check_support(&gpui_wgpu::Scene3dDeviceCapabilities::query(&context))?;
         let influences = (0..source.vertex_count()).try_fold(0_usize, |count, vertex| {
             count
                 .checked_add(source.vertex_influences(vertex)?.len())

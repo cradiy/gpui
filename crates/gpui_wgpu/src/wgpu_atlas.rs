@@ -30,6 +30,7 @@ struct PendingUpload {
 }
 
 struct WgpuAtlasState {
+    context: Option<Arc<WgpuContext>>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     max_texture_size: u32,
@@ -53,6 +54,7 @@ impl WgpuAtlas {
     ) -> Self {
         let max_texture_size = device.limits().max_texture_dimension_2d;
         WgpuAtlas(Mutex::new(WgpuAtlasState {
+            context: None,
             device,
             queue,
             max_texture_size,
@@ -66,11 +68,13 @@ impl WgpuAtlas {
     }
 
     pub fn from_context(context: &WgpuContext) -> Self {
-        Self::new(
+        let atlas = Self::new(
             context.device.clone(),
             context.queue.clone(),
             context.color_texture_format(),
-        )
+        );
+        atlas.0.lock().context = Some(Arc::new(context.clone()));
+        atlas
     }
 
     pub fn before_frame(&self) {
@@ -116,6 +120,7 @@ impl WgpuAtlas {
     /// The atlas will lazily recreate textures as needed on subsequent frames.
     pub fn handle_device_lost(&self, context: &WgpuContext) {
         let mut lock = self.0.lock();
+        lock.context = Some(Arc::new(context.clone()));
         lock.device = context.device.clone();
         lock.queue = context.queue.clone();
         lock.color_texture_format = context.color_texture_format();
@@ -127,6 +132,11 @@ impl WgpuAtlas {
 }
 
 impl PlatformAtlas for WgpuAtlas {
+    #[cfg(not(target_family = "wasm"))]
+    fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        self.0.lock().context.clone().map(|context| context as _)
+    }
+
     fn get_or_insert_with<'a>(
         &self,
         key: &AtlasKey,

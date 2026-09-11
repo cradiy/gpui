@@ -23,41 +23,87 @@ pub(super) fn prepare(
     frame: &Scene3dFrame,
     draws: &[Scene3dGpuDraw],
 ) -> Result<(Scene3dFrame, GpuGeometryMap)> {
-    let frame = with_bounds(
+    let mut frame = with_bounds(
         frame,
         draws.iter().map(|draw| (draw.output_id, draw.bounds)),
     )?;
-    let objects: HashMap<_, _> = frame
+    for draw in draws {
+        let object = Arc::make_mut(&mut frame.objects)
+            .iter_mut()
+            .find(|object| object.output_id == draw.output_id)
+            .unwrap();
+        object.gpu_geometry = Some(gpui::MeshGpuGeometry3d::new(draw.geometry.clone()));
+    }
+    let geometry = validate_frame(&context.device, &frame)?;
+    Ok((frame, geometry))
+}
+
+pub(crate) fn validate_frame(
+    device: &wgpu::Device,
+    frame: &Scene3dFrame,
+) -> Result<GpuGeometryMap> {
+    let geometry = frame_geometry(frame)?;
+    for gpu in geometry.values() {
+        ensure!(
+            !gpu.context().device_lost() && std::ptr::eq(device, gpu.context().device.as_ref()),
+            "GPU geometry belongs to a different or lost device"
+        );
+    }
+    Ok(geometry)
+}
+
+pub(super) fn frame_geometry(frame: &Scene3dFrame) -> Result<GpuGeometryMap> {
+    let mut geometry = HashMap::default();
+    if !frame
         .objects
         .iter()
-        .map(|object| (object.output_id, object))
-        .collect();
-    let mut geometry = HashMap::default();
-    for draw in draws {
-        let object = objects[&draw.output_id];
-        ensure!(
-            Arc::ptr_eq(&context.device, &draw.geometry.context().device),
-            "GPU geometry belongs to a different device"
-        );
-        ensure!(
-            Arc::ptr_eq(&object.mesh, draw.geometry.base_mesh()),
-            "GPU geometry source mesh mismatch for object {}",
-            draw.output_id
-        );
-        ensure!(
-            object.texture_uv_sets() == draw.geometry.uv_sets(),
-            "GPU geometry material coordinates mismatch for object {}",
-            draw.output_id
-        );
-        geometry.insert(draw.output_id, draw.geometry.clone());
+        .any(|object| object.gpu_geometry.is_some())
+    {
+        return Ok(geometry);
     }
-    Ok((frame, geometry))
+    let mut seen = HashSet::default();
+    for object in frame.objects.iter() {
+        ensure!(
+            object.output_id != 0 && seen.insert(object.output_id),
+            "GPU draw routing requires unique nonzero object IDs"
+        );
+        let Some(resource) = &object.gpu_geometry else {
+            continue;
+        };
+        let gpu = resource
+            .downcast::<Scene3dGpuGeometry>()
+            .ok_or_else(|| anyhow::anyhow!("unsupported GPU geometry backend"))?;
+        ensure!(
+            object.render_bounds.is_some_and(|bounds| bounds
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite())
+                && (0..3).all(|axis| bounds[0][axis] <= bounds[1][axis])),
+            "GPU geometry requires finite ordered render bounds"
+        );
+        ensure!(
+            Arc::ptr_eq(&object.mesh, gpu.base_mesh()),
+            "GPU geometry source mesh mismatch for object {}",
+            object.output_id
+        );
+        ensure!(
+            object.texture_uv_sets() == gpu.uv_sets(),
+            "GPU geometry material coordinates mismatch for object {}",
+            object.output_id
+        );
+        geometry.insert(object.output_id, gpu);
+    }
+    Ok(geometry)
 }
 
 fn with_bounds(
     frame: &Scene3dFrame,
     bounds: impl IntoIterator<Item = (u32, [[f32; 3]; 2])>,
 ) -> Result<Scene3dFrame> {
+    let mut bounds = bounds.into_iter().peekable();
+    if bounds.peek().is_none() {
+        return Ok(frame.clone());
+    }
     let mut frame = frame.clone();
     let mut indices = HashMap::default();
     for (index, object) in frame.objects.iter().enumerate() {
@@ -121,6 +167,11 @@ pub(super) fn memory(
         .collect();
     let mut memory = Scene3dGeometryMemory::plan(&cpu, channels)?;
     let mut seen = HashSet::default();
+    #[expect(
+        clippy::mutable_key_type,
+        reason = "wgpu buffers hash their immutable backend identity"
+    )]
+    let mut seen_indices = HashSet::default();
     for object in frame.objects.iter() {
         let Some(geometry) = geometry.get(&object.output_id) else {
             continue;
@@ -136,11 +187,16 @@ pub(super) fn memory(
             continue;
         }
         let packed = geometry.memory();
+        let index_bytes = if seen_indices.insert(geometry.indices()) {
+            packed.index_bytes
+        } else {
+            0
+        };
         memory.meshes += 1;
         memory.vertex_bytes += packed.vertex_bytes;
-        memory.index_bytes += packed.index_bytes;
+        memory.index_bytes += index_bytes;
         memory.indirect_bytes += packed.draw_bytes;
-        memory.total_bytes += packed.vertex_bytes + packed.index_bytes + packed.draw_bytes;
+        memory.total_bytes += packed.vertex_bytes + index_bytes + packed.draw_bytes;
         let largest = packed
             .vertex_bytes
             .max(packed.index_bytes)
@@ -157,6 +213,44 @@ pub(super) fn memory(
 mod tests {
     use super::*;
     use crate::wgpu_renderer::scene3d::tests::{frame, object};
+
+    #[test]
+    fn empty_bounds_overrides_preserve_cpu_frames_and_nonempty_overrides_validate_ids() {
+        let mut first = object();
+        first.output_id = 0;
+        let source = frame(&[first.clone(), first]);
+        let unchanged = with_bounds(&source, []).unwrap();
+        assert!(Arc::ptr_eq(&unchanged.objects, &source.objects));
+        assert!(frame_geometry(&unchanged).unwrap().is_empty());
+        assert_eq!(
+            Scene3dGeometryMemory::plan(&unchanged, Scene3dChannels::COLOR).unwrap(),
+            Scene3dGeometryMemory::plan(&source, Scene3dChannels::COLOR).unwrap()
+        );
+        assert!(with_bounds(&source, [(0, [[0.; 3], [1.; 3]])]).is_err());
+        let mut duplicate = source;
+        for object in Arc::make_mut(&mut duplicate.objects) {
+            object.output_id = 1;
+        }
+        assert!(with_bounds(&duplicate, [(1, [[0.; 3], [1.; 3]])]).is_err());
+    }
+
+    #[test]
+    fn geometry_planning_rejects_foreign_payloads_instead_of_counting_cpu_fallbacks() {
+        let mut gpu = object();
+        gpu.gpu_geometry = Some(gpui::MeshGpuGeometry3d::new(Arc::new(())));
+        gpu.render_bounds = Some([[0.; 3], [1.; 3]]);
+        let invalid = frame(&[gpu]);
+        assert!(
+            Scene3dGeometryMemory::plan(&invalid, Scene3dChannels::COLOR)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported GPU geometry backend")
+        );
+        let original = frame(&[object()]);
+        let memory = Scene3dGeometryMemory::plan(&original, Scene3dChannels::COLOR).unwrap();
+        assert_eq!(memory.indirect_bytes, 0);
+        assert!(memory.vertex_bytes > 0);
+    }
 
     #[test]
     #[ignore = "requires a compute-capable GPU"]
@@ -247,6 +341,23 @@ mod tests {
         assert_eq!(actual_pixels.linear_depth, expected_pixels.linear_depth);
         assert_eq!(actual_pixels.world_normals, expected_pixels.world_normals);
         assert_eq!(actual.geometry_memory().indirect_bytes, 40);
+        assert_eq!(
+            actual.geometry_memory().index_bytes,
+            template.memory().index_bytes
+        );
+        assert_eq!(
+            actual.geometry_memory().vertex_bytes,
+            template.memory().vertex_bytes * 2
+        );
+        let (attached, _) = prepare(&context, &source, &draws)?;
+        assert_eq!(
+            Scene3dGeometryMemory::plan(&attached, config.channels)?,
+            actual.geometry_memory()
+        );
+        assert_eq!(
+            read(&renderer.render(&attached, config)?)?.object_ids,
+            actual_pixels.object_ids
+        );
         renderer.set_geometry_byte_limit(Some(actual.geometry_memory().total_bytes - 1));
         assert!(
             renderer
@@ -298,6 +409,6 @@ mod tests {
         assert!(with_bounds(&original, [(1, [[1.; 3], [0.; 3]])]).is_err());
         assert!(with_bounds(&original, [(1, [[f32::NAN; 3]; 2])]).is_err());
         let duplicate = frame(&[original.objects[0].clone(), original.objects[0].clone()]);
-        assert!(with_bounds(&duplicate, []).is_err());
+        assert!(with_bounds(&duplicate, [(1, [[0.; 3]; 2])]).is_err());
     }
 }

@@ -7,6 +7,95 @@ use gpui_wgpu::WgpuOffscreenRenderer;
 use std::{rc::Rc, sync::Arc};
 
 #[test]
+#[ignore = "requires a compute-capable GPU"]
+fn gpu_viewports_keep_frame_local_geometry_and_invalidate_replaced_outputs() -> anyhow::Result<()> {
+    use gpui_wgpu::wgpu::{self, util::DeviceExt as _};
+    use gpui_wgpu::{WgpuContext, WgpuScene3dGeometry};
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(64)))?;
+    let context = renderer
+        .sprite_atlas()
+        .renderer_context()
+        .unwrap()
+        .downcast::<WgpuContext>()
+        .unwrap();
+    let base = mesh(0.5, 0xff8040ff, MeshTexture3d::None);
+    let source = WgpuScene3dGeometry::new((*context).clone(), base.mesh.clone(), [0; 5], None)?;
+    let mut gpu_objects = Vec::new();
+    let mut cpu_objects = Vec::new();
+    for shift in [-0.45, 0.45] {
+        let vertices: Vec<_> = base
+            .mesh
+            .vertices()
+            .iter()
+            .map(|v| {
+                let mut v = *v;
+                v.position[0] = v.position[0] * 0.4 + shift;
+                v
+            })
+            .collect();
+        let records: Vec<[[f32; 4]; 4]> = vertices
+            .iter()
+            .map(|v| {
+                [
+                    [v.position[0], v.position[1], v.position[2], 0.],
+                    [v.normal[0], v.normal[1], v.normal[2], 0.],
+                    [0.; 4],
+                    [0.; 4],
+                ]
+            })
+            .collect();
+        let buffer = context
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&records),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let mut gpu = base.clone();
+        gpu.gpu_geometry = Some(gpui::MeshGpuGeometry3d::new(Arc::new(
+            source.evaluate(&buffer)?,
+        )));
+        gpu.render_bounds = Some([[-1., -1., 0.5], [1., 1., 0.5]]);
+        gpu_objects.push(gpu);
+        let mut cpu = base.clone();
+        cpu.mesh = base.mesh.with_vertices(vertices, None)?;
+        cpu_objects.push(cpu);
+    }
+    let compose = |objects: &[MeshDraw3d]| {
+        let mut result = Scene::default();
+        for (index, object) in objects.iter().enumerate() {
+            result.insert_primitive(Primitive::SubtreeLayer(layer(
+                bounds(index as f32 * 64., 0., 64., 64.),
+                Scene::default(),
+                vec![object.clone()],
+                1.,
+            )));
+        }
+        result.finish();
+        result
+    };
+    let baseline = renderer.render_rgba(&compose(&[base.clone(), base.clone()]))?;
+    let gpu_scene = compose(&gpu_objects);
+    let actual = renderer.render_rgba(&gpu_scene)?;
+    assert_ne!(actual, baseline);
+    assert_eq!(actual, renderer.render_rgba(&compose(&cpu_objects))?);
+    assert_eq!(actual, renderer.render_rgba(&gpu_scene)?);
+    assert_eq!(actual, renderer.render_rgba(&gpu_scene)?);
+    gpu_objects.swap(0, 1);
+    cpu_objects.swap(0, 1);
+    let swapped = renderer.render_rgba(&compose(&gpu_objects))?;
+    assert_ne!(swapped, actual);
+    assert_eq!(swapped, renderer.render_rgba(&compose(&cpu_objects))?);
+    gpu_objects[0].gpu_geometry = Some(gpui::MeshGpuGeometry3d::new(Arc::new(())));
+    assert!(renderer.render_rgba(&compose(&gpu_objects)).is_err());
+    assert_eq!(
+        baseline,
+        renderer.render_rgba(&compose(&[base.clone(), base]))?
+    );
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires a GPU adapter"]
 fn viewport_bloom_and_grading_preserve_nested_clipping_and_group_opacity() {
     let mut renderer =
@@ -252,6 +341,7 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         uv,
     });
     MeshDraw3d {
+        gpu_geometry: None,
         render_bounds: None,
         cast_shadows: true,
         receive_shadows: true,

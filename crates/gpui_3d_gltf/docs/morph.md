@@ -27,6 +27,25 @@ nonzero geometric area. Invalid normals, incompatible tangent handedness, or
 unrepresentable results return errors without changing topology or dropping
 triangles.
 
+### Attribute inputs
+
+`attribute_targets()` exposes the shared core `MorphTargets` before direction
+regeneration. Cloning it retains the converted vertex order and target arrays.
+`regenerates_normals()` and `regenerates_tangents()` identify the additional work
+required for nonzero-weight samples.
+
+When both flags are false, these inputs can be evaluated directly with core
+`MorphTargets` or uploaded to `GpuMorph` with the `gpui_3d/wgpu` feature. GPU
+evaluation uses floating-point shader arithmetic; it is not bit-identical to
+CPU evaluation. When either flag is true, attribute evaluation alone does not
+produce the complete imported surface: flat normals or MikkTSpace tangents must
+also be regenerated before Skin and rendering. `MorphGeometry::evaluate` performs
+that work on the CPU.
+
+Generated tangents are absent from `attribute_targets().base_mesh()`, even when
+`MorphGeometry::base_mesh()` contains them. For zero weights, `evaluate` returns
+the complete base mesh, including its generated directions.
+
 ### Scene weights and deformation
 
 `SceneAsset::morphs()` associates each morphable primitive with its source node,

@@ -16,6 +16,18 @@ use std::{
 
 const ANIMATION_LENGTH: Duration = Duration::from_secs(4);
 
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+#[path = "scene/gpu.rs"]
+mod gpu;
+
+fn deformation_amount(position: Duration) -> f32 {
+    if position == ANIMATION_LENGTH {
+        0.
+    } else {
+        (std::f32::consts::PI * position.as_secs_f32() / ANIMATION_LENGTH.as_secs_f32()).sin()
+    }
+}
+
 fn animation(interpolation: Interpolation) -> TransformTrack {
     let vector = |values: [[f32; 3]; 3]| {
         VectorTrack::new(
@@ -196,9 +208,12 @@ struct SceneDemo {
     morphs: MorphTargets,
     skin: Skin,
     skinning: bool,
+    gpu_enabled: bool,
+    #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+    gpu: Option<gpu::Deformation>,
     deformation: usize,
     morph_weights: [f32; 2],
-    mesh_sample: (Duration, usize, [f32; 2], bool),
+    mesh_sample: (Duration, usize, [f32; 2], bool, bool),
     selected: usize,
     hovered: Option<usize>,
     raised: [bool; 3],
@@ -305,9 +320,12 @@ impl SceneDemo {
             morphs,
             skin,
             skinning: false,
+            gpu_enabled: false,
+            #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+            gpu: None,
             deformation: 0,
             morph_weights: [0.65, 0.35],
-            mesh_sample: (Duration::ZERO, 0, [0.65, 0.35], false),
+            mesh_sample: (Duration::ZERO, 0, [0.65, 0.35], false, false),
             selected: 1,
             hovered: None,
             raised: [false; 3],
@@ -355,15 +373,15 @@ impl SceneDemo {
             self.deformation,
             self.morph_weights,
             self.skinning,
+            self.gpu_enabled,
         );
         if self.mesh_sample != mesh_sample {
-            let amount = if position == ANIMATION_LENGTH {
-                0.
+            let amount = deformation_amount(position);
+            let mut mesh = match if self.gpu_enabled {
+                0
             } else {
-                (std::f32::consts::PI * position.as_secs_f32() / ANIMATION_LENGTH.as_secs_f32())
-                    .sin()
-            };
-            let mut mesh = match self.deformation {
+                self.deformation
+            } {
                 1 => taper(&self.body_mesh, amount * 1.2),
                 2 => self
                     .morphs
@@ -371,7 +389,7 @@ impl SceneDemo {
                     .unwrap(),
                 _ => self.body_mesh.clone(),
             };
-            if self.skinning {
+            if self.skinning && !self.gpu_enabled {
                 let half_angle = 0.6 * amount;
                 let tip = AffineTransform::from_trs(
                     [0., -0.25, 0.],
@@ -441,6 +459,87 @@ impl Render for SceneDemo {
             }
         }
         self.last_frame = now;
+        let scene = if self.rig_camera {
+            self.evaluated
+                .scene_from_camera(self.instances[self.selected].node(self.camera).unwrap())
+                .unwrap()
+        } else {
+            self.evaluated.scene(self.controls.camera())
+        };
+        #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+        let viewport: anyhow::Result<gpui_3d::Viewport3d> = if self.gpu_enabled {
+            (|| {
+                if self
+                    .gpu
+                    .as_ref()
+                    .is_none_or(|gpu| !gpu.matches_window(window))
+                {
+                    self.gpu = Some(gpu::Deformation::new(
+                        window,
+                        self.morphs.clone(),
+                        self.skin.clone(),
+                    )?);
+                }
+                let amount = deformation_amount(self.position);
+                let sample = gpu::Sample {
+                    weights: if self.deformation == 2 {
+                        self.morph_weights.map(|weight| weight * amount)
+                    } else {
+                        [0.; 2]
+                    },
+                    bend: self.skinning.then_some(0.6 * amount),
+                };
+                let bodies: Vec<_> = self
+                    .instances
+                    .iter()
+                    .map(|instance| instance.node(self.body).unwrap())
+                    .collect();
+                let gpu = self.gpu.as_mut().unwrap();
+                let viewport = gpu.view(scene, &bodies, sample)?;
+                if gpu.is_pending() {
+                    window.request_animation_frame();
+                }
+                Ok(viewport)
+            })()
+        } else {
+            Ok(viewport3d("scene", scene))
+        };
+        #[cfg(not(all(feature = "wgpu", not(target_family = "wasm"))))]
+        let viewport: anyhow::Result<gpui_3d::Viewport3d> = Ok(viewport3d("scene", scene));
+        let viewport = match viewport {
+            Ok(viewport) => viewport
+                .resolution_scale([0.5, 1., 2.][self.resolution])
+                .color_samples(self.color_samples)
+                .size_full()
+                .on_object_hover(cx.listener(|this, hit: &Option<gpui_3d::Hit>, _, cx| {
+                    let hovered = hit.as_ref().and_then(|hit| {
+                        this.instances.iter().position(|instance| {
+                            instance.mappings().any(|(_, node)| Some(node) == hit.node)
+                        })
+                    });
+                    if this.hovered != hovered {
+                        this.hovered = hovered;
+                        cx.notify();
+                    }
+                }))
+                .on_object_click(cx.listener(|this, hit: &gpui_3d::Hit, _, cx| {
+                    if let Some(selected) = this.instances.iter().position(|instance| {
+                        instance.mappings().any(|(_, node)| Some(node) == hit.node)
+                    }) {
+                        this.selected = selected;
+                        cx.notify();
+                    }
+                }))
+                .into_any_element(),
+            Err(error) => {
+                self.playing = false;
+                div()
+                    .p_6()
+                    .text_color(rgb(0xf09e8e))
+                    .child(format!("GPU deformation unavailable: {error}"))
+                    .into_any_element()
+            }
+        };
         let bounds = self.bounds.clone();
         let view_id = cx.entity_id();
         let mut stage = div()
@@ -527,42 +626,7 @@ impl Render for SceneDemo {
                     cx.notify();
                 }
             }))
-            .child(
-                viewport3d(
-                    "scene",
-                    if self.rig_camera {
-                        self.evaluated
-                            .scene_from_camera(
-                                self.instances[self.selected].node(self.camera).unwrap(),
-                            )
-                            .unwrap()
-                    } else {
-                        self.evaluated.scene(self.controls.camera())
-                    },
-                )
-                .resolution_scale([0.5, 1., 2.][self.resolution])
-                .color_samples(self.color_samples)
-                .size_full()
-                .on_object_hover(cx.listener(|this, hit: &Option<gpui_3d::Hit>, _, cx| {
-                    let hovered = hit.as_ref().and_then(|hit| {
-                        this.instances.iter().position(|instance| {
-                            instance.mappings().any(|(_, node)| Some(node) == hit.node)
-                        })
-                    });
-                    if this.hovered != hovered {
-                        this.hovered = hovered;
-                        cx.notify();
-                    }
-                }))
-                .on_object_click(cx.listener(|this, hit: &gpui_3d::Hit, _, cx| {
-                    if let Some(selected) = this.instances.iter().position(|instance| {
-                        instance.mappings().any(|(_, node)| Some(node) == hit.node)
-                    }) {
-                        this.selected = selected;
-                        cx.notify();
-                    }
-                })),
-            )
+            .child(viewport)
             .child(
                 canvas(
                     move |rect, _, cx| {
@@ -578,7 +642,9 @@ impl Render for SceneDemo {
             );
         div().size_full().p_6().flex().flex_col().gap_4().bg(rgb(0x0b1422)).text_color(rgb(0xeaf2fc))
             .child(div().text_size(px(30.)).child("Shared shapes, independent nodes"))
-            .child(div().text_color(rgb(0x9eb1cb)).child(if self.rig_camera {
+            .child(div().text_color(rgb(0x9eb1cb)).child(if self.gpu_enabled {
+                "GPU deformation · Select 1 / 2 / 3 with the buttons · Orbit controls remain available outside Rig camera"
+            } else if self.rig_camera {
                 "Camera follows the selected assembly · Select 1 / 2 / 3 to switch · Disable Rig camera for orbit controls"
             } else {
                 "Click an assembly to select · Right-drag to orbit · Middle-drag to pan · Scroll to zoom"
@@ -655,7 +721,16 @@ impl Render for SceneDemo {
                 })))
                 .child(self.button("reset", "Reset", false).on_click(cx.listener(|this, _, window, cx| { *this = Self::new(window, cx); cx.notify(); }))))
             .child(div().flex().flex_wrap().items_center().gap_3()
+                .when(cfg!(all(feature = "wgpu", not(target_family = "wasm"))) && self.deformation != 1, |row| row.child(
+                    self.button("gpu", if self.gpu_enabled { "GPU deformation" } else { "CPU deformation" }, self.gpu_enabled)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.gpu_enabled = !this.gpu_enabled;
+                            this.hovered = None;
+                            this.refresh(cx);
+                        }))
+                ))
                 .child(self.button("deform", "Taper mesh", self.deformation == 1).on_click(cx.listener(|this, _, _, cx| {
+                    this.gpu_enabled = false;
                     this.deformation = if this.deformation == 1 { 0 } else { 1 }; this.refresh(cx);
                 })))
                 .child(self.button("morph", "Blend shapes", self.deformation == 2).on_click(cx.listener(|this, _, _, cx| {

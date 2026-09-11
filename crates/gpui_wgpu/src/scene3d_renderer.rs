@@ -300,7 +300,8 @@ impl WgpuScene3dRenderer {
         frame: &Scene3dFrame,
         config: Scene3dOutputConfig,
     ) -> Result<Scene3dGpuOutput> {
-        self.render_inner(frame, config, &Default::default())
+        let geometry = gpu_draws::validate_frame(&self.context.device, frame)?;
+        self.render_inner(frame, config, &geometry)
     }
 
     /// Submits packed GPU geometry for selected frame-local object IDs.
@@ -308,6 +309,7 @@ impl WgpuScene3dRenderer {
     /// Supplied conservative bounds control camera/shadow culling and Blend sorting.
     /// CPU mesh data and queries remain unchanged. GPU-invalid draws count as submissions
     /// in statistics even when their indirect instance count is zero.
+    /// An empty override list preserves the frame's existing geometry.
     pub fn render_with_geometry(
         &mut self,
         frame: &Scene3dFrame,
@@ -551,7 +553,6 @@ impl WgpuScene3dRenderer {
                 primary = false;
             }
             if let Some(renderer) = renderer {
-                renderer.set_gpu_geometry(geometry);
                 if enabled && let Some(source) = plan_source {
                     renderer.reuse_plans_from(source);
                 }
@@ -585,7 +586,6 @@ impl WgpuScene3dRenderer {
                 ));
             }
             let renderer = &mut self.color.as_mut().unwrap().1;
-            renderer.set_gpu_geometry(geometry);
             renderer.prepare_frames(device, queue, [frame], [config.size]);
             draw_statistics += renderer.draw_statistics(frame);
             let texture = config
@@ -629,7 +629,6 @@ impl WgpuScene3dRenderer {
             }
             let renderer =
                 cache.get_or_insert_with(|| Scene3dRenderer::new(device, queue, kind.format(), 1));
-            renderer.set_gpu_geometry(geometry);
             if let Some(source) = resource_source {
                 renderer.reuse_resources_from(source);
             }

@@ -6,6 +6,7 @@ use crate::wgpu_renderer::scene3d::Scene3dRenderer;
 
 /// Vertex, index, and indirect argument payload required by one direct-render request.
 /// Shared geometry is counted once across instances and selected output channels.
+/// Packed GPU outputs also share index payload accounting when they use the same buffer.
 /// Excludes staging copies, instance/uniform buffers, textures, cache overlap,
 /// and driver overhead. This is not a measurement of physical GPU usage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -32,6 +33,14 @@ impl Scene3dGeometryMemory {
             !channels.is_empty() && Scene3dChannels::all().contains(channels),
             "3D geometry planning must select known channels"
         );
+        if frame
+            .objects
+            .iter()
+            .any(|object| object.gpu_geometry.is_some())
+        {
+            let geometry = super::gpu_draws::frame_geometry(frame)?;
+            return super::gpu_draws::memory(frame, channels, &geometry);
+        }
         Scene3dRenderer::plan_geometry_memory(frame, channels.shaded())
     }
 

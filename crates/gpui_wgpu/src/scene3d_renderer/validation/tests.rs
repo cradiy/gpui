@@ -2,6 +2,8 @@ use super::*;
 use crate::wgpu_renderer::scene3d::tests::frame;
 use gpui::{DirectionalShadow3d, LightKind3d, PunctualLight3d};
 
+mod objects;
+
 #[test]
 fn shadow_admission_tracks_selected_light_and_device_extent() {
     let mut input = frame(&[]);

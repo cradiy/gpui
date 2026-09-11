@@ -240,6 +240,12 @@ and exposure parameter validation. Invalid frame settings are rejected before
 texture dimensions; background and specular environment checks apply to shaded
 outputs. Viewport pick captures receive scene preparation failures.
 
+Active material coordinate sets must exist on the mesh, and normal maps must use
+its tangent coordinate set. Object transforms, render bounds, material factors,
+and active texture sampling are validated before geometry preparation, including
+objects outside the camera volume. Inactive texture slots impose no coordinate
+or sampling requirements.
+
 ## Viewport effects
 
 Wrap a viewport with `gpui_effects::subtree_effect_chain` to apply Bloom and color

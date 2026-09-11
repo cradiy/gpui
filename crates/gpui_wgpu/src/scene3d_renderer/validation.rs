@@ -1,6 +1,8 @@
 use anyhow::{Result, ensure};
 use gpui::Scene3dFrame;
 
+mod objects;
+
 pub(crate) fn validate_frame_settings(
     frame: &Scene3dFrame,
     max_texture_dimension: u32,
@@ -82,6 +84,9 @@ pub(crate) fn validate_frame_settings(
             .is_none_or(|direction| direction.iter().any(|v| *v != 0.)),
         "3D orthographic view direction must be nonzero"
     );
+    for object in frame.objects.iter() {
+        objects::validate_object_settings(object)?;
+    }
     Ok(())
 }
 

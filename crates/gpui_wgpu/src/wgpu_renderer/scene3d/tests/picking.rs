@@ -131,10 +131,27 @@ fn failed_viewport_preparation_publishes_pick_errors_and_allows_resubmission() -
             normal_bias: 0.,
             softness: 0.,
         });
+    let mut uv_failure = scene(false, false);
+    let input = Arc::make_mut(uv_failure.subtree_layers[0].scene3d.as_mut().unwrap());
+    let object = &mut Arc::make_mut(&mut input.objects)[0];
+    object.uv_set = 7;
+    object.texture = MeshTexture3d::Image(gpui::AtlasTile {
+        texture_id: gpui::AtlasTextureId {
+            index: 0,
+            kind: gpui::AtlasTextureKind::Polychrome,
+        },
+        tile_id: gpui::TileId(0),
+        padding: 0,
+        bounds: gpui::Bounds::new(
+            gpui::point(gpui::DevicePixels(0), gpui::DevicePixels(0)),
+            gpui::size(gpui::DevicePixels(1), gpui::DevicePixels(1)),
+        ),
+    });
     for (invalid, expected) in [
         (scene(true, false), "unsupported GPU geometry backend"),
         (scene(false, true), "unsupported 3D material backend"),
         (nested_failure, "unsupported 3D material backend"),
+        (uv_failure, "missing UV set 7"),
         (
             shadow_failure,
             "invalid directional shadow parameters or source",

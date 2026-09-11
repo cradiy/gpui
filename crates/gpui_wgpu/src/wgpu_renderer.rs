@@ -3057,6 +3057,7 @@ impl WgpuRenderer {
             let resources = self.resources_mut();
             if has_scene3d && resources.scene3d.is_none() {
                 resources.scene3d = Some(scene3d::ViewportRenderer::new(
+                    resources.capture_context.clone(),
                     format,
                     scene3d_capabilities.unwrap(),
                     output_budget,

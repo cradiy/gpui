@@ -224,6 +224,7 @@ impl Scene {
             });
         }
         Ok(Scene3dFrame {
+            pick_capture: None,
             depth_background: if self.camera.near == 0. {
                 gpui::DepthBackground3d::NegativeOne
             } else {

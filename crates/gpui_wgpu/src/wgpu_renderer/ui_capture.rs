@@ -227,6 +227,7 @@ mod tests {
                 [0., 0., 0., 1.],
             ];
             let frame = gpui::Scene3dFrame {
+                pick_capture: None,
                 depth_background: Default::default(),
                 viewport_quality: Default::default(),
                 ui_texture: Some(UiTexture3d::new(

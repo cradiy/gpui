@@ -1,6 +1,6 @@
 # Rendered-frame picking
 
-[Headless output](headless.md) · [Frame readback](readback.md) · [GPU deformation](deformation.md)
+[Headless output](headless.md) · [Frame readback](readback.md) · [Viewport capture](viewport_picking.md) · [GPU deformation](deformation.md)
 
 `RenderedFrame::pick([x, y])` reads one physical pixel's Object ID and linear depth
 without copying either full image or materializing CPU geometry. It selects the

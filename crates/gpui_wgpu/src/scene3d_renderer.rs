@@ -26,6 +26,8 @@ pub(crate) mod gpu_draws;
 pub use gpu_draws::Scene3dGpuDraw;
 mod readback;
 pub use readback::{Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dReadbackRegion};
+mod viewport_picking;
+pub use viewport_picking::WgpuScene3dPickFrame;
 
 bitflags::bitflags! {
     /// Independently selectable outputs. Non-color channels use the pixel center.

@@ -7,6 +7,143 @@ use gpui_wgpu::WgpuOffscreenRenderer;
 use std::{rc::Rc, sync::Arc};
 
 #[test]
+#[ignore = "requires a GPU adapter"]
+fn viewport_pick_outputs_retain_frame_identity_across_resize_and_capture_errors()
+-> anyhow::Result<()> {
+    use gpui::Scene3dPickCapture;
+    use gpui_wgpu::{
+        Scene3dChannels, Scene3dReadbackConfig, Scene3dReadbackRegion, WgpuScene3dPickFrame,
+    };
+
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(64), DevicePixels(64)))?;
+    let capture = Scene3dPickCapture::new(64 * 64 * 16);
+    let mut first = layer(
+        bounds(-16., 0., 64., 64.),
+        Scene::default(),
+        vec![mesh(0.5, 0xff8040ff, MeshTexture3d::None)],
+        1.,
+    );
+    Arc::make_mut(first.scene3d.as_mut().unwrap()).pick_capture = Some(capture.clone());
+    let original = first.scene3d.as_ref().unwrap().clone();
+    assert!(capture.read::<WgpuScene3dPickFrame>().is_none());
+    let first_scene = scene(first.clone());
+    {
+        use gpui_wgpu::{
+            WgpuContext, WgpuExternalRenderTarget, WgpuExternalRendererConfig, WgpuRenderer, wgpu,
+        };
+        let context = renderer
+            .sprite_atlas()
+            .renderer_context()
+            .unwrap()
+            .downcast::<WgpuContext>()
+            .unwrap();
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let mut external = WgpuRenderer::new_external(
+            &context,
+            WgpuExternalRendererConfig {
+                size: size(DevicePixels(64), DevicePixels(64)),
+                format,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                target_usage: usage,
+            },
+        )?;
+        let target = context.device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let mut encoder = context.device.create_command_encoder(&Default::default());
+        assert!(external.encode_external(
+            &first_scene,
+            WgpuExternalRenderTarget {
+                texture: &target,
+                view: &view,
+                command_encoder: &mut encoder,
+            }
+        ));
+        assert!(capture.read::<WgpuScene3dPickFrame>().is_none());
+        drop(encoder);
+        assert!(external.draw_external(&first_scene, &target, &view, wgpu::Color::BLACK));
+        assert!(
+            capture
+                .read::<WgpuScene3dPickFrame>()
+                .unwrap()
+                .unwrap()
+                .matches_frame(&original)
+        );
+    }
+    renderer.render_rgba(&first_scene)?;
+    let retained = capture.read::<WgpuScene3dPickFrame>().unwrap().unwrap();
+    assert!(retained.matches_frame(&original));
+    assert_eq!(retained.projection_rect(), [-16., 0., 64., 64.]);
+    assert_eq!(retained.pixel_at([0.5, 0.5]), Some([16, 32]));
+    assert_eq!(retained.pixel_at([0.1, 0.5]), None);
+    renderer.render_rgba(&first_scene)?;
+    let replayed = capture.read::<WgpuScene3dPickFrame>().unwrap().unwrap();
+    assert!(!Arc::ptr_eq(&retained, &replayed));
+    assert!(replayed.matches_frame(&original));
+
+    renderer.resize(size(DevicePixels(96), DevicePixels(96)));
+    let mut next = first;
+    next.composite.bounds = bounds(0., 0., 80., 80.);
+    next.composite.effect_bounds = next.composite.bounds;
+    next.composite.content_mask.bounds = next.composite.bounds;
+    let replacement = Arc::make_mut(next.scene3d.as_mut().unwrap());
+    let mut object = mesh(0.2, 0x4080ffff, MeshTexture3d::None);
+    object.output_id = 7;
+    replacement.objects = vec![object].into();
+    let updated = next.scene3d.as_ref().unwrap().clone();
+    renderer.render_rgba(&scene(next.clone()))?;
+    // The larger target exceeds the original capture's explicit payload limit.
+    assert!(capture.read::<WgpuScene3dPickFrame>().unwrap().is_err());
+    let expanded = Scene3dPickCapture::new(80 * 80 * 16);
+    Arc::make_mut(next.scene3d.as_mut().unwrap()).pick_capture = Some(expanded.clone());
+    let source = next.scene3d.as_ref().unwrap().clone();
+    renderer.render_rgba(&scene(next))?;
+    let newest = expanded.read::<WgpuScene3dPickFrame>().unwrap().unwrap();
+    assert!(newest.matches_frame(&source));
+    assert!(!newest.matches_frame(&updated));
+    assert!(!retained.matches_frame(&source));
+    drop(renderer);
+
+    for (output, expected_id, expected_depth) in [(retained, 1, 2.5), (newest, 7, 2.8)] {
+        let mut pending = output.gpu().readback_region(
+            Scene3dReadbackRegion {
+                origin: output.pixel_at([0.5, 0.5]).unwrap(),
+                size: [1, 1],
+            },
+            Scene3dReadbackConfig {
+                channels: Scene3dChannels::OBJECT_ID | Scene3dChannels::LINEAR_DEPTH,
+                max_staging_bytes: Some(512),
+                max_cpu_bytes: Some(8),
+            },
+        )?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(pixels) = pending.try_read()? {
+                assert_eq!(pixels.object_ids.unwrap(), vec![expected_id]);
+                assert!((pixels.linear_depth.unwrap()[0] - expected_depth).abs() < 1e-5);
+                break;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires a compute-capable GPU"]
 fn gpu_viewports_keep_frame_local_geometry_and_invalidate_replaced_outputs() -> anyhow::Result<()> {
     use gpui_wgpu::wgpu::{self, util::DeviceExt as _};
@@ -377,6 +514,7 @@ fn layer(
     source.finish();
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
+            pick_capture: None,
             depth_background: Default::default(),
             viewport_quality: Default::default(),
             background: None,

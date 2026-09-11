@@ -41,15 +41,20 @@ pub(in crate::wgpu_renderer) struct ViewportRenderer {
     output_indices: HashMap<usize, usize>,
     surface_size: [u32; 2],
     budget: OutputBudget,
+    context: crate::WgpuContext,
+    picking: Option<super::picking::PickRenderer>,
 }
 
 impl ViewportRenderer {
     pub(in crate::wgpu_renderer) fn new(
+        context: crate::WgpuContext,
         format: wgpu::TextureFormat,
         capabilities: Scene3dViewportCapabilities,
         budget: OutputBudget,
     ) -> Self {
         Self {
+            context,
+            picking: None,
             renderers: [None, None],
             geometry: GeometryCache::default(),
             plans: BatchPlanCache::default(),
@@ -76,6 +81,7 @@ impl ViewportRenderer {
     ) {
         let mut needed = [false; 2];
         let mut frames = Vec::new();
+        let mut pick_needed = false;
         if self.surface_size != [width, height] {
             self.outputs.clear();
             self.surface_size = [width, height];
@@ -85,6 +91,7 @@ impl ViewportRenderer {
         visit_scenes(scene, |scene| {
             for layer in &scene.subtree_layers {
                 if let Some(frame) = &layer.scene3d {
+                    pick_needed |= frame.pick_capture.is_some();
                     let samples = self.capabilities.color_samples_for(frame.viewport_quality);
                     needed[usize::from(samples == 4)] = true;
                     let old = previous.next().flatten();
@@ -183,9 +190,17 @@ impl ViewportRenderer {
             renderer.plans.reuse_from(&self.plans);
             renderer.prepare(device, queue, scene, width, height, self.capabilities);
         }
+        if pick_needed || self.picking.is_some() {
+            self.picking
+                .get_or_insert_with(|| super::picking::PickRenderer::new(self.context.clone()))
+                .prepare(scene, [width, height], self.capabilities);
+        }
     }
 
     pub(in crate::wgpu_renderer) fn commit_outputs(&self, submitted: bool) {
+        if let Some(picking) = &self.picking {
+            picking.commit(submitted);
+        }
         for renderer in self.renderers.iter().flatten() {
             renderer.commit_uploads(submitted);
         }
@@ -195,6 +210,9 @@ impl ViewportRenderer {
     }
 
     pub(in crate::wgpu_renderer) fn retain_external_uploads(&self) {
+        if let Some(picking) = &self.picking {
+            picking.retain_external_uploads();
+        }
         for renderer in self.renderers.iter().flatten() {
             renderer.retain_external_uploads();
         }
@@ -216,6 +234,9 @@ impl ViewportRenderer {
         destination: &wgpu::Texture,
         encoder: &mut wgpu::CommandEncoder,
     ) {
+        if let Some(picking) = &self.picking {
+            picking.encode(layer, atlas, source, encoder);
+        }
         let output = self
             .output_indices
             .get(&(layer as *const _ as usize))

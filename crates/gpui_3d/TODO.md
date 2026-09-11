@@ -227,6 +227,9 @@ Core implementation order:
      - [x] **Headless draw routing**: Bind packed outputs to objects across render channels, with conservative render bounds and explicit CPU query materialization.
      - [x] **Viewport draw routing**: Window-device sharing, frame-local packed resources, conservative bounds, cache invalidation, and explicit CPU interaction limits.
      - [ ] **GPU viewport interaction**: Associate displayed deformation frames with ID/depth queries, pointer coordinates, and asynchronous selection results without using original CPU mesh hits.
+       - [x] **Submitted data capture**: Opt-in WGPU ID/depth passes paired with the color submission, source-frame identity, clipped raster coordinates, target admission, and retained regional readback.
+       - [ ] **Viewport event integration**: Retain frame/camera/object/layout metadata, schedule bounded pointer queries, and reject stale asynchronous results.
+       - [ ] **Capture GPU validation**: Verify submission gating, GPU-deformed coverage, resize/clipping, cached color replay, retained outputs, nested UI captures, and device loss on supported adapters.
      - [x] **Interactive deformation comparison**: Shared CPU/GPU timeline, Morph/Skin controls, retained sources, paired GPU bounds, bounded pending work, and explicit backend failures in the scene example.
      - [ ] **Viewport GPU validation**: Verify multiple viewports, retained outputs, replacement, shadows, nested captures, and device recovery on supported adapters.
 

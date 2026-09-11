@@ -8,6 +8,7 @@ mod geometry;
 mod images;
 mod instances;
 mod output_cache;
+mod picking;
 mod specular;
 mod target;
 mod viewport;
@@ -1875,6 +1876,7 @@ pub(crate) mod tests {
 
     pub(crate) fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
         gpui::Scene3dFrame {
+            pick_capture: None,
             depth_background: Default::default(),
             viewport_quality: Default::default(),
             ui_texture: None,

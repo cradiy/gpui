@@ -630,7 +630,7 @@ fn directional_shadows_preserve_indirect_light_geometry_channels_and_alpha_masks
                 for (actual, expected) in color(case).iter().zip(color(reference)) {
                     assert!(
                         actual.abs_diff(*expected) <= 2,
-                        "case {case}, PBR {pbr}, softness {softness}"
+                        "case {case}, PBR {pbr}, softness {softness}: {actual} != {expected}"
                     );
                 }
                 assert_eq!(outputs[0].object_ids, outputs[case].object_ids);
@@ -763,9 +763,9 @@ fn occlusion_attenuates_only_indirect_light_with_independent_linear_sampling() -
     let image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
         image::RgbaImage::from_fn(2, 1, |x, _| {
             image::Rgba(if x == 0 {
-                [0, 255, 255, 255]
+                [255, 255, 0, 255]
             } else {
-                [128, 17, 243, 0]
+                [243, 17, 128, 0]
             })
         }),
     )]));
@@ -858,7 +858,7 @@ fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow
     };
     use std::sync::Arc;
     let normal_map = Arc::new(RenderImage::new(vec![image::Frame::new(
-        image::RgbaImage::from_pixel(1, 1, image::Rgba([230, 180, 220, 255])),
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([220, 180, 230, 255])),
     )]));
     let viewport = Bounds::new(point(px(0.), px(0.)), size(px(67.), px(49.)));
     let mut renderer = HeadlessRenderer::new()?;
@@ -939,9 +939,12 @@ fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow
                             }
                             assert_eq!(ids[index], hit.object_index as u32 + 1);
                             assert_eq!(normals[index][3], 1.);
-                            let orientation = if hit.object_index == 0 { -1. } else { 1. };
                             for (actual, expected) in normals[index][..3].iter().zip(hit.normal) {
-                                assert!((actual - expected * orientation).abs() < 0.001);
+                                assert!(
+                                    (actual - expected).abs() < 0.001,
+                                    "normal at ({x}, {y}), object {}, side {side}: {actual} != {expected}",
+                                    hit.object_index,
+                                );
                             }
                         } else {
                             assert_eq!(result.world_position_at(x as u32, y as u32)?, None);
@@ -964,7 +967,7 @@ fn normal_maps_match_vertex_normals_across_reflections_and_back_faces() -> anyho
     use gpui_3d::{Light, MaterialTexture, Object, PbrMaterial, Projection, Scene};
     use std::sync::Arc;
     let image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
-        image::RgbaImage::from_pixel(1, 1, image::Rgba([204, 153, 230, 0])),
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([230, 153, 204, 0])),
     )]));
     let material = Material::color(rgb(0x6897ab)).pbr(PbrMaterial {
         metallic: 0.3,
@@ -1047,7 +1050,10 @@ fn material_maps_match_factors_with_independent_sampling_and_zero_alpha() -> any
     use std::sync::Arc;
     let image = |pixels: [[u8; 4]; 2]| {
         Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
-            image::RgbaImage::from_fn(2, 1, |x, _| image::Rgba(pixels[x as usize])),
+            image::RgbaImage::from_fn(2, 1, |x, _| {
+                let [r, g, b, a] = pixels[x as usize];
+                image::Rgba([b, g, r, a])
+            }),
         )]))
     };
     let sampling = |u| TextureSampling {

@@ -20,6 +20,10 @@ mod memory;
 pub use memory::Scene3dTargetMemory;
 mod geometry_memory;
 pub use geometry_memory::Scene3dGeometryMemory;
+mod gpu_geometry;
+pub use gpu_geometry::{Scene3dGpuGeometry, Scene3dGpuGeometryMemory, WgpuScene3dGeometry};
+pub(crate) mod gpu_draws;
+pub use gpu_draws::Scene3dGpuDraw;
 mod readback;
 pub use readback::{Scene3dReadbackConfig, Scene3dReadbackMemory};
 
@@ -296,6 +300,33 @@ impl WgpuScene3dRenderer {
         frame: &Scene3dFrame,
         config: Scene3dOutputConfig,
     ) -> Result<Scene3dGpuOutput> {
+        self.render_inner(frame, config, &Default::default())
+    }
+
+    /// Submits packed GPU geometry for selected frame-local object IDs.
+    /// The input frame must contain every overridden object; prior culling cannot be undone.
+    /// Supplied conservative bounds control camera/shadow culling and Blend sorting.
+    /// CPU mesh data and queries remain unchanged. GPU-invalid draws count as submissions
+    /// in statistics even when their indirect instance count is zero.
+    pub fn render_with_geometry(
+        &mut self,
+        frame: &Scene3dFrame,
+        config: Scene3dOutputConfig,
+        draws: &[Scene3dGpuDraw],
+    ) -> Result<Scene3dGpuOutput> {
+        if draws.is_empty() {
+            return self.render(frame, config);
+        }
+        let (frame, geometry) = gpu_draws::prepare(&self.context, frame, draws)?;
+        self.render_inner(&frame, config, &geometry)
+    }
+
+    fn render_inner(
+        &mut self,
+        frame: &Scene3dFrame,
+        config: Scene3dOutputConfig,
+        geometry: &gpu_draws::GpuGeometryMap,
+    ) -> Result<Scene3dGpuOutput> {
         let target_memory = self.validate_target_memory(
             config,
             frame.directional_shadow.map(|shadow| shadow.resolution),
@@ -383,6 +414,14 @@ impl WgpuScene3dRenderer {
             "3D orthographic view direction must be nonzero"
         );
         for object in frame.objects.iter() {
+            ensure!(
+                object.render_bounds.is_none_or(|bounds| bounds
+                    .iter()
+                    .flatten()
+                    .all(|v| v.is_finite())
+                    && (0..3).all(|axis| bounds[0][axis] <= bounds[1][axis])),
+                "invalid object render bounds"
+            );
             for set in object.texture_uv_sets() {
                 ensure!(
                     object.mesh.uv_at(set, 0).is_some(),
@@ -478,7 +517,11 @@ impl WgpuScene3dRenderer {
             );
         }
         let [width, height] = config.size;
-        let geometry_memory = self.validate_geometry_memory(frame, config.channels)?;
+        let geometry_memory = gpu_draws::memory(frame, config.channels, geometry)?;
+        geometry_memory.validate(
+            self.context.device.limits().max_buffer_size,
+            self.geometry_byte_limit,
+        )?;
         let stride = (u64::from(width) * 4).div_ceil(256) * 256;
         ensure!(
             stride * u64::from(height) <= self.context.device.limits().max_buffer_size,
@@ -508,6 +551,7 @@ impl WgpuScene3dRenderer {
                 primary = false;
             }
             if let Some(renderer) = renderer {
+                renderer.set_gpu_geometry(geometry);
                 if enabled && let Some(source) = plan_source {
                     renderer.reuse_plans_from(source);
                 }
@@ -541,6 +585,7 @@ impl WgpuScene3dRenderer {
                 ));
             }
             let renderer = &mut self.color.as_mut().unwrap().1;
+            renderer.set_gpu_geometry(geometry);
             renderer.prepare_frames(device, queue, [frame], [config.size]);
             draw_statistics += renderer.draw_statistics(frame);
             let texture = config
@@ -584,6 +629,7 @@ impl WgpuScene3dRenderer {
             }
             let renderer =
                 cache.get_or_insert_with(|| Scene3dRenderer::new(device, queue, kind.format(), 1));
+            renderer.set_gpu_geometry(geometry);
             if let Some(source) = resource_source {
                 renderer.reuse_resources_from(source);
             }

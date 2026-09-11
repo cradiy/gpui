@@ -24,6 +24,21 @@ impl Mesh3d {
         model: [[f32; 4]; 4],
         view_projection: [[f32; 4]; 4],
     ) -> bool {
+        Self::bounds_intersect_clip_volume(self.bounds, model, view_projection)
+    }
+
+    /// Conservatively tests finite ordered mesh-local bounds without changing mesh geometry.
+    /// Invalid bounds or numerically uncertain transforms are treated as visible.
+    pub fn bounds_intersect_clip_volume(
+        bounds: [[f32; 3]; 2],
+        model: [[f32; 4]; 4],
+        view_projection: [[f32; 4]; 4],
+    ) -> bool {
+        if !bounds.iter().flatten().all(|v| v.is_finite())
+            || (0..3).any(|axis| bounds[0][axis] > bounds[1][axis])
+        {
+            return true;
+        }
         if !model
             .iter()
             .flatten()
@@ -48,9 +63,9 @@ impl Mesh3d {
             if i == 3 {
                 1.
             } else {
-                f64::from(self.bounds[0][i])
+                f64::from(bounds[0][i])
                     .abs()
-                    .max(f64::from(self.bounds[1][i]).abs())
+                    .max(f64::from(bounds[1][i]).abs())
             }
         });
         let world_magnitude: [f64; 4] =
@@ -85,7 +100,7 @@ impl Mesh3d {
             });
             let maximum = plane[3]
                 + (0..3)
-                    .map(|i| plane[i] * f64::from(self.bounds[usize::from(plane[i] >= 0.)][i]))
+                    .map(|i| plane[i] * f64::from(bounds[usize::from(plane[i] >= 0.)][i]))
                     .sum::<f64>();
             let magnitude = clip_magnitude[axis] + if include_w { clip_magnitude[3] } else { 0. };
             let tolerance =

@@ -2,6 +2,7 @@
 
 mod coverage;
 mod depth;
+mod gpu_geometry;
 mod gpu_labels;
 mod images;
 mod labels;
@@ -22,9 +23,10 @@ use crate::{Camera, CameraError, PreparationCache, Scene};
 
 pub use gpui_wgpu::{
     IdRemapConfig, Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities,
-    Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dGeometryMemory, Scene3dOutputConfig,
-    Scene3dPixels, Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dTargetMemory, WgpuContext,
-    WgpuIdRemapper,
+    Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dGeometryMemory, Scene3dGpuDraw,
+    Scene3dGpuGeometry, Scene3dGpuGeometryMemory, Scene3dOutputConfig, Scene3dPixels,
+    Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dTargetMemory, WgpuContext, WgpuIdRemapper,
+    WgpuScene3dGeometry,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load

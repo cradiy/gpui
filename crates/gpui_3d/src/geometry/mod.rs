@@ -1,5 +1,11 @@
 mod aim;
 mod bounds;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+mod gpu_deformation;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+mod gpu_morph;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+mod gpu_skin;
 mod ik;
 mod ik_chain;
 mod joint_limits;
@@ -13,6 +19,12 @@ mod tangents;
 mod transform;
 pub use aim::{AimError, AimResult, AimSettings, AimStatus};
 pub use bounds::Aabb;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use gpu_deformation::{GpuDeformationLimits, GpuDeformationOutput, GpuDeformationVertex};
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use gpu_morph::{GpuMorph, GpuMorphMemory};
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use gpu_skin::{GpuSkin, GpuSkinMemory, GpuSkinPalette};
 pub use ik::{
     IkOrientationStatus, IkOrientationTarget, IkReach, TwoBoneIkError, TwoBoneIkResult,
     TwoBoneIkSettings,

@@ -7,10 +7,11 @@ license = "MIT"
 
 [features]
 test-support = ["gpui/test-support"]
-wgpu = ["dep:gpui_wgpu"]
+wgpu = ["dep:gpui_wgpu", "dep:bytemuck"]
 
 [dependencies]
 anyhow.workspace = true
+bytemuck = { version = "1", features = ["derive"], optional = true }
 bevy_mikktspace.workspace = true
 gpui.workspace = true
 gpui_wgpu = { workspace = true, optional = true }

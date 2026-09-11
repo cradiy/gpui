@@ -118,17 +118,13 @@ pub(super) struct Visibility {
 impl Visibility {
     pub fn new(frame: &Scene3dFrame, object: &MeshDraw3d, shadows: bool) -> Self {
         Self {
-            camera: object
-                .mesh
-                .intersects_clip_volume(object.model, frame.view_projection),
+            camera: object.intersects_clip_volume(frame.view_projection),
             shadow: shadows
                 && object.cast_shadows
                 && object.alpha_mode != AlphaMode3d::Blend
-                && frame.directional_shadow.is_some_and(|s| {
-                    object
-                        .mesh
-                        .intersects_clip_volume(object.model, s.view_projection)
-                }),
+                && frame
+                    .directional_shadow
+                    .is_some_and(|s| object.intersects_clip_volume(s.view_projection)),
         }
     }
     pub fn any(self) -> bool {
@@ -209,7 +205,9 @@ fn same_map(a: Option<MaterialTexture3d>, b: Option<MaterialTexture3d>) -> bool 
 }
 
 fn compatible(a: &MeshDraw3d, b: &MeshDraw3d) -> bool {
-    a.alpha_mode != AlphaMode3d::Blend
+    a.render_bounds.is_none()
+        && b.render_bounds.is_none()
+        && a.alpha_mode != AlphaMode3d::Blend
         && Arc::ptr_eq(&a.mesh, &b.mesh)
         && a.alpha_mode == b.alpha_mode
         && a.alpha_cutoff == b.alpha_cutoff
@@ -256,6 +254,35 @@ pub(super) fn retained_capacity(current: usize, required: usize, limit: usize) -
 mod tests {
     use super::super::tests::{IDENTITY, frame, object};
     use super::*;
+
+    #[test]
+    fn explicit_render_bounds_separate_instances_and_control_camera_and_shadow_passes() {
+        let first = object();
+        let mut second = first.clone();
+        second.output_id = 2;
+        second.render_bounds = Some([[4., 0., 0.], [5., 1., 1.]]);
+        let mut third = first.clone();
+        third.output_id = 3;
+        third.render_bounds = Some([[0., 0., 0.], [1., 1., 1.]]);
+        let mut frame = frame(&[first, second, third]);
+        let mut projection = IDENTITY;
+        projection[3][0] = -4.;
+        frame.directional_shadow = Some(gpui::DirectionalShadow3d {
+            light_index: 0,
+            view_projection: projection,
+            resolution: 64,
+            depth_bias: 0.,
+            normal_bias: 0.,
+            softness: 0.,
+        });
+        let plan = BatchPlan::new(&frame, true, 100);
+        assert_eq!(plan.order, [0, 1, 2]);
+        assert_eq!(plan.batches, [0..1, 1..2, 2..3]);
+        assert!(plan.passes[0].camera && !plan.passes[0].shadow);
+        assert!(!plan.passes[1].camera && plan.passes[1].shadow);
+        assert!(plan.passes[2].camera && !plan.passes[2].shadow);
+        assert_eq!(BatchPlan::new(&frame, false, 100).order, [0, 2]);
+    }
 
     #[test]
     fn scene3d_instance_capacity_reclaims_peaks_without_threshold_churn() {

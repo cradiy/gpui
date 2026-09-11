@@ -29,6 +29,11 @@ pub use geometry::{
     TangentRepair, TangentRepairKind, Transform, TransformError, TwoBoneIkError, TwoBoneIkResult,
     TwoBoneIkSettings,
 };
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use geometry::{
+    GpuDeformationLimits, GpuDeformationOutput, GpuDeformationVertex, GpuMorph, GpuMorphMemory,
+    GpuSkin, GpuSkinMemory, GpuSkinPalette,
+};
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use headless::*;

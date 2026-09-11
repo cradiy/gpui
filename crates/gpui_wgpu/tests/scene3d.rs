@@ -252,6 +252,7 @@ fn mesh(z: f32, color: u32, texture: MeshTexture3d) -> MeshDraw3d {
         uv,
     });
     MeshDraw3d {
+        render_bounds: None,
         cast_shadows: true,
         receive_shadows: true,
         output_id: 1,

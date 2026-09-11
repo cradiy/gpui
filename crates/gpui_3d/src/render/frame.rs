@@ -141,7 +141,7 @@ impl Scene {
             );
             let (model, normal) = object.matrices();
             let sort_depth = if object.material.alpha_mode == crate::AlphaMode::Blend {
-                let bounds = object.mesh.bounds();
+                let bounds = object.render_bounds.unwrap_or_else(|| object.mesh.bounds());
                 let center: [f64; 4] = std::array::from_fn(|i| {
                     if i == 3 {
                         1.
@@ -178,19 +178,25 @@ impl Scene {
                     .all(|value| value.is_finite()),
                 "object {index} has non-finite render parameters"
             );
-            let camera_visible = object.mesh.0.intersects_clip_volume(model, view_projection);
+            let bounds = object.render_bounds.unwrap_or_else(|| object.mesh.bounds());
+            let intersects = |projection| {
+                gpui::Mesh3d::bounds_intersect_clip_volume(
+                    [bounds.min(), bounds.max()],
+                    model,
+                    projection,
+                )
+            };
+            let camera_visible = intersects(view_projection);
             let shadow_visible = object.cast_shadows
                 && object.material.alpha_mode != crate::AlphaMode::Blend
-                && directional_shadow.is_some_and(|shadow| {
-                    object
-                        .mesh
-                        .0
-                        .intersects_clip_volume(model, shadow.view_projection)
-                });
+                && directional_shadow.is_some_and(|shadow| intersects(shadow.view_projection));
             if !camera_visible && !shadow_visible {
                 continue;
             }
             objects.push(MeshDraw3d {
+                render_bounds: object
+                    .render_bounds
+                    .map(|bounds| [bounds.min(), bounds.max()]),
                 cast_shadows: object.cast_shadows,
                 receive_shadows: object.receive_shadows,
                 output_id: index as u32 + 1,

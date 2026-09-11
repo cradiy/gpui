@@ -388,4 +388,4 @@ time conversion.
 
 ## Related topics
 
-[Constraints and IK](constraints.md).
+[Constraints and IK](constraints.md) · [GPU deformation](deformation.md).

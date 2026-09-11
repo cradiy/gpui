@@ -4,18 +4,20 @@ use gpui::Scene3dFrame;
 use super::Scene3dChannels;
 use crate::wgpu_renderer::scene3d::Scene3dRenderer;
 
-/// Vertex and index payload required by one direct-render request.
+/// Vertex, index, and indirect argument payload required by one direct-render request.
 /// Shared geometry is counted once across instances and selected output channels.
 /// Excludes staging copies, instance/uniform buffers, textures, cache overlap,
 /// and driver overhead. This is not a measurement of physical GPU usage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Scene3dGeometryMemory {
-    /// Distinct mesh-allocation/material-coordinate combinations.
+    /// Distinct CPU mesh/material-coordinate combinations and active packed GPU outputs.
     pub meshes: u64,
     pub vertex_bytes: u64,
     pub index_bytes: u64,
+    /// Indirect arguments for explicitly supplied GPU geometry.
+    pub indirect_bytes: u64,
     pub total_bytes: u64,
-    /// Largest individual vertex or index buffer.
+    /// Largest individual vertex, index, or indirect argument buffer.
     pub max_buffer_bytes: u64,
     /// Frame-local object referencing the largest buffer, or `None` for no geometry.
     pub max_buffer_object_id: Option<u32>,

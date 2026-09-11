@@ -653,6 +653,9 @@ impl DirectionalShadow3d {
 /// One indexed mesh and its material parameters.
 #[derive(Clone, Debug)]
 pub struct MeshDraw3d {
+    /// Optional conservative mesh-local render bounds, independent of CPU vertex/query data.
+    /// Bounds must be finite and ordered. Objects with explicit bounds draw independently.
+    pub render_bounds: Option<[[f32; 3]; 2]>,
     /// Exact frame-local output ID. Zero is reserved for the background.
     /// The caller retains the mapping to application or scene-node identities.
     pub output_id: u32,
@@ -705,6 +708,15 @@ pub struct MeshDraw3d {
 }
 
 impl MeshDraw3d {
+    /// Tests explicit render bounds when present, otherwise the CPU mesh bounds.
+    pub fn intersects_clip_volume(&self, view_projection: [[f32; 4]; 4]) -> bool {
+        Mesh3d::bounds_intersect_clip_volume(
+            self.render_bounds.unwrap_or(self.mesh.bounds),
+            self.model,
+            view_projection,
+        )
+    }
+
     /// Active coordinate sets in base-color, metallic-roughness, emissive, normal,
     /// and occlusion order. Inactive slots and captured UI use set zero.
     pub fn texture_uv_sets(&self) -> [u32; 5] {

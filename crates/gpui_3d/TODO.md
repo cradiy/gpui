@@ -206,6 +206,13 @@ Core implementation order:
    - [x] **Constrained chains**: Multi-joint solving with local rotation limits, explicit convergence/reach diagnostics, and no internal playback history.
 5. [x] **Deformation measurements**: Reproducible CPU Skin/Morph workloads covering mesh size, active influences, target counts, and concurrent instances; distinguish evaluation from upload/render time.
 6. [ ] **GPU deformation**: Shared skin palettes and Morph inputs, bounded GPU buffers, retained outputs, and explicit CPU bounds/picking synchronization. Preserve CPU evaluation for callers requiring final geometry.
+   - [x] **GPU Morph**: Reusable uploaded targets, signed per-evaluation weights, retained attribute buffers, payload admission, and explicit CPU mesh readback.
+   - [ ] **GPU validation**: Check Morph/Skin output parity, composition, and retained-output lifetime on supported adapters.
+   - [x] **GPU Skin**: Shared influence bindings, per-instance palettes, and Morph-to-Skin buffer composition.
+   - [ ] **Render integration**: Consume deformation buffers without CPU readback, with explicit bounds and query synchronization policies.
+     - [x] **GPU vertex packing**: Shared material-coordinate and index inputs, retained render-format vertices, and indirect draw suppression for invalid deformation results.
+     - [x] **Headless draw routing**: Bind packed outputs to objects across render channels, with conservative render bounds and explicit CPU query materialization.
+     - [ ] **Viewport draw routing**: Supply device-local packed geometry to window rendering with explicit bounds and interaction policies.
 
 Independent extensions:
 

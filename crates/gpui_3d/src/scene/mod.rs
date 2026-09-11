@@ -18,6 +18,7 @@ use std::{
 /// One mesh with a material and object-to-world transform.
 #[derive(Clone)]
 pub struct Object {
+    pub(crate) render_bounds: Option<crate::Aabb>,
     pub(crate) cast_shadows: bool,
     pub(crate) receive_shadows: bool,
     pub(crate) id: Option<ObjectId>,
@@ -39,6 +40,7 @@ impl Object {
     /// Creates a mesh at the origin.
     pub fn new(mesh: Mesh, material: Material) -> Self {
         Self {
+            render_bounds: None,
             cast_shadows: true,
             receive_shadows: true,
             id: None,

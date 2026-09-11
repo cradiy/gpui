@@ -3,6 +3,7 @@ use gpui::{Mesh3d, MeshTexture3d, SubtreeLayer};
 use wgpu::util::DeviceExt;
 
 mod background;
+mod draw;
 mod geometry;
 mod images;
 mod instances;
@@ -24,7 +25,7 @@ struct DisplayParams {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct Vertex {
+pub(crate) struct Vertex {
     position: [f32; 3],
     normal: [f32; 3],
     uv: [f32; 4],
@@ -35,7 +36,7 @@ struct Vertex {
 }
 
 impl Vertex {
-    fn new(mesh: &Mesh3d, index: usize, sets: [u32; 5]) -> Self {
+    pub(crate) fn new(mesh: &Mesh3d, index: usize, sets: [u32; 5]) -> Self {
         let v = mesh.vertices()[index];
         let [base, surface, emission, normal, occlusion] = sets.map(|set| {
             mesh.uv_at(set, index)
@@ -52,7 +53,7 @@ impl Vertex {
         }
     }
 
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
+    pub(crate) fn layout() -> wgpu::VertexBufferLayout<'static> {
         const ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x4,
             14 => Float32x4, 15 => Float32x2, 11 => Float32x4
@@ -493,6 +494,7 @@ pub(crate) struct Scene3dRenderer {
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
     geometry: geometry::GeometryCache<Geometry>,
+    gpu_geometry: crate::scene3d_renderer::gpu_draws::GpuGeometryMap,
     images: Arc<parking_lot::Mutex<images::ImageCache>>,
     slots: Vec<BatchSlot>,
     offsets: HashMap<usize, usize>,
@@ -722,6 +724,7 @@ impl Scene3dRenderer {
             }),
             white: white.create_view(&Default::default()),
             geometry: geometry::GeometryCache::default(),
+            gpu_geometry: Default::default(),
             images: Default::default(),
             slots: Vec::new(),
             offsets: HashMap::new(),
@@ -890,10 +893,18 @@ impl Scene3dRenderer {
         let meshes: Vec<_> = frames
             .iter()
             .flat_map(|frame| {
-                self.plan(frame).order.iter().map(|&index| {
-                    let object = &frame.objects[index];
-                    (object.mesh.clone(), object.texture_uv_sets())
-                })
+                self.plan(frame)
+                    .order
+                    .iter()
+                    .filter(|&&index| {
+                        !self
+                            .gpu_geometry
+                            .contains_key(&frame.objects[index].output_id)
+                    })
+                    .map(|&index| {
+                        let object = &frame.objects[index];
+                        (object.mesh.clone(), object.texture_uv_sets())
+                    })
             })
             .collect();
         self.geometry.prepare(meshes, |previous, mesh, uv_sets| {
@@ -1092,7 +1103,9 @@ impl Scene3dRenderer {
         let mut uploaded = HashSet::new();
         for &index in &plan.order {
             let object = &frame.objects[index];
-            if uploaded.insert((Arc::as_ptr(&object.mesh), object.texture_uv_sets())) {
+            if !self.gpu_geometry.contains_key(&object.output_id)
+                && uploaded.insert((Arc::as_ptr(&object.mesh), object.texture_uv_sets()))
+            {
                 self.geometry
                     .get(&object.mesh, object.texture_uv_sets())
                     .encode_upload(encoder);
@@ -1453,12 +1466,9 @@ impl Scene3dRenderer {
                 if !plan.passes[batch.start].shadow {
                     continue;
                 }
-                let geometry = self.geometry.get(&object.mesh, object.texture_uv_sets());
                 pass.set_bind_group(0, &shadow_groups[index], &[]);
-                pass.set_vertex_buffer(0, geometry.vertices.slice(..));
                 pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
-                pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..geometry.count, 0, 0..batch.len() as u32);
+                self.draw_geometry(&mut pass, object, batch.len() as u32);
             }
         }
         let depth_view = depth.create_view(&Default::default());
@@ -1526,12 +1536,9 @@ impl Scene3dRenderer {
                     &self.pipeline
                 };
                 pass.set_pipeline(pipeline);
-                let geometry = self.geometry.get(&object.mesh, object.texture_uv_sets());
                 pass.set_bind_group(0, group, &[]);
-                pass.set_vertex_buffer(0, geometry.vertices.slice(..));
                 pass.set_vertex_buffer(1, self.slots[start + index].instances.slice(..));
-                pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..geometry.count, 0, 0..batch.len() as u32);
+                self.draw_geometry(&mut pass, object, batch.len() as u32);
             }
         }
         drop(pass);
@@ -1665,7 +1672,7 @@ fn color_draw_order(objects: &[gpui::MeshDraw3d]) -> Vec<usize> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     mod geometry_memory;
 
@@ -1872,7 +1879,7 @@ mod tests {
         [0., 0., 0., 1.],
     ];
 
-    pub(super) fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
+    pub(crate) fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
         gpui::Scene3dFrame {
             depth_background: Default::default(),
             viewport_quality: Default::default(),
@@ -1894,8 +1901,9 @@ mod tests {
         }
     }
 
-    pub(super) fn object() -> gpui::MeshDraw3d {
+    pub(crate) fn object() -> gpui::MeshDraw3d {
         gpui::MeshDraw3d {
+            render_bounds: None,
             cast_shadows: true,
             receive_shadows: true,
             output_id: 1,

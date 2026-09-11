@@ -28,6 +28,23 @@ fn material_program_compiles_custom_light_response_with_shared_coverage() {
 }
 
 #[test]
+fn material_program_compiles_custom_environment_response_without_bindings() {
+    let program = MaterialProgram::compile(&format!(r#"
+        {SURFACE}
+        fn reflected_light(normal: vec3<f32>, view: vec3<f32>, f0: vec3<f32>) -> vec3<f32> {{
+            let radiance = material_environment_radiance(reflect(-view, normal), 0.3);
+            let brdf = material_environment_brdf(dot(normal, view), 0.3);
+            return radiance * (f0 * brdf.x + vec3<f32>(brdf.y));
+        }}
+        fn material_shading(base: vec3<f32>, input: SurfaceInput, gradients: SurfaceGradients, face_sign: f32) -> vec3<f32> {{
+            let normal = surface_normal(input, gradients.normal) * face_sign;
+            return reflected_light(normal, material_view_direction(input.world), base);
+        }}
+    "#)).unwrap();
+    assert!(program.resources().is_empty());
+}
+
+#[test]
 fn material_program_rejects_renderer_state_and_entry_point_overrides() {
     for (extra, expected) in [
         ("var<private> state: f32;", "globals"),
@@ -89,6 +106,8 @@ fn material_program_checks_transitive_coverage_calls_inside_control_flow() {
         "if (input.world.x > 0.0) { return material_view_direction(input.world); } return vec3<f32>(0.0);",
         "return material_view_position(input.world);",
         "return material_view_vector(input.normal);",
+        "return material_environment_radiance(input.normal, 0.3);",
+        "return vec3<f32>(material_environment_brdf(input.color.x, 0.3), 0.0);",
         "switch (u32(input.color.x)) { case 0u: { return material_ambient(input.normal); } default: { return vec3<f32>(0.0); } }",
         "loop { if (input.color.x > 0.0) { break; } return material_ambient(input.normal); } return vec3<f32>(0.0);",
         "return vec3<f32>(dpdx(input.world.x));",

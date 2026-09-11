@@ -71,6 +71,20 @@ normal conversion requires the inverse-transpose transform supplied by the appli
 Both helpers are shading-only. `material_view_direction(world)` instead returns the
 normalized world-space direction toward the viewer, including orthographic cameras.
 
+`material_environment_radiance(direction, roughness) -> vec3<f32>` samples the
+scene's prefiltered specular environment in a world-space direction. It normalizes
+the direction, applies the environment's Y rotation and intensity, and returns
+linear HDR radiance. Roughness is clamped to `[0, 1]` and maps linearly across the
+prefiltered mip levels. A zero direction or inactive environment returns zero.
+The result excludes Fresnel, BRDF weighting, base color, and ambient occlusion.
+
+`material_environment_brdf(n_dot_v, roughness) -> vec2<f32>` samples the renderer's
+GGX split-sum lookup table. Both inputs are clamped to `[0, 1]`; the result contains
+the Fresnel scale and bias. An inactive specular environment returns zero. For a
+reflectance `f0`, an application can combine the helpers as
+`radiance * (f0 * brdf.x + vec3<f32>(brdf.y))` or use its own response. Both helpers
+are shading-only and require no application texture or sampler bindings.
+
 Material code cannot declare shader entry points, overrides, or private globals,
 call private renderer helpers, or discard fragments. The restrictions apply to
 helper functions as well as the two required functions. Source validation is not

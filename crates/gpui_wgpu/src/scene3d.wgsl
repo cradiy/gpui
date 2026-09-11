@@ -335,6 +335,23 @@ fn diffuse_environment(normal: vec3<f32>) -> vec3<f32> {
     return max(value, vec3<f32>(0.0)) * params.environment.z;
 }
 
+fn material_environment_radiance(direction: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let settings = params.specular_environment;
+    if (settings.z <= 0.0) { return vec3<f32>(0.0); }
+    let n = unit_vector(direction);
+    if (dot(n, n) < 0.5) { return vec3<f32>(0.0); }
+    let rotated = vec3<f32>(settings.x * n.x - settings.y * n.z, n.y,
+        settings.y * n.x + settings.x * n.z);
+    return textureSampleLevel(specular_image, specular_sampler, rotated,
+        clamp(roughness, 0.0, 1.0) * settings.w).rgb * settings.z;
+}
+
+fn material_environment_brdf(n_dot_v: f32, roughness: f32) -> vec2<f32> {
+    if (params.specular_environment.z <= 0.0) { return vec2<f32>(0.0); }
+    return textureSampleLevel(specular_brdf, specular_sampler,
+        clamp(vec2<f32>(n_dot_v, roughness), vec2<f32>(0.0), vec2<f32>(1.0)), 0.0).rg;
+}
+
 fn occlusion(uv: vec2<f32>, gradients: mat2x2<f32>) -> f32 {
     if (params.occlusion_settings.x == 0.0) { return 1.0; }
     return mix(1.0, sample_image(occlusion_image, occlusion_sampler, params.occlusion_map, uv, gradients).r, params.occlusion_settings.x);
@@ -417,12 +434,9 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>,
     let nv = clamp(dot(normal, view), 0.0, 1.0);
     if (params.specular_environment.z > 0.0 && nv > 0.0) {
         let direction = reflect(-view, normal);
-        let settings = params.specular_environment;
-        let rotated = vec3<f32>(settings.x * direction.x - settings.y * direction.z, direction.y,
-            settings.y * direction.x + settings.x * direction.z);
-        let radiance = textureSampleLevel(specular_image, specular_sampler, rotated, roughness * settings.w).rgb;
-        let brdf = textureSampleLevel(specular_brdf, specular_sampler, vec2<f32>(nv, roughness), 0.0).rg;
-        result += radiance * settings.z * (f0 * brdf.x + vec3<f32>(brdf.y)) * occlusion(input.occlusion_uv, gradients.occlusion);
+        let radiance = material_environment_radiance(direction, roughness);
+        let brdf = material_environment_brdf(nv, roughness);
+        result += radiance * (f0 * brdf.x + vec3<f32>(brdf.y)) * occlusion(input.occlusion_uv, gradients.occlusion);
     }
     for (var i = 0u; i < params.light_count.x; i += 1u) {
         result += pbr_direct(diffuse, f0, roughness, normal, view, sample_light(params.lights[i], world)) * shadow_visibility(i, world, geometric_normal, gradients.shadow_depth);

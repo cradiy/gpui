@@ -275,6 +275,8 @@ contract. Core APIs do not own a physics world, character controller, or editor 
     - [x] **Backend material programs**: Bounded source assembly, typed surface/shading signatures, transitive helper permissions, explicit discard/global/entry-point rejection, and shared built-in compilation for viewport/headless pipelines.
     - [x] **Camera-space inputs**: Submitted world-to-view position/vector helpers restricted to shading, with perspective/orthographic viewing directions and example Toon/Sphere Map programs.
   - [ ] **Lighting access**: Reusable direct-light direction, energy, attenuation, shadow visibility, and environment helpers without requiring the built-in PBR response.
+    - [x] **Specular environment inputs**: Shading-only prefiltered radiance and split-sum BRDF helpers using renderer-owned textures, rotation, intensity, and roughness levels.
+    - [ ] **Environment helper GPU validation**: Verify custom and built-in specular responses, direction and rotation, intensity, roughness levels, and inactive environments on supported adapters.
   - [ ] **Material resources**: Declared bounded parameter layouts, textures and samplers, immutable per-frame binding snapshots, independent data updates, and explicit format/color-space/UV requirements.
     - [x] **Program resource reflection**: Group 1 uniform/texture/sampler declarations, typed layouts, transitive coverage/shading usage, CPU admission, and enabled-device checks including standard bindings.
     - [x] **Bound resource snapshots**: Device-local shader/layout sources, checked bind-group creation, private uniform uploads, retained views/samplers with creation-device identity, full-snapshot payload budgets, and partial updates sharing unchanged resources.

@@ -26,6 +26,8 @@ const SHADING_HELPERS: &[&str] = &[
     "material_light_count",
     "material_light",
     "material_ambient",
+    "material_environment_radiance",
+    "material_environment_brdf",
     "diffuse_environment",
     "unit_vector",
 ];

@@ -88,7 +88,8 @@ impl Scene {
                         .material
                         .mesh_passes
                         .iter()
-                        .all(|pass| pass.state.is_valid()),
+                        .all(|pass| pass.state.is_valid()
+                            && pass.expansion.as_ref().is_none_or(|e| e.is_valid())),
                 "object {index} has invalid additional mesh passes"
             );
             ensure!(
@@ -195,7 +196,14 @@ impl Scene {
                     projection,
                 )
             };
-            let camera_visible = intersects(view_projection);
+            let camera_visible = intersects(view_projection)
+                || object.material.mesh_passes.iter().any(|pass| {
+                    pass.intersects_clip_volume(
+                        [bounds.min(), bounds.max()],
+                        model,
+                        view_projection,
+                    )
+                });
             let shadow_visible = object.cast_shadows
                 && object.material.alpha_mode != crate::AlphaMode::Blend
                 && directional_shadow.is_some_and(|shadow| intersects(shadow.view_projection));
@@ -287,6 +295,7 @@ mod tests {
     #[test]
     fn mesh_passes_retain_order_and_reject_invalid_states_before_preparation() {
         let pass = gpui::MeshPass3d {
+            expansion: None,
             material: gpui::MeshMaterial3d::new(std::sync::Arc::new(())),
             state: Default::default(),
         };

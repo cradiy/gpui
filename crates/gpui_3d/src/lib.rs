@@ -57,8 +57,8 @@ pub use lighting::{
 };
 pub(crate) use material::Texture;
 pub use material::{
-    Material, MaterialTexture, MeshPass, MeshPassBlend, MeshPassCull, MeshPassDepth, MeshPassStage,
-    MeshPassState, TextureSlot,
+    Material, MaterialTexture, MeshPass, MeshPassBlend, MeshPassCull, MeshPassDepth,
+    MeshPassExpansion, MeshPassSpace, MeshPassStage, MeshPassState, TextureSlot,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use render::headless;

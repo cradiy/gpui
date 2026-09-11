@@ -18,6 +18,8 @@ struct Materials {
     custom: bool,
     bands: f32,
     sphere_brightness: f32,
+    outline_mode: u8,
+    outline_weighted: bool,
     program_error: Option<gpui::SharedString>,
     #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
     programs: Option<programs::Programs>,
@@ -83,6 +85,8 @@ impl Materials {
             custom: false,
             bands: 3.,
             sphere_brightness: 1.5,
+            outline_mode: 2,
+            outline_weighted: false,
             program_error: None,
             #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
             programs: None,
@@ -240,6 +244,25 @@ impl Materials {
                     "Emission" => material.program(programs.sphere.clone()),
                     _ => material,
                 };
+                if self.outline_mode != 0 {
+                    use gpui_3d::{
+                        MeshPass, MeshPassCull, MeshPassExpansion, MeshPassSpace, MeshPassState,
+                    };
+                    let mut expansion = if self.outline_mode == 1 {
+                        MeshPassExpansion::new(MeshPassSpace::World, 0.045)
+                    } else {
+                        MeshPassExpansion::new(MeshPassSpace::Pixels, 4.)
+                    };
+                    if self.outline_weighted {
+                        expansion = expansion.weight("width", 1.);
+                    }
+                    material = material.mesh_passes([MeshPass::new(programs.outline.clone())
+                        .state(MeshPassState {
+                            cull: MeshPassCull::Front,
+                            ..Default::default()
+                        })
+                        .expansion(expansion)]);
+                }
             }
             scene = scene.object(
                 Object::new(
@@ -304,7 +327,7 @@ impl Render for Materials {
                 .is_none_or(|programs| !programs.matches_window(_window))
         {
             self.programs = None;
-            match programs::Programs::new(_window, self.bands, self.sphere_brightness) {
+            match programs::Programs::new(_window, self.bands, self.sphere_brightness, &self.mesh) {
                 Ok(programs) => self.programs = Some(programs),
                 Err(error) => self.program_error = Some(format!("{error:#}").into()),
             }
@@ -354,6 +377,8 @@ impl Render for Materials {
                     .chain(cfg!(all(feature = "wgpu", not(target_family = "wasm"))).then_some(("programs", "PBR / Custom")))
                     .chain(self.custom.then_some(("bands", "Toon bands")))
                     .chain(self.custom.then_some(("sphere", "Sphere brightness")))
+                    .chain(self.custom.then_some(("outline", match self.outline_mode { 0 => "Outline: off", 1 => "Outline: world", _ => "Outline: pixels" })))
+                    .chain(self.custom.then_some(("outline-weights", if self.outline_weighted { "Width: weighted" } else { "Width: uniform" })))
                     .map(|(id, label)| {
                         div()
                             .id(id)
@@ -366,6 +391,8 @@ impl Render for Materials {
                             .child(label)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 match id {
+                                    "outline" => this.outline_mode = (this.outline_mode + 1) % 3,
+                                    "outline-weights" => this.outline_weighted = !this.outline_weighted,
                                     #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
                                     "programs" => {
                                         this.custom = !this.custom;

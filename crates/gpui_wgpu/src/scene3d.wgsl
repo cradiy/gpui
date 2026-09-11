@@ -2,6 +2,10 @@
 override mesh_pass_cull: u32 = 0u;
 override mesh_pass_alpha_mode: u32 = 2u;
 override mesh_pass_alpha_cutoff: f32 = 0.5;
+override mesh_pass_expansion_mode: u32 = 0u;
+override mesh_pass_expansion_amount: f32 = 0.0;
+override mesh_pass_weight_index: u32 = 4294967295u;
+override mesh_pass_weight_limit: f32 = 1.0;
 struct ImageParams {
     rect: vec4<f32>, uv_u: vec4<f32>, uv_v: vec4<f32>, sampling: vec4<u32>,
 };
@@ -100,12 +104,37 @@ fn vertex(/* MATERIAL_ATTRIBUTE_INDEX */ @location(0) position: vec3<f32>, @loca
     // MATERIAL_ATTRIBUTE_LOAD
     let model = mat4x4<f32>(instance.model_0, instance.model_1, instance.model_2, instance.model_3);
     var clip = params.camera * model * vec4<f32>(position, 1.0);
+    if (mesh_pass_expansion_mode != 0u) {
+        let distance = mesh_pass_expansion_amount * mesh_pass_vertex_weight(output);
+        let direction = unit_vector(output.normal);
+        if (mesh_pass_expansion_mode == 1u) {
+            output.world += direction * distance;
+            clip = params.camera * vec4<f32>(output.world, 1.0);
+        } else {
+            let projected = params.camera * vec4<f32>(direction, 0.0);
+            let projected_scale = max(max(abs(projected.x), abs(projected.y)), abs(projected.w));
+            let clip_scale = max(max(abs(clip.x), abs(clip.y)), abs(clip.w));
+            let p = projected / max(projected_scale, 1.0e-30);
+            let c = clip / max(clip_scale, 1.0e-30);
+            let differential = (p.xy * c.w - c.xy * p.w) * params.bounds.zw;
+            let scale = max(abs(differential.x), abs(differential.y));
+            if (scale > 0.0) {
+                let direction_2d = normalize(differential / scale);
+                clip.x += direction_2d.x * distance * 2.0 / params.bounds.z * clip.w;
+                clip.y += direction_2d.y * distance * 2.0 / params.bounds.w * clip.w;
+            }
+        }
+    }
     let origin = params.bounds.xy / params.viewport.xy;
     let extent = params.bounds.zw / params.viewport.xy;
     clip.x = (origin.x * 2.0 - 1.0) * clip.w + (clip.x + clip.w) * extent.x;
     clip.y = (1.0 - origin.y * 2.0) * clip.w + (clip.y - clip.w) * extent.y;
     output.position = clip;
     return output;
+}
+fn mesh_pass_vertex_weight(input: Output) -> f32 {
+    // MATERIAL_ATTRIBUTE_PASS_WEIGHT
+    return 1.0;
 }
 fn address_coordinate(value: f32, mode: u32) -> f32 {
     if (mode == 1u) { return value - floor(value); }

@@ -170,6 +170,7 @@ fn scene3d_mesh_pass_color_is_independent_from_primary_data_coverage() -> Result
         ),
     ] {
         object.mesh_passes = vec![gpui::MeshPass3d {
+            expansion: None,
             material: gpui::MeshMaterial3d::new(Arc::new(snapshot.clone())),
             state,
         }]

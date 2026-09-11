@@ -1,5 +1,7 @@
 use super::*;
 use gpui::{MeshPassBlend3d, MeshPassDepth3d, MeshPassState3d};
+mod expansion;
+pub(super) use expansion::Expansion;
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests;
@@ -60,7 +62,7 @@ pub(in super::super) fn pass_snapshot(pass: &gpui::MeshPass3d) -> Result<&Scene3
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(Default)]
-pub(in super::super) struct MeshPassCache(HashMap<(usize, [u32; 9]), MeshPassPipeline>);
+pub(in super::super) struct MeshPassCache(HashMap<(usize, [u32; 9], [u32; 4]), MeshPassPipeline>);
 
 #[cfg(not(target_family = "wasm"))]
 struct MeshPassPipeline {
@@ -109,6 +111,10 @@ impl MeshPassCache {
                 let snapshot = pass_snapshot(pass)?;
                 snapshot.validate_vertex_count(object.mesh.vertices().len())?;
                 let source = snapshot.source();
+                let expansion = Expansion::new(
+                    source.program().vertex_attributes(),
+                    pass.expansion.as_ref(),
+                )?;
                 ensure!(
                     !source.context().device_lost()
                         && std::ptr::eq(device, source.context().device.as_ref()),
@@ -117,7 +123,7 @@ impl MeshPassCache {
                 if !color {
                     continue;
                 }
-                let identity = (source.identity(), key(pass.state));
+                let identity = (source.identity(), key(pass.state), expansion.key());
                 used.insert(identity);
                 if let std::collections::hash_map::Entry::Vacant(entry) = self.0.entry(identity) {
                     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -128,7 +134,7 @@ impl MeshPassCache {
                         source.vertex_layout(),
                         format,
                         samples,
-                        Pass::Additional(pass.state),
+                        Pass::Additional(pass.state, expansion),
                     );
                     if let Some(error) = gpui::block_on(scope.pop()) {
                         anyhow::bail!("3D mesh pass pipeline: {error}");
@@ -146,6 +152,16 @@ impl MeshPassCache {
 
     pub fn get(&self, pass: &gpui::MeshPass3d) -> &wgpu::RenderPipeline {
         let snapshot = pass_snapshot(pass).expect("validated mesh pass");
-        &self.0[&(snapshot.source().identity(), key(pass.state))].pipeline
+        let expansion = Expansion::new(
+            snapshot.source().program().vertex_attributes(),
+            pass.expansion.as_ref(),
+        )
+        .expect("validated mesh pass expansion");
+        &self.0[&(
+            snapshot.source().identity(),
+            key(pass.state),
+            expansion.key(),
+        )]
+            .pipeline
     }
 }

@@ -95,6 +95,7 @@ pub(super) fn assemble(
     let mut fields = String::new();
     let mut interpolated = String::new();
     let mut loads = String::new();
+    let mut weights = String::new();
     for (index, attribute) in attributes.iter().enumerate() {
         let name = &attribute.name;
         ensure!(
@@ -153,11 +154,18 @@ pub(super) fn assemble(
             format!("{ty}({})", components.join(", "))
         };
         writeln!(loads, "output.material_attribute_{index} = {value};")?;
+        if attribute.format == wgpu::VertexFormat::Float32 {
+            writeln!(
+                weights,
+                "if (mesh_pass_weight_index == {index}u) {{ return clamp(input.material_attribute_{index}, 0.0, mesh_pass_weight_limit); }}"
+            )?;
+        }
     }
     declarations.push_str("}\n");
     declarations.push_str(&buffers);
     let mut source = core.to_owned();
     for (marker, replacement, occurrences) in [
+        ("// MATERIAL_ATTRIBUTE_PASS_WEIGHT", weights.as_str(), 1),
         (
             "// MATERIAL_ATTRIBUTE_DECLARATIONS",
             declarations.as_str(),

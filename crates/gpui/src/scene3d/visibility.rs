@@ -34,6 +34,19 @@ impl Mesh3d {
         model: [[f32; 4]; 4],
         view_projection: [[f32; 4]; 4],
     ) -> bool {
+        Self::expanded_bounds_intersect_clip_volume(bounds, model, view_projection, 0., false)
+    }
+
+    pub(super) fn expanded_bounds_intersect_clip_volume(
+        bounds: [[f32; 3]; 2],
+        model: [[f32; 4]; 4],
+        view_projection: [[f32; 4]; 4],
+        world_radius: f64,
+        screen_expansion: bool,
+    ) -> bool {
+        if !world_radius.is_finite() || world_radius < 0. {
+            return true;
+        }
         if !bounds.iter().flatten().all(|v| v.is_finite())
             || (0..3).any(|axis| bounds[0][axis] > bounds[1][axis])
         {
@@ -68,8 +81,12 @@ impl Mesh3d {
                     .max(f64::from(bounds[1][i]).abs())
             }
         });
-        let world_magnitude: [f64; 4] =
-            std::array::from_fn(|r| (0..4).map(|c| model[c][r].abs() * local_extent[c]).sum());
+        let world_magnitude: [f64; 4] = std::array::from_fn(|r| {
+            (0..4)
+                .map(|c| model[c][r].abs() * local_extent[c])
+                .sum::<f64>()
+                + if r < 3 { world_radius } else { 0. }
+        });
         let clip_magnitude: [f64; 4] = std::array::from_fn(|r| {
             (0..4)
                 .map(|c| camera[c][r].abs() * world_magnitude[c])
@@ -90,15 +107,16 @@ impl Mesh3d {
             (2, 1., false),
             (2, -1., true),
         ] {
-            let plane: [f64; 4] = std::array::from_fn(|c| {
-                (0..4)
-                    .map(|r| {
-                        (camera[r][axis] * sign + if include_w { camera[r][3] } else { 0. })
-                            * model[c][r]
-                    })
-                    .sum()
+            if screen_expansion && axis < 2 {
+                continue;
+            }
+            let world_plane: [f64; 4] = std::array::from_fn(|r| {
+                camera[r][axis] * sign + if include_w { camera[r][3] } else { 0. }
             });
+            let plane: [f64; 4] =
+                std::array::from_fn(|c| (0..4).map(|r| world_plane[r] * model[c][r]).sum());
             let maximum = plane[3]
+                + world_radius * world_plane[..3].iter().map(|v| v * v).sum::<f64>().sqrt()
                 + (0..3)
                     .map(|i| plane[i] * f64::from(bounds[usize::from(plane[i] >= 0.)][i]))
                     .sum::<f64>();

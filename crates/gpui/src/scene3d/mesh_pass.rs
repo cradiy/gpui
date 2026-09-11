@@ -1,4 +1,6 @@
 use super::{AlphaMode3d, MeshMaterial3d};
+mod expansion;
+pub use expansion::*;
 
 /// Maximum additional color draws per mesh.
 pub const MAX_MESH_PASSES_3D: usize = 8;
@@ -117,6 +119,8 @@ impl MeshPassState3d {
 /// Does not cast shadows or contribute to ID, depth or normal output channels.
 #[derive(Clone, Debug)]
 pub struct MeshPass3d {
+    /// Optional bounded normal displacement, applied only to this color pass.
+    pub expansion: Option<MeshPassExpansion3d>,
     /// Retained backend material resources and custom vertex streams.
     pub material: MeshMaterial3d,
     /// Color-pass raster and composition controls.

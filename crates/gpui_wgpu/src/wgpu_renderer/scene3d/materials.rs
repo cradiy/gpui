@@ -86,7 +86,7 @@ pub(super) enum Pass {
     Opaque,
     Blend,
     Shadow,
-    Additional(gpui::MeshPassState3d),
+    Additional(gpui::MeshPassState3d, mesh_pass::Expansion),
 }
 
 pub(super) fn create_pipeline(
@@ -100,9 +100,9 @@ pub(super) fn create_pipeline(
 ) -> wgpu::RenderPipeline {
     let shadow = matches!(pass, Pass::Shadow);
     let blend = matches!(pass, Pass::Blend);
-    let extra = match pass {
-        Pass::Additional(state) => Some(state),
-        _ => None,
+    let (extra, vertex_constants) = match pass {
+        Pass::Additional(state, expansion) => (Some(state), Some(expansion.constants())),
+        _ => (None, None),
     };
     let fragment = match format {
         wgpu::TextureFormat::R32Uint => "object_id",
@@ -150,7 +150,12 @@ pub(super) fn create_pipeline(
         vertex: wgpu::VertexState {
             module: shader,
             entry_point: Some(if shadow { "shadow_vertex" } else { "vertex" }),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: vertex_constants
+                    .as_ref()
+                    .map_or(&[], |constants| constants.as_slice()),
+                ..Default::default()
+            },
             buffers: &[Some(Vertex::layout()), Some(Instance::layout())],
         },
         fragment: Some(wgpu::FragmentState {

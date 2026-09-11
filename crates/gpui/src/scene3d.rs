@@ -778,6 +778,17 @@ impl std::fmt::Debug for MeshGpuGeometry3d {
 }
 
 impl MeshDraw3d {
+    /// Whether any additional pass's conservative camera bounds intersect the clip volume.
+    pub fn mesh_passes_intersect_clip_volume(&self, view_projection: [[f32; 4]; 4]) -> bool {
+        self.mesh_passes.iter().any(|pass| {
+            pass.intersects_clip_volume(
+                self.render_bounds.unwrap_or(self.mesh.bounds),
+                self.model,
+                view_projection,
+            )
+        })
+    }
+
     /// Tests explicit render bounds when present, otherwise the CPU mesh bounds.
     pub fn intersects_clip_volume(&self, view_projection: [[f32; 4]; 4]) -> bool {
         Mesh3d::bounds_intersect_clip_volume(

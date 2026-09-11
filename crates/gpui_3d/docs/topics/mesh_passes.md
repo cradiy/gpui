@@ -55,11 +55,51 @@ Within each pass stage, objects use scene submission order and passes use their
 declaration order. They are not depth-sorted. Enabling depth writes affects later
 color draws, including primary blended surfaces after an AfterOpaque pass.
 
+## Normal expansion
+
+`MeshPass::expansion()` displaces vertices along their geometric normals after CPU
+or GPU deformation. The primary surface and its query geometry remain unchanged.
+
+```rust
+use gpui_3d::{MeshPassCull, MeshPassExpansion, MeshPassSpace};
+
+let pass = MeshPass::new(bindings)
+    .state(MeshPassState {
+        cull: MeshPassCull::Front,
+        ..Default::default()
+    })
+    .expansion(MeshPassExpansion::new(MeshPassSpace::Pixels, 4.)
+        .weight("width", 1.));
+```
+
+`World` measures displacement in world units along the normalized transformed
+normal, independent of object scale. It updates the pass's world position for
+shading. `Pixels` measures render-target pixels along the projected normal,
+accounting for perspective and viewport aspect ratio. It preserves clip Z/W and
+the original world position. A normal with zero projected length produces no
+pixel displacement. Pixel widths are raster pixels, not logical UI points;
+resampling the viewport's output texture also resamples its outline.
+
+The amount is signed and finite; negative values move inward. Without `.weight()`,
+all vertices use the same amount. A weight names a declared `Float32` custom
+stream in the pass's material program. Bind it through
+[custom vertex inputs](material_attributes.md). The vertex stage clamps values to
+`[0, weight_limit]` before multiplication. Negative weights produce zero expansion;
+the maximum product must fit finite `f32` arithmetic. GPU-provided weights follow
+the stream contract requiring finite float lanes.
+
+World expansion enlarges conservative camera-plane tests by the maximum world
+displacement without modifying stored mesh bounds. Pixel expansion keeps candidates
+across side planes until raster clipping, because target dimensions are not known
+during scene preparation; unchanged near/far bounds still apply. Primary data and
+shadow passes retain their original bounds. Additional color passes are not
+included in CPU mesh queries or reported GPU deformation bounds.
+
 ## Geometry, coverage and lifetime
 
-Additional passes use unchanged vertex positions and conservative render bounds.
-They do not provide vertex expansion or per-vertex outline width. GPU deformation
-and external custom streams follow their existing ownership and queue contracts.
+Additional passes retain the original vertex normals and tangents; expansion does
+not rebuild surface directions. GPU deformation and external custom streams follow
+their existing ownership and queue contracts.
 Stream counts must match the owner's mesh. Objects with additional passes draw
 individually, while sharing geometry allocations and compatible shader pipelines.
 Draw statistics include their camera draws, instances and triangles without
@@ -76,3 +116,13 @@ snapshots keep their resources alive; shared external buffers must remain immuta
 for their documented lifetime. Recreate device-local snapshots after device
 replacement. Invalid pass counts, floating-point state, backend types, devices,
 vertex counts and shader pipelines fail explicitly. Native WGPU is required.
+
+## Material comparison
+
+```sh
+cargo run -p gpui_3d --features wgpu --example materials
+```
+
+Select **PBR / Custom**. **Outline** cycles pixel width, no outline and world width;
+**Width** switches uniform and vertex-weighted expansion. Orbit and zoom to compare
+world-unit and raster-pixel behavior. The outline shader belongs to the example.

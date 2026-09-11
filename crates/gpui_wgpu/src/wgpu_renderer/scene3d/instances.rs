@@ -118,10 +118,11 @@ pub(super) struct Visibility {
 }
 
 impl Visibility {
-    pub fn new(frame: &Scene3dFrame, object: &MeshDraw3d, shadows: bool) -> Self {
+    pub fn new(frame: &Scene3dFrame, object: &MeshDraw3d, color: bool) -> Self {
         Self {
-            camera: object.intersects_clip_volume(frame.view_projection),
-            shadow: shadows
+            camera: object.intersects_clip_volume(frame.view_projection)
+                || (color && object.mesh_passes_intersect_clip_volume(frame.view_projection)),
+            shadow: color
                 && object.cast_shadows
                 && object.alpha_mode != AlphaMode3d::Blend
                 && frame
@@ -284,11 +285,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scene3d_expansion_keeps_camera_candidates_without_expanding_data_or_shadow_bounds() {
+        let mut object = object();
+        object.render_bounds = Some([[1.1, 0., 0.5], [1.2, 0.1, 0.6]]);
+        object.mesh_passes = vec![gpui::MeshPass3d {
+            material: gpui::MeshMaterial3d::new(Arc::new(())),
+            state: Default::default(),
+            expansion: Some(gpui::MeshPassExpansion3d::new(
+                gpui::MeshPassSpace3d::World,
+                0.2,
+            )),
+        }]
+        .into();
+        let mut frame = frame(&[object]);
+        frame.directional_shadow = Some(gpui::DirectionalShadow3d {
+            light_index: 0,
+            view_projection: IDENTITY,
+            resolution: 64,
+            depth_bias: 0.,
+            normal_bias: 0.,
+            softness: 0.,
+        });
+        let plan = BatchPlan::new(&frame, true, 100);
+        assert_eq!(plan.order, [0]);
+        assert_eq!(plan.extra_batches, [0]);
+        assert!(!plan.passes[0].shadow);
+        assert!(BatchPlan::new(&frame, false, 100).order.is_empty());
+    }
+
+    #[test]
     fn scene3d_mesh_passes_keep_submission_order_and_separate_instance_batches() {
         let mut a = object();
         a.alpha_mode = AlphaMode3d::Blend;
         a.sort_depth = 1.;
         a.mesh_passes = vec![gpui::MeshPass3d {
+            expansion: None,
             material: gpui::MeshMaterial3d::new(Arc::new(())),
             state: Default::default(),
         }]

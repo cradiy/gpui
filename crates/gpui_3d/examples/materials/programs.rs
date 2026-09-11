@@ -11,6 +11,7 @@ pub(super) struct Programs {
     context: WgpuContext,
     pub toon: Scene3dMaterialSnapshot,
     pub sphere: Scene3dMaterialSnapshot,
+    pub outline: Scene3dMaterialSnapshot,
 }
 
 fn uniform(settings: [f32; 4]) -> Scene3dMaterialValue {
@@ -24,9 +25,35 @@ impl Programs {
                 .is_some_and(|context| Arc::ptr_eq(&context.device, &self.context.device))
     }
 
-    pub fn new(window: &Window, bands: f32, brightness: f32) -> Result<Self> {
+    pub fn new(window: &Window, bands: f32, brightness: f32, mesh: &gpui_3d::Mesh) -> Result<Self> {
         let context = WgpuContext::for_window(window).context("A wgpu window is required")?;
         let limits = Scene3dMaterialBindingLimits::default();
+        let outline_source = Scene3dMaterialSource::new(
+            context.clone(),
+            Scene3dMaterialProgram::compile_with_attributes(
+                include_str!("outline.wgsl"),
+                &[gpui_3d::Scene3dVertexAttribute::new(
+                    "width",
+                    wgpu::VertexFormat::Float32,
+                )],
+            )?,
+        )?;
+        let weights: Vec<_> = mesh
+            .vertices()
+            .iter()
+            .map(|vertex| 0.2 + 0.8 * (vertex.normal[1] * 0.5 + 0.5).clamp(0., 1.))
+            .collect();
+        let streams = outline_source.bind_vertex_streams(
+            mesh.vertex_count(),
+            &[(
+                "width",
+                gpui_3d::Scene3dVertexStreamValue::Bytes(bytemuck::cast_slice(&weights)),
+            )],
+            1024 * 1024,
+        )?;
+        let outline = outline_source
+            .bind([], limits)?
+            .with_vertex_streams(streams)?;
         let toon = Scene3dMaterialSource::new(
             context.clone(),
             Scene3dMaterialProgram::compile(include_str!("toon.wgsl"))?,
@@ -90,6 +117,7 @@ impl Programs {
             limits,
         )?;
         Ok(Self {
+            outline,
             context,
             toon,
             sphere,
@@ -116,6 +144,14 @@ mod tests {
 
     #[test]
     fn example_materials_validate_with_shading_only_resources() {
+        Scene3dMaterialProgram::compile_with_attributes(
+            include_str!("outline.wgsl"),
+            &[gpui_3d::Scene3dVertexAttribute::new(
+                "width",
+                wgpu::VertexFormat::Float32,
+            )],
+        )
+        .unwrap();
         for source in [include_str!("toon.wgsl"), include_str!("sphere_map.wgsl")] {
             let program = Scene3dMaterialProgram::compile(source).unwrap();
             assert!(

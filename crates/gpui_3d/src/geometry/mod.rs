@@ -25,14 +25,14 @@ pub use expansion::ExpandedMesh;
 pub use gpu_deformation::{
     GpuDeformationBounds, GpuDeformationBoundsReadback, GpuDeformationLimits, GpuDeformationOutput,
     GpuDeformationReadback, GpuDeformationVertex, GpuFlatNormals, GpuFlatNormalsMemory,
-    GpuGeometryBatchPreparation, GpuGeometryPreparation, GpuTangentAdjacency,
-    GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput, GpuTangentDerivative,
-    GpuTangentDerivativeOutput, GpuTangentDerivatives, GpuTangentDerivativesMemory, GpuTangentEdge,
-    GpuTangentFrame, GpuTangentFrames, GpuTangentFramesMemory, GpuTangentFramesOutput,
-    GpuTangentGeneration, GpuTangentGenerationMemory, GpuTangentGroup, GpuTangentGroups,
-    GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld, GpuTangentWeldMemory,
-    GpuTangentWeldOutput, GpuTangentWeldRecord, GpuTangents, GpuTangentsMemory, GpuTangentsOutput,
-    PreparedGpuGeometry,
+    GpuGeometryBatchPreparation, GpuGeometryPreparation, GpuSmoothNormals, GpuSmoothNormalsMemory,
+    GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput,
+    GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
+    GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentFrame, GpuTangentFrames,
+    GpuTangentFramesMemory, GpuTangentFramesOutput, GpuTangentGeneration,
+    GpuTangentGenerationMemory, GpuTangentGroup, GpuTangentGroups, GpuTangentGroupsMemory,
+    GpuTangentGroupsOutput, GpuTangentWeld, GpuTangentWeldMemory, GpuTangentWeldOutput,
+    GpuTangentWeldRecord, GpuTangents, GpuTangentsMemory, GpuTangentsOutput, PreparedGpuGeometry,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpu_morph::{GpuMorph, GpuMorphMemory};

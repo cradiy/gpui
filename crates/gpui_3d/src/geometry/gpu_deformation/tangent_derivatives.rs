@@ -9,7 +9,7 @@ use std::sync::Arc;
 mod tests;
 
 const SHADER: &str = concat!(
-    include_str!("tangent_precision.wgsl"),
+    include_str!("precision.wgsl"),
     include_str!("tangent_derivatives.wgsl")
 );
 

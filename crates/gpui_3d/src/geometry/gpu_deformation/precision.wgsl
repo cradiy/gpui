@@ -1,4 +1,4 @@
-// Decode finite f32 bits without arithmetic on f32 subnormals.
+// Widen finite f32 components without arithmetic on f32 subnormals.
 fn wide_component(bits: u32) -> f64 {
     let exponent = (bits >> 23u) & 255u;
     let mantissa = (bits & 0x7fffffu) | select(0u, 0x800000u, exponent != 0u);

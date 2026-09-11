@@ -9,6 +9,7 @@ mod external;
 mod flat_normals;
 mod preparation;
 mod readback;
+mod smooth_normals;
 pub(super) mod support;
 mod tangent_adjacency;
 mod tangent_derivatives;
@@ -21,6 +22,7 @@ pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
 pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
 pub use preparation::{GpuGeometryBatchPreparation, GpuGeometryPreparation, PreparedGpuGeometry};
 pub use readback::GpuDeformationReadback;
+pub use smooth_normals::{GpuSmoothNormals, GpuSmoothNormalsMemory};
 pub use tangent_adjacency::{
     GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput, GpuTangentEdge,
 };

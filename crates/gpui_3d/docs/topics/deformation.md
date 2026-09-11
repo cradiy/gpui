@@ -42,6 +42,9 @@ uses `f32`, unlike the CPU evaluator's widened intermediates, so cancellation,
 overflow, and tiny values can produce different results. CPU evaluation remains
 available through `source().evaluate(weights)`; no automatic fallback is performed.
 
+For shared indexed geometry, [GPU smooth normals](smooth_normals.md) rebuild
+area-weighted normals while preserving vertex correspondence.
+
 ## Flat normal reconstruction
 
 `GpuFlatNormals` retains triangle topology and rebuilds face normals from a
@@ -148,7 +151,7 @@ preserve the buffer and inspect status before using results. They must not mutat
 the buffer through another GPU binding.
 
 Status X is zero for a valid record, one for detected nonfinite arithmetic,
-two for an undefined tangent frame, three for a singular or unrepresentable
+two for an undefined normal or tangent frame, three for a singular or unrepresentable
 blended Skin transform, four for a rejected zero-area face during normal or
 tangent generation, and five for tangent input outside its supported numeric
 range. Other lanes are reserved and zero. Submission

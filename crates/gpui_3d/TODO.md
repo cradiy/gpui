@@ -220,6 +220,8 @@ Core implementation order:
    - [x] **GPU Skin**: Shared influence bindings, per-instance palettes, and Morph-to-Skin buffer composition.
    - [x] **Imported deformation inputs**: Shared glTF attribute targets, explicit direction-regeneration requirements, and instance-mapped final Skin poses in binding joint order.
    - [x] **GPU flat normals**: Retained triangle-corner topology, source identity and payload admission, and fixed-order reconstruction between Morph and Skin.
+   - [x] **GPU smooth normals**: Retained indexed adjacency, ordered area weighting with widened arithmetic, fixed vertex correspondence, independent results and explicit degenerate/cancelled normal status.
+   - [ ] **Smooth normal GPU validation**: Verify Morph/external inputs, area weighting, seams, unused vertices, extreme coordinate scales, failure propagation and retained packed outputs on supported adapters.
    - [ ] **GPU direction validation**: Verify normal reconstruction, degenerate-face status, retained outputs, and Morph/Skin composition on supported adapters.
    - [ ] **Imported GPU evaluation**: Preserve generated normal/tangent policies, authored Morph defaults, Morph-before-Skin ordering, and source geometry identity when routing imported primitives to GPU draws.
      - [x] **glTF GPU adapter**: Retained per-primitive sources, shared CPU/GPU weight resolution, instance-mapped palettes, and ordered Morph/direction/Skin composition.

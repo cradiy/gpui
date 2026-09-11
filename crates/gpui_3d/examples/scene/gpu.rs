@@ -1,10 +1,10 @@
 use anyhow::{Context as _, Result};
 use gpui::Window;
 use gpui_3d::{
-    Aabb, AffineTransform, GpuDeformationBounds, GpuDeformationBoundsReadback,
-    GpuDeformationLimits, GpuDeformationOutput, GpuMorph, GpuSkin, MorphTargets, NodeHandle,
-    ObjectUpdate, Scene, Scene3dDeviceCapabilities, Scene3dGpuGeometry, Skin, Viewport3d,
-    WgpuContext, WgpuScene3dGeometry, viewport3d,
+    Aabb, AffineTransform, GpuDeformationBounds, GpuDeformationLimits, GpuDeformationOutput,
+    GpuGeometryPreparation, GpuMorph, GpuSkin, MorphTargets, NodeHandle, ObjectUpdate, Scene,
+    Scene3dDeviceCapabilities, Scene3dGpuGeometry, Skin, Viewport3d, WgpuContext,
+    WgpuScene3dGeometry, viewport3d,
 };
 use std::sync::Arc;
 
@@ -27,8 +27,7 @@ struct Output {
 
 struct Pending {
     sample: Sample,
-    geometry: Arc<Scene3dGpuGeometry>,
-    bounds: GpuDeformationBoundsReadback,
+    preparation: GpuGeometryPreparation,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -86,12 +85,12 @@ impl Deformation {
         sample: Sample,
     ) -> Result<Viewport3d> {
         if let Some(mut pending) = self.pending.take() {
-            if let Some(bounds) = pending.bounds.try_read()? {
+            if let Some(prepared) = pending.preparation.try_read()? {
                 if self.output.sample != sample {
                     self.output = Output {
                         sample: pending.sample,
-                        geometry: pending.geometry,
-                        bounds,
+                        geometry: prepared.geometry().clone(),
+                        bounds: prepared.bounds(),
                     };
                 }
             } else {
@@ -121,8 +120,11 @@ impl Deformation {
             let output = skinned.as_ref().unwrap_or(input);
             self.pending = Some(Pending {
                 sample,
-                geometry: Arc::new(output.render_geometry(&self.source)?),
-                bounds: self.bounds.request(output, Some(64))?,
+                preparation: output.prepare_render_geometry(
+                    &self.source,
+                    &self.bounds,
+                    Some(4 * 1024 * 1024),
+                )?,
             });
         }
         let updates = scene

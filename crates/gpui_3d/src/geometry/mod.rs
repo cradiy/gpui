@@ -23,11 +23,11 @@ pub use bounds::Aabb;
 pub use gpu_deformation::{
     GpuDeformationBounds, GpuDeformationBoundsReadback, GpuDeformationLimits, GpuDeformationOutput,
     GpuDeformationReadback, GpuDeformationVertex, GpuFlatNormals, GpuFlatNormalsMemory,
-    GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput,
-    GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
-    GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentGroup, GpuTangentGroups,
-    GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld, GpuTangentWeldMemory,
-    GpuTangentWeldOutput, GpuTangentWeldRecord,
+    GpuGeometryPreparation, GpuTangentAdjacency, GpuTangentAdjacencyMemory,
+    GpuTangentAdjacencyOutput, GpuTangentDerivative, GpuTangentDerivativeOutput,
+    GpuTangentDerivatives, GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentGroup,
+    GpuTangentGroups, GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld,
+    GpuTangentWeldMemory, GpuTangentWeldOutput, GpuTangentWeldRecord, PreparedGpuGeometry,
 };
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use gpu_morph::{GpuMorph, GpuMorphMemory};

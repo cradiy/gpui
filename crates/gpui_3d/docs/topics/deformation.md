@@ -284,6 +284,22 @@ same packed geometry. CPU scene geometry and spatial queries remain unchanged.
 Use output ID/depth readback for screen-space selection or materialize meshes for
 CPU queries at the deformed pose.
 
+`GpuDeformationOutput::prepare_render_geometry(source, bounds_reducer, limit)`
+combines packing, packed-attribute validation, and bounds reduction for one output.
+Poll the returned `GpuGeometryPreparation::try_read()` without waiting. It returns
+`None` until both readbacks finish, then a `PreparedGpuGeometry` with shared
+`geometry()` and mesh-local `bounds()`. Validation failures return errors; no partial
+result is published. Completion and failure are terminal. The request may outlive
+its source/output/reducer handles; dropping it cancels mapping, not submitted work.
+
+The per-request working limit covers packed vertices and indirect/validation storage
+plus 96 bytes for the reduction result and both staging buffers. `working_bytes()`
+retains this admitted total. Existing sources, shared indices/pipelines, deformation
+inputs, and driver overhead are excluded. Concurrent requests are caller-managed.
+Use the returned pair with `ObjectUpdate::gpu_geometry` or `Scene3dGpuDraw`; final
+poses, material snapshots, camera state and publication order remain caller-owned.
+The scene example retains its previous geometry until preparation succeeds.
+
 `WgpuScene3dRenderer::render_with_geometry` accepts the same draws for a prepared
 `Scene3dFrame`. Its input must still contain every overridden object; objects
 removed by earlier preparation cannot be recovered. Prepared frames retain packed

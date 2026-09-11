@@ -16,7 +16,7 @@ const INITIAL: [u32; 8] = [
 /// Reusable mesh-local bounds reduction for deformation outputs on one device.
 /// Includes all vertices, even those not referenced by indices. Does not update CPU meshes.
 pub struct GpuDeformationBounds {
-    context: WgpuContext,
+    pub(super) context: WgpuContext,
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::ComputePipeline,
 }

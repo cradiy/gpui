@@ -7,6 +7,7 @@ use wgpu::util::DeviceExt as _;
 mod bounds;
 mod external;
 mod flat_normals;
+mod preparation;
 mod readback;
 pub(super) mod support;
 mod tangent_adjacency;
@@ -15,6 +16,7 @@ mod tangent_groups;
 mod tangent_weld;
 pub use bounds::{GpuDeformationBounds, GpuDeformationBoundsReadback};
 pub use flat_normals::{GpuFlatNormals, GpuFlatNormalsMemory};
+pub use preparation::{GpuGeometryPreparation, PreparedGpuGeometry};
 pub use readback::GpuDeformationReadback;
 pub use tangent_adjacency::{
     GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput, GpuTangentEdge,

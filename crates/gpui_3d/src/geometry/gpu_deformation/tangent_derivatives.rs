@@ -19,6 +19,8 @@ pub struct GpuTangentDerivative {
     pub bitangent: [f32; 4],
     /// Boolean lanes: zero geometric area, zero UV determinant, positive UV
     /// orientation, and undefined derivative pair. Undefined pairs have zero vectors.
+    /// Regular pairs require absolute UV determinant and both derivative magnitudes
+    /// strictly above f32::MIN_POSITIVE.
     pub classification: [u32; 4],
     /// First failing input corner's status, or [1, 0, 0, 0] for detected nonfinite
     /// arithmetic. Inspect this before using other fields. Zero means no detected error;

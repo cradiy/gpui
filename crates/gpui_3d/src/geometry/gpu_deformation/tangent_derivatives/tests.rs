@@ -1,6 +1,8 @@
 use super::*;
 use crate::{GpuMorph, MorphTarget, MorphTargets, Vertex};
 
+mod numeric;
+
 fn mesh() -> Mesh {
     Mesh::new(
         [[0., 0., 0.], [2., 0., 0.], [0., 3., 0.], [2., 3., 0.]]

@@ -39,6 +39,12 @@ separately, not discarded or repaired. Undefined derivative pairs contain zero
 vectors. Classification and arithmetic use `f32`; this stage does not establish
 equivalence with CPU tangent-generation policies at numeric limits.
 
+A regular derivative pair requires both the absolute UV determinant and each
+derivative magnitude to exceed `f32::MIN_POSITIVE` (`2^-126`). Values equal to
+that boundary remain undefined, even when finite and nonzero. The zero-UV lane
+still records exact zero independently of derivative eligibility. Undefined pairs
+participate in frame inheritance rather than seeding regular orientation groups.
+
 These are unprojected triangle derivatives, not final vertex tangents. Welding,
 orientation groups, corner-angle weighting, normal projection, and degenerate-frame
 inheritance are outside this API. Do not bind its buffer as a renderable mesh or

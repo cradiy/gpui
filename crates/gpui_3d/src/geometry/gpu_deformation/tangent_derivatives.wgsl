@@ -11,6 +11,7 @@ struct Derivative {
     status: vec4<u32>,
 }
 struct Params { triangles: u32, padding_0: u32, padding_1: u32, padding_2: u32 }
+const MIN_NORMAL: f32 = 0x1p-126;
 @group(0) @binding(0) var<storage, read> source: array<Vertex>;
 @group(0) @binding(1) var<storage, read> uv: array<vec2<f32>>;
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
@@ -62,7 +63,7 @@ fn tangent_derivatives(@builtin(global_invocation_id) id: vec3<u32>) {
     result.classification = vec4(u32(zero_area), u32(determinant == 0.0), u32(determinant > 0.0), 0u);
     let ss = magnitude(s);
     let ts = magnitude(t);
-    if determinant == 0.0 || ss == 0.0 || ts == 0.0 {
+    if abs(determinant) <= MIN_NORMAL || ss == 0.0 || ts == 0.0 {
         result.classification.w = 1u;
     } else {
         let sn = s / ss;
@@ -73,6 +74,10 @@ fn tangent_derivatives(@builtin(global_invocation_id) id: vec3<u32>) {
         result.bitangent = vec4(tn / tl * sign(determinant), (ts / abs(determinant)) * tl);
         if !finite(result.tangent) || !finite(result.bitangent) {
             result.status.x = 1u;
+        } else if result.tangent.w <= MIN_NORMAL || result.bitangent.w <= MIN_NORMAL {
+            result.classification.w = 1u;
+            result.tangent = vec4(0.0);
+            result.bitangent = vec4(0.0);
         }
     }
     output[id.x] = result;

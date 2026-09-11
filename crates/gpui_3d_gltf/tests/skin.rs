@@ -141,15 +141,20 @@ fn generated_vertex_splits_preserve_joint_order_and_skinning_inputs() {
             AffineTransform::IDENTITY,
         ];
         let result = binding.evaluate(geometry.mesh(), &joints).unwrap();
-        for (((vertex, base), &source), influences) in result
+        for (index, (((vertex, base), &source), influences)) in result
             .vertices()
             .iter()
             .zip(geometry.mesh().vertices())
             .zip(geometry.source_vertices())
             .zip(geometry.skin_influences().unwrap())
+            .enumerate()
         {
             let expected_joint = if source < 2 { 1 } else { 0 };
             assert_eq!(influences[0].joint, expected_joint);
+            let normalized = binding.vertex_influences(index).unwrap();
+            assert_eq!(normalized.len(), 1);
+            assert_eq!(normalized[0].joint, expected_joint);
+            assert_eq!(normalized[0].weight, 1.);
             near(
                 vertex.position,
                 [

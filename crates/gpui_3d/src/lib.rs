@@ -20,11 +20,12 @@ pub use camera::{
 };
 pub use geometry::{
     Aabb, AffineTransform, AimError, AimResult, AimSettings, AimStatus, ConeOptions,
-    CylinderOptions, GeneratedNormals, GeneratedTangents, IkReach, Mesh, MorphAttribute,
-    MorphError, MorphTarget, MorphTargets, NormalGenerationError, NormalMode, PlaneOptions,
-    PrimitiveError, Skin, SkinError, SkinInfluence, SphereOptions, TangentGenerationError,
-    TangentGenerationMode, TangentRepair, TangentRepairKind, Transform, TransformError,
-    TwoBoneIkError, TwoBoneIkResult, TwoBoneIkSettings,
+    CylinderOptions, GeneratedNormals, GeneratedTangents, IkReach, JointAngleLimitStatus,
+    JointRotationLimitError, JointRotationLimitResult, JointRotationLimits, Mesh, MorphAttribute,
+    MorphError, MorphTarget, MorphTargets, NormalGenerationError, NormalMode,
+    NormalizedSkinInfluence, PlaneOptions, PrimitiveError, Skin, SkinError, SkinInfluence,
+    SphereOptions, TangentGenerationError, TangentGenerationMode, TangentRepair, TangentRepairKind,
+    Transform, TransformError, TwoBoneIkError, TwoBoneIkResult, TwoBoneIkSettings,
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

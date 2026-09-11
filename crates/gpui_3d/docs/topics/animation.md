@@ -91,6 +91,32 @@ joint entries contribute additively. There is no fixed joint or influence limit.
 Rigid vertices can reference one joint with a positive weight. Empty joint arrays,
 empty vertex lists, missing influences, and out-of-range joints return `SkinError`.
 
+`Skin::vertex_influences(vertex)` borrows a slice of `NormalizedSkinInfluence`
+values containing `joint: usize` and `weight: f64`. These are the same normalized
+contributions used by evaluation, including for unused mesh vertices. Positive
+inputs retain their order; repeated joints remain separate and contribute
+additively. Zero-weight inputs are absent. Reading does not allocate or round
+weights to f32. An index at or beyond `vertex_count()` returns
+`SkinError::VertexIndex` with the requested index and vertex count.
+
+```rust
+fn joint_weight(skin: &gpui_3d::Skin, vertex: usize, joint: usize)
+    -> Result<f64, gpui_3d::SkinError>
+{
+    Ok(skin.vertex_influences(vertex)?.iter()
+        .filter(|influence| influence.joint == joint)
+        .map(|influence| influence.weight)
+        .sum())
+}
+```
+
+Cloned bindings share the borrowed data. Weight editing creates a new `Skin`
+from caller-owned `SkinInfluence` inputs; normalization and validation apply to
+the new binding without changing existing bindings or meshes. `SkinInfluence`
+accepts f32 weights, so converting normalized f64 values back to editing inputs
+can lose precision, including very small contributions. Imported bindings are
+available through `gpui_3d_gltf::SceneSkin::binding()`.
+
 `evaluate` accepts current joint-local-to-mesh-local transforms. Each is multiplied
 by its inverse bind matrix before per-vertex linear blending. `evaluate_world`
 instead accepts `mesh_world` and current world-space joint transforms, computing

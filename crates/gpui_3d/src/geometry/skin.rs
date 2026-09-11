@@ -8,11 +8,24 @@ pub struct SkinInfluence {
     pub weight: f32,
 }
 
+/// One retained contribution used by skin evaluation, normalized per vertex.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NormalizedSkinInfluence {
+    /// Index into the binding's inverse bind matrices.
+    pub joint: usize,
+    /// Positive normalized weight in the evaluator's accumulation precision.
+    pub weight: f64,
+}
+
 /// Invalid skin inputs or an unrepresentable sampled deformation. Offsets are zero-based.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SkinError {
     EmptyJoints,
     EmptyVertices,
+    VertexIndex {
+        vertex: usize,
+        vertex_count: usize,
+    },
     JointIndex {
         vertex: usize,
         influence: usize,
@@ -50,6 +63,12 @@ impl fmt::Display for SkinError {
         match self {
             Self::EmptyJoints => f.write_str("skin requires at least one joint"),
             Self::EmptyVertices => f.write_str("skin requires vertex influences"),
+            Self::VertexIndex {
+                vertex,
+                vertex_count,
+            } => {
+                write!(f, "skin vertex {vertex} is outside {vertex_count} vertices")
+            }
             Self::JointIndex {
                 vertex,
                 influence,
@@ -102,7 +121,7 @@ impl std::error::Error for SkinError {
 pub struct Skin {
     inverse_bind: Arc<[AffineTransform]>,
     offsets: Arc<[usize]>,
-    influences: Arc<[(usize, f64)]>,
+    influences: Arc<[NormalizedSkinInfluence]>,
 }
 
 impl Skin {
@@ -137,14 +156,17 @@ impl Skin {
                 if value.weight > 0. {
                     let weight = f64::from(value.weight);
                     sum += weight;
-                    normalized.push((value.joint, weight));
+                    normalized.push(NormalizedSkinInfluence {
+                        joint: value.joint,
+                        weight,
+                    });
                 }
             }
             if sum == 0. {
                 return Err(SkinError::MissingInfluences { vertex });
             }
-            for (_, weight) in &mut normalized[start..] {
-                *weight /= sum;
+            for influence in &mut normalized[start..] {
+                influence.weight /= sum;
             }
             offsets.push(normalized.len());
         }
@@ -168,6 +190,23 @@ impl Skin {
 
     pub fn inverse_bind_matrices(&self) -> &[AffineTransform] {
         &self.inverse_bind
+    }
+
+    /// Borrows the normalized contributions used to evaluate one vertex.
+    /// Retains positive inputs in their original order, including repeated joints;
+    /// zero-weight inputs are absent. No allocation or f32 conversion occurs.
+    /// The index must be less than `vertex_count()`, including for unused vertices.
+    pub fn vertex_influences(
+        &self,
+        vertex: usize,
+    ) -> Result<&[NormalizedSkinInfluence], SkinError> {
+        if vertex >= self.vertex_count() {
+            return Err(SkinError::VertexIndex {
+                vertex,
+                vertex_count: self.vertex_count(),
+            });
+        }
+        Ok(&self.influences[self.offsets[vertex]..self.offsets[vertex + 1]])
     }
 
     /// Builds each palette entry as `joint_to_mesh * inverse_bind`.
@@ -221,7 +260,8 @@ impl Skin {
             .map(|_| Vec::with_capacity(mesh.vertex_count()));
         for (vertex, base) in mesh.vertices().iter().enumerate() {
             let mut blended = [[0_f64; 4]; 4];
-            for &(joint, weight) in &self.influences[self.offsets[vertex]..self.offsets[vertex + 1]]
+            for &NormalizedSkinInfluence { joint, weight } in
+                &self.influences[self.offsets[vertex]..self.offsets[vertex + 1]]
             {
                 for (c, column) in blended.iter_mut().enumerate() {
                     for (r, value) in column.iter_mut().enumerate().take(3) {

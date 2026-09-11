@@ -203,6 +203,65 @@ Retain other sampled parent overrides. This also permits passing solved world
 poses directly into skinning without owning a `SceneGraph`. Applications own
 multi-chain ordering and any conflicting pose overrides.
 
+## Joint rotation limits
+
+`JointRotationLimits::solve(rotation)` limits a joint-local-to-parent quaternion
+relative to `reference_rotation`. Both use `[x, y, z, w]` order and accept finite,
+nonzero inputs that are normalized on entry. `twist_axis` is expressed in the
+reference joint's local space and need not be normalized.
+
+The relative rotation is decomposed as
+`reference.inverse() * rotation = swing * twist`. The swing rotates about an
+axis perpendicular to `twist_axis`; the twist rotates around `twist_axis`.
+`max_swing` defines a circular cone half-angle in `0..=pi` radians.
+`twist_range` is an ordered `[min, max]` interval within `[-pi, pi]`. The default
+reference is identity, the default axis is `+X`, and both components are unrestricted.
+Zero swing and a `[0, 0]` twist interval lock the rotation to the reference pose.
+
+```rust
+use gpui_3d::{JointRotationLimits, TransformPose};
+
+let limits = JointRotationLimits {
+    twist_axis: [0., 1., 0.],
+    max_swing: 45_f32.to_radians(),
+    twist_range: [-20_f32.to_radians(), 30_f32.to_radians()],
+    ..Default::default()
+};
+
+fn constrain_pose(
+    mut pose: TransformPose,
+    limits: JointRotationLimits,
+) -> Result<TransformPose, gpui_3d::JointRotationLimitError> {
+    pose.rotation = limits.solve(pose.rotation)?.rotation;
+    Ok(pose)
+}
+# Ok::<(), gpui_3d::JointRotationLimitError>(())
+```
+
+The returned `rotation` is the constrained local orientation. `swing` and `twist`
+each report `requested_angle`, `applied_angle`, and `limited`. Angles are computed
+in `f64`; the output quaternion is rounded to `f32`. Diagnostics describe the
+angular clamp before output rounding. Quaternion sign does not change the result's
+orientation. No translation, scale, graph state, or mesh data is modified.
+
+Twist uses the signed principal angle in `(-pi, pi]`, choosing positive `pi` for
+an exact half-turn. Intervals are clamped numerically and do not wrap across that
+seam. This is not a multi-turn counter or a closest-orientation optimization.
+The `f32` representations of `pi` and `-pi` are accepted as interval endpoints.
+
+At a half-turn swing the twist decomposition is not unique. When the norm of
+the quaternion's scalar and axial projection is at most `1e-12`, the solver
+selects zero twist and sets `twist_degenerate`. Limits then apply to that
+decomposition. The convention is deterministic, not a continuity guarantee near
+the singularity or the principal-angle seam; no previous pose is retained.
+
+Invalid rotations, reference rotations, axes, or angular limits return the
+corresponding `JointRotationLimitError`. Callers apply the output to a
+`TransformPose` before creating local transform overrides. Arbitrary affine
+matrices are not decomposed into joint orientations. This solver does not
+automatically constrain `TwoBoneIkSettings` or preserve an IK target after
+clamping; chain solving and constraint order are caller-controlled.
+
 ## Related topics
 
 [Scene hierarchy](scenes.md).

@@ -4,6 +4,27 @@ pub(super) struct Rotation([f64; 4]);
 impl Rotation {
     pub const IDENTITY: Self = Self([0., 0., 0., 1.]);
 
+    pub fn from_quaternion(q: [f64; 4]) -> Option<Self> {
+        if !q.iter().all(|value| value.is_finite()) || q.iter().all(|value| *value == 0.) {
+            return None;
+        }
+        let maximum = q.iter().map(|value| value.abs()).fold(0., f64::max);
+        let mut result = Self::normalized(q.map(|value| value / maximum));
+        if result.0[3] == 0.
+            && result.0[..3]
+                .iter()
+                .find(|value| **value != 0.)
+                .is_some_and(|value| *value < 0.)
+        {
+            result.0 = result.0.map(|value| -value);
+        }
+        Some(result)
+    }
+
+    pub fn quaternion(self) -> [f64; 4] {
+        self.0
+    }
+
     fn normalized(mut q: [f64; 4]) -> Self {
         let length = q.iter().map(|value| value * value).sum::<f64>().sqrt();
         let scale = if q[3] < 0. { -1. / length } else { 1. / length };

@@ -527,7 +527,11 @@ impl Scene3dRenderer {
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("scene3d"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../scene3d.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                crate::scene3d_material::MaterialProgram::builtin()
+                    .source()
+                    .into(),
+            ),
         });
         let data_output = matches!(
             format,
@@ -2560,7 +2564,10 @@ pub(crate) mod tests {
 
     #[test]
     fn scene3d_pipeline_bindings_cover_each_shader_entry_point() {
-        let module = naga::front::wgsl::parse_str(include_str!("../scene3d.wgsl")).unwrap();
+        let module = naga::front::wgsl::parse_str(
+            crate::scene3d_material::MaterialProgram::builtin().source(),
+        )
+        .unwrap();
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -2676,7 +2683,10 @@ pub(crate) mod tests {
 
     #[test]
     fn scene3d_shader_validates_and_matches_uniform_layout() {
-        let module = naga::front::wgsl::parse_str(include_str!("../scene3d.wgsl")).unwrap();
+        let module = naga::front::wgsl::parse_str(
+            crate::scene3d_material::MaterialProgram::builtin().source(),
+        )
+        .unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),

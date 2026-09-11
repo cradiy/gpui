@@ -2,6 +2,7 @@ mod cosmic_text_system;
 #[cfg(not(target_family = "wasm"))]
 mod id_remap;
 mod offscreen_renderer;
+mod scene3d_material;
 mod scene3d_renderer;
 mod wgpu_atlas;
 mod wgpu_context;

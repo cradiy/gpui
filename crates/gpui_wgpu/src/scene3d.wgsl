@@ -125,7 +125,7 @@ fn sample_image(source: texture_2d<f32>, source_sampler: sampler, config: ImageP
     return mix(mix(image_texel(source, config, low, extent), image_texel(source, config, low + vec2<i32>(1, 0), extent), weight.x),
         mix(image_texel(source, config, low + vec2<i32>(0, 1), extent), image_texel(source, config, low + vec2<i32>(1, 1), extent), weight.x), weight.y);
 }
-fn material_surface(input: SurfaceInput, gradients: mat2x2<f32>) -> vec4<f32> {
+fn builtin_surface(input: SurfaceInput, gradients: mat2x2<f32>) -> vec4<f32> {
     var sampled: vec4<f32>;
     if (params.flags.w > 0.5) {
         sampled = sample_image(image, image_sampler, ImageParams(params.texture_rect, params.uv_u, params.uv_v, params.sampling), input.uv.xy, gradients);
@@ -358,7 +358,7 @@ fn pbr_lighting(base: vec3<f32>, normal: vec3<f32>, geometric_normal: vec3<f32>,
     return result;
 }
 
-fn material_shading(base: vec3<f32>, input: SurfaceInput, gradients: SurfaceGradients, face_sign: f32) -> vec3<f32> {
+fn builtin_shading(base: vec3<f32>, input: SurfaceInput, gradients: SurfaceGradients, face_sign: f32) -> vec3<f32> {
     var illumination = vec3<f32>(1.0);
     if (params.flags.y < 0.5) {
         if (params.pbr.z > 0.5) {
@@ -374,6 +374,19 @@ fn material_shading(base: vec3<f32>, input: SurfaceInput, gradients: SurfaceGrad
         }
     }
     return base * illumination;
+}
+
+fn material_view_direction(world: vec3<f32>) -> vec3<f32> {
+    return unit_vector(params.view.xyz - world * params.view.w);
+}
+fn material_light_count() -> u32 { return min(params.light_count.x, 8u); }
+fn material_light(index: u32, world: vec3<f32>, geometric_normal: vec3<f32>, shadow_depth: vec2<f32>) -> LightSample {
+    if (index >= material_light_count()) { return LightSample(vec3<f32>(0.0), vec3<f32>(0.0)); }
+    let light = sample_light(params.lights[index], world);
+    return LightSample(light.direction, light.energy * shadow_visibility(index, world, geometric_normal, shadow_depth));
+}
+fn material_ambient(normal: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(params.ambient.x) + diffuse_environment(normal);
 }
 
 @fragment

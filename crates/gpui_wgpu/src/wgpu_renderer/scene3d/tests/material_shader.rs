@@ -11,7 +11,9 @@ fn function(module: &Module, name: &str) -> Handle<Function> {
 
 #[test]
 fn scene3d_material_coverage_is_shared_and_shading_cannot_discard() {
-    let module = naga::front::wgsl::parse_str(include_str!("../../../scene3d.wgsl")).unwrap();
+    let module =
+        naga::front::wgsl::parse_str(crate::scene3d_material::MaterialProgram::builtin().source())
+            .unwrap();
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -90,7 +92,9 @@ fn scene3d_material_coverage_is_shared_and_shading_cannot_discard() {
 
 #[test]
 fn scene3d_camera_and_shadow_preserve_identical_material_vertex_inputs() {
-    let module = naga::front::wgsl::parse_str(include_str!("../../../scene3d.wgsl")).unwrap();
+    let module =
+        naga::front::wgsl::parse_str(crate::scene3d_material::MaterialProgram::builtin().source())
+            .unwrap();
     let world = function(&module, "world_vertex");
     for entry in module
         .entry_points

@@ -59,8 +59,8 @@ same UV orientation. No orientation is assigned to a frame needing inheritance.
 
 [`GpuTangentGroups`](tangent_groups.md) consumes this output to label connected
 regular corners. Adjacency does not select inherited frames, compute angle weights,
-or publish vertex tangents. It does not establish compatibility with CPU
-MikkTSpace's legacy edge-sorting behavior.
+or publish vertex tangents. CPU and GPU edge pairing use face order for opposite
+directions; complete tangent generation also depends on the subsequent frame stages.
 
 ## Admission
 

@@ -128,6 +128,9 @@ impl Mesh {
     /// for remapping external attributes. Bounds exclude omitted vertices.
     ///
     /// Indexed normals must be nonzero; a normalized copy is used by the algorithm.
+    /// Internal matching uses exact position/normalized-normal/UV bits, including
+    /// signed zero. Opposite edges are paired in face order; neither matching nor
+    /// pairing merges the source vertex data.
     /// Zero geometric/UV area and unrepresentable f32 intermediates return errors;
     /// triangles are never silently dropped and no arbitrary basis is substituted.
     pub fn generate_tangents(&self) -> Result<GeneratedTangents, TangentGenerationError> {

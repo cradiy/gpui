@@ -5,6 +5,9 @@ use gpui_3d::{
     Vertex,
 };
 
+#[path = "tangents/topology.rs"]
+mod topology;
+
 fn quad(mirrored: bool) -> Mesh {
     let uv = if mirrored { [1., 0.] } else { [0., 1.] };
     Mesh::new(

@@ -269,6 +269,11 @@ tangent frames differ, including mirrored UV seams. Triangle order and winding
 are unchanged, preserving triangle IDs for queries and per-triangle metadata.
 Existing tangents are replaced without modifying the source mesh.
 
+Internal corner matching uses exact position, normalized-normal and selected-UV
+bits, including signed zero. Non-manifold edges pair opposite directions in face
+order. Matching controls tangent smoothing without merging distinct source
+vertices in the output mesh.
+
 `generate_tangents_for_uv_set(set, mode)` uses the requested coordinate set for
 validation, MikkTSpace and any repairs. It preserves all coordinate sets and
 records the selected identifier in `tangent_uv_set()`. Missing sets return

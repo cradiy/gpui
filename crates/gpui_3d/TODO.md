@@ -238,6 +238,7 @@ Core implementation order:
          - [ ] **Welding GPU validation**: Verify dynamic split/merge, shared indices, seams, signed zero, failed corners, multi-workgroup sorting, and retained frames on supported adapters.
        - [ ] **GPU tangent publication**: Normal-orthogonal frames, imported repair policy, handedness checks, Morph-to-Skin composition, and CPU MikkTSpace parity on supported adapters.
          - [x] **Fixed-order tangent vertices**: Initial tangent-source metadata, normal projection, explicit Strict/Inherit/Repair modes, triangle handedness rejection, independent repair tags, and canonical deformation output for Skin and render packing.
+         - [x] **Combined tangent generation**: Reusable stage ownership, direct deformation-to-tangent evaluation, aggregate payload admission, retained output identity, and explicit normal-reconstruction ordering.
          - [ ] **Publication GPU validation**: Verify deformed frame projection, repair selection, mixed signs, original failure propagation, retained outputs, and Morph/Skin/render composition on supported adapters.
          - [ ] **CPU/GPU generation parity**: Align welding keys, edge ordering, normalization, and degenerate-frame inheritance across evaluation paths before enabling imported generated tangents.
            - [x] **Regular-frame thresholds**: Strict lower bounds for the UV determinant and derivative magnitudes, independent zero-UV classification, and undefined-frame inheritance eligibility.

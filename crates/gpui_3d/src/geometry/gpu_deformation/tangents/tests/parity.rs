@@ -250,7 +250,7 @@ fn gpu_frames_match_cpu_repair_selection_for_inheritance_and_projection() -> Res
         underflowing_neighbor(),
         underflowing_bitangent(),
     ] {
-        let source = GpuTangents::new(
+        let source = crate::GpuTangentGeneration::new(
             context.clone(),
             base.clone(),
             0,
@@ -258,7 +258,7 @@ fn gpu_frames_match_cpu_repair_selection_for_inheritance_and_projection() -> Res
             limits,
         )?;
         let input = GpuDeformationOutput::upload(context.clone(), base.clone(), limits)?;
-        let output = source.evaluate(&frames(&input, 0)?)?;
+        let output = source.evaluate(&input)?;
         drop((source, input));
         let expected = base.generate_tangents_with_mode(TangentGenerationMode::Repair)?;
         let mut expected_tags = vec![0; base.vertex_count()];

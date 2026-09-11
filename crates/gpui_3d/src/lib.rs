@@ -37,10 +37,10 @@ pub use geometry::{
     GpuTangentAdjacency, GpuTangentAdjacencyMemory, GpuTangentAdjacencyOutput,
     GpuTangentDerivative, GpuTangentDerivativeOutput, GpuTangentDerivatives,
     GpuTangentDerivativesMemory, GpuTangentEdge, GpuTangentFrame, GpuTangentFrames,
-    GpuTangentFramesMemory, GpuTangentFramesOutput, GpuTangentGroup, GpuTangentGroups,
-    GpuTangentGroupsMemory, GpuTangentGroupsOutput, GpuTangentWeld, GpuTangentWeldMemory,
-    GpuTangentWeldOutput, GpuTangentWeldRecord, GpuTangents, GpuTangentsMemory, GpuTangentsOutput,
-    PreparedGpuGeometry,
+    GpuTangentFramesMemory, GpuTangentFramesOutput, GpuTangentGeneration,
+    GpuTangentGenerationMemory, GpuTangentGroup, GpuTangentGroups, GpuTangentGroupsMemory,
+    GpuTangentGroupsOutput, GpuTangentWeld, GpuTangentWeldMemory, GpuTangentWeldOutput,
+    GpuTangentWeldRecord, GpuTangents, GpuTangentsMemory, GpuTangentsOutput, PreparedGpuGeometry,
 };
 pub use gpui::MeshTexture3d as ResolvedTexture;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]

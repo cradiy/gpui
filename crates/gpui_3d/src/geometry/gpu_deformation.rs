@@ -13,6 +13,7 @@ pub(super) mod support;
 mod tangent_adjacency;
 mod tangent_derivatives;
 mod tangent_frames;
+mod tangent_generation;
 mod tangent_groups;
 mod tangent_weld;
 mod tangents;
@@ -30,6 +31,7 @@ pub use tangent_derivatives::{
 pub use tangent_frames::{
     GpuTangentFrame, GpuTangentFrames, GpuTangentFramesMemory, GpuTangentFramesOutput,
 };
+pub use tangent_generation::{GpuTangentGeneration, GpuTangentGenerationMemory};
 pub use tangent_groups::{
     GpuTangentGroup, GpuTangentGroups, GpuTangentGroupsMemory, GpuTangentGroupsOutput,
 };

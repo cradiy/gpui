@@ -5,6 +5,47 @@
 the native `wgpu` feature. Outputs feed Skin, bounds reduction, render vertex
 packing, and explicit CPU readback without reading intermediate vertices back.
 
+## Complete generation
+
+`GpuTangentGeneration` owns the derivative, weld, adjacency, group, frame and
+publication stages. Construct it once for an unshared mesh and reuse it for
+subsequent deformation snapshots from the same device and base mesh allocation.
+It preserves input normals; run any required normal reconstruction beforehand.
+
+```rust,no_run
+# use gpui_3d::{GpuDeformationLimits, GpuDeformationOutput, GpuTangentGeneration, TangentGenerationMode};
+# fn generate(input: &GpuDeformationOutput) -> anyhow::Result<()> {
+let generator = GpuTangentGeneration::new(
+    input.context().clone(),
+    input.base_mesh().clone(),
+    0,
+    TangentGenerationMode::Repair,
+    GpuDeformationLimits::default(),
+)?;
+let output = generator.evaluate(input)?;
+let deformation = output.deformation();
+# Ok(())
+# }
+```
+
+The result is a `GpuTangentsOutput` with canonical deformation vertices and repair
+tags. Its mesh identity is `generator.output_mesh()`, distinct from `base_mesh()`.
+Results remain valid after subsequent evaluations or source destruction. Evaluation
+submits the existing stage passes without intermediate CPU readback; arithmetic
+failures remain in output status. Use individual stage APIs when intermediate
+derivatives, groups or frames are required. The glTF GPU adapter rejects assets
+requiring generated tangents.
+
+`GpuTangentGenerationMemory::plan(corners, limits)` admits the combined payload
+before source construction. `source_bytes` includes every retained stage's
+topology, coordinates and uniforms. `evaluation_bytes` is a conservative sum of
+all stage scratch and result allocations for one call, including final vertices
+and repair tags. `retained_output_bytes` reports only those final buffers and is
+already included in the evaluation total. `max_source_bytes` and `max_output_bytes`
+bound the combined source and evaluation totals respectively. Input snapshots,
+CPU tangent preparation, pipelines, driver overhead and other retained evaluations
+are excluded; callers separately limit concurrent work and retained results.
+
 ## Source preparation
 
 Each source vertex must appear exactly once in the index buffer. Index order

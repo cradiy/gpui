@@ -14,6 +14,42 @@ pub enum Scene3dVertexUpdate<'a> {
     },
     /// Normalized linear, straight-alpha RGBA multipliers. White removes modulation.
     Color(&'a [[f32; 4]]),
+    /// Copies packed Float32x2 records from a device-local COPY_SRC buffer.
+    UvBuffer {
+        set: u32,
+        buffer: &'a crate::WgpuResource<wgpu::Buffer>,
+    },
+    /// Copies packed Float32x4 linear, straight-alpha RGBA records from COPY_SRC storage.
+    ColorBuffer(&'a crate::WgpuResource<wgpu::Buffer>),
+}
+
+impl Scene3dVertexUpdate<'_> {
+    fn buffer(&self) -> Option<&crate::WgpuResource<wgpu::Buffer>> {
+        match self {
+            Self::UvBuffer { buffer, .. } | Self::ColorBuffer(buffer) => Some(buffer),
+            _ => None,
+        }
+    }
+
+    fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Uv { coordinates, .. } => Some(bytemuck::cast_slice(coordinates)),
+            Self::Color(colors) => Some(bytemuck::cast_slice(colors)),
+            _ => None,
+        }
+    }
+}
+
+fn validate_buffer(expected: u64, size: u64, usage: wgpu::BufferUsages) -> Result<()> {
+    ensure!(
+        size == expected,
+        "GPU attribute buffer requires exactly {expected} bytes"
+    );
+    ensure!(
+        usage.contains(wgpu::BufferUsages::COPY_SRC),
+        "GPU attribute buffer requires COPY_SRC usage"
+    );
+    Ok(())
 }
 
 struct AttributePlan {
@@ -40,11 +76,7 @@ impl AttributePlan {
         for update in updates {
             let offset = u32::try_from(words)?;
             match update {
-                Scene3dVertexUpdate::Uv { set, coordinates } => {
-                    ensure!(
-                        sets.contains(set),
-                        "GPU geometry does not select UV set {set}"
-                    );
+                Scene3dVertexUpdate::Uv { coordinates, .. } => {
                     ensure!(
                         coordinates.len() == vertices,
                         "GPU UV attribute count mismatch"
@@ -52,6 +84,30 @@ impl AttributePlan {
                     ensure!(
                         coordinates.iter().flatten().all(|v| v.is_finite()),
                         "GPU UV coordinates must be finite"
+                    );
+                }
+                Scene3dVertexUpdate::Color(colors) => {
+                    ensure!(
+                        colors.len() == vertices,
+                        "GPU color attribute count mismatch"
+                    );
+                    ensure!(
+                        colors.iter().flatten().all(|v| (0. ..=1.).contains(v)),
+                        "GPU vertex colors must be finite and within 0..=1"
+                    );
+                }
+                Scene3dVertexUpdate::UvBuffer { buffer, .. } => {
+                    validate_buffer(vertices as u64 * 8, buffer.size(), buffer.usage())?
+                }
+                Scene3dVertexUpdate::ColorBuffer(buffer) => {
+                    validate_buffer(vertices as u64 * 16, buffer.size(), buffer.usage())?
+                }
+            }
+            match update {
+                Scene3dVertexUpdate::Uv { set, .. } | Scene3dVertexUpdate::UvBuffer { set, .. } => {
+                    ensure!(
+                        sets.contains(set),
+                        "GPU geometry does not select UV set {set}"
                     );
                     for (slot, selected) in sets.iter().enumerate() {
                         if selected == set {
@@ -61,16 +117,8 @@ impl AttributePlan {
                     }
                     words += vertices as u64 * 2;
                 }
-                Scene3dVertexUpdate::Color(colors) => {
+                Scene3dVertexUpdate::Color(_) | Scene3dVertexUpdate::ColorBuffer(_) => {
                     ensure!(header[6] == 0, "duplicate GPU vertex color update");
-                    ensure!(
-                        colors.len() == vertices,
-                        "GPU color attribute count mismatch"
-                    );
-                    ensure!(
-                        colors.iter().flatten().all(|v| (0. ..=1.).contains(v)),
-                        "GPU vertex colors must be finite and within 0..=1"
-                    );
                     header[6] = offset;
                     words += vertices as u64 * 4;
                 }
@@ -106,22 +154,6 @@ impl AttributePlan {
             header,
             upload_bytes,
         })
-    }
-
-    fn pack(&self, updates: &[Scene3dVertexUpdate<'_>]) -> Vec<u32> {
-        if updates.is_empty() {
-            return Vec::new();
-        }
-        let mut words = Vec::with_capacity(self.upload_bytes as usize / 4);
-        words.extend(self.header);
-        for update in updates {
-            let data: &[f32] = match update {
-                Scene3dVertexUpdate::Uv { coordinates, .. } => bytemuck::cast_slice(coordinates),
-                Scene3dVertexUpdate::Color(colors) => bytemuck::cast_slice(colors),
-            };
-            words.extend(data.iter().map(|v| v.to_bits()));
-        }
-        words
     }
 }
 
@@ -179,13 +211,20 @@ impl WgpuScene3dGeometry {
     /// packing pipelines, and previous source versions are preserved. Empty updates clone
     /// this source without allocating buffers or submitting work.
     ///
-    /// Only supplied streams are uploaded. The GPU copies the interleaved source before
-    /// updating it. `max_working_bytes` admits the new source plus the temporary upload,
-    /// excluding existing sources, results, shared indices, pipelines, and driver overhead.
+    /// Only CPU streams are uploaded; external streams are copied on the GPU. The GPU
+    /// copies the interleaved source before updating it. `max_working_bytes` admits
+    /// the new source plus the temporary copy buffer, excluding existing sources,
+    /// external inputs, results, shared indices, pipelines, and driver overhead.
     ///
     /// CPU mesh metadata is unchanged. Use GPU coverage/picking for the resulting draw.
     /// UV updates do not regenerate tangents: when changing tangent-space coordinates,
     /// supply matching tangents in the deformation buffer passed to `evaluate`.
+    ///
+    /// External buffers must be created through this source's context. Submit producers
+    /// on its queue before calling; later queue writes may reuse the buffers without
+    /// changing this snapshot. Do not map or destroy inputs until the copy completes.
+    /// GPU values are not read back: packing suppresses draws with nonfinite UVs or
+    /// color lanes outside [0, 1]. Buffer inputs count toward the temporary copy payload.
     pub fn with_attributes(
         &self,
         updates: &[Scene3dVertexUpdate<'_>],
@@ -193,6 +232,11 @@ impl WgpuScene3dGeometry {
     ) -> Result<Self> {
         ensure!(!self.context.device_lost(), "GPU geometry device is lost");
         let device = &self.context.device;
+        for update in updates {
+            if let Some(buffer) = update.buffer() {
+                buffer.check_device(device)?;
+            }
+        }
         let plan = AttributePlan::new(
             self.mesh.vertices().len(),
             self.uv_sets,
@@ -203,17 +247,17 @@ impl WgpuScene3dGeometry {
         if updates.is_empty() {
             return Ok(self.clone());
         }
-        let words = plan.pack(updates);
         let mut cached = self.attribute_kernel.lock();
         if cached.is_none() {
             *cached = Some(AttributeKernel::new(device)?);
         }
         let kernel = cached.as_ref().expect("initialized attribute kernel");
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let upload = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let upload = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene3d.attributes.upload"),
-            contents: bytemuck::cast_slice(&words),
-            usage: wgpu::BufferUsages::STORAGE,
+            size: plan.upload_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let source = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene3d.attributes.source"),
@@ -240,6 +284,19 @@ impl WgpuScene3dGeometry {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene3d.attributes"),
         });
+        self.context
+            .queue
+            .write_buffer(&upload, 0, bytemuck::cast_slice(&plan.header));
+        let mut offset = 32;
+        for update in updates {
+            if let Some(bytes) = update.bytes() {
+                self.context.queue.write_buffer(&upload, offset, bytes);
+                offset += bytes.len() as u64;
+            } else if let Some(buffer) = update.buffer() {
+                encoder.copy_buffer_to_buffer(buffer, 0, &upload, offset, buffer.size());
+                offset += buffer.size();
+            }
+        }
         encoder.copy_buffer_to_buffer(&self.source, 0, &source, 0, self.memory.source_vertex_bytes);
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

@@ -7,6 +7,8 @@ struct Attributes {
 const VERTEX_WORDS: u32 = 24u;
 const NORMAL_WORD: u32 = 3u;
 const TANGENT_WORD: u32 = 10u;
+const UV_WORDS = array<u32, 5>(6u, 8u, 14u, 16u, 18u);
+const COLOR_WORD = 20u;
 @group(0) @binding(0) var<storage, read> base: array<u32>;
 @group(0) @binding(1) var<storage, read> attributes: array<Attributes>;
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
@@ -32,6 +34,15 @@ fn pack(@builtin(global_invocation_id) invocation: vec3<u32>) {
         let word = index * VERTEX_WORDS;
         for (var lane = 0u; lane < VERTEX_WORDS; lane += 1u) {
             vertices[word + lane] = base[word + lane];
+        }
+        for (var slot = 0u; slot < 5u; slot += 1u) {
+            let uv = vec2<f32>(bitcast<f32>(base[word + UV_WORDS[slot]]),
+                bitcast<f32>(base[word + UV_WORDS[slot] + 1u]));
+            if !finite(vec4<f32>(uv, 0.0, 0.0)) { atomicStore(&draw[1], 0u); }
+        }
+        for (var lane = 0u; lane < 4u; lane += 1u) {
+            let color = bitcast<f32>(base[word + COLOR_WORD + lane]);
+            if !(color >= 0.0 && color <= 1.0) { atomicStore(&draw[1], 0u); }
         }
         for (var lane = 0u; lane < 3u; lane += 1u) {
             vertices[word + lane] = bitcast<u32>(value.position[lane]);

@@ -16,11 +16,8 @@ fn sparse_attribute_upload_shares_selected_uv_slots_and_admits_peak_payload() {
     let working_bytes = 3 * 96 + upload_bytes;
     let plan =
         AttributePlan::new(3, [2, 0, 2, 0, 2], &updates, &limits, Some(working_bytes)).unwrap();
-    let words = plan.pack(&updates);
-    assert_eq!(words.len() as u64 * 4, upload_bytes);
-    assert_eq!(&words[..8], &[3, 8, 0, 8, 0, 8, 14, 0]);
-    assert_eq!(&words[8..14], bytemuck::cast_slice::<_, u32>(&coordinates));
-    assert_eq!(&words[14..], bytemuck::cast_slice::<_, u32>(&colors));
+    assert_eq!(plan.upload_bytes, upload_bytes);
+    assert_eq!(plan.header, [3, 8, 0, 8, 0, 8, 14, 0]);
     assert!(
         AttributePlan::new(
             3,
@@ -37,7 +34,19 @@ fn sparse_attribute_upload_shares_selected_uv_slots_and_admits_peak_payload() {
     };
     assert!(AttributePlan::new(3, [2; 5], &updates, &limits, None).is_err());
     let empty = AttributePlan::new(3, [0; 5], &[], &limits, Some(0)).unwrap();
-    assert!(empty.pack(&[]).is_empty());
+    assert_eq!(empty.upload_bytes, 0);
+}
+
+#[test]
+fn external_attribute_buffers_require_exact_copyable_records() {
+    let copy = wgpu::BufferUsages::COPY_SRC;
+    for bytes in [24, 48] {
+        validate_buffer(bytes, bytes, copy).unwrap();
+        for actual in [0, bytes - 4, bytes + 4] {
+            assert!(validate_buffer(bytes, actual, copy).is_err());
+        }
+        assert!(validate_buffer(bytes, bytes, wgpu::BufferUsages::STORAGE).is_err());
+    }
 }
 
 #[test]
@@ -102,51 +111,57 @@ fn attribute_shader_offsets_match_render_vertex_attributes() {
         front::wgsl,
         valid::{Capabilities, ValidationFlags, Validator},
     };
-    let module = wgsl::parse_str(include_str!("../attributes.wgsl")).unwrap();
-    Validator::new(ValidationFlags::all(), Capabilities::empty())
-        .validate(&module)
-        .unwrap();
-    let constant = |name| {
-        module
-            .constants
-            .iter()
-            .find(|(_, c)| c.name.as_deref() == Some(name))
-            .unwrap()
-            .1
-            .init
-    };
-    let value = |handle| {
-        let Expression::Literal(Literal::U32(v)) = module.global_expressions[handle] else {
-            panic!("expected u32");
+    for source in [
+        include_str!("../attributes.wgsl"),
+        include_str!("../../gpu_geometry.wgsl"),
+    ] {
+        let module = wgsl::parse_str(source).unwrap();
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .unwrap();
+        let constant = |name| {
+            module
+                .constants
+                .iter()
+                .find(|(_, c)| c.name.as_deref() == Some(name))
+                .unwrap()
+                .1
+                .init
         };
-        u64::from(v) * 4
-    };
-    let layout = Vertex::layout();
-    let offset = |location| {
-        layout
-            .attributes
-            .iter()
-            .find(|a| a.shader_location == location)
-            .unwrap()
-            .offset
-    };
-    assert_eq!(value(constant("VERTEX_WORDS")), layout.array_stride);
-    assert_eq!(value(constant("COLOR_WORD")), offset(11));
-    let Expression::Compose { components, .. } = &module.global_expressions[constant("UV_WORDS")]
-    else {
-        panic!("expected UV offsets");
-    };
-    let uv_offsets: Vec<_> = components.iter().map(|&handle| value(handle)).collect();
-    assert_eq!(
-        uv_offsets,
-        [
-            offset(2),
-            offset(2) + 8,
-            offset(14),
-            offset(14) + 8,
-            offset(15)
-        ]
-    );
+        let value = |handle| {
+            let Expression::Literal(Literal::U32(v)) = module.global_expressions[handle] else {
+                panic!("expected u32");
+            };
+            u64::from(v) * 4
+        };
+        let layout = Vertex::layout();
+        let offset = |location| {
+            layout
+                .attributes
+                .iter()
+                .find(|a| a.shader_location == location)
+                .unwrap()
+                .offset
+        };
+        assert_eq!(value(constant("VERTEX_WORDS")), layout.array_stride);
+        assert_eq!(value(constant("COLOR_WORD")), offset(11));
+        let Expression::Compose { components, .. } =
+            &module.global_expressions[constant("UV_WORDS")]
+        else {
+            panic!("expected UV offsets");
+        };
+        let uv_offsets: Vec<_> = components.iter().map(|&handle| value(handle)).collect();
+        assert_eq!(
+            uv_offsets,
+            [
+                offset(2),
+                offset(2) + 8,
+                offset(14),
+                offset(14) + 8,
+                offset(15)
+            ]
+        );
+    }
 }
 
 #[test]
@@ -185,6 +200,59 @@ fn gpu_attribute_versions_preserve_geometry_and_share_packing_resources() {
     let next = updated
         .with_attributes(&[Scene3dVertexUpdate::Color(&next_colors)], None)
         .unwrap();
+    let uv_buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&coordinates),
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    });
+    let color_buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&next_colors),
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    });
+    let external = source
+        .with_attributes(
+            &[
+                Scene3dVertexUpdate::UvBuffer {
+                    set: 2,
+                    buffer: &uv_buffer,
+                },
+                Scene3dVertexUpdate::Color(&colors),
+            ],
+            None,
+        )
+        .unwrap()
+        .with_attributes(&[Scene3dVertexUpdate::ColorBuffer(&color_buffer)], None)
+        .unwrap();
+    assert!(
+        source
+            .with_attributes(
+                &[
+                    Scene3dVertexUpdate::UvBuffer {
+                        set: 2,
+                        buffer: &uv_buffer
+                    },
+                    Scene3dVertexUpdate::Uv {
+                        set: 2,
+                        coordinates: &coordinates
+                    },
+                ],
+                None
+            )
+            .is_err()
+    );
+    context
+        .queue
+        .write_buffer(&uv_buffer, 0, bytemuck::cast_slice(&[[f32::NAN, 0.]; 3]));
+    context.queue.write_buffer(
+        &color_buffer,
+        0,
+        bytemuck::cast_slice(&[[1., 1., 1., 2.]; 3]),
+    );
+    assert_eq!(
+        read(&context, &external.source),
+        read(&context, &next.source)
+    );
     let invalid = updated.with_attributes(&[Scene3dVertexUpdate::Color(&[])], None);
     assert!(invalid.is_err());
     let base: Vec<_> = (0..3)
@@ -228,6 +296,58 @@ fn gpu_attribute_versions_preserve_geometry_and_share_packing_resources() {
             usage: wgpu::BufferUsages::STORAGE,
         });
     let packed = next.evaluate(&buffer).unwrap();
+    let external_packed = external.evaluate(&buffer).unwrap();
+    for update in [
+        Scene3dVertexUpdate::UvBuffer {
+            set: 2,
+            buffer: &uv_buffer,
+        },
+        Scene3dVertexUpdate::ColorBuffer(&color_buffer),
+    ] {
+        let invalid = external.with_attributes(&[update], None).unwrap();
+        assert_eq!(
+            read(&context, invalid.evaluate(&buffer).unwrap().draw()),
+            [3, 0, 0, 0, 0]
+        );
+        let repaired = invalid
+            .with_attributes(
+                &[
+                    Scene3dVertexUpdate::Uv {
+                        set: 2,
+                        coordinates: &coordinates,
+                    },
+                    Scene3dVertexUpdate::Color(&next_colors),
+                ],
+                None,
+            )
+            .unwrap()
+            .evaluate(&buffer)
+            .unwrap();
+        assert_eq!(read(&context, repaired.draw()), [3, 1, 0, 0, 0]);
+        assert_eq!(
+            read(&context, repaired.vertices()),
+            read(&context, external_packed.vertices())
+        );
+    }
+    let foreign = WgpuContext::new_headless()
+        .unwrap()
+        .create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 24,
+            usage: wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+    assert!(
+        source
+            .with_attributes(
+                &[Scene3dVertexUpdate::UvBuffer {
+                    set: 2,
+                    buffer: &foreign
+                },],
+                None
+            )
+            .is_err()
+    );
     let expected_mesh = expected_mesh
         .with_vertex_colors(next_colors.to_vec())
         .unwrap();
@@ -237,9 +357,17 @@ fn gpu_attribute_versions_preserve_geometry_and_share_packing_resources() {
     drop(next);
     drop(updated);
     drop(source);
+    drop(external);
+    drop(uv_buffer);
+    drop(color_buffer);
     assert_eq!(
         read(&context, packed.vertices()),
         bytemuck::cast_slice::<_, u32>(&expected)
     );
     assert_eq!(read(&context, packed.draw()), [3, 1, 0, 0, 0]);
+    assert_eq!(
+        read(&context, external_packed.vertices()),
+        read(&context, packed.vertices())
+    );
+    assert_eq!(read(&context, external_packed.draw()), [3, 1, 0, 0, 0]);
 }

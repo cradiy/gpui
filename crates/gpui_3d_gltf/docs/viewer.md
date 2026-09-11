@@ -69,9 +69,11 @@ render vertices without reading them back to the CPU. Material coordinate sets
 are bound independently of image loading.
 
 GPU mode keeps one pending evaluation batch and the last complete display batch.
-Each primitive's bounds are reduced on the GPU and read back as a fixed-size
-result. Geometry, bounds, transforms, lights and cameras become visible together
-after every primitive in the batch completes. The timeline shows the requested
+Each primitive's packed geometry is validated and its bounds are reduced on the
+GPU, with fixed-size status and bounds readbacks. Geometry, material coordinate
+selections, bounds, transforms, lights and cameras become visible together after
+every primitive passes both checks. A failed preparation retains the previous
+display batch and reports the error. The timeline shows the requested
 sample; the displayed pose can lag while work completes. Before the first batch
 is ready, the viewport shows a preparation message. **Frame all** and **Frame
 selected** use bounds from the displayed batch.
@@ -89,8 +91,10 @@ disable and re-enable GPU deformation to rebuild its resources. Reloaded models
 start in CPU mode.
 
 The example uses default per-source deformation limits, a 256 MiB limit per render
-source, a 256 MiB pick-target budget, and 64 bytes of bounds-readback working storage
-per deformed primitive. These limits are not an aggregate GPU residency budget.
+source, a 256 MiB preparation limit per primitive, and a 256 MiB pick-target budget.
+Preparation includes packed vertices, indirect/validation storage, and 96 bytes
+for bounds reduction and both staging buffers. Existing sources and driver
+overhead are excluded. These limits are not an aggregate GPU residency budget.
 
 ## Loading and resources
 

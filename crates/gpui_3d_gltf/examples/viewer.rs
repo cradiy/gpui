@@ -369,7 +369,7 @@ impl Render for Viewer {
             }
             model.evaluated.scene(self.controls.camera())
         });
-        let viewport = if let Some(model) = &mut self.model {
+        let viewport = if let Some(model) = &self.model {
             model.viewport(scene)
         } else {
             Ok(Some(viewport3d("model", scene)))

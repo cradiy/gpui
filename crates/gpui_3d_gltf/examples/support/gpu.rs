@@ -3,8 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{Context as _, Result, ensure};
 use gpui::Window;
 use gpui_3d::{
-    Aabb, EvaluatedScene, GpuDeformationBounds, GpuDeformationBoundsReadback, GpuDeformationLimits,
-    GpuDeformationOutput, NodeHandle, Scene, Scene3dGpuDraw, Scene3dGpuGeometry, Viewport3d,
+    Aabb, Camera, EvaluatedScene, GpuDeformationBounds, GpuDeformationLimits,
+    GpuGeometryPreparation, NodeHandle, PreparedGpuGeometry, Scene, Scene3dGpuDraw, Viewport3d,
     WgpuContext, WgpuScene3dGeometry, viewport3d,
 };
 use gpui_3d_gltf::{GpuSceneDeformation, SceneInstance};
@@ -21,10 +21,8 @@ pub(super) struct Deformation {
 }
 
 struct Entry {
-    node: NodeHandle,
-    output: GpuDeformationOutput,
-    bounds: Aabb,
-    packed: Option<([u32; 5], Arc<Scene3dGpuGeometry>)>,
+    uv_sets: [u32; 5],
+    prepared: PreparedGpuGeometry,
 }
 
 struct Ready {
@@ -42,9 +40,9 @@ struct Pending {
 
 struct PendingEntry {
     node: NodeHandle,
-    output: GpuDeformationOutput,
-    readback: Option<GpuDeformationBoundsReadback>,
-    bounds: Option<Aabb>,
+    uv_sets: [u32; 5],
+    request: Option<GpuGeometryPreparation>,
+    prepared: Option<PreparedGpuGeometry>,
 }
 
 impl Deformation {
@@ -111,14 +109,14 @@ impl Deformation {
     ) -> Result<()> {
         if let Some(mut pending) = self.pending.take() {
             for entry in &mut pending.entries {
-                if let Some(request) = &mut entry.readback
+                if let Some(request) = &mut entry.request
                     && let Some(value) = request.try_read()?
                 {
-                    entry.bounds = Some(value);
-                    entry.readback = None;
+                    entry.prepared = Some(value);
+                    entry.request = None;
                 }
             }
-            if pending.entries.iter().all(|entry| entry.bounds.is_some()) {
+            if pending.entries.iter().all(|entry| entry.prepared.is_some()) {
                 let ready = Ready {
                     revision: pending.revision,
                     poses: pending.poses,
@@ -132,10 +130,8 @@ impl Deformation {
                         .entries
                         .into_iter()
                         .map(|entry| Entry {
-                            node: entry.node,
-                            output: entry.output,
-                            bounds: entry.bounds.unwrap(),
-                            packed: None,
+                            uv_sets: entry.uv_sets,
+                            prepared: entry.prepared.unwrap(),
                         })
                         .collect(),
                 };
@@ -158,15 +154,33 @@ impl Deformation {
                     .iter()
                     .map(|(node, output)| (*node, output.base_mesh().clone())),
             )?;
+            let scene = poses.scene(Camera::default());
+            let coordinates: HashMap<_, _> = scene
+                .geometry_inputs()?
+                .filter_map(|object| object.node.map(|node| (node, object.uv_sets)))
+                .collect();
             let entries = outputs
                 .into_iter()
                 .map(|(node, output)| {
-                    let bounds = self.bounds.request(&output, Some(64))?;
+                    let uv_sets = *coordinates
+                        .get(&node)
+                        .context("GPU primitive is absent from its evaluated scene")?;
+                    let source = match self.packing.entry((node, uv_sets)) {
+                        std::collections::hash_map::Entry::Occupied(slot) => slot.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(slot) => {
+                            slot.insert(output.render_source(uv_sets, Some(256 * 1024 * 1024))?)
+                        }
+                    };
+                    let request = output.prepare_render_geometry(
+                        source,
+                        &self.bounds,
+                        Some(256 * 1024 * 1024),
+                    )?;
                     Ok(PendingEntry {
                         node,
-                        output,
-                        readback: Some(bounds),
-                        bounds: None,
+                        uv_sets,
+                        request: Some(request),
+                        prepared: None,
                     })
                 })
                 .collect::<Result<_>>()?;
@@ -191,7 +205,7 @@ impl Deformation {
         {
             let bounds = if let Some(&index) = ready.indices.get(&node.handle) {
                 let entry = &ready.entries[index];
-                Some(entry.bounds.transformed(node.world)?)
+                Some(entry.prepared.bounds().transformed(node.world)?)
             } else {
                 node.bounds
             };
@@ -202,12 +216,12 @@ impl Deformation {
         Ok(combined)
     }
 
-    pub fn view(&mut self, scene: Scene) -> Result<Option<Viewport3d>> {
+    pub fn view(&self, scene: Scene) -> Result<Option<Viewport3d>> {
         ensure!(
             self.device_valid,
             "GPU device changed; disable and re-enable GPU deformation"
         );
-        let Some(ready) = &mut self.ready else {
+        let Some(ready) = &self.ready else {
             return Ok(None);
         };
         let mut draws = Vec::new();
@@ -216,26 +230,16 @@ impl Deformation {
             let Some(&index) = node.and_then(|node| ready.indices.get(&node)) else {
                 continue;
             };
-            let entry = &mut ready.entries[index];
-            let uv_sets = object.uv_sets;
-            if entry.packed.as_ref().is_none_or(|(uv, _)| *uv != uv_sets) {
-                let key = (entry.node, uv_sets);
-                if let std::collections::hash_map::Entry::Vacant(slot) = self.packing.entry(key) {
-                    slot.insert(
-                        entry
-                            .output
-                            .render_source(uv_sets, Some(256 * 1024 * 1024))?,
-                    );
-                }
-                entry.packed = Some((
-                    uv_sets,
-                    Arc::new(entry.output.render_geometry(&self.packing[&key])?),
-                ));
-            }
+            let entry = &ready.entries[index];
+            ensure!(
+                entry.uv_sets == object.uv_sets,
+                "Material coordinates differ from the prepared GPU frame"
+            );
+            let bounds = entry.prepared.bounds();
             draws.push(Scene3dGpuDraw {
                 output_id: object.output_id,
-                geometry: entry.packed.as_ref().unwrap().1.clone(),
-                bounds: [entry.bounds.min(), entry.bounds.max()],
+                geometry: entry.prepared.geometry().clone(),
+                bounds: [bounds.min(), bounds.max()],
             });
         }
         Ok(Some(viewport3d("model", scene).gpu_geometry(&draws)?))

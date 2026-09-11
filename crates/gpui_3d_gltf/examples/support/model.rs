@@ -263,12 +263,9 @@ impl Model {
         })
     }
 
-    pub(super) fn viewport(
-        &mut self,
-        scene: gpui_3d::Scene,
-    ) -> Result<Option<gpui_3d::Viewport3d>> {
+    pub(super) fn viewport(&self, scene: gpui_3d::Scene) -> Result<Option<gpui_3d::Viewport3d>> {
         #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
-        if let Some(gpu) = &mut self.gpu {
+        if let Some(gpu) = &self.gpu {
             return gpu.view(scene);
         }
         Ok(Some(gpui_3d::viewport3d("model", scene)))

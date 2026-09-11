@@ -97,10 +97,15 @@ fn shader_validates_deformation_layout_and_topology_bindings() {
         front::wgsl,
         valid::{Capabilities, ValidationFlags, Validator},
     };
-    let module = wgsl::parse_str(include_str!("../flat_normals.wgsl")).unwrap();
-    Validator::new(ValidationFlags::all(), Capabilities::empty())
+    let module = wgsl::parse_str(SHADER).unwrap();
+    Validator::new(ValidationFlags::all(), Capabilities::FLOAT64)
         .validate(&module)
         .unwrap();
+    assert!(
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .is_err()
+    );
     let globals: Vec<_> = module
         .global_variables
         .iter()
@@ -132,7 +137,7 @@ fn shader_validates_deformation_layout_and_topology_bindings() {
 }
 
 #[test]
-#[ignore = "requires a compute-capable GPU"]
+#[ignore = "requires a compute-capable GPU with SHADER_F64"]
 fn gpu_flat_normals_compose_morph_and_skin_and_preserve_retained_outputs() -> Result<()> {
     let context = WgpuContext::new_headless()?;
     let limits = GpuDeformationLimits::default();
@@ -180,12 +185,14 @@ fn gpu_flat_normals_compose_morph_and_skin_and_preserve_retained_outputs() -> Re
     }
     let foreign = GpuDeformationOutput::upload(context.clone(), corners(), limits)?;
     assert!(normals.evaluate(&foreign).is_err());
-    for expected_status in [[4, 0, 0, 0], [0, 0, 7, 0]] {
+    for expected_status in [[4, 0, 0, 0], [1, 0, 0, 0], [0, 0, 7, 0]] {
         let mut records = crate::geometry::gpu_deformation::pack_mesh(&base);
         if expected_status[0] == 4 {
             for record in &mut records[..3] {
                 record.position = [0.; 4];
             }
+        } else if expected_status[0] == 1 {
+            records[2].position[0] = f32::INFINITY;
         } else {
             records[2].status = expected_status;
         }
@@ -248,6 +255,78 @@ fn gpu_flat_normals_compose_morph_and_skin_and_preserve_retained_outputs() -> Re
                 .zip(b.position.into_iter().chain(b.normal))
             {
                 assert!((a - b).abs() < 1e-5, "{a} != {b}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a compute-capable GPU with SHADER_F64"]
+fn gpu_flat_normals_preserve_finite_face_directions_across_coordinate_ranges() -> Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let make_mesh = |positions: [[f32; 3]; 3]| {
+        Mesh::new(
+            positions
+                .into_iter()
+                .map(|position| Vertex {
+                    position,
+                    normal: [0., 1., 0.],
+                    uv: [0.; 2],
+                })
+                .collect(),
+            vec![0, 1, 2],
+        )
+    };
+    let base = make_mesh([[0.; 3], [1., 0., 0.], [0., 1., 0.]]);
+    let normals = GpuFlatNormals::new(context.clone(), base.clone(), Default::default())?;
+    let tiny = f32::from_bits(1);
+    let large = f32::MAX;
+    let mut triangles = vec![
+        [[-large, 0., 0.], [large, 0., 0.], [0., large, 0.]],
+        [
+            [0.; 3],
+            [16_777_216., 16_777_215., 0.],
+            [16_777_215., 16_777_214., 0.],
+        ],
+        [[0.; 3], [tiny, 0., 0.], [0., tiny, 0.]],
+        [[0.; 3], [large, tiny, 0.], [large, 0., tiny]],
+    ];
+    for scale in [1e-30, 1., 1e30] {
+        triangles.push([[0.; 3], [2. * scale, 0., 0.], [0., 3. * scale, 4. * scale]]);
+    }
+    let mut outputs = Vec::new();
+    for positions in triangles {
+        let mesh = make_mesh(positions);
+        let expected = mesh.generate_normals(NormalMode::Flat)?;
+        let buffer = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&super::super::pack_mesh(&mesh)),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+        let input = GpuDeformationOutput::from_buffer(
+            context.clone(),
+            base.clone(),
+            buffer,
+            Default::default(),
+        )?;
+        outputs.push((normals.evaluate(&input)?, expected, mesh));
+    }
+    drop(normals);
+    for (output, expected, input) in outputs {
+        let actual = output.readback()?;
+        for (corner, &source) in expected.source_vertices().iter().enumerate() {
+            let actual = actual.vertices()[source as usize];
+            assert_eq!(
+                actual.position.map(f32::to_bits),
+                input.vertices()[source as usize].position.map(f32::to_bits)
+            );
+            for (actual, expected) in actual
+                .normal
+                .into_iter()
+                .zip(expected.mesh().vertices()[corner].normal)
+            {
+                assert!((actual - expected).abs() < 2e-6, "{actual} != {expected}");
             }
         }
     }

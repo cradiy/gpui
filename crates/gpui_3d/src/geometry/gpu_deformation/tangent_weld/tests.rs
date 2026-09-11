@@ -251,7 +251,7 @@ fn normal_variants(normals: &[[f32; 3]]) -> Mesh {
 }
 
 #[test]
-fn tangent_generation_stages_require_device_enabled_float64() {
+fn direction_generation_stages_require_device_enabled_float64() {
     use gpui_wgpu::Scene3dDeviceCapabilities;
     let mut capabilities = Scene3dDeviceCapabilities {
         adapter_info: wgpu::AdapterInfo {
@@ -295,7 +295,11 @@ fn tangent_generation_stages_require_device_enabled_float64() {
             .contains("enabled SHADER_F64")
     );
     GpuMorph::check_support(&capabilities).unwrap();
+    assert!(crate::GpuFlatNormals::check_support(&capabilities).is_err());
+    assert!(crate::GpuSmoothNormals::check_support(&capabilities).is_err());
     capabilities.enabled_features = wgpu::Features::SHADER_F64;
+    crate::GpuFlatNormals::check_support(&capabilities).unwrap();
+    crate::GpuSmoothNormals::check_support(&capabilities).unwrap();
     GpuTangentWeld::check_support(&capabilities).unwrap();
     GpuTangentDerivatives::check_support(&capabilities).unwrap();
     crate::GpuTangents::check_support(&capabilities).unwrap();

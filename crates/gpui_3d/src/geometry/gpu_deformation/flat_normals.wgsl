@@ -20,9 +20,6 @@ fn finite(v: vec3<f32>) -> bool {
     let bits = bitcast<vec3<u32>>(v);
     return all((bits & vec3(0x7f800000u)) != vec3(0x7f800000u));
 }
-fn magnitude(v: vec3<f32>) -> f32 {
-    return max(max(abs(v.x), abs(v.y)), abs(v.z));
-}
 
 @compute @workgroup_size(64)
 fn flat_normals(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -40,26 +37,17 @@ fn flat_normals(@builtin(global_invocation_id) id: vec3<u32>) {
             return;
         }
     }
-    let u = b.position.xyz - a.position.xyz;
-    let v = c.position.xyz - a.position.xyz;
-    if !finite(a.position.xyz) || !finite(b.position.xyz) || !finite(c.position.xyz)
-        || !finite(u) || !finite(v) {
+    if !finite(a.position.xyz) || !finite(b.position.xyz) || !finite(c.position.xyz) {
         result.status.x = 1u;
     } else {
-        let su = magnitude(u);
-        let sv = magnitude(v);
-        if su == 0.0 || sv == 0.0 {
+        let origin = wide_vector(a.position.xyz);
+        let u = wide_vector(b.position.xyz) - origin;
+        let v = wide_vector(c.position.xyz) - origin;
+        let n = vec3(u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x);
+        if all(n == vec3(f64(0.0))) {
             result.status.x = 4u;
         } else {
-            let n = cross(u / su, v / sv);
-            let scale = magnitude(n);
-            if scale == 0.0 {
-                result.status.x = 4u;
-            } else {
-                let scaled = n / scale;
-                result.normal = vec4(scaled / length(scaled), 0.0);
-                if !finite(result.normal.xyz) { result.status.x = 1u; }
-            }
+            result.normal = vec4(narrow_vector(wide_unit(n)), 0.0);
         }
     }
     output[id.x] = result;

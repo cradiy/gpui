@@ -49,7 +49,7 @@ generation; assets with `regenerates_tangents()` still require that stage.
 [`GpuSceneDeformation`](gpu_deformation.md) composes imported Morph, required flat
 normal and selected-set tangent reconstruction, and Skin with the native `wgpu`
 feature. It preserves authored defaults, zero-weight base directions, and instance
-mappings. Tangent reconstruction requires device-enabled `SHADER_F64`.
+mappings. Normal and tangent reconstruction require device-enabled `SHADER_F64`.
 
 Generated tangents are absent from `attribute_targets().base_mesh()`, even when
 `MorphGeometry::base_mesh()` contains them. For zero weights, `evaluate` returns

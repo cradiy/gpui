@@ -4,6 +4,12 @@ use anyhow::{Result, ensure};
 use gpui_wgpu::{WgpuContext, wgpu};
 use std::sync::Arc;
 
+const SHADER: &str = concat!(
+    include_str!("precision.wgsl"),
+    "\n",
+    include_str!("flat_normals.wgsl")
+);
+
 #[cfg(test)]
 mod tests;
 
@@ -46,6 +52,7 @@ impl GpuFlatNormalsMemory {
 /// Each source vertex must occur exactly once in the index buffer. Split shared vertices
 /// and remap Morph/Skin inputs before creating the source. Tangents must be absent;
 /// generate them from the rebuilt normals before rendering a normal-mapped material.
+/// Requires enabled `SHADER_F64` for position differences and normal reconstruction.
 pub struct GpuFlatNormals {
     context: WgpuContext,
     base: Mesh,
@@ -59,6 +66,12 @@ pub struct GpuFlatNormals {
 impl GpuFlatNormals {
     /// Checks enabled compute capabilities without allocating resources or submitting work.
     pub fn check_support(capabilities: &gpui_wgpu::Scene3dDeviceCapabilities) -> Result<()> {
+        ensure!(
+            capabilities
+                .enabled_features
+                .contains(wgpu::Features::SHADER_F64),
+            "GPU flat normals require enabled SHADER_F64"
+        );
         super::support::validate(capabilities, 4, 1, 0)
     }
 
@@ -77,12 +90,7 @@ impl GpuFlatNormals {
         )?;
         let offsets = face_offsets(&base)?;
         let device = &context.device;
-        let kernel = ComputeKernel::new(
-            device,
-            include_str!("flat_normals.wgsl"),
-            "flat_normals",
-            [64, 4, 4],
-        )?;
+        let kernel = ComputeKernel::new(device, SHADER, "flat_normals", [64, 4, 4])?;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let offsets = buffer(
             device,
@@ -122,7 +130,7 @@ impl GpuFlatNormals {
 
     /// Returns an independent output on the same device and source mesh allocation.
     /// Existing vertex failures are propagated. Zero-area triangles and nonfinite
-    /// arithmetic are reported through vertex status, readback, and draw suppression.
+    /// positions are reported through vertex status, readback, and draw suppression.
     /// CPU bounds, queries, and previously returned outputs remain unchanged.
     pub fn evaluate(&self, input: &GpuDeformationOutput) -> Result<GpuDeformationOutput> {
         ensure!(

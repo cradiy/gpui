@@ -25,11 +25,11 @@ It can evaluate multiple instances of the same asset.
 Supported inputs include authored normal/tangent deltas, flat normal
 reconstruction for imported triangle-corner geometry, selected-set tangent
 regeneration, Skin without Morph, and Morph followed by Skin. Tangent regeneration
-uses core `GpuTangentGeneration` with `Repair` policy and requires device-enabled
-`SHADER_F64`, including assets whose authored weights are zero. Regenerated
-geometry must use ordered, unshared triangle corners. There is no automatic CPU
-fallback. [`SceneAsset::deform`](morph.md#scene-weights-and-deformation) supplies
-the CPU evaluation path.
+uses core `GpuTangentGeneration` with `Repair` policy. Both normal and tangent
+reconstruction require device-enabled `SHADER_F64`, including assets whose authored
+weights are zero. Regenerated geometry must use ordered, unshared triangle corners.
+There is no automatic CPU fallback. Use
+[`SceneAsset::deform`](morph.md#scene-weights-and-deformation) for CPU evaluation.
 
 `GpuDeformationLimits` applies to each core source and each result. The final
 constructor argument separately limits the complete retained source payload;

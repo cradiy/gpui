@@ -60,7 +60,7 @@ correspondence and normalized Skin weights across vertex splits.
 The input must use the same base mesh allocation and have no tangents. Evaluation
 preserves vertex order, positions, indices, coordinate sets, and colors, and
 returns an independent output. Existing vertex failures propagate to every
-corner of their triangle. Zero-area faces and nonfinite arithmetic produce error
+corner of their triangle. Zero-area faces and nonfinite positions produce error
 status; they are not dropped or replaced with an arbitrary normal.
 
 ```rust,no_run
@@ -82,8 +82,10 @@ weights; callers preserving an authored zero-weight base may bypass it.
 `GpuFlatNormalsMemory::plan` admits two four-byte topology entries per vertex,
 a 16-byte uniform, and a 64-byte output record per vertex. The input buffer is
 separately owned. Constructors check enabled compute limits and topology before
-GPU allocation. GPU calculations use `f32`, with different numerical limits from
-the CPU normal generator's widened arithmetic. No CPU query or bound is updated.
+GPU allocation. Reconstruction requires enabled `SHADER_F64`. Finite f32 position
+components are decoded before subtraction; edge differences, cross products and
+normalization use f64 arithmetic, followed by rounded f32 normal output. Nonzero
+faces are not discarded by an area threshold. No CPU query or bound is updated.
 
 ## Skin computation
 

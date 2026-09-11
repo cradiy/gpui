@@ -221,11 +221,12 @@ Core implementation order:
    - [x] **GPU Skin**: Shared influence bindings, per-instance palettes, and Morph-to-Skin buffer composition.
    - [x] **Imported deformation inputs**: Shared glTF attribute targets, explicit direction-regeneration requirements, and instance-mapped final Skin poses in binding joint order.
    - [x] **GPU flat normals**: Retained triangle-corner topology, source identity and payload admission, and fixed-order reconstruction between Morph and Skin.
+     - [x] **Wide flat-normal arithmetic**: Decode finite f32 positions before f64 edge differences, cross products and normalization; preserve near-collinear faces and admit enabled arithmetic capabilities explicitly.
    - [x] **GPU smooth normals**: Retained indexed adjacency, ordered area weighting with widened arithmetic, fixed vertex correspondence, independent results and explicit degenerate/cancelled normal status.
    - [x] **GPU result remapping**: Retained output-to-source indices, bit-preserving record copies, duplication/reordering/subsets, destination topology identity and pre-allocation mapping/device admission.
    - [ ] **Remapping GPU validation**: Verify external snapshot reuse, exact record/status preservation, foreign devices, destination metadata and smooth-normal-to-corner-tangent composition on supported adapters.
    - [ ] **Smooth normal GPU validation**: Verify Morph/external inputs, area weighting, seams, unused vertices, extreme coordinate scales, failure propagation and retained packed outputs on supported adapters.
-   - [ ] **GPU direction validation**: Verify normal reconstruction, degenerate-face status, retained outputs, and Morph/Skin composition on supported adapters.
+   - [ ] **GPU direction validation**: Verify normal reconstruction across extreme coordinate scales and near-collinear faces, degenerate-face status, retained outputs, and Morph/Skin composition on supported adapters.
    - [ ] **Imported GPU evaluation**: Preserve generated normal/tangent policies, authored Morph defaults, Morph-before-Skin ordering, and source geometry identity when routing imported primitives to GPU draws.
      - [x] **glTF GPU adapter**: Retained per-primitive sources, shared CPU/GPU weight resolution, instance-mapped palettes, and ordered Morph/direction/Skin composition.
      - [x] **Imported evaluation admission**: Weight-dependent aggregate GPU payload reports, per-call budgets before primitive dispatch, zero-weight source reuse accounting, and viewer evaluation limits separate from render preparation.

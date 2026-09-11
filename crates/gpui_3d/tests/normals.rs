@@ -176,6 +176,35 @@ fn normal_generation_handles_extreme_finite_position_scales() {
 }
 
 #[test]
+fn normal_generation_preserves_near_collinear_face_winding() {
+    let vertices = [
+        [0.; 3],
+        [16_777_216., 16_777_215., 0.],
+        [16_777_215., 16_777_214., 0.],
+    ]
+    .map(|position| Vertex {
+        position,
+        normal: [0.; 3],
+        uv: [0.; 2],
+    });
+    for indices in [[0, 1, 2], [1, 2, 0], [2, 0, 1]] {
+        for reversed in [false, true] {
+            let mut indices = indices.to_vec();
+            if reversed {
+                indices.swap(1, 2);
+            }
+            let mesh = Mesh::new(vertices.to_vec(), indices);
+            for mode in [NormalMode::Flat, NormalMode::Smooth] {
+                let generated = mesh.generate_normals(mode).unwrap();
+                for vertex in generated.mesh().vertices() {
+                    close(vertex.normal, [0., 0., if reversed { 1. } else { -1. }]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn generated_vertex_maps_compose_with_tangents_morph_and_skin_inputs() {
     let source = folded()
         .with_uv_set(7, (0..5).map(|i| [i as f32, -2.]).collect())

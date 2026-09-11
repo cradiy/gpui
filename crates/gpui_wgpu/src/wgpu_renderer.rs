@@ -36,6 +36,13 @@ mod ui_capture;
 #[cfg(not(target_family = "wasm"))]
 pub use texture_effect::{TextureEffectConfig, WgpuTextureEffect};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SceneEncoding {
+    Complete,
+    InstanceCapacity,
+    CaptureCapacity,
+}
+
 #[derive(Clone, Copy)]
 struct FeedbackSnapshot {
     texture: usize,
@@ -2369,26 +2376,23 @@ impl WgpuRenderer {
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("main_encoder"),
                     });
-            if !self.encode_scene(
+            let encoded = self.encode_scene(
                 scene,
                 &frame.texture,
                 &frame_view,
                 &mut encoder,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 true,
-            ) {
+            );
+            if !matches!(encoded, Ok(SceneEncoding::Complete)) {
                 self.commit_encoded_scene(false);
                 self.commit_scene3d_outputs(false);
                 drop(encoder);
-                if self.instance_buffer_capacity >= self.max_buffer_size {
-                    log::error!(
-                        "instance buffer size grew too large: {}",
-                        self.instance_buffer_capacity
-                    );
-                    self.resources().queue.present(frame);
-                    return true;
+                match encoded {
+                    Err(_) => return false,
+                    Ok(SceneEncoding::InstanceCapacity) => self.grow_instance_buffer(),
+                    _ => {}
                 }
-                self.grow_instance_buffer();
                 continue;
             }
 
@@ -2412,7 +2416,10 @@ impl WgpuRenderer {
     /// replacement uploads remain replayable on later draws of the same snapshot.
     /// Use `draw_external` for renderer-owned submission and output reuse.
     pub fn encode_external(&mut self, scene: &Scene, target: WgpuExternalRenderTarget<'_>) -> bool {
-        let encoded = self.encode_external_scene(scene, target, false);
+        let encoded = matches!(
+            self.encode_external_scene(scene, target, false),
+            Ok(SceneEncoding::Complete)
+        );
         self.commit_encoded_scene(encoded);
         self.retain_external_scene3d_uploads();
         encoded
@@ -2420,7 +2427,8 @@ impl WgpuRenderer {
 
     /// Clears, encodes, and submits an external target on this renderer's queue.
     /// Enables reuse of submitted 3D viewport and UI capture pixels. A false result submits no
-    /// frame commands; capacity growth may require a retry. The target must match this
+    /// frame commands. Instance capacity growth may require a retry; scene preparation
+    /// errors do not grow instance storage. The target must match this
     /// renderer's configured size/format and support render attachments.
     pub fn draw_external(
         &mut self,
@@ -2448,14 +2456,17 @@ impl WgpuRenderer {
             })],
             ..Default::default()
         }));
-        let encoded = self.encode_external_scene(
-            scene,
-            WgpuExternalRenderTarget {
-                texture,
-                view,
-                command_encoder: &mut encoder,
-            },
-            true,
+        let encoded = matches!(
+            self.encode_external_scene(
+                scene,
+                WgpuExternalRenderTarget {
+                    texture,
+                    view,
+                    command_encoder: &mut encoder,
+                },
+                true,
+            ),
+            Ok(SceneEncoding::Complete)
         );
         if encoded {
             self.resources().queue.submit([encoder.finish()]);
@@ -2470,7 +2481,7 @@ impl WgpuRenderer {
         scene: &Scene,
         target: WgpuExternalRenderTarget<'_>,
         retain_outputs: bool,
-    ) -> bool {
+    ) -> anyhow::Result<SceneEncoding> {
         assert!(
             self.resources().surface.is_none(),
             "encode_external() requires an external renderer"
@@ -2496,9 +2507,13 @@ impl WgpuRenderer {
             wgpu::LoadOp::Load,
             retain_outputs,
         );
-        if !encoded && self.instance_buffer_capacity < self.max_buffer_size {
-            self.grow_instance_buffer();
-            self.needs_redraw = true;
+        match &encoded {
+            Ok(SceneEncoding::InstanceCapacity) => {
+                self.grow_instance_buffer();
+                self.needs_redraw = true;
+            }
+            Ok(SceneEncoding::CaptureCapacity) => self.needs_redraw = true,
+            _ => {}
         }
         encoded
     }
@@ -2983,8 +2998,8 @@ impl WgpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
         retain_outputs: bool,
-    ) -> bool {
-        let encoded = self.encode_scene_inner(
+    ) -> anyhow::Result<SceneEncoding> {
+        let mut encoded = self.encode_scene_inner(
             scene,
             target_texture,
             target_view,
@@ -2992,11 +3007,23 @@ impl WgpuRenderer {
             load,
             retain_outputs,
         );
-        if !encoded {
-            let error = self.last_error.lock().unwrap().clone().map_or_else(
-                || "3D picking frame was not submitted".into(),
-                gpui::SharedString::from,
-            );
+        if matches!(encoded, Ok(SceneEncoding::InstanceCapacity))
+            && self.instance_buffer_capacity >= self.max_buffer_size
+        {
+            encoded = Err(anyhow::anyhow!(
+                "scene instance storage exceeds the device buffer limit of {} bytes",
+                self.max_buffer_size
+            ));
+        }
+        if !matches!(encoded, Ok(SceneEncoding::Complete)) {
+            let error = match &encoded {
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    *self.last_error.lock().unwrap() = Some(message.clone());
+                    message.into()
+                }
+                _ => "3D picking frame was not submitted".into(),
+            };
             scene3d::fail_pick_captures(scene, error);
             for capture in &mut self.resources_mut().ui_captures {
                 capture.invalidate_encoding();
@@ -3013,7 +3040,7 @@ impl WgpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
         retain_outputs: bool,
-    ) -> bool {
+    ) -> anyhow::Result<SceneEncoding> {
         let mut has_scene3d = false;
         scene.visit(&mut |scene| {
             has_scene3d |= scene
@@ -3025,9 +3052,7 @@ impl WgpuRenderer {
             match self.scene3d_support() {
                 gpui::Scene3dSupport::Supported(capabilities) => Some(capabilities),
                 gpui::Scene3dSupport::Unsupported(reason) => {
-                    *self.last_error.lock().unwrap() =
-                        Some(format!("3D viewport unavailable: {reason}"));
-                    return false;
+                    anyhow::bail!("3D viewport unavailable: {reason}");
                 }
             }
         } else {
@@ -3048,12 +3073,11 @@ impl WgpuRenderer {
                 }
             });
             if let Some(error) = failure {
-                *self.last_error.lock().unwrap() = Some(error.to_string());
-                return false;
+                return Err(error);
             }
         }
-        if !self.encode_ui_captures(scene, encoder, retain_outputs) {
-            return false;
+        if !self.encode_ui_captures(scene, encoder, retain_outputs)? {
+            return Ok(SceneEncoding::CaptureCapacity);
         }
         let format = self.surface_config.format;
         let viewport = [
@@ -3093,8 +3117,8 @@ impl WgpuRenderer {
                     output_budget,
                 ));
             }
-            if let Some(renderer) = &mut resources.scene3d
-                && let Err(error) = renderer.prepare(
+            if let Some(renderer) = &mut resources.scene3d {
+                renderer.prepare(
                     &resources.device,
                     &resources.queue,
                     scene,
@@ -3102,10 +3126,7 @@ impl WgpuRenderer {
                     viewport[1] as u32,
                     &atlas,
                     retain_outputs,
-                )
-            {
-                *self.last_error.lock().unwrap() = Some(error.to_string());
-                return false;
+                )?;
             }
             if has_particle_transition && resources.particle_transition.is_none() {
                 resources.particle_transition = Some(
@@ -3178,7 +3199,21 @@ impl WgpuRenderer {
         for textures in self.resources().feedback_textures.values() {
             textures.pending.set(None);
         }
-        self.encode_scene_batches(scene, target_texture, target_view, encoder, load, &mut 0, 0)
+        Ok(
+            if self.encode_scene_batches(
+                scene,
+                target_texture,
+                target_view,
+                encoder,
+                load,
+                &mut 0,
+                0,
+            ) {
+                SceneEncoding::Complete
+            } else {
+                SceneEncoding::InstanceCapacity
+            },
+        )
     }
 
     fn commit_encoded_scene(&self, encoded: bool) {

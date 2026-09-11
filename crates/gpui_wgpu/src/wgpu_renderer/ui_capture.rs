@@ -1,5 +1,5 @@
 use super::scene_snapshot::{OutputValidity, SceneSnapshot};
-use super::{WgpuExternalRenderTarget, WgpuRenderer};
+use super::{SceneEncoding, WgpuExternalRenderTarget, WgpuRenderer};
 use gpui::{Scene, SubtreeLayer, UiTexture3d};
 
 pub(super) struct UiCapture {
@@ -50,7 +50,7 @@ impl WgpuRenderer {
         scene: &Scene,
         encoder: &mut wgpu::CommandEncoder,
         retain_outputs: bool,
-    ) -> bool {
+    ) -> anyhow::Result<bool> {
         fn collect<'a>(scene: &'a Scene, captures: &mut Vec<(&'a SubtreeLayer, UiTexture3d)>) {
             for layer in &scene.subtree_layers {
                 if let Some(texture) = layer.scene3d.as_ref().and_then(|frame| frame.ui_texture) {
@@ -149,7 +149,7 @@ impl WgpuRenderer {
                 })],
                 ..Default::default()
             }));
-            if !capture.renderer.encode_external_scene(
+            if capture.renderer.encode_external_scene(
                 &layer.scene,
                 WgpuExternalRenderTarget {
                     texture: &capture.texture,
@@ -157,15 +157,16 @@ impl WgpuRenderer {
                     command_encoder: encoder,
                 },
                 retain_outputs,
-            ) {
-                return false;
+            )? != SceneEncoding::Complete
+            {
+                return Ok(false);
             }
             capture.validity.encoded();
             self.resources_mut()
                 .ui_capture_indices
                 .insert(layer as *const _ as usize, index);
         }
-        true
+        Ok(true)
     }
 
     fn ui_capture_texture(&self, width: u32, height: u32) -> wgpu::Texture {
@@ -273,7 +274,7 @@ mod tests {
         };
         let commands = || context.device.create_command_encoder(&Default::default());
         let mut first = commands();
-        assert!(renderer.encode_ui_captures(&make_scene(0xff0000ff, 32.), &mut first, true));
+        assert!(renderer.encode_ui_captures(&make_scene(0xff0000ff, 32.), &mut first, true)?);
         assert!(!renderer.resources().ui_captures[0].validity.reusable());
         context.queue.submit([first.finish()]);
         renderer.commit_scene3d_outputs(true);
@@ -281,29 +282,29 @@ mod tests {
         let first_texture = renderer.resources().ui_captures[0].texture.clone();
 
         let mut repaint = commands();
-        assert!(renderer.encode_ui_captures(&make_scene(0xff0000ff, 32.), &mut repaint, true));
+        assert!(renderer.encode_ui_captures(&make_scene(0xff0000ff, 32.), &mut repaint, true)?);
         renderer.commit_scene3d_outputs(false);
         assert!(renderer.resources().ui_captures[0].validity.reusable());
         assert_eq!(first_texture, renderer.resources().ui_captures[0].texture);
         drop(repaint);
 
         let mut changed = commands();
-        assert!(renderer.encode_ui_captures(&make_scene(0x0000ffff, 32.), &mut changed, true));
+        assert!(renderer.encode_ui_captures(&make_scene(0x0000ffff, 32.), &mut changed, true)?);
         renderer.commit_scene3d_outputs(false);
         assert!(!renderer.resources().ui_captures[0].validity.reusable());
         drop(changed);
 
         let mut retry = commands();
-        assert!(renderer.encode_ui_captures(&make_scene(0x0000ffff, 32.), &mut retry, true));
+        assert!(renderer.encode_ui_captures(&make_scene(0x0000ffff, 32.), &mut retry, true)?);
         context.queue.submit([retry.finish()]);
         renderer.commit_scene3d_outputs(true);
         assert!(renderer.resources().ui_captures[0].validity.reusable());
 
         let mut external = commands();
-        assert!(renderer.encode_ui_captures(&make_scene(0xff0000ff, 32.), &mut external, false));
+        assert!(renderer.encode_ui_captures(&make_scene(0xff0000ff, 32.), &mut external, false)?);
         let external_texture = renderer.resources().ui_captures[0].texture.clone();
         let mut owned = commands();
-        assert!(renderer.encode_ui_captures(&make_scene(0x0000ffff, 32.), &mut owned, true));
+        assert!(renderer.encode_ui_captures(&make_scene(0x0000ffff, 32.), &mut owned, true)?);
         assert_ne!(
             external_texture,
             renderer.resources().ui_captures[0].texture
@@ -314,11 +315,66 @@ mod tests {
 
         let texture = renderer.resources().ui_captures[0].texture.clone();
         let mut resized = commands();
-        assert!(renderer.encode_ui_captures(&make_scene(0x0000ffff, 48.), &mut resized, true));
+        assert!(renderer.encode_ui_captures(&make_scene(0x0000ffff, 48.), &mut resized, true)?);
         assert_ne!(texture, renderer.resources().ui_captures[0].texture);
         assert_eq!(renderer.resources().ui_captures[0].texture.width(), 48);
         renderer.commit_scene3d_outputs(false);
         assert!(!renderer.resources().ui_captures[0].validity.reusable());
+        drop(resized);
+
+        let parent_capacity = renderer.instance_buffer_capacity;
+        let child = &mut renderer.resources_mut().ui_captures[0].renderer;
+        let child_limit = child.max_buffer_size;
+        child.instance_buffer_capacity = 64;
+        child.max_buffer_size = 64;
+        let target = renderer.ui_capture_texture(64, 64);
+        let target_view = target.create_view(&Default::default());
+        let mut failed = commands();
+        assert!(
+            renderer
+                .encode_external_scene(
+                    &make_scene(0x0000ffff, 48.),
+                    WgpuExternalRenderTarget {
+                        texture: &target,
+                        view: &target_view,
+                        command_encoder: &mut failed,
+                    },
+                    true,
+                )
+                .is_err()
+        );
+        assert_eq!(renderer.instance_buffer_capacity, parent_capacity);
+        assert_eq!(
+            renderer.resources().ui_captures[0]
+                .renderer
+                .instance_buffer_capacity,
+            64
+        );
+        drop(failed);
+
+        renderer.resources_mut().ui_captures[0]
+            .renderer
+            .max_buffer_size = child_limit;
+        let mut retry = commands();
+        assert_eq!(
+            renderer.encode_external_scene(
+                &make_scene(0x0000ffff, 48.),
+                WgpuExternalRenderTarget {
+                    texture: &target,
+                    view: &target_view,
+                    command_encoder: &mut retry,
+                },
+                true,
+            )?,
+            SceneEncoding::CaptureCapacity,
+        );
+        assert_eq!(renderer.instance_buffer_capacity, parent_capacity);
+        assert_eq!(
+            renderer.resources().ui_captures[0]
+                .renderer
+                .instance_buffer_capacity,
+            128
+        );
         Ok(())
     }
 }

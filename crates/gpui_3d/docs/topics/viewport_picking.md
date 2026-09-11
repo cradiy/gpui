@@ -86,6 +86,10 @@ error to its captures, including nested UI scenes, without revoking retained
 outputs. A successful renderer-owned resubmission replaces the error. Unsubmitted
 commands never publish a new successful output.
 
+Instance storage exhaustion can request an encoding retry within the device's
+buffer limit. Unsupported resources and scene preparation errors do not grow
+instance storage. A failed draw submits no frame commands or successful pick output.
+
 `output.matches_frame(&frame)` checks the original immutable frame allocation.
 Retain the source camera, object-ID mapping, and layout alongside that frame.
 Frame identity alone does not establish current layout, visibility, or application

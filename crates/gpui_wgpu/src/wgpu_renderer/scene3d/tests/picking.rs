@@ -113,12 +113,22 @@ fn failed_viewport_preparation_publishes_pick_errors_and_allows_resubmission() -
         .read::<crate::WgpuScene3dPickFrame>()
         .unwrap()
         .unwrap();
-    for (geometry, material, expected) in [
-        (true, false, "unsupported GPU geometry backend"),
-        (false, true, "unsupported 3D material backend"),
+    let mut nested_failure = scene(false, false);
+    let mut invalid_child = nested.subtree_layers[0].clone();
+    Arc::make_mut(&mut Arc::make_mut(invalid_child.scene3d.as_mut().unwrap()).objects)[0]
+        .custom_material = Some(gpui::MeshMaterial3d::new(Arc::new(())));
+    let mut invalid_nested = Scene::default();
+    invalid_nested.insert_primitive(Primitive::SubtreeLayer(invalid_child));
+    invalid_nested.finish();
+    nested_failure.subtree_layers[0].scene = Rc::new(invalid_nested);
+    for (invalid, expected) in [
+        (scene(true, false), "unsupported GPU geometry backend"),
+        (scene(false, true), "unsupported 3D material backend"),
+        (nested_failure, "unsupported 3D material backend"),
     ] {
-        let invalid = scene(geometry, material);
+        let capacity = renderer.instance_buffer_capacity;
         assert!(!renderer.draw_external(&invalid, &texture, &view, wgpu::Color::TRANSPARENT));
+        assert_eq!(renderer.instance_buffer_capacity, capacity);
         for capture in [&capture, &nested_capture] {
             let error = capture
                 .read::<crate::WgpuScene3dPickFrame>()
@@ -142,6 +152,41 @@ fn failed_viewport_preparation_publishes_pick_errors_and_allows_resubmission() -
             .unwrap();
         assert!(nested_current.matches_frame(nested.subtree_layers[0].scene3d.as_ref().unwrap()));
         assert!(!Arc::ptr_eq(&nested_retained, &nested_current));
+    }
+
+    let max_buffer_size = renderer.max_buffer_size;
+    renderer.instance_buffer_capacity = 64;
+    renderer.max_buffer_size = 64;
+    assert!(!renderer.draw_external(&valid, &texture, &view, wgpu::Color::TRANSPARENT));
+    assert_eq!(renderer.instance_buffer_capacity, 64);
+    let error = capture
+        .read::<crate::WgpuScene3dPickFrame>()
+        .unwrap()
+        .err()
+        .expect("unsubmitted frame must not publish a successful capture");
+    assert!(error.contains("device buffer limit of 64 bytes"), "{error}");
+
+    renderer.max_buffer_size = max_buffer_size;
+    for attempt in 0..8 {
+        let capacity = renderer.instance_buffer_capacity;
+        if renderer.draw_external(&valid, &texture, &view, wgpu::Color::TRANSPARENT) {
+            assert_eq!(renderer.instance_buffer_capacity, capacity);
+            assert!(
+                capture
+                    .read::<crate::WgpuScene3dPickFrame>()
+                    .unwrap()
+                    .is_ok()
+            );
+            return Ok(());
+        }
+        assert!(renderer.instance_buffer_capacity > capacity);
+        let error = capture
+            .read::<crate::WgpuScene3dPickFrame>()
+            .unwrap()
+            .err()
+            .expect("capacity retry must not publish an output");
+        assert_eq!(error, "3D picking frame was not submitted");
+        assert!(attempt < 7, "capacity retries must reach a submitted frame");
     }
     Ok(())
 }

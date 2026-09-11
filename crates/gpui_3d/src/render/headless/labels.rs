@@ -40,6 +40,7 @@ impl std::error::Error for LabelError {}
 /// original pixel buffers, or scene geometry are retained.
 #[derive(Debug)]
 pub struct FrameLabels {
+    layout: crate::FrameReadbackLayout,
     frame_id: crate::Scene3dFrameId,
     size: [u32; 2],
     camera: Camera,
@@ -76,6 +77,9 @@ impl ReadFrame {
                 actual: ids.len(),
             });
         }
+        if !self.layout.valid(self.pixels.size) {
+            return Err(LabelError::InvalidSize);
+        }
         if ids.len() > pixel_limit {
             return Err(LabelError::PixelLimit {
                 required: ids.len(),
@@ -104,6 +108,7 @@ impl ReadFrame {
             pixels.push(label);
         }
         Ok(FrameLabels {
+            layout: self.layout,
             frame_id: self.frame_id().clone(),
             size: self.pixels.size,
             camera: self.camera,
@@ -129,6 +134,9 @@ pub(super) fn assign_labels(
 }
 
 impl FrameLabels {
+    pub fn layout(&self) -> crate::FrameReadbackLayout {
+        self.layout
+    }
     pub fn frame_id(&self) -> &crate::Scene3dFrameId {
         &self.frame_id
     }
@@ -179,6 +187,7 @@ mod tests {
         let mut graph = SceneGraph::new();
         let nodes = std::array::from_fn::<_, 4, _>(|_| graph.insert(None, Node::new()).unwrap());
         ReadFrame {
+            layout: crate::FrameReadbackLayout::full([4, 2]),
             frame_id: Default::default(),
             pixels: Scene3dPixels {
                 depth_background: Default::default(),

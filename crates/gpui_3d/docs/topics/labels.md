@@ -32,7 +32,9 @@ label persistence, and instance ownership remain caller-defined.
 `size()` reports physical width and height. `pixels()` contains one row-major
 `u32` per pixel, with top-left origin and no row padding. `label_at(x, y)` returns
 `Some(0)` for background/excluded samples and `None` outside the image.
-`into_pixels()` moves the buffer without copying; retain `size()` separately.
+`into_pixels()` moves the buffer without copying; retain `layout()` and `frame_id()`
+separately. Size and pixel lookup are region-local; `layout()` retains the full
+source dimensions, region origin, and projection rectangle.
 Do not pass labels through f32 or display-color conversions when serializing
 exact integer data.
 

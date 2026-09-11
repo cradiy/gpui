@@ -46,7 +46,7 @@ retain `Scene3dReadback::frame_id()` alongside the returned pixels.
 
 ## Regions
 
-`frame.gpu().readback_region(region, config)` copies a nonempty rectangle from
+`frame.readback_region(region, config)` copies a nonempty rectangle from
 selected channels. `Scene3dReadbackRegion { origin, size }` uses top-left-origin
 physical pixels. `region.validate(output_size)` checks containment without a
 device. Invalid rectangles are rejected rather than clipped, including empty
@@ -54,9 +54,28 @@ sizes and overflowing extents.
 
 Admission uses `config.memory(region.size)`, not full output dimensions. The
 result's `Scene3dPixels::size` equals the rectangle size, and pixel coordinates
-are local to that rectangle. `Scene3dReadback::region()` retains the original
-source rectangle after completion. No camera is cropped or recomputed; use the
-full source dimensions and add `region.origin` when reconstructing world points.
+are local to that rectangle. Requests and completed `ReadFrame` values expose a
+`FrameReadbackLayout` through `layout()`: `output_size` is the complete source
+texture size, `region` is the sampled rectangle, and `projection_rect` is the
+original camera rectangle. For clipped viewport captures, the projection rectangle
+can extend outside the texture. No camera is cropped or recomputed.
+
+| Query | Coordinates |
+| --- | --- |
+| `ReadFrame::object_at(x, y)` | Region-local pixels. |
+| `ReadFrame::world_position_at(x, y)` | Region-local pixel centers, reconstructed through the original projection. |
+| `DepthComparison::pixel` | Absolute pixels in the source texture. Subtract `layout().region.origin` for array lookup. |
+| `ObjectCoverage::bounds` and `FrameLabels::label_at(x, y)` | Region-local pixels. |
+
+Coverage and label images retain `layout()` and `frame_id()`. Coverage counts
+only sampled pixels; zero coverage does not establish absence elsewhere in the
+output. `screen_fraction` divides sampled object pixels by the complete source
+output area, not the region area. To measure the fraction within the region,
+divide the object's count by `FrameCoverage::pixel_count()`.
+
+The lower-level `frame.gpu().readback_region()` returns raw channel data;
+`Scene3dReadback::region()` retains its source rectangle. The caller must retain
+the source camera and identity mapping when using that entry point.
 
 Regional reads share the same pending-request permit and cancellation behavior
 as full-frame reads. All available channel formats are supported. For an ID/depth

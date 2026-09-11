@@ -49,6 +49,18 @@ current before readback finishes. It returns false for removed, failed, cleared,
 or not-yet-matched bindings. Tokens retain no GPU textures. See
 [frame identity](readback.md#frame-identity).
 
+## Regional queries
+
+`ViewportPickFrame::readback_region(region, config)` reads a rectangle of ID/depth
+pixels and retains the capture's camera, projection, object mapping, and frame ID.
+The rectangle uses capture-texture coordinates within `frame.size()`, not logical
+window coordinates. `frame.pixel_at(position)` converts a logical input position
+without reading the GPU; out-of-bounds or clipped positions return `None`.
+Only the ID and linear-depth channels are available. The
+returned `FrameReadback` shares the capture's pending-readback permit and supports
+the same [regional queries](readback.md#regions) as headless output. Use
+`picks.is_current_frame(request.frame_id())` when freshness is required.
+
 ## Backend capture
 
 The WGPU viewport renderer publishes paired Object ID and camera-forward depth

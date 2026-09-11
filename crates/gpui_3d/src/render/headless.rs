@@ -9,12 +9,14 @@ mod identity_tests;
 mod images;
 mod labels;
 mod picking;
+mod region;
 pub use coverage::{CoverageError, FrameCoverage, ObjectCoverage};
 pub use depth::{DepthComparison, DepthQueryError, DepthRelation};
 pub use gpu_labels::RenderedLabels;
 pub use images::{ImageCacheLimits, ImageCacheUsage};
 pub use labels::{FrameLabels, LabelError};
 pub use picking::{FramePick, FramePickHit, FramePickReadback};
+pub use region::FrameReadbackLayout;
 
 use std::sync::Arc;
 
@@ -200,16 +202,19 @@ impl RenderedFrame {
     /// Starts a bounded readback of selected available channels while retaining
     /// this frame's complete object identity mapping and camera.
     pub fn readback_with(&self, config: Scene3dReadbackConfig) -> Result<FrameReadback> {
-        Ok(FrameReadback {
-            pending: self.output.readback_with(config)?,
-            objects: self.objects.clone(),
-            camera: self.camera,
-        })
+        self.readback_region(
+            Scene3dReadbackRegion {
+                origin: [0; 2],
+                size: self.output.config().size,
+            },
+            config,
+        )
     }
 }
 
 /// Nonblocking GPU readback with the same frame-local object mapping.
 pub struct FrameReadback {
+    layout: FrameReadbackLayout,
     pending: Scene3dReadback,
     objects: Arc<[RenderObject]>,
     camera: Camera,
@@ -223,6 +228,7 @@ impl FrameReadback {
     }
     pub fn try_read(&mut self) -> Result<Option<ReadFrame>> {
         Ok(self.pending.try_read()?.map(|pixels| ReadFrame {
+            layout: self.layout,
             frame_id: self.pending.frame_id().clone(),
             pixels,
             objects: self.objects.clone(),
@@ -233,6 +239,7 @@ impl FrameReadback {
 
 /// Tightly packed, top-left-origin pixels and the identities that produced them.
 pub struct ReadFrame {
+    layout: FrameReadbackLayout,
     frame_id: Scene3dFrameId,
     pub pixels: Scene3dPixels,
     objects: Arc<[RenderObject]>,
@@ -248,7 +255,7 @@ impl ReadFrame {
         self.camera
     }
 
-    /// Reconstructs the nearest surface at a physical pixel center using this
+    /// Reconstructs the nearest surface at a region-local pixel center using this
     /// frame's camera and linear depth. Background, out-of-bounds coordinates,
     /// or missing depth samples return `None`. Invalid non-background depth values and
     /// unrepresentable world coordinates return an error.
@@ -256,6 +263,9 @@ impl ReadFrame {
         let [width, height] = self.pixels.size;
         if x >= width || y >= height {
             return Ok(None);
+        }
+        if !self.layout.valid(self.pixels.size) {
+            return Err(CameraError::InvalidViewport);
         }
         let index = (y as usize)
             .checked_mul(width as usize)
@@ -269,11 +279,11 @@ impl ReadFrame {
         }
         self.camera
             .screen_to_world(
-                Bounds::new(
-                    point(px(0.), px(0.)),
-                    size(px(width as f32), px(height as f32)),
+                self.layout.viewport(),
+                point(
+                    px((self.layout.region.origin[0] + x) as f32 + 0.5),
+                    px((self.layout.region.origin[1] + y) as f32 + 0.5),
                 ),
-                point(px(x as f32 + 0.5), px(y as f32 + 0.5)),
                 depth,
             )
             .map(Some)
@@ -285,7 +295,11 @@ impl ReadFrame {
     pub fn object(&self, output_id: u32) -> Option<&RenderObject> {
         lookup(&self.objects, output_id)
     }
+    /// Looks up an object using region-local pixel coordinates.
     pub fn object_at(&self, x: u32, y: u32) -> Option<&RenderObject> {
+        if !self.layout.valid(self.pixels.size) {
+            return None;
+        }
         let [width, height] = self.pixels.size;
         if x >= width || y >= height {
             return None;
@@ -310,6 +324,7 @@ mod tests {
 
     fn depth_frame(projection: Projection) -> ReadFrame {
         ReadFrame {
+            layout: FrameReadbackLayout::full([3, 2]),
             frame_id: Default::default(),
             pixels: Scene3dPixels {
                 depth_background: Default::default(),

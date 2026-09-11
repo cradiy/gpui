@@ -139,6 +139,27 @@ pub struct ViewportPickFrame {
 }
 
 impl ViewportPickFrame {
+    /// Physical dimensions of this capture's ID/depth textures.
+    pub fn size(&self) -> [u32; 2] {
+        self.output.gpu().config().size
+    }
+
+    /// Reads a rectangle in capture-texture pixels with the original projection and identities.
+    /// Available channels are ID and linear depth. Use the request's frame ID for freshness.
+    pub fn readback_region(
+        &self,
+        region: crate::Scene3dReadbackRegion,
+        config: crate::Scene3dReadbackConfig,
+    ) -> Result<crate::FrameReadback> {
+        crate::FrameReadback::new(
+            self.output.gpu(),
+            self.snapshot.objects.clone(),
+            self.snapshot.camera,
+            region,
+            config,
+            Some(self.output.projection_rect()),
+        )
+    }
     /// Identity of the submitted ID/depth output, not only the prepared scene.
     pub fn frame_id(&self) -> &crate::Scene3dFrameId {
         self.output.gpu().frame_id()
@@ -147,15 +168,19 @@ impl ViewportPickFrame {
         self.snapshot.layout.bounds
     }
 
-    /// Retains the selected frame even if subsequent viewport renders replace it.
-    pub fn pick(&self, position: Point<Pixels>) -> Result<Option<ViewportPickReadback>> {
-        let Some(_) = normalized(self.bounds(), position) else {
-            return Ok(None);
-        };
-        let Some(pixel) = self.output.pixel_at_surface([
+    /// Maps logical viewport-input coordinates to a capture pixel without starting readback.
+    /// Outside, nonfinite and surface-clipped positions return None.
+    pub fn pixel_at(&self, position: Point<Pixels>) -> Option<[u32; 2]> {
+        normalized(self.bounds(), position)?;
+        self.output.pixel_at_surface([
             f32::from(position.x) * self.snapshot.layout.scale,
             f32::from(position.y) * self.snapshot.layout.scale,
-        ]) else {
+        ])
+    }
+
+    /// Retains the selected frame even if subsequent viewport renders replace it.
+    pub fn pick(&self, position: Point<Pixels>) -> Result<Option<ViewportPickReadback>> {
+        let Some(pixel) = self.pixel_at(position) else {
             return Ok(None);
         };
         Ok(Some(ViewportPickReadback {

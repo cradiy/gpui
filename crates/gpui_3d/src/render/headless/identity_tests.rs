@@ -37,7 +37,14 @@ fn repeated_and_updated_outputs_keep_distinct_readback_provenance() -> Result<()
     let result = pick.try_read()?.expect("pick mapping should complete");
     assert_eq!(result.frame_id(), &identity);
     drop(pick);
-    let mut readback = original.readback()?;
+    let region = Scene3dReadbackRegion {
+        origin: [12, 8],
+        size: [8, 4],
+    };
+    let mut readback =
+        original.readback_region(region, Scene3dReadbackConfig::new(config.channels))?;
+    assert_eq!(readback.layout().region, region);
+    assert_eq!(readback.layout().output_size, [32, 32]);
     assert_eq!(readback.frame_id(), &identity);
     drop(original);
     drop(renderer);
@@ -46,6 +53,9 @@ fn repeated_and_updated_outputs_keep_distinct_readback_provenance() -> Result<()
         timeout: Some(std::time::Duration::from_secs(10)),
     })?;
     let pixels = readback.try_read()?.expect("frame mapping should complete");
+    assert_eq!(pixels.pixels.size, [8, 4]);
+    assert_eq!(pixels.layout().region, region);
+    assert_eq!(pixels.coverage()?.layout().output_size, [32, 32]);
     assert_eq!(pixels.frame_id(), &identity);
     assert_eq!(pixels.coverage()?.frame_id(), &identity);
     assert_eq!(

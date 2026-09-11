@@ -1,5 +1,6 @@
 use super::ReadFrame;
 use crate::CameraError;
+#[cfg(test)]
 use gpui::{Bounds, point, px, size};
 use std::fmt;
 
@@ -16,6 +17,7 @@ pub enum DepthRelation {
 /// Comparison using the containing physical pixel, with no depth interpolation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DepthComparison {
+    /// Physical coordinates in the complete source texture, not the readback region.
     pub pixel: [u32; 2],
     /// Nonnegative camera-forward depth in scene units, not ray distance.
     pub point_depth: f32,
@@ -62,8 +64,8 @@ impl std::error::Error for DepthQueryError {
 
 impl ReadFrame {
     /// Compares a world point against the containing pixel's linear depth, using
-    /// this frame's retained camera and physical dimensions. `None` means outside
-    /// the clip volume or half-open output rectangle. Tolerance is an absolute,
+    /// this frame's retained camera and projection. `None` means outside
+    /// the clip volume or half-open readback region. Tolerance is an absolute,
     /// finite, nonnegative forward distance in scene units; equality is included.
     /// Requires a complete depth channel even for clipped points. Only the selected
     /// sample is checked for finite nonnegative depth. No GPU work or allocation
@@ -93,10 +95,10 @@ impl ReadFrame {
                 actual: depths.len(),
             });
         }
-        let viewport = Bounds::new(
-            point(px(0.), px(0.)),
-            size(px(width as f32), px(height as f32)),
-        );
+        if !self.layout.valid(self.pixels.size) {
+            return Err(DepthQueryError::InvalidSize);
+        }
+        let viewport = self.layout.viewport();
         let Some(projected) = self
             .camera
             .world_to_screen(viewport, world)
@@ -107,15 +109,16 @@ impl ReadFrame {
         let x = f64::from(projected.position.x);
         let y = f64::from(projected.position.y);
         if !projected.in_frustum
-            || x < 0.
-            || y < 0.
-            || x >= f64::from(width)
-            || y >= f64::from(height)
+            || x < f64::from(self.layout.region.origin[0])
+            || y < f64::from(self.layout.region.origin[1])
+            || x >= f64::from(self.layout.region.origin[0]) + f64::from(width)
+            || y >= f64::from(self.layout.region.origin[1]) + f64::from(height)
         {
             return Ok(None);
         }
         let pixel = [x.floor() as u32, y.floor() as u32];
-        let index = (u64::from(pixel[1]) * u64::from(width) + u64::from(pixel[0])) as usize;
+        let index = (u64::from(pixel[1] - self.layout.region.origin[1]) * u64::from(width)
+            + u64::from(pixel[0] - self.layout.region.origin[0])) as usize;
         let surface = depths[index];
         let background = self.pixels.depth_background.is_background(surface);
         if !background && (!surface.is_finite() || surface < 0.) {
@@ -196,6 +199,7 @@ mod tests {
 
     fn frame(projection: Projection) -> ReadFrame {
         ReadFrame {
+            layout: crate::FrameReadbackLayout::full([4, 2]),
             frame_id: Default::default(),
             pixels: Scene3dPixels {
                 depth_background: Default::default(),

@@ -44,9 +44,9 @@ struct Coverage {
 pub struct ObjectCoverage<'a> {
     pub object: &'a RenderObject,
     pub pixels: u64,
-    /// Fraction of the entire frame, not of the object's unoccluded projection.
+    /// Sampled pixels divided by the full source output area, not the object's projection.
     pub screen_fraction: f64,
-    /// Smallest top-left-origin pixel rectangle enclosing all matching samples.
+    /// Smallest region-local pixel rectangle enclosing all matching samples.
     /// Right and bottom are exclusive. `None` means there are no matching pixels.
     pub bounds: Option<Bounds<u32>>,
 }
@@ -56,6 +56,7 @@ pub struct ObjectCoverage<'a> {
 /// occlusion, clipping, discarded alpha, or subpixel geometry.
 #[derive(Clone, Debug)]
 pub struct FrameCoverage {
+    layout: crate::FrameReadbackLayout,
     frame_id: crate::Scene3dFrameId,
     size: [u32; 2],
     background_pixels: u64,
@@ -86,6 +87,9 @@ impl ReadFrame {
                 expected,
                 actual: ids.len(),
             });
+        }
+        if !self.layout.valid(self.pixels.size) {
+            return Err(CoverageError::InvalidSize);
         }
         let mut coverage = Vec::new();
         coverage
@@ -119,6 +123,7 @@ impl ReadFrame {
             });
         }
         Ok(FrameCoverage {
+            layout: self.layout,
             frame_id: self.frame_id().clone(),
             size: self.pixels.size,
             background_pixels,
@@ -130,6 +135,9 @@ impl ReadFrame {
 }
 
 impl FrameCoverage {
+    pub fn layout(&self) -> crate::FrameReadbackLayout {
+        self.layout
+    }
     pub fn frame_id(&self) -> &crate::Scene3dFrameId {
         &self.frame_id
     }
@@ -169,7 +177,9 @@ impl FrameCoverage {
         ObjectCoverage {
             object,
             pixels: coverage.pixels,
-            screen_fraction: coverage.pixels as f64 / self.pixel_count() as f64,
+            screen_fraction: coverage.pixels as f64
+                / (u64::from(self.layout.output_size[0]) * u64::from(self.layout.output_size[1]))
+                    as f64,
             bounds: coverage.bounds,
         }
     }
@@ -184,6 +194,7 @@ mod tests {
         let mut graph = SceneGraph::new();
         let node = graph.insert(None, Node::new()).unwrap();
         ReadFrame {
+            layout: crate::FrameReadbackLayout::full(size),
             frame_id: Default::default(),
             pixels: Scene3dPixels {
                 depth_background: Default::default(),
@@ -244,8 +255,7 @@ mod tests {
         let summary = frame.coverage().unwrap();
         let original_camera = frame.camera();
         let original_id = frame.object(1).unwrap().id.clone();
-        frame.pixels.size = [1, 1];
-        frame.pixels.object_ids = Some(vec![3]);
+        frame.pixels.object_ids = Some(vec![3; 4]);
         frame.camera = Camera::default();
         frame.objects = (0..3)
             .map(|index| RenderObject {
@@ -265,8 +275,8 @@ mod tests {
         );
         assert_eq!(summary.object(1).unwrap().object.id, original_id);
         assert_eq!(summary.object(2).unwrap().pixels, 2);
-        assert_eq!(later.size(), [1, 1]);
-        assert_eq!(later.object(3).unwrap().pixels, 1);
+        assert_eq!(later.size(), [2, 2]);
+        assert_eq!(later.object(3).unwrap().pixels, 4);
         assert_eq!(
             later.object(3).unwrap().object.id,
             Some("replacement-2".into())

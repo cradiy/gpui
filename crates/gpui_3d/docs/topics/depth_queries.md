@@ -49,8 +49,11 @@ These results describe one depth sample, not continuous visibility. A world poin
 can project away from the pixel center where the surface was sampled, especially
 at silhouettes, steep surfaces, and subpixel features. `WithinTolerance` does not
 prove object identity, and `Background` does not prove the point is drawable.
-Use `object_at(result.pixel[0], result.pixel[1])` separately when an ID channel
-was requested. Low-opacity Blend surfaces can own the nearest depth; color MSAA,
+When an ID channel was requested, subtract `frame.layout().region.origin` from
+`result.pixel` before calling `object_at(x, y)`. Depth comparison returns absolute
+source pixels, whereas object lookup addresses the region-local arrays.
+Points outside the sampled rectangle return `None`, even when inside the camera.
+Low-opacity Blend surfaces can own the nearest depth; color MSAA,
 alpha-weighted contributions, and post-processing do not change the comparison.
 
 The complete depth-channel length and nonzero dimensions are required even for

@@ -178,13 +178,15 @@ can own a sample ahead of an opaque object. `Mask` cutouts and clip planes follo
 the rendered ID channel. Color MSAA and post-processing do not change these
 statistics. Background samples have ID zero, including environment pixels.
 
-`screen_fraction` is `pixels / (width * height)`, not the visible fraction of an
-object's full projected surface. The per-object counts plus background count
-equal the frame's `pixel_count()`. Pixel bounds have a top-left origin and
+`screen_fraction` divides sampled pixels by the full source output area, not the
+object's projected surface or the readback region area. The per-object counts
+plus background count equal the sampled region's `pixel_count()`. `layout()`
+retains the region and full output extent. Pixel bounds have a region-local origin and
 exclusive right/bottom endpoints, enclose every matching sample, and may contain
 holes or samples belonging to other objects. Zero-count objects have no bounds.
-Zero coverage alone does not distinguish occlusion, clipping, discarded alpha,
-or subpixel geometry. These results describe this output's resolution, not
+Zero coverage alone does not distinguish an object outside the read region,
+occlusion, clipping, discarded alpha, or subpixel geometry. These results describe
+this output's resolution, not
 continuous geometric visibility or a different camera view.
 
 ### Linear HDR color

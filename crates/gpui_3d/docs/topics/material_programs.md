@@ -6,6 +6,7 @@ create an adapter, allocate GPU resources, or execute shaders.
 
 This API prepares source and layouts. It does not attach a program to `Material`,
 upload parameter data, resolve images, or create custom rendering pipelines.
+Use [material bindings](material_bindings.md) to prepare device-local resource snapshots.
 
 ```rust
 use gpui_3d::Scene3dMaterialProgram;

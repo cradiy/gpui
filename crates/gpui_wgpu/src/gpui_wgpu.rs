@@ -16,6 +16,11 @@ pub use scene3d_material::{
     MaterialProgram as Scene3dMaterialProgram, Scene3dMaterialLimits, Scene3dMaterialResource,
     Scene3dMaterialResourceKind,
 };
+#[cfg(not(target_family = "wasm"))]
+pub use scene3d_material::{
+    Scene3dMaterialBindingLimits, Scene3dMaterialSnapshot, Scene3dMaterialSource,
+    Scene3dMaterialValue,
+};
 pub use scene3d_renderer::*;
 pub use wgpu;
 pub use wgpu_atlas::*;

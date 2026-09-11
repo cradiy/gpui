@@ -1,0 +1,64 @@
+# Material bindings
+
+`Scene3dMaterialSource` prepares a compiled [material program](material_programs.md)
+on a caller-supplied `WgpuContext`. It creates the shader module and group 1 layout
+once. The native `wgpu` feature is required.
+
+`bind()` uploads uniform values and binds existing texture views and samplers.
+It returns a `Scene3dMaterialSnapshot` retaining the source and all bound resources.
+The source and snapshot do not yet attach custom materials to scene objects or
+create scene draw pipelines.
+
+```rust
+use gpui_3d::{
+    Scene3dMaterialBindingLimits, Scene3dMaterialSource, Scene3dMaterialValue,
+};
+
+let source = Scene3dMaterialSource::new(context, program)?;
+let limits = Scene3dMaterialBindingLimits::default();
+let bindings = source.bind([
+    (0, Scene3dMaterialValue::Uniform(parameter_bytes.into())),
+    (1, Scene3dMaterialValue::Texture(image_view)),
+    (2, Scene3dMaterialValue::Sampler(image_sampler)),
+], limits)?;
+
+let updated = bindings.with_values([
+    (0, Scene3dMaterialValue::Uniform(updated_parameter_bytes.into())),
+], limits)?;
+```
+
+The binding numbers and resource kinds must match the program's declarations.
+Initial binding requires every declaration exactly once, including unused ones.
+Input order is arbitrary. Uniform bytes must exactly match the reflected struct
+size, including WGSL padding. Oversized buffers are not treated as subranges.
+
+## Updates and ownership
+
+`with_values()` replaces only the specified bindings. It reuses the source shader
+and layout, and shares unmodified buffers, views, and samplers. Changed uniform
+blocks receive new private buffers; existing snapshots are never overwritten.
+An empty update retains all resources. Invalid updates leave the original snapshot
+unchanged. Cloning a snapshot shares its complete binding state.
+
+Uniform input bytes are copied during binding and are not retained by the snapshot.
+Texture views retain their underlying textures without copying pixels. External
+texture content is not immutable: callers must preserve its content for retained
+frames and must not destroy textures while those frames can still use them. A
+different image or immutable texture revision can be supplied through a new view.
+
+`bind_group()` exposes the snapshot's group 1 bindings; `source()` retains its
+matching shader and layout. Resources belong to the source device. Recreate the
+source and bindings after device replacement.
+
+## Validation and budgets
+
+Unknown, missing, duplicate, mistyped, and incorrectly sized values are rejected
+before parameter allocation. WGPU validation checks actual view dimensions,
+filterability, usage, sampler compatibility, and device ownership when creating
+the bind group; validation failures are returned as errors.
+
+`Scene3dMaterialBindingLimits` defaults to 64 KiB of uniform payload per complete
+snapshot. `uniform_bytes()` reports that payload, counting shared buffers in every
+snapshot. The limit also applies to partial and empty updates. It excludes external
+texture memory, driver overhead, and simultaneous retained snapshots; callers bound
+their lifetimes and memory separately. Unchanged uniforms are not uploaded again.

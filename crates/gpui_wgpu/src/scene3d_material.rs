@@ -1,7 +1,14 @@
 use anyhow::{Result, ensure};
 use std::sync::{Arc, OnceLock};
 use wgpu::naga::{self, Expression, Function, Handle, Module, Statement};
+#[cfg(not(target_family = "wasm"))]
+mod bindings;
 mod resources;
+#[cfg(not(target_family = "wasm"))]
+pub use bindings::{
+    Scene3dMaterialBindingLimits, Scene3dMaterialSnapshot, Scene3dMaterialSource,
+    Scene3dMaterialValue,
+};
 pub use resources::{Scene3dMaterialLimits, Scene3dMaterialResource, Scene3dMaterialResourceKind};
 
 const CORE: &str = include_str!("scene3d.wgsl");

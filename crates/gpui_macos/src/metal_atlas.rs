@@ -8,23 +8,43 @@ use gpui::{
 };
 use metal::Device;
 use parking_lot::Mutex;
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
-pub(crate) struct MetalAtlas(Mutex<MetalAtlasState>);
+pub(crate) struct MetalAtlas {
+    native: Mutex<MetalAtlasState>,
+    shared: Option<Arc<gpui_wgpu::WgpuAtlas>>,
+}
 
 impl MetalAtlas {
     pub(crate) fn new(device: Device, is_apple_gpu: bool) -> Self {
-        MetalAtlas(Mutex::new(MetalAtlasState {
-            device: AssertSend(device),
-            is_apple_gpu,
-            monochrome_textures: Default::default(),
-            polychrome_textures: Default::default(),
-            tiles_by_key: Default::default(),
-        }))
+        MetalAtlas {
+            native: Mutex::new(MetalAtlasState {
+                device: AssertSend(device),
+                is_apple_gpu,
+                monochrome_textures: Default::default(),
+                polychrome_textures: Default::default(),
+                tiles_by_key: Default::default(),
+            }),
+            shared: None,
+        }
+    }
+
+    pub(crate) fn with_shared(
+        device: Device,
+        is_apple_gpu: bool,
+        atlas: Arc<gpui_wgpu::WgpuAtlas>,
+    ) -> Self {
+        let mut result = Self::new(device, is_apple_gpu);
+        result.shared = Some(atlas);
+        result
     }
 
     pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
-        self.0.lock().texture(id).metal_texture.clone()
+        if let Some(atlas) = &self.shared {
+            return crate::metal_scene::metal_texture(&atlas.texture(id))
+                .expect("shared Metal atlas");
+        }
+        self.native.lock().texture(id).metal_texture.clone()
     }
 }
 
@@ -37,12 +57,19 @@ struct MetalAtlasState {
 }
 
 impl PlatformAtlas for MetalAtlas {
+    fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        self.shared.as_ref()?.renderer_context()
+    }
+
     fn get_or_insert_with<'a>(
         &self,
         key: &AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>> {
-        let mut lock = self.0.lock();
+        if let Some(atlas) = &self.shared {
+            return atlas.get_or_insert_with(key, build);
+        }
+        let mut lock = self.native.lock();
         if let Some(tile) = lock.tiles_by_key.get(key) {
             Ok(Some(*tile))
         } else {
@@ -60,7 +87,11 @@ impl PlatformAtlas for MetalAtlas {
     }
 
     fn remove(&self, key: &AtlasKey) {
-        let mut lock = self.0.lock();
+        if let Some(atlas) = &self.shared {
+            atlas.remove(key);
+            return;
+        }
+        let mut lock = self.native.lock();
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };

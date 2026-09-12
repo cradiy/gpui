@@ -90,6 +90,12 @@ impl WgpuAtlas {
         }
     }
 
+    /// Shares an atlas texture for native GPU compositing. Flush uploads with
+    /// `before_frame` and submit the context queue before sampling it externally.
+    pub fn texture(&self, id: AtlasTextureId) -> wgpu::Texture {
+        self.0.lock().storage[id].texture.clone()
+    }
+
     pub(crate) fn get_tile_info(&self, tile: AtlasTile) -> (wgpu::TextureView, u64) {
         let lock = self.0.lock();
         (

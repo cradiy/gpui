@@ -1383,7 +1383,7 @@ fn viewport_pixel_mapping_survives_offset_clipping_and_target_resize() -> anyhow
                 for (actual, expected) in pixels[index..index + 4].iter().zip(expected) {
                     assert!(
                         actual.abs_diff(*expected) <= 1,
-                        "pixel {x}, {y}: {actual} != {expected}"
+                        "target {width}x{height}, offset {dx},{dy}, pixel {x}, {y}: {actual} != {expected}"
                     );
                 }
             }

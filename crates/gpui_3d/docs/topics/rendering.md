@@ -225,9 +225,15 @@ group does not create a device or submit GPU work.
 
 ## Rendering and support
 
-Linux WGPU supports these viewports. Check `window.supports_scene3d()` before
-displaying 3D content; unsupported backends draw no mesh scene. Native Metal and
-DirectX backends do not currently implement the mesh pass.
+Linux WGPU and the macOS Metal compositor support these viewports. macOS uses
+WGPU's Metal backend for mesh rendering and shares the GPU device, command queue,
+and image atlas with native compositing. `WgpuContext::for_window` provides the
+window's context for custom materials, GPU geometry, and picking resources.
+Check `window.scene3d_support()` before displaying 3D content; unsupported
+backends draw no mesh scene. The DirectX backend does not implement the mesh pass.
+
+The macOS compositor retains one window-sized texture per top-level captured
+layer. These compositing targets are separate from the mesh output-cache budget.
 
 Each viewport has isolated depth visibility and is composited into GPUI's normal
 paint order. Ancestor opacity applies once to the final image, and ancestor

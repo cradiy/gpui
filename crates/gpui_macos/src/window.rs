@@ -1573,6 +1573,29 @@ impl PlatformWindow for MacWindow {
         true
     }
 
+    fn supports_subtree_effects(&self) -> bool {
+        self.0.lock().renderer.supports_subtree_effects()
+    }
+
+    fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        self.0.lock().renderer.scene3d_support()
+    }
+
+    fn clear_scene3d_caches(&mut self) {
+        self.0.lock().renderer.clear_scene3d_caches();
+    }
+
+    fn scene3d_output_cache_stats(&self) -> Option<gpui::Scene3dOutputCacheStats> {
+        self.0.lock().renderer.scene3d_output_cache_stats()
+    }
+
+    fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.0
+            .lock()
+            .renderer
+            .set_scene3d_output_cache_budget(bytes);
+    }
+
     fn set_edited(&mut self, edited: bool) {
         unsafe {
             let window = self.0.lock().native_window;

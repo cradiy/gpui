@@ -44,14 +44,22 @@ impl WgpuContext {
     #[cfg(not(target_family = "wasm"))]
     pub fn new_headless() -> anyhow::Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            backends: if cfg!(target_os = "macos") {
+                wgpu::Backends::METAL
+            } else {
+                wgpu::Backends::VULKAN | wgpu::Backends::GL
+            },
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             display: None,
         });
         let adapter = gpui::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+            power_preference: if cfg!(target_os = "macos") {
+                wgpu::PowerPreference::LowPower
+            } else {
+                wgpu::PowerPreference::HighPerformance
+            },
             compatible_surface: None,
             force_fallback_adapter: false,
             apply_limit_buckets: false,

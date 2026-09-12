@@ -158,7 +158,8 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Direct geometry admission**: CPU-only vertex/index payload reports with shared mesh/UV accounting, camera/shadow eligibility, per-buffer device checks, optional per-request totals before geometry allocation, and retained output reports.
   - [x] **Selective readback admission**: Available-channel subsets, aligned staging and widened CPU payload budgets before allocation, retained request reports, and direct decoding with the shared pending/cancellation limit.
   - [x] **Regional readback**: Checked physical pixel rectangles, region-sized channel budgets, copy origins and extents, and shared completion/cancellation behavior with full-frame reads.
-- [ ] **Platform coverage**: Add macOS and Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
+- [x] **macOS rendering**: WGPU Metal mesh rendering with native compositing, shared device/queue/atlas, capability queries, picking, and output-cache controls.
+- [ ] **Windows rendering**: Add Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
 - [ ] **Cross-platform validation**: Cover depth, transparency, texture colors, nested composition, input mapping, and high DPI; distinguish automated checks from manual visual confirmation.
 
 ## Extensions Built on the Core

@@ -30,6 +30,7 @@ mod particle_transition;
 mod particles;
 pub(crate) mod scene3d;
 mod scene_snapshot;
+mod subtree_output;
 #[cfg(not(target_family = "wasm"))]
 mod texture_effect;
 mod ui_capture;
@@ -434,7 +435,6 @@ pub type GpuContext = Rc<RefCell<Option<WgpuContext>>>;
 /// GPU resources that must be dropped together during device recovery.
 struct WgpuResources {
     capture_context: WgpuContext,
-    instance: wgpu::Instance,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface: Option<wgpu::Surface<'static>>,
@@ -979,7 +979,6 @@ impl WgpuRenderer {
 
         let resources = WgpuResources {
             capture_context: context.clone(),
-            instance: context.instance.clone(),
             device,
             queue,
             surface,
@@ -2383,6 +2382,7 @@ impl WgpuRenderer {
                 &mut encoder,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 true,
+                &[],
             );
             if !matches!(encoded, Ok(SceneEncoding::Complete)) {
                 self.commit_encoded_scene(false);
@@ -2482,6 +2482,16 @@ impl WgpuRenderer {
         target: WgpuExternalRenderTarget<'_>,
         retain_outputs: bool,
     ) -> anyhow::Result<SceneEncoding> {
+        self.encode_external_scene_with_subtree_targets(scene, target, retain_outputs, &[])
+    }
+
+    fn encode_external_scene_with_subtree_targets(
+        &mut self,
+        scene: &Scene,
+        target: WgpuExternalRenderTarget<'_>,
+        retain_outputs: bool,
+        subtree_targets: &[wgpu::Texture],
+    ) -> anyhow::Result<SceneEncoding> {
         assert!(
             self.resources().surface.is_none(),
             "encode_external() requires an external renderer"
@@ -2506,6 +2516,7 @@ impl WgpuRenderer {
             target.command_encoder,
             wgpu::LoadOp::Load,
             retain_outputs,
+            subtree_targets,
         );
         match &encoded {
             Ok(SceneEncoding::InstanceCapacity) => {
@@ -2998,6 +3009,7 @@ impl WgpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
         retain_outputs: bool,
+        subtree_targets: &[wgpu::Texture],
     ) -> anyhow::Result<SceneEncoding> {
         let mut encoded = self.encode_scene_inner(
             scene,
@@ -3006,6 +3018,7 @@ impl WgpuRenderer {
             encoder,
             load,
             retain_outputs,
+            subtree_targets,
         );
         if matches!(encoded, Ok(SceneEncoding::InstanceCapacity))
             && self.instance_buffer_capacity >= self.max_buffer_size
@@ -3040,6 +3053,7 @@ impl WgpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
         retain_outputs: bool,
+        subtree_targets: &[wgpu::Texture],
     ) -> anyhow::Result<SceneEncoding> {
         let mut has_scene3d = false;
         scene.visit(&mut |scene| {
@@ -3217,6 +3231,7 @@ impl WgpuRenderer {
                 load,
                 &mut 0,
                 0,
+                subtree_targets,
             ) {
                 SceneEncoding::Complete
             } else {
@@ -3270,6 +3285,7 @@ impl WgpuRenderer {
         load: wgpu::LoadOp<wgpu::Color>,
         instance_offset: &mut u64,
         depth: usize,
+        subtree_targets: &[wgpu::Texture],
     ) -> bool {
         let mut overflow = false;
 
@@ -3297,7 +3313,18 @@ impl WgpuRenderer {
                         let capture_view =
                             texture.create_view(&wgpu::TextureViewDescriptor::default());
                         let mut did_draw = true;
-                        for layer in &scene.subtree_layers[range] {
+                        for index in range {
+                            let layer = &scene.subtree_layers[index];
+                            let isolated = subtree_targets.get(index);
+                            let isolated_view =
+                                isolated.map(|texture| texture.create_view(&Default::default()));
+                            let target_texture = isolated.unwrap_or(target_texture);
+                            let target_view = isolated_view.as_ref().unwrap_or(target_view);
+                            let composite_load = if isolated.is_some() {
+                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                            } else {
+                                wgpu::LoadOp::Load
+                            };
                             let pipeline = self
                                 .resources()
                                 .subtree_effect_pipelines
@@ -3312,9 +3339,10 @@ impl WgpuRenderer {
                                     target_texture,
                                     target_view,
                                     encoder,
-                                    wgpu::LoadOp::Load,
+                                    composite_load,
                                     instance_offset,
                                     depth,
+                                    &[],
                                 );
                                 continue;
                             };
@@ -3332,6 +3360,7 @@ impl WgpuRenderer {
                                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                     instance_offset,
                                     depth + 1,
+                                    &[],
                                 )
                             {
                                 did_draw = false;
@@ -3356,6 +3385,7 @@ impl WgpuRenderer {
                                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                     instance_offset,
                                     depth + 2,
+                                    &[],
                                 ) {
                                     did_draw = false;
                                     break;
@@ -3632,7 +3662,7 @@ impl WgpuRenderer {
                                         view: target_view,
                                         resolve_target: None,
                                         ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
+                                            load: composite_load,
                                             store: wgpu::StoreOp::Store,
                                         },
                                         depth_slice: None,
@@ -3894,7 +3924,7 @@ impl WgpuRenderer {
                 }
 
                 match Self::import_dma_buf(
-                    &resources.instance,
+                    &resources.capture_context.instance,
                     &resources.device,
                     resources.drm_render_device,
                     &frame,

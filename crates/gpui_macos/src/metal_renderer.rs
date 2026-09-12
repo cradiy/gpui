@@ -91,6 +91,7 @@ pub(crate) unsafe fn new_renderer(
 pub(crate) struct InstanceBufferPool {
     buffer_size: usize,
     buffers: Vec<metal::Buffer>,
+    scene_context: Option<gpui_wgpu::WgpuContext>,
 }
 
 impl Default for InstanceBufferPool {
@@ -98,6 +99,7 @@ impl Default for InstanceBufferPool {
         Self {
             buffer_size: 2 * 1024 * 1024,
             buffers: Vec::new(),
+            scene_context: None,
         }
     }
 }
@@ -108,6 +110,13 @@ pub(crate) struct InstanceBuffer {
 }
 
 impl InstanceBufferPool {
+    fn scene_context(&mut self) -> Result<gpui_wgpu::WgpuContext> {
+        if self.scene_context.is_none() {
+            self.scene_context = Some(gpui_wgpu::WgpuContext::new_headless()?);
+        }
+        Ok(self.scene_context.as_ref().unwrap().clone())
+    }
+
     pub(crate) fn reset(&mut self, buffer_size: usize) {
         self.buffer_size = buffer_size;
         self.buffers.clear();
@@ -144,6 +153,8 @@ impl InstanceBufferPool {
 }
 
 pub(crate) struct MetalRenderer {
+    scene_renderer: Option<crate::metal_scene::MetalSceneRenderer>,
+    subtree_pipeline_state: metal::RenderPipelineState,
     device: metal::Device,
     layer: Option<metal::MetalLayer>,
     is_apple_gpu: bool,
@@ -364,6 +375,23 @@ impl MetalRenderer {
         opaque: bool,
         instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
     ) -> Self {
+        let scene_renderer = match instance_buffer_pool
+            .lock()
+            .scene_context()
+            .and_then(crate::metal_scene::MetalSceneRenderer::new)
+        {
+            Ok(renderer) => Some(renderer),
+            Err(error) => {
+                log::error!("failed to initialize Metal 3D renderer: {error:#}");
+                None
+            }
+        };
+        let device = scene_renderer
+            .as_ref()
+            .map_or(device, |renderer| renderer.device());
+        if let Some(layer) = &layer {
+            layer.set_device(&device);
+        }
         #[cfg(feature = "runtime_shaders")]
         let library = device
             .new_library_with_source(&SHADERS_SOURCE_FILE, &metal::CompileOptions::new())
@@ -482,8 +510,20 @@ impl MetalRenderer {
             MTLPixelFormat::BGRA8Unorm,
         );
 
-        let command_queue = device.new_command_queue();
-        let sprite_atlas = Arc::new(MetalAtlas::new(device.clone(), is_apple_gpu));
+        let subtree_pipeline_state = crate::metal_scene::composite_pipeline(&device, &library);
+        let command_queue = scene_renderer.as_ref().map_or_else(
+            || device.new_command_queue(),
+            |renderer| renderer.command_queue(),
+        );
+        let sprite_atlas = Arc::new(if let Some(renderer) = &scene_renderer {
+            MetalAtlas::with_shared(
+                device.clone(),
+                is_apple_gpu,
+                renderer.renderer.sprite_atlas().clone(),
+            )
+        } else {
+            MetalAtlas::new(device.clone(), is_apple_gpu)
+        });
         let core_video_texture_cache =
             CVMetalTextureCache::new(None, device.clone(), None).unwrap();
         let effect_sampler_descriptor = SamplerDescriptor::new();
@@ -494,6 +534,8 @@ impl MetalRenderer {
         let effect_sampler = device.new_sampler(&effect_sampler_descriptor);
 
         Self {
+            scene_renderer,
+            subtree_pipeline_state,
             device,
             layer,
             presents_with_transaction: false,
@@ -527,6 +569,37 @@ impl MetalRenderer {
             backdrop_blurred_texture: None,
             #[cfg(any(test, feature = "test-support"))]
             headless_render_target: None,
+        }
+    }
+
+    pub fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        self.scene_renderer.as_ref().map_or(
+            gpui::Scene3dSupport::Unsupported(gpui::Scene3dUnsupportedReason::RendererUnavailable),
+            |renderer| renderer.renderer.scene3d_support(),
+        )
+    }
+
+    pub fn supports_subtree_effects(&self) -> bool {
+        self.scene_renderer
+            .as_ref()
+            .is_some_and(|renderer| !renderer.context.device_lost())
+    }
+
+    pub fn clear_scene3d_caches(&mut self) {
+        if let Some(renderer) = &mut self.scene_renderer {
+            renderer.clear_caches();
+        }
+    }
+
+    pub fn scene3d_output_cache_stats(&self) -> Option<gpui::Scene3dOutputCacheStats> {
+        self.scene_renderer
+            .as_ref()
+            .map(|renderer| renderer.renderer.scene3d_output_cache_stats())
+    }
+
+    pub fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        if let Some(renderer) = &mut self.scene_renderer {
+            renderer.renderer.set_scene3d_output_cache_budget(bytes);
         }
     }
 
@@ -1006,6 +1079,15 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
+        let subtree_textures = if let Some(renderer) = &mut self.scene_renderer {
+            renderer.prepare(scene, viewport_size)?
+        } else {
+            anyhow::ensure!(
+                scene.subtree_layers.is_empty(),
+                "Metal subtree renderer is unavailable"
+            );
+            Vec::new()
+        };
         self.ensure_effect_pipelines(scene);
         self.ensure_backdrop_effect_pipelines(scene);
         let command_queue = self.command_queue.clone();
@@ -1025,8 +1107,13 @@ impl MetalRenderer {
 
         for batch in scene.batches() {
             let ok = match batch {
-                PrimitiveBatch::SubtreeLayers(_) => {
-                    unreachable!("subtree capture is disabled on Metal")
+                PrimitiveBatch::SubtreeLayers(range) => {
+                    command_encoder.set_render_pipeline_state(&self.subtree_pipeline_state);
+                    for texture in &subtree_textures[range] {
+                        command_encoder.set_fragment_texture(0, Some(texture));
+                        command_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+                    }
+                    true
                 }
                 PrimitiveBatch::BackdropBlurs(range) => {
                     command_encoder.end_encoding();

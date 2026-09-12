@@ -140,6 +140,45 @@ fn material_binding_snapshots_retain_uniform_buffers_and_validate_gpu_resources(
             .with_values([(2, Scene3dMaterialValue::Texture(wrong_view))], limits)
             .is_err()
     );
+    for (format, usage, sample_count) in [
+        (
+            wgpu::TextureFormat::R32Uint,
+            wgpu::TextureUsages::TEXTURE_BINDING,
+            1,
+        ),
+        (
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::COPY_DST,
+            1,
+        ),
+        (
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            4,
+        ),
+    ] {
+        let incompatible = context.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: texture.size(),
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        });
+        let error = original
+            .with_values(
+                [(
+                    2,
+                    Scene3dMaterialValue::Texture(incompatible.create_view(&Default::default())),
+                )],
+                limits,
+            )
+            .err()
+            .expect("incompatible material texture accepted");
+        assert!(error.to_string().contains("material binding"), "{error:#}");
+    }
     let foreign = WgpuContext::new_headless()?;
     let foreign_sampler = foreign.create_sampler(&Default::default());
     assert!(
@@ -179,5 +218,32 @@ fn material_binding_snapshots_retain_uniform_buffers_and_validate_gpu_resources(
     assert_eq!(retained.bind_group(), original.bind_group());
     assert_eq!(retained.source().layout(), changed.source().layout());
     assert_eq!(retained.uniform_bytes(), original.uniform_bytes());
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn material_snapshot_updates_reject_reported_device_loss() -> Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let program = MaterialProgram::compile(super::super::DEFAULT)?;
+    let source = Scene3dMaterialSource::new(context.clone(), program.clone())?;
+    let limits = Scene3dMaterialBindingLimits::default();
+    let original = source.bind([], limits)?;
+    context
+        .device_lost_flag()
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    for error in [
+        source.bind([], limits).err(),
+        original.with_values([], limits).err(),
+        Scene3dMaterialSource::new(context, program.clone()).err(),
+    ] {
+        let error = error.expect("reported device loss must reject material publication");
+        assert!(
+            error.to_string().contains("material device is lost"),
+            "{error:#}"
+        );
+    }
+    let replacement = Scene3dMaterialSource::new(WgpuContext::new_headless()?, program)?;
+    replacement.bind([], limits)?;
     Ok(())
 }

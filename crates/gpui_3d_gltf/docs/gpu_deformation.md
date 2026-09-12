@@ -1,0 +1,172 @@
+# GPU deformation
+
+The native `wgpu` feature exposes `GpuSceneDeformation`, a retained adapter for
+imported Morph and Skin data. It uses a caller-owned `WgpuContext` and submits
+immutable core `GpuDeformationOutput` buffers. Vertex evaluation stays on the GPU;
+resource loading, animation sampling, render publication, and CPU queries remain
+caller-owned.
+
+```toml
+gpui_3d_gltf = { path = "../gpui_3d_gltf", features = ["wgpu"] }
+```
+
+## Preparation
+
+`GpuSceneDeformation::check_asset(&asset)` checks direction-regeneration topology
+and tangent coordinate metadata without creating a device or allocating GPU
+resources. `GpuSceneSourceMemory::plan(&asset, limits, max_source_bytes)` also
+checks core payload limits and the optional aggregate source budget without a
+device. `check_support(&asset, &capabilities)` checks imported topology and the
+device-enabled compute features and stage limits for the complete asset. It uses
+an existing `Scene3dDeviceCapabilities` snapshot without creating a device or GPU
+resources. Capability errors identify the source node, mesh, primitive and
+processing stage.
+Static primitives impose no deformation requirements; zero authored weights do
+not remove direction-reconstruction requirements. Render packing and indirect
+draw capabilities are separate from deformation computation.
+
+`new(context, &asset, limits, max_source_bytes)` checks payload admission, device
+health and complete stage support before any upload, then prepares each
+deformable primitive in scene order. Per-buffer device sizes and source values
+are checked by the core constructors. Capability admission does not guarantee
+allocation, pipeline compilation or shader execution success. Static
+primitives are omitted. The adapter retains geometry, authored weights, and skin
+bindings, not materials or decoded images.
+It can evaluate multiple instances of the same asset.
+
+Supported inputs include authored normal/tangent deltas, flat normal
+reconstruction for imported triangle-corner geometry, selected-set tangent
+regeneration, Skin without Morph, and Morph followed by Skin. Tangent regeneration
+uses core `GpuTangentGeneration` with `Repair` policy. Both normal and tangent
+reconstruction require device-enabled `SHADER_F64`, including assets whose authored
+weights are zero. Regenerated geometry must use ordered, unshared triangle corners.
+There is no automatic CPU fallback. Use
+[`SceneAsset::deform`](morph.md#scene-weights-and-deformation) for CPU evaluation.
+
+`GpuDeformationLimits` applies to each core source and each result. The final
+constructor argument separately limits the complete retained source payload;
+`None` disables only this aggregate limit. `source_memory()` returns the admitted
+`GpuSceneSourceMemory`, with `source_bytes` and `primitive_count`.
+
+The report includes Morph bases/deltas, Skin influence bindings, direction
+reconstruction sources, uniforms, and uploaded bind-space snapshots. It excludes
+evaluation weights/palettes/results, render packing, readbacks, CPU data, pipelines
+and driver overhead. Repeated primitive occurrences have independent GPU sources;
+instances evaluated through one adapter reuse those sources. Tangent regeneration
+also retains a base-direction snapshot for zero-weight samples. Bound outstanding
+evaluations and retained results separately. CPU admission does not establish
+device support or guarantee successful GPU allocation.
+
+## Evaluation
+
+```no_run
+use gpui_3d::{
+    EvaluatedScene, GpuDeformationLimits, GpuDeformationOutput, NodeHandle,
+    SubtreeInstance, WgpuContext,
+};
+use gpui_3d_gltf::{GpuSceneDeformation, SceneAsset};
+
+fn prepare(
+    context: WgpuContext,
+    asset: &SceneAsset,
+) -> anyhow::Result<GpuSceneDeformation> {
+    GpuSceneDeformation::new(
+        context, asset, GpuDeformationLimits::default(), Some(256 * 1024 * 1024),
+    )
+}
+
+fn sample(
+    gpu: &GpuSceneDeformation,
+    instance: &SubtreeInstance,
+    poses: &EvaluatedScene,
+    weights: &[(NodeHandle, Vec<f32>)],
+) -> anyhow::Result<Vec<(NodeHandle, GpuDeformationOutput)>> {
+    gpu.evaluate(instance, poses, weights, Some(256 * 1024 * 1024))
+}
+```
+
+`poses` contains final world transforms, including animation, constraints, or
+caller-supplied pose overrides. Weight overrides use original glTF node handles
+mapped through `SubtreeInstance::node`, not primitive-child handles. One override
+applies to every primitive of its node. Omitted overrides use authored defaults
+on every call. Weights are finite, signed, and must match the target count.
+Duplicate, unknown, foreign-instance, and missing snapshot targets return errors.
+All Skin palettes are composed into CPU snapshots before any primitive's GPU
+work. Mesh-world cancellation, inverse-bind composition and their finite affine
+constraints are checked for every joint; composition errors identify the
+primitive and joint. The admitted snapshots are uploaded without recomposition.
+Per-vertex blend failures remain GPU evaluation results, not pose-admission errors.
+
+`evaluation_memory(instance, weights)` reports a `GpuSceneEvaluationMemory`
+without allocating GPU resources or submitting commands. `evaluation_bytes` is
+the conservative sum of new weight buffers, Skin palettes, Morph/normal outputs,
+and tangent-stage scratch/output buffers selected by the weights. `output_bytes`
+counts the returned vertex buffers per primitive, including reused bind-space
+buffers. All-zero generated-tangent Morph samples need no new Morph allocation;
+Skin still allocates its palette and result when present.
+
+The final `evaluate` argument limits `evaluation_bytes` for the complete call.
+Admission follows weight and pose validation and precedes the first primitive's
+GPU work. `None` disables this aggregate limit; per-source and per-result limits
+still apply. Resident sources, CPU data, render preparation, readbacks, driver
+overhead and other evaluations are excluded. This sum is not a measurement of
+peak GPU residency. The memory query validates instance and weight mappings, not
+pose matrices or current device health.
+
+Evaluation starts from bind-space geometry, applies Morph, rebuilds required flat
+normals and then tangents for nonzero-weight samples, and finally applies Skin.
+Tangent generation uses the primitive's selected tangent UV set and the current
+normals, including authored normal deltas. All-zero Morph samples retain the
+complete base directions without regeneration. Skin uses instance-mapped joints
+in binding order and applies mesh-world cancellation and inverse binds once.
+No previous sample is used as input.
+
+Returned pairs follow deformable primitive order and contain mapped primitive
+handles. Earlier outputs remain valid after another evaluation or destruction of
+the adapter. CPU graphs and snapshots are never changed. An error may occur after
+work has been submitted for earlier primitives; their outputs are not published.
+Successful submission does not prove valid shader arithmetic: core vertex status
+is checked during render packing or explicit readback.
+GPU arithmetic is not bit-identical to CPU evaluation; tangent grouping and
+numeric-limit behavior follow the [core generation contract](../../gpui_3d/docs/topics/tangent_publication.md).
+
+## Rendering and queries
+
+Each output's `base_mesh()` is its GPU source identity. The imported scene's
+initial mesh may already contain authored Morph and Skin deformation and must not
+be substituted for this source when binding GPU draws. For regenerated tangents,
+zero-weight and nonzero-weight results can have different source allocations.
+Always use the returned output's identity, including when restoring zero weights.
+
+```no_run
+# use gpui_3d::{EvaluatedScene, GpuDeformationOutput, NodeHandle};
+# fn render_pose(poses: &EvaluatedScene, outputs: &[(NodeHandle, GpuDeformationOutput)])
+#     -> anyhow::Result<EvaluatedScene> {
+let render_pose = poses.with_meshes(
+    outputs.iter().map(|(handle, output)| (*handle, output.base_mesh().clone())),
+)?;
+# Ok(render_pose)
+# }
+```
+
+Use `Scene::geometry_inputs()` to obtain each object's node, source mesh, output ID,
+and five active texture-coordinate selections before image resolution. Create render
+sources with those selections, pack each result with `render_geometry`, and bind
+the packed geometry to its scene object. Output IDs are scene object indices plus
+one, not indices in the adapter's result vector. Supply conservative mesh-local
+bounds for the same deformation sample, or obtain them through
+`GpuDeformationBounds`. See
+[core GPU deformation](../../gpui_3d/docs/topics/deformation.md#render-vertex-packing)
+for packing, headless rendering, and viewport binding.
+
+The replacement snapshot above contains source meshes, not final CPU geometry.
+Its CPU bounds and picking do not describe deformed surfaces. GPU viewport
+overrides disable CPU picking and captured-UI pointer routing. Use explicit mesh
+readback to build a CPU-query snapshot when needed; no selection synchronization
+is performed by this adapter. The [model viewer](viewer.md#gpu-deformation) combines
+this adapter with GPU bounds and submitted-frame ID/depth selection.
+
+Use the window's shared context for viewport rendering and the renderer's context
+for headless output. Sources and results belong to that device. Rebuild the
+adapter and render sources after device replacement; cross-device reuse is
+rejected.

@@ -10,6 +10,8 @@ use gpui::{
 use gpui_effects::{subtree_blur_shader, subtree_color_adjust_shader, subtree_wave_shader};
 use gpui_wgpu::WgpuOffscreenRenderer;
 
+const OUTPUT_SRGB: bool = true;
+
 #[path = "support/contour_glow.rs"]
 mod contour_glow;
 #[path = "support/contour_relief.rs"]
@@ -66,6 +68,7 @@ fn quad(bounds: Bounds<ScaledPixels>, color: u32) -> Quad {
 fn layer(mut scene: Scene, bounds: Bounds<ScaledPixels>, opacity: f32) -> Primitive {
     scene.finish();
     Primitive::SubtreeLayer(SubtreeLayer {
+        scene3d: None,
         second_scene: None,
         intermediate_effects: Arc::default(),
         composite: EffectQuad {

@@ -168,7 +168,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         );
         let seam = renderer.render_rgba(&scene(scale, vec![probe]))?;
         assert!(
-            pixel(&seam, 40., 32.)[0].abs_diff(188) <= 1,
+            pixel(&seam, 40., 32.)[0].abs_diff(if OUTPUT_SRGB { 188 } else { 128 }) <= 1,
             "repeat filtering must wrap within the image tile"
         );
 
@@ -179,7 +179,8 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         let raw = renderer.render_rgba(&scene(scale, vec![probe]))?;
         let center = pixel(&raw, 40., 32.);
         assert!(
-            center[0].abs_diff(137) <= 1 && center[1].abs_diff(99) <= 1,
+            center[0].abs_diff(if OUTPUT_SRGB { 137 } else { 64 }) <= 1
+                && center[1].abs_diff(if OUTPUT_SRGB { 99 } else { 32 }) <= 1,
             "external images keep straight alpha: {center:?}"
         );
     }

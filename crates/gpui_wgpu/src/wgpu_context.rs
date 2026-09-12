@@ -8,6 +8,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use wgpu::TextureFormat;
 
+mod resources;
+pub use resources::WgpuResource;
+
+#[derive(Clone)]
 pub struct WgpuContext {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -25,18 +29,39 @@ pub struct CompositorGpuHint {
 }
 
 impl WgpuContext {
+    /// Shares the current window device and queue. Returns None for other backends.
+    /// Reacquire after device recovery; old device-local resources cannot be reused.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn for_window(window: &gpui::Window) -> Option<Self> {
+        window
+            .renderer_context()?
+            .downcast::<Self>()
+            .ok()
+            .map(|context| (*context).clone())
+    }
+
     /// Creates a GPU context that is not tied to a native presentation surface.
     #[cfg(not(target_family = "wasm"))]
     pub fn new_headless() -> anyhow::Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            backends: if cfg!(target_os = "macos") {
+                wgpu::Backends::METAL
+            } else if cfg!(target_os = "windows") {
+                wgpu::Backends::DX12
+            } else {
+                wgpu::Backends::VULKAN | wgpu::Backends::GL
+            },
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             display: None,
         });
         let adapter = gpui::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+            power_preference: if cfg!(target_os = "macos") {
+                wgpu::PowerPreference::LowPower
+            } else {
+                wgpu::PowerPreference::HighPerformance
+            },
             compatible_surface: None,
             force_fallback_adapter: false,
             apply_limit_buckets: false,
@@ -210,7 +235,7 @@ impl WgpuContext {
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
 
-        let mut required_features = wgpu::Features::empty();
+        let mut required_features = adapter.features() & wgpu::Features::SHADER_F64;
         if dual_source_blending {
             required_features |= wgpu::Features::DUAL_SOURCE_BLENDING;
         } else {
@@ -241,9 +266,7 @@ impl WgpuContext {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("gpui_device"),
                 required_features,
-                required_limits: wgpu::Limits::downlevel_defaults()
-                    .using_resolution(adapter.limits())
-                    .using_alignment(adapter.limits()),
+                required_limits: required_device_limits(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -261,10 +284,18 @@ impl WgpuContext {
 
     #[cfg(not(target_family = "wasm"))]
     pub fn instance(display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>) -> wgpu::Instance {
+        let mut backend_options = wgpu::BackendOptions::default();
+        if cfg!(target_os = "windows") {
+            backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        }
         wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            backends: if cfg!(target_os = "windows") {
+                wgpu::Backends::DX12
+            } else {
+                wgpu::Backends::VULKAN | wgpu::Backends::GL
+            },
             flags: wgpu::InstanceFlags::default(),
-            backend_options: wgpu::BackendOptions::default(),
+            backend_options,
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             display: Some(display),
         })
@@ -624,6 +655,15 @@ impl WgpuContext {
     }
 }
 
+fn required_device_limits(adapter_limits: wgpu::Limits) -> wgpu::Limits {
+    let mut limits = wgpu::Limits::downlevel_defaults()
+        .using_resolution(adapter_limits.clone())
+        .using_alignment(adapter_limits.clone());
+    limits.max_storage_buffers_per_shader_stage =
+        adapter_limits.max_storage_buffers_per_shader_stage.min(5);
+    limits
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn parse_pci_id(id: &str) -> anyhow::Result<u32> {
     let mut id = id.trim();
@@ -643,7 +683,33 @@ fn parse_pci_id(id: &str) -> anyhow::Result<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_pci_id;
+    use super::{parse_pci_id, required_device_limits};
+
+    #[test]
+    fn device_limits_enable_geometry_without_exceeding_adapter_capacity() {
+        for storage_buffers in [4, 5, 8] {
+            let adapter = wgpu::Limits {
+                max_storage_buffers_per_shader_stage: storage_buffers,
+                max_texture_dimension_2d: 8192,
+                min_storage_buffer_offset_alignment: 64,
+                ..wgpu::Limits::downlevel_defaults()
+            };
+            let requested = required_device_limits(adapter.clone());
+            assert!(requested.check_limits(&adapter));
+            assert_eq!(
+                requested.max_storage_buffers_per_shader_stage >= 5,
+                storage_buffers >= 5
+            );
+            assert_eq!(
+                requested.max_texture_dimension_2d,
+                adapter.max_texture_dimension_2d
+            );
+            assert_eq!(
+                requested.min_storage_buffer_offset_alignment,
+                adapter.min_storage_buffer_offset_alignment
+            );
+        }
+    }
 
     #[test]
     fn test_parse_device_id() {

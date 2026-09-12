@@ -2,6 +2,9 @@ use super::*;
 
 fn linear_channel(value: u8) -> f64 {
     let srgb = f64::from(value) / 255.;
+    if !OUTPUT_SRGB {
+        return srgb;
+    }
     if srgb <= 0.04045 {
         srgb / 12.92
     } else {
@@ -71,11 +74,19 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
             let center = pixel(32, 24);
             assert!(blurred[center] < source[center]);
             let outside = if displacement[0] == 0. {
-                pixel(32, 17)
+                pixel(32, if OUTPUT_SRGB { 17 } else { 19 })
+            } else if displacement[1] != 0. {
+                // Probe inside the diagonal trail, away from its rasterized edge.
+                pixel(29, 20)
             } else {
-                pixel(27, 24)
+                pixel(if OUTPUT_SRGB { 27 } else { 29 }, 24)
             };
-            assert!(blurred[outside] > source[outside]);
+            assert!(
+                blurred[outside] > source[outside],
+                "no blur spread at scale {scale}, displacement {displacement:?}: {} <= {}",
+                blurred[outside],
+                source[outside]
+            );
             if displacement[1] == 0. {
                 assert_eq!(blurred[pixel(32, 18)], 0);
             }

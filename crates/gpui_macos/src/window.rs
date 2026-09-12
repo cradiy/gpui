@@ -73,6 +73,25 @@ use std::{
     time::Duration,
 };
 
+mod internal_drag;
+mod popup;
+
+unsafe fn retain_native(object: id) {
+    if !object.is_null() {
+        unsafe {
+            let _: () = msg_send![object, retain];
+        }
+    }
+}
+
+unsafe fn release_native(object: id) {
+    if !object.is_null() {
+        unsafe {
+            let _: () = msg_send![object, release];
+        }
+    }
+}
+
 const WINDOW_STATE_IVAR: &str = "windowState";
 
 static mut WINDOW_CLASS: *const Class = ptr::null();
@@ -134,6 +153,7 @@ unsafe fn build_classes() {
         VIEW_CLASS = {
             let mut decl = ClassDecl::new("GPUIView", class!(NSView)).unwrap();
             decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
+            internal_drag::register(&mut decl);
             decl.add_method(sel!(dealloc), dealloc_view as extern "C" fn(&Object, Sel));
 
             decl.add_method(
@@ -534,6 +554,8 @@ struct MacWindowState {
     accesskit_adapter: Option<accesskit_macos::SubclassingAdapter>,
     // The parent window if this window is a sheet (Dialog kind)
     sheet_parent: Option<id>,
+    popup: Option<popup::PopupState>,
+    drag_event: id,
 }
 
 impl MacWindowState {
@@ -771,7 +793,22 @@ impl MacWindow {
         foreground_executor: ForegroundExecutor,
         background_executor: BackgroundExecutor,
         renderer_context: renderer::Context,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
+        let popup_parent = if let WindowKind::AnchoredPopup(options) = &kind {
+            if options.grab {
+                let buttons: NSUInteger =
+                    unsafe { msg_send![class!(NSEvent), pressedMouseButtons] };
+                anyhow::ensure!(buttons != 0, "popup grab requires an active mouse press");
+            }
+            Some(popup::parent(options)?)
+        } else {
+            None
+        };
+        let focus = if let WindowKind::AnchoredPopup(options) = &kind {
+            options.grab
+        } else {
+            focus
+        };
         unsafe {
             let pool = NSAutoreleasePool::new(nil);
 
@@ -803,12 +840,13 @@ impl MacWindow {
                     | NSWindowStyleMask::NSFullSizeContentViewWindowMask;
             }
 
-            let native_window: id = match kind {
+            if popup_parent.is_some() {
+                style_mask = NSWindowStyleMask::NSBorderlessWindowMask;
+            }
+            let native_window: id = match &kind {
                 WindowKind::Normal => {
                     msg_send![WINDOW_CLASS, alloc]
                 }
-                // `AnchoredPopup` is rejected in `MacPlatform::open_window`, grouped here only
-                // for exhaustiveness.
                 WindowKind::PopUp | WindowKind::AnchoredPopup(_) => {
                     style_mask |= NSWindowStyleMaskNonactivatingPanel;
                     msg_send![PANEL_CLASS, alloc]
@@ -857,6 +895,13 @@ impl MacWindow {
                 ),
             );
 
+            let popup_frame = if let (Some(parent), WindowKind::AnchoredPopup(options)) =
+                (&popup_parent, &kind)
+            {
+                Some(popup::frame(&parent.lock(), options, window_rect.size))
+            } else {
+                None
+            };
             let native_window = native_window.initWithContentRect_styleMask_backing_defer_screen_(
                 window_rect,
                 style_mask,
@@ -868,7 +913,7 @@ impl MacWindow {
             let () = msg_send![
                 native_window,
                 registerForDraggedTypes:
-                    NSArray::arrayWithObject(nil, NSFilenamesPboardType)
+                    NSArray::arrayWithObjects(nil, &[NSFilenamesPboardType, ns_string(internal_drag::PASTEBOARD_TYPE)])
             ];
             let () = msg_send![
                 native_window,
@@ -932,6 +977,8 @@ impl MacWindow {
                 closed: Arc::new(AtomicBool::new(false)),
                 accesskit_adapter: None,
                 sheet_parent: None,
+                popup: None,
+                drag_event: nil,
             })));
 
             (*native_window).set_ivar(
@@ -986,7 +1033,7 @@ impl MacWindow {
             let main_window: id = msg_send![app, mainWindow];
             let mut sheet_parent = None;
 
-            match kind {
+            match &kind {
                 WindowKind::Normal | WindowKind::Floating => {
                     if kind == WindowKind::Floating {
                         // Let the window float keep above normal windows.
@@ -1003,8 +1050,6 @@ impl MacWindow {
                         let _: () = msg_send![native_window, setTabbingIdentifier:nil];
                     }
                 }
-                // `AnchoredPopup` is rejected in `MacPlatform::open_window`, grouped here only
-                // for exhaustiveness.
                 WindowKind::PopUp | WindowKind::AnchoredPopup(_) => {
                     // Use a tracking area to allow receiving MouseMoved events even when
                     // the window or application aren't active, which is often the case
@@ -1077,17 +1122,26 @@ impl MacWindow {
                 }
             }
 
+            if let (Some(parent), WindowKind::AnchoredPopup(options)) = (popup_parent, &kind) {
+                popup::attach(&window, parent, options.clone());
+            }
             if focus && show {
                 native_window.makeKeyAndOrderFront_(nil);
             } else if show {
                 native_window.orderFront_(nil);
+            } else {
+                native_window.orderOut_(nil);
             }
 
             // Set the initial position of the window to the specified origin.
             // Although we already specified the position using `initWithContentRect_styleMask_backing_defer_screen_`,
             // the window position might be incorrect if the main screen (the screen that contains the window that has focus)
             //  is different from the primary screen.
-            NSWindow::setFrameTopLeftPoint_(native_window, window_rect.origin);
+            if let Some(rect) = popup_frame {
+                let _: () = msg_send![native_window, setFrame: rect display: YES];
+            } else {
+                NSWindow::setFrameTopLeftPoint_(native_window, window_rect.origin);
+            }
             {
                 let mut window_state = window.0.lock();
                 window_state.move_traffic_light();
@@ -1096,7 +1150,7 @@ impl MacWindow {
 
             pool.drain();
 
-            window
+            Ok(window)
         }
     }
 
@@ -1108,7 +1162,9 @@ impl MacWindow {
                 return None;
             }
 
-            if msg_send![main_window, isKindOfClass: WINDOW_CLASS] {
+            if msg_send![main_window, isKindOfClass: WINDOW_CLASS]
+                || msg_send![main_window, isKindOfClass: PANEL_CLASS]
+            {
                 let handle = get_window_state(&*main_window).lock().handle;
                 Some(handle)
             } else {
@@ -1126,7 +1182,9 @@ impl MacWindow {
             let mut window_handles = Vec::new();
             for i in 0..count {
                 let window: id = msg_send![windows, objectAtIndex:i];
-                if msg_send![window, isKindOfClass: WINDOW_CLASS] {
+                if msg_send![window, isKindOfClass: WINDOW_CLASS]
+                    || msg_send![window, isKindOfClass: PANEL_CLASS]
+                {
                     let handle = get_window_state(&*window).lock().handle;
                     window_handles.push(handle);
                 }
@@ -1166,10 +1224,16 @@ impl MacWindow {
 
 impl Drop for MacWindow {
     fn drop(&mut self) {
+        internal_drag::source_closed(&self.0);
         let mut this = self.0.lock();
         this.renderer.destroy();
         let window = this.native_window;
         let sheet_parent = this.sheet_parent.take();
+        this.popup.take();
+        unsafe {
+            release_native(this.drag_event);
+        }
+        this.drag_event = nil;
         this.display_link.take();
         unsafe {
             this.native_window.setDelegate_(nil);
@@ -1180,6 +1244,10 @@ impl Drop for MacWindow {
                 unsafe {
                     if let Some(parent) = sheet_parent {
                         let _: () = msg_send![parent, endSheet: window];
+                    }
+                    let parent: id = msg_send![window, parentWindow];
+                    if !parent.is_null() {
+                        let _: () = msg_send![parent, removeChildWindow: window];
                     }
                     window.close();
                     window.autorelease();
@@ -1221,6 +1289,7 @@ impl PlatformWindow for MacWindow {
         let this = self.0.lock();
         let window = this.native_window;
         let closed = this.closed.clone();
+        let state = Arc::downgrade(&self.0);
         this.foreground_executor
             .spawn(async move {
                 if_window_not_closed(closed, || unsafe {
@@ -1228,6 +1297,9 @@ impl PlatformWindow for MacWindow {
                         width: size.width.as_f32() as f64,
                         height: size.height.as_f32() as f64,
                     });
+                    if let Some(state) = state.upgrade() {
+                        popup::resize(&state, size);
+                    }
                 })
             })
             .detach();
@@ -1573,6 +1645,37 @@ impl PlatformWindow for MacWindow {
         true
     }
 
+    fn supports_subtree_effects(&self) -> bool {
+        self.0.lock().renderer.supports_subtree_effects()
+    }
+
+    fn supports_gpu_particles(&self) -> bool {
+        self.0.lock().renderer.supports_subtree_effects()
+    }
+
+    fn supports_gpu_fluid(&self) -> bool {
+        self.0.lock().renderer.supports_subtree_effects()
+    }
+
+    fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        self.0.lock().renderer.scene3d_support()
+    }
+
+    fn clear_scene3d_caches(&mut self) {
+        self.0.lock().renderer.clear_scene3d_caches();
+    }
+
+    fn scene3d_output_cache_stats(&self) -> Option<gpui::Scene3dOutputCacheStats> {
+        self.0.lock().renderer.scene3d_output_cache_stats()
+    }
+
+    fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.0
+            .lock()
+            .renderer
+            .set_scene3d_output_cache_budget(bytes);
+    }
+
     fn set_edited(&mut self, edited: bool) {
         unsafe {
             let window = self.0.lock().native_window;
@@ -1713,7 +1816,9 @@ impl PlatformWindow for MacWindow {
             let mut result = Vec::new();
             for i in 0..count {
                 let window: id = msg_send![windows, objectAtIndex:i];
-                if msg_send![window, isKindOfClass: WINDOW_CLASS] {
+                if msg_send![window, isKindOfClass: WINDOW_CLASS]
+                    || msg_send![window, isKindOfClass: PANEL_CLASS]
+                {
                     let handle = get_window_state(&*window).lock().handle;
                     let title: id = msg_send![window, title];
                     let title = SharedString::from(title.to_str().to_string());
@@ -1758,6 +1863,47 @@ impl PlatformWindow for MacWindow {
         self.0.as_ref().lock().toggle_tab_bar_callback = Some(callback);
     }
 
+    fn create_internal_drag_icon(
+        &self,
+        session_id: gpui::DragSessionId,
+        logical_size: Size<Pixels>,
+        scale_factor: f32,
+        hotspot: Point<Pixels>,
+        scene: &gpui::Scene,
+    ) -> anyhow::Result<()> {
+        internal_drag::create(
+            &self.0,
+            session_id,
+            logical_size,
+            scale_factor,
+            hotspot,
+            scene,
+        )
+    }
+    fn update_internal_drag_icon(
+        &self,
+        session_id: gpui::DragSessionId,
+        logical_size: Size<Pixels>,
+        scale_factor: f32,
+        hotspot: Point<Pixels>,
+        scene: &gpui::Scene,
+    ) -> anyhow::Result<()> {
+        internal_drag::update(session_id, logical_size, scale_factor, hotspot, scene)
+    }
+    fn destroy_internal_drag_icon(&self, session_id: gpui::DragSessionId) {
+        internal_drag::destroy(session_id);
+    }
+    fn start_internal_drag(
+        &self,
+        session_id: gpui::DragSessionId,
+        has_icon: bool,
+    ) -> anyhow::Result<()> {
+        internal_drag::start(&self.0, session_id, has_icon)
+    }
+    fn cancel_internal_drag(&self, session_id: gpui::DragSessionId) {
+        internal_drag::cancel(session_id);
+    }
+
     fn draw(&self, scene: &gpui::Scene) {
         let mut this = self.0.lock();
         this.renderer.draw(scene);
@@ -1768,7 +1914,7 @@ impl PlatformWindow for MacWindow {
     }
 
     fn gpu_specs(&self) -> Option<gpui::GpuSpecs> {
-        None
+        Some(self.0.lock().renderer.gpu_specs())
     }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {
@@ -2127,6 +2273,14 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent: 
         return NO;
     };
 
+    if popup::grabs(&lock)
+        && matches!(&event, PlatformInput::KeyDown(event) if event.keystroke.key == "escape")
+    {
+        drop(lock);
+        popup::dismiss(&window_state);
+        return YES;
+    }
+
     let run_callback = |event: PlatformInput| -> BOOL {
         let mut callback = window_state.as_ref().lock().event_callback.take();
         let handled: BOOL = if let Some(callback) = callback.as_mut() {
@@ -2263,6 +2417,17 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
     let mut lock = window_state.as_ref().lock();
     let window_height = lock.content_size().height;
     let event = unsafe { platform_input_from_native(native_event, Some(window_height)) };
+
+    if matches!(
+        event,
+        Some(PlatformInput::MouseDown(_) | PlatformInput::MouseMove(_) | PlatformInput::MouseUp(_))
+    ) {
+        unsafe {
+            release_native(lock.drag_event);
+            retain_native(native_event);
+        }
+        lock.drag_event = native_event;
+    }
 
     if let Some(mut event) = event {
         // AppKit unhides the cursor on the next mouse movement; mirror that here.
@@ -2422,6 +2587,7 @@ extern "C" fn window_did_change_occlusion_state(this: &Object, _: Sel, _: id) {
 extern "C" fn window_did_resize(this: &Object, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
     window_state.as_ref().lock().move_traffic_light();
+    popup::reposition_children(&window_state);
 }
 
 extern "C" fn window_will_enter_fullscreen(this: &Object, _: Sel, _: id) {
@@ -2465,6 +2631,7 @@ pub(crate) fn is_macos_version_at_least(version: NSOperatingSystemVersion) -> bo
 
 extern "C" fn window_did_move(this: &Object, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
+    popup::reposition_children(&window_state);
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.moved_callback.take() {
         drop(lock);
@@ -2604,6 +2771,23 @@ extern "C" fn window_should_close(this: &Object, _: Sel, _: id) -> BOOL {
 
 extern "C" fn close_window(this: &Object, _: Sel) {
     unsafe {
+        let children: id = msg_send![this, childWindows];
+        let children: id = if children.is_null() {
+            nil
+        } else {
+            msg_send![children, copy]
+        };
+        if !children.is_null() {
+            for ix in (0..NSArray::count(children)).rev() {
+                let child = NSArray::objectAtIndex(children, ix);
+                child.close();
+            }
+        }
+        release_native(children);
+        let parent: id = msg_send![this, parentWindow];
+        if !parent.is_null() {
+            let _: () = msg_send![parent, removeChildWindow: this];
+        }
         let close_callback = {
             let window_state = get_window_state(this);
             let mut lock = window_state.as_ref().lock();
@@ -2929,6 +3113,15 @@ fn screen_point_to_gpui_point(this: &Object, position: NSPoint) -> Point<Pixels>
 extern "C" fn dragging_entered(this: &Object, _: Sel, dragging_info: id) -> NSDragOperation {
     let window_state = unsafe { get_window_state(this) };
     let position = drag_event_position(&window_state, dragging_info);
+    if let Some(session_id) = internal_drag::session(dragging_info) {
+        return internal_drag::target(
+            &window_state,
+            gpui::InternalDragEvent::Entered {
+                session_id,
+                position,
+            },
+        );
+    }
     let paths = external_paths_from_event(dragging_info);
     if let Some(event) = paths.map(|paths| FileDropEvent::Entered { position, paths })
         && send_file_drop_event(window_state, event)
@@ -2941,6 +3134,15 @@ extern "C" fn dragging_entered(this: &Object, _: Sel, dragging_info: id) -> NSDr
 extern "C" fn dragging_updated(this: &Object, _: Sel, dragging_info: id) -> NSDragOperation {
     let window_state = unsafe { get_window_state(this) };
     let position = drag_event_position(&window_state, dragging_info);
+    if let Some(session_id) = internal_drag::session(dragging_info) {
+        return internal_drag::target(
+            &window_state,
+            gpui::InternalDragEvent::Moved {
+                session_id,
+                position,
+            },
+        );
+    }
     if send_file_drop_event(window_state, FileDropEvent::Pending { position }) {
         NSDragOperationCopy
     } else {
@@ -2948,14 +3150,21 @@ extern "C" fn dragging_updated(this: &Object, _: Sel, dragging_info: id) -> NSDr
     }
 }
 
-extern "C" fn dragging_exited(this: &Object, _: Sel, _: id) {
+extern "C" fn dragging_exited(this: &Object, _: Sel, dragging_info: id) {
     let window_state = unsafe { get_window_state(this) };
+    if let Some(session_id) = internal_drag::session(dragging_info) {
+        internal_drag::target(&window_state, gpui::InternalDragEvent::Left { session_id });
+        return;
+    }
     send_file_drop_event(window_state, FileDropEvent::Exited);
 }
 
 extern "C" fn perform_drag_operation(this: &Object, _: Sel, dragging_info: id) -> BOOL {
     let window_state = unsafe { get_window_state(this) };
     let position = drag_event_position(&window_state, dragging_info);
+    if let Some(session_id) = internal_drag::session(dragging_info) {
+        return internal_drag::dropped(&window_state, session_id, position);
+    }
     send_file_drop_event(window_state, FileDropEvent::Submit { position }).to_objc()
 }
 
@@ -2976,7 +3185,10 @@ fn external_paths_from_event(dragging_info: *mut Object) -> Option<ExternalPaths
     Some(ExternalPaths(paths))
 }
 
-extern "C" fn conclude_drag_operation(this: &Object, _: Sel, _: id) {
+extern "C" fn conclude_drag_operation(this: &Object, _: Sel, dragging_info: id) {
+    if internal_drag::session(dragging_info).is_some() {
+        return;
+    }
     let window_state = unsafe { get_window_state(this) };
     send_file_drop_event(window_state, FileDropEvent::Exited);
 }

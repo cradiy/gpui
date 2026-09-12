@@ -1,0 +1,276 @@
+use super::{
+    Geometry, RenderRegion,
+    geometry::GeometryCache,
+    images::ImageCache,
+    instances::BatchPlanCache,
+    output_cache::{Output, OutputBudget, OutputKey},
+};
+use super::{Scene3dRenderer, WgpuAtlas};
+use gpui::{Scene, Scene3dViewportCapabilities, SubtreeLayer};
+use parking_lot::Mutex;
+use std::{collections::HashMap, sync::Arc};
+
+pub(super) fn visit_scenes(scene: &Scene, mut visit: impl FnMut(&Scene)) {
+    let mut pending = vec![scene];
+    while let Some(scene) = pending.pop() {
+        visit(scene);
+        for layer in scene.subtree_layers.iter().rev() {
+            if let Some(second) = &layer.second_scene {
+                pending.push(second);
+            }
+            if layer
+                .scene3d
+                .as_ref()
+                .and_then(|frame| frame.ui_texture)
+                .is_none()
+            {
+                pending.push(&layer.scene);
+            }
+        }
+    }
+}
+
+pub(in crate::wgpu_renderer) struct ViewportRenderer {
+    renderers: [Option<Scene3dRenderer>; 2],
+    geometry: GeometryCache<Geometry>,
+    plans: BatchPlanCache,
+    images: Arc<Mutex<ImageCache>>,
+    capabilities: Scene3dViewportCapabilities,
+    format: wgpu::TextureFormat,
+    outputs: Vec<Option<Output>>,
+    output_indices: HashMap<usize, usize>,
+    surface_size: [u32; 2],
+    budget: OutputBudget,
+    context: crate::WgpuContext,
+    picking: Option<super::picking::PickRenderer>,
+}
+
+impl ViewportRenderer {
+    pub(in crate::wgpu_renderer) fn new(
+        context: crate::WgpuContext,
+        format: wgpu::TextureFormat,
+        capabilities: Scene3dViewportCapabilities,
+        budget: OutputBudget,
+    ) -> Self {
+        Self {
+            context,
+            picking: None,
+            renderers: [None, None],
+            geometry: GeometryCache::default(),
+            plans: BatchPlanCache::default(),
+            images: Arc::new(Mutex::new(ImageCache::default())),
+            capabilities,
+            format,
+            outputs: Vec::new(),
+            output_indices: HashMap::new(),
+            surface_size: [0; 2],
+            budget,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::wgpu_renderer) fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &Scene,
+        width: u32,
+        height: u32,
+        atlas: &WgpuAtlas,
+        retain_outputs: bool,
+    ) -> anyhow::Result<()> {
+        let mut needed = [false; 2];
+        let mut frames = Vec::new();
+        let mut pick_needed = false;
+        if self.surface_size != [width, height] {
+            self.outputs.clear();
+            self.surface_size = [width, height];
+        }
+        let mut previous = std::mem::take(&mut self.outputs).into_iter();
+        self.output_indices.clear();
+        visit_scenes(scene, |scene| {
+            for layer in &scene.subtree_layers {
+                if let Some(frame) = &layer.scene3d {
+                    pick_needed |= frame.pick_capture.is_some();
+                    let samples = self.capabilities.color_samples_for(frame.viewport_quality);
+                    needed[usize::from(samples == 4)] = true;
+                    let old = previous.next().flatten();
+                    let bounds = layer.composite.bounds;
+                    let region = RenderRegion::viewport(
+                        [
+                            bounds.origin.x.0,
+                            bounds.origin.y.0,
+                            bounds.size.width.0,
+                            bounds.size.height.0,
+                        ],
+                        [width, height],
+                        frame.viewport_quality.resolution_scale(),
+                        self.capabilities.max_texture_dimension,
+                    );
+                    if region.is_some() {
+                        frames.push(frame.clone());
+                    }
+                    let output = (retain_outputs && self.budget.stats().budget_bytes > 0)
+                        .then_some(region)
+                        .flatten()
+                        .and_then(|region| {
+                            let bytes = u64::from(region.output_size[0])
+                                .checked_mul(u64::from(region.output_size[1]))?
+                                .checked_mul(u64::from(
+                                    self.format.block_copy_size(None).unwrap_or(16),
+                                ))?;
+                            if bytes > self.budget.stats().budget_bytes {
+                                return None;
+                            }
+                            let key =
+                                OutputKey::new(layer, region, |tile| atlas.tile_generation(tile))?;
+                            let matching = old.filter(|output| output.key.matches(&key));
+                            Some(match matching {
+                                Some(mut output) if output.validity.reusable() => {
+                                    output.key = key;
+                                    output
+                                }
+                                Some(previous) => {
+                                    drop(previous);
+                                    Output::new(
+                                        device,
+                                        self.format,
+                                        key,
+                                        region,
+                                        self.budget.reserve(bytes),
+                                    )
+                                }
+                                None => Output::new(device, self.format, key, region, None),
+                            })
+                        });
+                    self.output_indices
+                        .insert(layer as *const _ as usize, self.outputs.len());
+                    self.outputs.push(output);
+                }
+            }
+        });
+        self.images
+            .lock()
+            .retain(frames.iter().flat_map(|frame| frame.objects.iter()));
+        for (index, samples) in [1, 4].into_iter().enumerate() {
+            if !needed[index] {
+                self.renderers[index] = None;
+                continue;
+            }
+            let renderer = self.renderers[index]
+                .get_or_insert_with(|| Scene3dRenderer::new(device, queue, self.format, samples));
+            renderer.images = self.images.clone();
+        }
+        let limit = super::instance_limit(device);
+        self.plans
+            .prepare(frames.iter().map(AsRef::as_ref), true, limit);
+        let meshes = frames
+            .iter()
+            .flat_map(|frame| {
+                self.plans
+                    .get(frame, true, limit)
+                    .order
+                    .iter()
+                    .filter(|&&index| frame.objects[index].gpu_geometry.is_none())
+                    .map(|&index| {
+                        let object = &frame.objects[index];
+                        (object.mesh.clone(), object.texture_uv_sets())
+                    })
+            })
+            .collect();
+        self.geometry.prepare_shared(
+            meshes,
+            self.renderers
+                .iter_mut()
+                .flatten()
+                .map(|renderer| &mut renderer.geometry),
+            |previous, mesh, uv_sets| Geometry::prepare(device, previous, mesh, uv_sets),
+        );
+        for renderer in self.renderers.iter_mut().flatten() {
+            renderer.plans.reuse_from(&self.plans);
+            renderer.prepare(device, queue, scene, width, height, self.capabilities)?;
+        }
+        if pick_needed || self.picking.is_some() {
+            self.picking
+                .get_or_insert_with(|| super::picking::PickRenderer::new(self.context.clone()))
+                .prepare(scene, [width, height], self.capabilities)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::wgpu_renderer) fn commit_outputs(&self, submitted: bool) {
+        if let Some(picking) = &self.picking {
+            picking.commit(submitted);
+        }
+        for renderer in self.renderers.iter().flatten() {
+            renderer.commit_uploads(submitted);
+        }
+        for output in self.outputs.iter().flatten() {
+            output.validity.commit(submitted);
+        }
+    }
+
+    pub(in crate::wgpu_renderer) fn retain_external_uploads(&self) {
+        if let Some(picking) = &self.picking {
+            picking.retain_external_uploads();
+        }
+        for renderer in self.renderers.iter().flatten() {
+            renderer.retain_external_uploads();
+        }
+    }
+
+    pub(in crate::wgpu_renderer) fn invalidate_outputs(&mut self) {
+        self.outputs.clear();
+        self.output_indices.clear();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::wgpu_renderer) fn encode(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: &WgpuAtlas,
+        layer: &SubtreeLayer,
+        source: &wgpu::TextureView,
+        destination: &wgpu::Texture,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        if let Some(picking) = &self.picking {
+            picking.encode(layer, atlas, source, encoder);
+        }
+        let output = self
+            .output_indices
+            .get(&(layer as *const _ as usize))
+            .and_then(|index| self.outputs[*index].as_ref())
+            .filter(|output| output.texture.is_some());
+        let view = destination.create_view(&Default::default());
+        if let Some(output) = output.filter(|output| output.validity.reusable()) {
+            drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("scene3d_restore_output"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            }));
+            output.copy(destination, encoder, true);
+            return;
+        }
+        let samples = self
+            .capabilities
+            .color_samples_for(layer.scene3d.as_ref().unwrap().viewport_quality);
+        self.renderers[usize::from(samples == 4)]
+            .as_ref()
+            .unwrap()
+            .encode(device, queue, atlas, layer, source, &view, encoder);
+        if let Some(output) = output {
+            output.copy(destination, encoder, false);
+            output.validity.encoded();
+        }
+    }
+}

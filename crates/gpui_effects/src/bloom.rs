@@ -55,6 +55,7 @@ impl EffectStage {
                 ],
             )
             .uniform_pixels(1, [radius, px(0.), px(0.), px(0.)])
+            .pointer_transform(gpui::PointerTransform::identity())
             .capture_padding(radius + px(downsample as f32))
             .enabled(radius > px(0.) && intensity > 0.);
         stage.bloom = Some(SubtreeBloomPass {

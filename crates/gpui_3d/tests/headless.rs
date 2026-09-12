@@ -1,0 +1,1571 @@
+#![cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+
+use gpui::rgb;
+use gpui_3d::{Camera, HeadlessRenderer, Material, Mesh, Node, Scene3dOutputConfig, SceneGraph};
+
+#[path = "headless/picking.rs"]
+mod picking;
+
+#[path = "headless/labels.rs"]
+mod labels;
+
+#[path = "headless/submissions.rs"]
+mod submissions;
+
+#[path = "headless/environment.rs"]
+mod environment;
+
+#[path = "headless/shadow_material.rs"]
+mod shadow_material;
+
+#[path = "headless/transparency.rs"]
+mod transparency;
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn target_budget_rejects_before_images_and_preserves_retained_outputs() -> anyhow::Result<()> {
+    use gpui_3d::{Object, ResolvedTexture, Scene, TextureState};
+    let mut renderer = HeadlessRenderer::new()?;
+    let scene = Scene::new().object(Object::new(Mesh::cube(), Material::color(rgb(0x80a0c0))));
+    let config = Scene3dOutputConfig {
+        size: [17, 13],
+        channels: renderer.capabilities().channels(),
+        color_samples: 1,
+    };
+    let memory = config.target_memory(None)?;
+    let prepared = scene.prepare(17. / 13., None, |_| {
+        Ok(TextureState::Ready(ResolvedTexture::None))
+    })?;
+    let mut direct = gpui_wgpu::WgpuScene3dRenderer::new(renderer.context().clone())?;
+    direct.set_target_byte_limit(Some(memory.total_bytes - 1));
+    assert!(direct.render(prepared.frame(), config).is_err());
+    assert!(direct.validate_target_memory(config, None).is_err());
+    direct.set_target_byte_limit(Some(memory.total_bytes));
+    assert_eq!(direct.validate_target_memory(config, None)?, memory);
+    let accepted = direct.render(prepared.frame(), config)?;
+    assert_eq!(accepted.target_memory(), memory);
+    direct.clear_caches();
+    assert_eq!(direct.target_byte_limit(), Some(memory.total_bytes));
+    drop(direct);
+    assert_eq!(renderer.target_byte_limit(), None);
+    renderer.set_target_byte_limit(Some(memory.total_bytes));
+    let original = renderer.render(&scene, config)?;
+    assert_eq!(original.gpu().target_memory(), memory);
+    let outputs = [
+        original.gpu().color(),
+        original.gpu().linear_color(),
+        original.gpu().object_ids(),
+        original.gpu().linear_depth(),
+        original.gpu().world_normals(),
+    ];
+    let actual: u64 = outputs
+        .into_iter()
+        .flatten()
+        .map(|texture| {
+            u64::from(texture.width())
+                * u64::from(texture.height())
+                * u64::from(texture.format().block_copy_size(None).unwrap())
+        })
+        .sum();
+    assert_eq!(memory.output_bytes, actual);
+    let pending = original.readback()?;
+    renderer.set_target_byte_limit(Some(memory.total_bytes - 1));
+    assert!(renderer.render(&scene, config).is_err());
+    renderer.set_target_byte_limit(Some(0));
+    let unresolved = Scene::new().object(Object::new(
+        Mesh::plane(),
+        Material::image("unresolved.png"),
+    ));
+    let error = renderer
+        .render(&unresolved, config)
+        .err()
+        .expect("over-budget request accepted");
+    assert!(error.to_string().contains("target request"));
+    renderer.clear_caches();
+    assert_eq!(renderer.target_byte_limit(), Some(0));
+    renderer.set_target_byte_limit(None);
+    let error = renderer
+        .render(&unresolved, config)
+        .err()
+        .expect("unresolved image accepted");
+    assert!(format!("{error:#}").contains("decoded pixels"));
+    let later = renderer.render(
+        &scene,
+        Scene3dOutputConfig {
+            size: [34, 26],
+            ..config
+        },
+    )?;
+    assert_eq!(
+        later.gpu().target_memory().total_bytes,
+        memory.total_bytes * 4
+    );
+    drop(renderer);
+    let mut pending = pending;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Some(read) = pending.try_read()? {
+            assert_eq!(read.pixels.size, config.size);
+            assert!(read.pixels.object_ids.as_ref().unwrap().contains(&1));
+            break;
+        }
+        anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn cache_release_preserves_frames_readbacks_and_image_reconstruction() -> anyhow::Result<()> {
+    use gpui_3d::{
+        FrameReadback, Object, Projection, ReadFrame, Scene, Scene3dChannels, TextureMipFilter,
+        TextureSampling,
+    };
+
+    fn read(mut pending: FrameReadback) -> anyhow::Result<ReadFrame> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(result) = pending.try_read()? {
+                return Ok(result);
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_pixel(5, 3, image::Rgba([128, 128, 128, 255])),
+    )]));
+    let camera = Camera {
+        projection: Projection::Orthographic { vertical_size: 3. },
+        ..Default::default()
+    };
+    let scene = Scene::new().camera(camera).object(
+        Object::new(
+            Mesh::plane(),
+            Material::image(image)
+                .unlit(true)
+                .image_sampling(TextureSampling {
+                    mip_filter: TextureMipFilter::Linear,
+                    ..Default::default()
+                }),
+        )
+        .id("image"),
+    );
+    let config = Scene3dOutputConfig {
+        size: [65, 65],
+        channels: Scene3dChannels::all(),
+        color_samples: 1,
+    };
+    let mut renderer = HeadlessRenderer::new()?;
+    renderer.clear_caches();
+    let original = renderer.render(&scene, config)?;
+    let pending = original.readback()?;
+    renderer.clear_caches();
+    renderer.clear_caches();
+    let rebuilt = renderer.render(&scene, config)?;
+    assert!(rebuilt.readback().is_err());
+
+    let resized_camera = Camera {
+        eye: [0., 0., 8.],
+        lens_shift: [0.1, 0.],
+        ..camera
+    };
+    let resized_scene = Scene::new()
+        .camera(resized_camera)
+        .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff)).unlit(true)).id("solid"));
+    let resized = renderer.render(
+        &resized_scene,
+        Scene3dOutputConfig {
+            size: [33, 33],
+            ..config
+        },
+    )?;
+    renderer.clear_caches();
+    drop(renderer);
+
+    assert_eq!(original.camera(), camera);
+    assert_eq!(resized.camera(), resized_camera);
+    let first = read(pending)?;
+    let second = read(rebuilt.readback()?)?;
+    assert_eq!(first.camera(), camera);
+    assert_eq!(second.camera(), camera);
+    let first_world = first.world_position_at(32, 32)?.unwrap();
+    assert!(first_world.into_iter().all(|value| value.abs() < 0.001));
+    assert_eq!(first.pixels.size, [65, 65]);
+    assert_eq!(first.pixels.rgba, second.pixels.rgba);
+    assert_eq!(first.pixels.linear_rgba, second.pixels.linear_rgba);
+    assert_eq!(first.pixels.object_ids, second.pixels.object_ids);
+    assert_eq!(first.pixels.linear_depth, second.pixels.linear_depth);
+    assert_eq!(first.pixels.world_normals, second.pixels.world_normals);
+    assert_eq!(first.object_at(32, 32).unwrap().id, Some("image".into()));
+    let offset = (32 * 65 + 32) * 4;
+    let color = &first.pixels.rgba.as_ref().unwrap()[offset..offset + 4];
+    assert!(color[..3].iter().all(|&value| value.abs_diff(128) <= 1));
+    assert_eq!(color[3], 255);
+
+    let third = read(resized.readback()?)?;
+    assert_eq!(third.camera(), resized_camera);
+    for (actual, expected) in third
+        .world_position_at(16, 16)?
+        .unwrap()
+        .into_iter()
+        .zip([0.15, 0., 0.])
+    {
+        assert!((actual - expected).abs() < 0.001);
+    }
+    assert_eq!(third.pixels.size, [33, 33]);
+    assert_eq!(third.object_at(16, 16).unwrap().id, Some("solid".into()));
+    let offset = (16 * 33 + 16) * 4;
+    assert_eq!(
+        &third.pixels.rgba.as_ref().unwrap()[offset..offset + 4],
+        &[255; 4]
+    );
+    let retained = read(original.readback()?)?;
+    assert_eq!(retained.camera(), camera);
+    assert_eq!(retained.world_position_at(32, 32)?, Some(first_world));
+    assert_eq!(first.pixels.rgba, retained.pixels.rgba);
+    assert_eq!(first.pixels.object_ids, retained.pixels.object_ids);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn specular_ibl_resolves_cube_mips_brdf_energy_and_geometry_independence() -> anyhow::Result<()> {
+    use gpui_3d::{
+        Light, Object, PbrMaterial, Projection, Scene, Scene3dChannels, SpecularEnvironment,
+        SpecularEnvironmentMap,
+    };
+    let levels = (0..5)
+        .map(|level| {
+            let edge = 16 >> level;
+            (0..6)
+                .flat_map(|face| {
+                    let color = if face == 4 {
+                        match level {
+                            0 => [4., 0., 0.],
+                            1 => [0., 2., 0.],
+                            _ => [0., 0., 3.],
+                        }
+                    } else {
+                        [0., 1., 0.]
+                    };
+                    vec![color; edge * edge]
+                })
+                .collect()
+        })
+        .collect();
+    let environment = SpecularEnvironment::from_prefiltered(
+        SpecularEnvironmentMap::from_prefiltered(16, levels)?,
+    );
+    let mut renderer = HeadlessRenderer::new()?;
+    let mut outputs = Vec::new();
+    for (enabled, roughness, rotation, intensity, unlit, pbr) in [
+        (true, 0., 0., 1., false, true),
+        (true, 1., 0., 1., false, true),
+        (true, 0., std::f32::consts::FRAC_PI_2, 1., false, true),
+        (true, 0., 0., 0.5, false, true),
+        (false, 0., 0., 1., false, true),
+        (true, 0., 0., 1., true, true),
+        (true, 0., 0., 1., false, false),
+    ] {
+        let mut material = Material::color(rgb(0xffffff)).unlit(unlit);
+        if pbr {
+            material = material.pbr(PbrMaterial {
+                metallic: 1.,
+                roughness,
+                ..Default::default()
+            });
+        }
+        let scene = Scene::new()
+            .camera(Camera {
+                projection: Projection::Orthographic { vertical_size: 3. },
+                ..Default::default()
+            })
+            .light(Light {
+                ambient: 0.,
+                ..Default::default()
+            })
+            .lights([])
+            .specular_environment(enabled.then(|| {
+                environment
+                    .clone()
+                    .rotation_y(rotation)
+                    .intensity(intensity)
+            }))
+            .object(Object::new(Mesh::plane(), material));
+        let frame = renderer.render(
+            &scene,
+            Scene3dOutputConfig {
+                size: [65, 65],
+                channels: Scene3dChannels::all(),
+                color_samples: 1,
+            },
+        )?;
+        let mut pending = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(result) = pending.try_read()? {
+                outputs.push(result.pixels);
+                break;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    let expected = [
+        [3.28, 0.36, 0.],
+        [0., 0., 3. * (1. - std::f32::consts::LN_2)],
+        [0., 1., 0.],
+        [1.64, 0.18, 0.],
+        [0.; 3],
+        [1.; 3],
+        [0.; 3],
+    ];
+    for (pixels, expected) in outputs.iter().zip(expected) {
+        assert_eq!(pixels.object_ids, outputs[0].object_ids);
+        assert_eq!(pixels.linear_depth, outputs[0].linear_depth);
+        assert_eq!(pixels.world_normals, outputs[0].world_normals);
+        let hdr = pixels.linear_rgba.as_ref().unwrap();
+        assert_eq!(hdr[0], [0.; 4]);
+        for (actual, expected) in hdr[32 * 65 + 32][..3].iter().zip(expected) {
+            assert!((actual - expected).abs() < 0.025, "{actual} != {expected}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn environment_background_composes_in_linear_color_without_geometry_coverage() -> anyhow::Result<()>
+{
+    use gpui_3d::{
+        AlphaMode, EnvironmentBackground, EnvironmentMap, Object, Projection, Scene,
+        Scene3dChannels,
+    };
+    let mut renderer = HeadlessRenderer::new()?;
+    let map = EnvironmentMap::from_equirectangular(
+        [4, 1],
+        vec![[4., 0., 0.], [0., 2., 0.], [0., 0., 3.], [1.; 3]],
+    )?;
+    let scene = Scene::new()
+        .camera(Camera {
+            eye: [3., 0., 3.],
+            target: [0.; 3],
+            projection: Projection::Orthographic { vertical_size: 3. },
+            ..Default::default()
+        })
+        .object(
+            Object::new(
+                Mesh::plane(),
+                Material::color(gpui::Hsla {
+                    h: 2. / 3.,
+                    s: 1.,
+                    l: 0.5,
+                    a: 0.5,
+                })
+                .unlit(true)
+                .alpha_mode(AlphaMode::Blend),
+            )
+            .rotation([0., std::f32::consts::FRAC_PI_4, 0.]),
+        );
+    for color_samples in [1, 4] {
+        let mut outputs = Vec::new();
+        for (visible, intensity, rotation) in [
+            (false, 1., 0.),
+            (true, 1., 0.),
+            (true, 1., std::f32::consts::FRAC_PI_2),
+            (true, 0., 0.),
+            (true, 2., 0.),
+        ] {
+            let scene = scene.clone().background(visible.then(|| {
+                EnvironmentBackground::new(map.clone())
+                    .intensity(intensity)
+                    .rotation_y(rotation)
+            }));
+            let frame = renderer.render(
+                &scene,
+                Scene3dOutputConfig {
+                    size: [65, 65],
+                    channels: Scene3dChannels::all(),
+                    color_samples,
+                },
+            )?;
+            let mut pending = frame.readback()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(result) = pending.try_read()? {
+                    outputs.push(result.pixels);
+                    break;
+                }
+                anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        let expected_background = [
+            [0.; 4],
+            [4., 0., 0., 1.],
+            [0., 2., 0., 1.],
+            [0., 0., 0., 1.],
+            [8., 0., 0., 1.],
+        ];
+        for (output, expected) in outputs.iter().zip(expected_background) {
+            assert_eq!(output.object_ids, outputs[0].object_ids);
+            assert_eq!(output.linear_depth, outputs[0].linear_depth);
+            assert_eq!(output.world_normals, outputs[0].world_normals);
+            let hdr = output.linear_rgba.as_ref().unwrap();
+            for (actual, expected) in hdr[0].iter().zip(expected) {
+                assert!((actual - expected).abs() < 0.01);
+            }
+            let center = hdr[32 * 65 + 32];
+            let composed = [
+                expected[0] * 0.5,
+                expected[1] * 0.5,
+                0.5 + expected[2] * 0.5,
+                0.5 + expected[3] * 0.5,
+            ];
+            for (actual, expected) in center.into_iter().zip(composed) {
+                assert!((actual - expected).abs() < 0.01);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn linear_hdr_outputs_keep_radiance_coverage_and_owned_frames() -> anyhow::Result<()> {
+    use gpui_3d::{
+        AlphaMode, ColorOutput, Light, Object, PbrMaterial, Projection, RenderedFrame, Scene,
+        Scene3dChannels, Scene3dPixels, ToneMapping,
+    };
+    fn read(frame: &RenderedFrame) -> anyhow::Result<Scene3dPixels> {
+        let mut pending = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(result) = pending.try_read()? {
+                return Ok(result.pixels);
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    let mut renderer = HeadlessRenderer::new()?;
+    let scene = Scene::new()
+        .camera(Camera {
+            projection: Projection::Orthographic { vertical_size: 3. },
+            ..Default::default()
+        })
+        .light(Light {
+            ambient: 0.,
+            ..Default::default()
+        })
+        .lights([])
+        .object(
+            Object::new(
+                Mesh::plane(),
+                Material::color(gpui::Hsla {
+                    h: 0.,
+                    s: 0.,
+                    l: 0.,
+                    a: 0.25,
+                })
+                .pbr(PbrMaterial {
+                    metallic: 0.,
+                    roughness: 0.5,
+                    emissive: [8., 2., 0.5],
+                })
+                .alpha_mode(AlphaMode::Blend),
+            )
+            .rotation([0., 0., 0.2]),
+        );
+    for color_samples in [1, 4] {
+        let config = Scene3dOutputConfig {
+            size: [65, 65],
+            channels: Scene3dChannels::COLOR | Scene3dChannels::LINEAR_COLOR,
+            color_samples,
+        };
+        let first = renderer.render(&scene, config)?;
+        let mapped = renderer.render(
+            &scene.clone().color_output(ColorOutput {
+                exposure: -2.,
+                tone_mapping: ToneMapping::Reinhard,
+            }),
+            config,
+        )?;
+        let hdr_only = renderer.render(
+            &scene,
+            Scene3dOutputConfig {
+                channels: Scene3dChannels::LINEAR_COLOR,
+                ..config
+            },
+        )?;
+        assert!(hdr_only.gpu().color().is_none());
+        assert_eq!(hdr_only.gpu().linear_color().unwrap().sample_count(), 1);
+        assert_eq!(
+            hdr_only.gpu().linear_color().unwrap().format(),
+            gpui_wgpu::wgpu::TextureFormat::Rgba16Float
+        );
+        let replacement = renderer.render(
+            &Scene::new(),
+            Scene3dOutputConfig {
+                size: [9, 7],
+                ..config
+            },
+        )?;
+        assert!(
+            read(&replacement)?
+                .linear_rgba
+                .unwrap()
+                .iter()
+                .all(|p| *p == [0.; 4])
+        );
+        let first = read(&first)?;
+        let mapped = read(&mapped)?;
+        let hdr_only = read(&hdr_only)?;
+        assert_eq!(first.linear_rgba, mapped.linear_rgba);
+        assert_eq!(first.linear_rgba, hdr_only.linear_rgba);
+        assert_ne!(first.rgba, mapped.rgba);
+        let hdr = first.linear_rgba.unwrap();
+        assert_eq!(hdr[32 * 65 + 32], [2., 0.5, 0.125, 0.25]);
+        assert_eq!(hdr[0], [0.; 4]);
+        if color_samples == 4 {
+            assert!(hdr.iter().any(|p| p[3] > 0. && p[3] < 0.25));
+        }
+        for pixel in hdr.iter().filter(|p| p[3] > 0.) {
+            for (actual, radiance) in pixel[..3].iter().zip([8., 2., 0.5]) {
+                assert!((actual - radiance * pixel[3]).abs() < 0.002);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn directional_shadows_preserve_indirect_light_geometry_channels_and_alpha_masks()
+-> anyhow::Result<()> {
+    use gpui_3d::{
+        AlphaMode, DirectionalShadow, Light, Object, PbrMaterial, Projection, PunctualLight, Scene,
+        Scene3dChannels,
+    };
+    use std::sync::Arc;
+    let mut renderer = HeadlessRenderer::new()?;
+    let hole = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 255, 255, 0])),
+    )]));
+    for pbr in [false, true] {
+        let mut receiver = Material::color(rgb(0x908070));
+        if pbr {
+            receiver = receiver.pbr(PbrMaterial {
+                metallic: 0.2,
+                roughness: 0.7,
+                emissive: [0.03, 0.01, 0.02],
+            });
+        }
+        for softness in [0., 1.5, 4.] {
+            let mut outputs = Vec::new();
+            for case in 0..9 {
+                let caster_material = if case == 6 || case == 7 {
+                    Material::image(hole.clone()).alpha_mode(if case == 6 {
+                        AlphaMode::Mask
+                    } else {
+                        AlphaMode::Opaque
+                    })
+                } else {
+                    Material::color(rgb(0xffffff))
+                        .unlit(true)
+                        .alpha_mode(if case == 5 {
+                            AlphaMode::Blend
+                        } else {
+                            AlphaMode::Opaque
+                        })
+                };
+                let scene = Scene::new()
+                    .camera(Camera {
+                        projection: Projection::Orthographic { vertical_size: 2. },
+                        ..Default::default()
+                    })
+                    .light(Light {
+                        ambient: 0.12,
+                        ..Default::default()
+                    })
+                    .lights([
+                        PunctualLight::directional([1., 0., 1.]).intensity(0.2),
+                        PunctualLight::directional([1., 0., 1.]).intensity(if case == 1 {
+                            0.
+                        } else {
+                            0.8
+                        }),
+                    ])
+                    .directional_shadow((case >= 2).then_some(DirectionalShadow {
+                        light_index: 1,
+                        resolution: 512,
+                        softness,
+                        ..DirectionalShadow::new([0.; 3], [3.; 3])
+                    }))
+                    .object(
+                        Object::new(Mesh::plane(), receiver.clone())
+                            .scale([4., 4., 1.])
+                            .receive_shadows(case != 4),
+                    )
+                    .object(
+                        Object::new(Mesh::plane(), caster_material)
+                            .position(if case == 8 {
+                                [2.5, 0., 1.5]
+                            } else {
+                                [1.5, 0., 1.5]
+                            })
+                            .scale([0.5, 0.5, 1.])
+                            .cast_shadows(case != 3),
+                    );
+                let frame = renderer.render(
+                    &scene,
+                    Scene3dOutputConfig {
+                        color_samples: 1,
+                        channels: Scene3dChannels::all(),
+                        ..Scene3dOutputConfig::new([65, 65])
+                    },
+                )?;
+                let mut read = frame.readback()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                loop {
+                    if let Some(result) = read.try_read()? {
+                        outputs.push(result.pixels);
+                        break;
+                    }
+                    anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            let pixel = 32 * 65 + 32;
+            let color =
+                |case: usize| &outputs[case].rgba.as_ref().unwrap()[pixel * 4..pixel * 4 + 4];
+            assert!(color(0)[0] > color(1)[0] + 15);
+            for case in 2..9 {
+                let reference = if case == 2 || case == 7 { 1 } else { 0 };
+                for (actual, expected) in color(case).iter().zip(color(reference)) {
+                    assert!(
+                        actual.abs_diff(*expected) <= 2,
+                        "case {case}, PBR {pbr}, softness {softness}: {actual} != {expected}"
+                    );
+                }
+                assert_eq!(outputs[0].object_ids, outputs[case].object_ids);
+                assert_eq!(outputs[0].linear_depth, outputs[case].linear_depth);
+                assert_eq!(outputs[0].world_normals, outputs[case].world_normals);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn punctual_sources_match_directional_energy_at_the_surface_center() -> anyhow::Result<()> {
+    use gpui_3d::{Light, Object, PbrMaterial, Projection, PunctualLight, Scene};
+    let mut renderer = HeadlessRenderer::new()?;
+    let point = PunctualLight::point([0., 0., 2.]).intensity(1.6);
+    let cases = [
+        (vec![], 0.),
+        (
+            vec![PunctualLight::directional([0., 0., 7.]).intensity(0.4)],
+            0.4,
+        ),
+        (vec![point], 0.4),
+        (vec![PunctualLight::point([0., 0., 4.]).intensity(1.6)], 0.1),
+        (vec![point.range(Some(2.))], 0.),
+        (vec![point.range(Some(4.))], 0.3515625),
+        (vec![PunctualLight::point([0.; 3])], 0.),
+        (
+            vec![
+                PunctualLight::spot([0., 0., 2.], [(1_f32 - 0.85 * 0.85).sqrt(), 0., -0.85])
+                    .cone_angles(0.95_f32.acos(), 0.75_f32.acos())
+                    .intensity(1.6),
+            ],
+            0.1,
+        ),
+        (
+            vec![
+                PunctualLight::point([0., 0., 0.0001])
+                    .minimum_distance(0.5)
+                    .intensity(0.1),
+            ],
+            0.4,
+        ),
+        (
+            vec![PunctualLight::spot([0., 0., 2.], [0., 0., -1.]).intensity(1.6)],
+            0.4,
+        ),
+        (
+            vec![PunctualLight::spot([0., 0., 2.], [1., 0., 0.]).intensity(1.6)],
+            0.,
+        ),
+        (
+            vec![PunctualLight::directional([0., 0., 1.]).intensity(0.05); 8],
+            0.4,
+        ),
+    ];
+    for pbr in [false, true] {
+        for (lights, expected) in &cases {
+            let mut outputs = Vec::new();
+            for explicit in [false, true] {
+                let material = Material::color(rgb(0x806040));
+                let material = if pbr {
+                    material.pbr(PbrMaterial {
+                        metallic: 0.2,
+                        roughness: 0.6,
+                        ..Default::default()
+                    })
+                } else {
+                    material
+                };
+                let mut scene = Scene::new()
+                    .camera(Camera {
+                        projection: Projection::Orthographic { vertical_size: 2. },
+                        ..Default::default()
+                    })
+                    .light(Light {
+                        direction: [0., 0., 1.],
+                        intensity: *expected,
+                        color: rgb(0xffffff),
+                        ambient: 0.,
+                    })
+                    .object(Object::new(Mesh::plane(), material));
+                if explicit {
+                    scene = scene.lights(lights.iter().copied());
+                }
+                let frame = renderer.render(
+                    &scene,
+                    Scene3dOutputConfig {
+                        color_samples: 1,
+                        ..Scene3dOutputConfig::new([33, 33])
+                    },
+                )?;
+                let mut read = frame.readback()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                loop {
+                    if let Some(result) = read.try_read()? {
+                        outputs.push(result.pixels);
+                        break;
+                    }
+                    anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+            let offset = (16 * 33 + 16) * 4;
+            let reference = &outputs[0].rgba.as_ref().unwrap()[offset..offset + 4];
+            let actual = &outputs[1].rgba.as_ref().unwrap()[offset..offset + 4];
+            assert_eq!(actual[3], 255);
+            for (actual, reference) in actual.iter().zip(reference) {
+                assert!(
+                    actual.abs_diff(*reference) <= 2,
+                    "PBR {pbr}, lights {lights:?}: {actual} != {reference}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn occlusion_attenuates_only_indirect_light_with_independent_linear_sampling() -> anyhow::Result<()>
+{
+    use gpui_3d::{
+        DiffuseEnvironment, Light, MaterialTexture, Object, PbrMaterial, Projection, Scene,
+        Scene3dChannels, TextureAddressMode, TextureSampling, UvTransform,
+    };
+    use std::sync::Arc;
+    let image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_fn(2, 1, |x, _| {
+            image::Rgba(if x == 0 {
+                [255, 255, 0, 255]
+            } else {
+                [243, 17, 128, 0]
+            })
+        }),
+    )]));
+    let map = MaterialTexture::new(image).sampling(TextureSampling {
+        transform: UvTransform::from_rows([[0., 0., 1.75], [0., 0., 0.5]])?,
+        address_u: TextureAddressMode::Repeat,
+        ..Default::default()
+    });
+    let environment = DiffuseEnvironment::from_equirectangular([1, 1], &[[0.4, 0.8, 0.2]])?;
+    let mut renderer = HeadlessRenderer::new()?;
+    for (pbr, unlit, strength) in [
+        (false, false, 1.),
+        (true, false, 0.65),
+        (true, false, 0.),
+        (true, true, 1.),
+    ] {
+        let visibility = 1. + strength * (128. / 255. - 1.);
+        let mut outputs = Vec::new();
+        for mapped in [false, true] {
+            let mut material = Material::color(rgb(0x806040));
+            if pbr {
+                material = material.pbr(PbrMaterial {
+                    metallic: 0.25,
+                    roughness: 0.6,
+                    emissive: [0.05, 0.01, 0.03],
+                });
+            }
+            if mapped {
+                material = material
+                    .occlusion_texture(map.clone())
+                    .occlusion_strength(strength);
+            }
+            let indirect = if mapped { 1. } else { visibility };
+            let scene = Scene::new()
+                .camera(Camera {
+                    projection: Projection::Orthographic { vertical_size: 2. },
+                    ..Default::default()
+                })
+                .light(Light {
+                    direction: [0.3, 0.4, 1.],
+                    intensity: 1.,
+                    ambient: 0.3 * indirect,
+                    ..Default::default()
+                })
+                .diffuse_environment(environment.intensity(indirect))
+                .object(Object::new(Mesh::plane(), material.unlit(unlit)).id("surface"));
+            let frame = renderer.render(
+                &scene,
+                Scene3dOutputConfig {
+                    channels: Scene3dChannels::COLOR
+                        | Scene3dChannels::OBJECT_ID
+                        | Scene3dChannels::LINEAR_DEPTH
+                        | Scene3dChannels::WORLD_NORMAL,
+                    ..Scene3dOutputConfig::new([33, 33])
+                },
+            )?;
+            let mut read = frame.readback()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(result) = read.try_read()? {
+                    outputs.push(result.pixels);
+                    break;
+                }
+                anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+        assert_eq!(outputs[0].linear_depth, outputs[1].linear_depth);
+        assert_eq!(outputs[0].world_normals, outputs[1].world_normals);
+        let expected = outputs[0].rgba.as_ref().unwrap();
+        let actual = outputs[1].rgba.as_ref().unwrap();
+        assert_eq!(actual[(16 * 33 + 16) * 4 + 3], 255);
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!(
+                actual.abs_diff(*expected) <= 2,
+                "PBR {pbr}, unlit {unlit}, strength {strength}: {actual} != {expected}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow::Result<()> {
+    use gpui::{Bounds, RenderImage, point, px, rgba, size};
+    use gpui_3d::{
+        AlphaMode, MaterialTexture, Object, PbrMaterial, Projection, Scene, Scene3dChannels,
+    };
+    use std::sync::Arc;
+    let normal_map = Arc::new(RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([220, 180, 230, 255])),
+    )]));
+    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(67.), px(49.)));
+    let mut renderer = HeadlessRenderer::new()?;
+    for projection in [
+        Projection::default(),
+        Projection::Orthographic { vertical_size: 3. },
+    ] {
+        for side in [-1., 1.] {
+            for alpha in [0., 0.25] {
+                let camera = Camera {
+                    eye: [0.3, 0.2, side * 4.],
+                    projection,
+                    ..Default::default()
+                };
+                let mut tint = rgba(0x89c6efff);
+                tint.a = alpha;
+                let scene = Scene::new()
+                    .camera(camera)
+                    .object(
+                        Object::new(
+                            Mesh::cube(),
+                            Material::color(tint)
+                                .alpha_mode(AlphaMode::Blend)
+                                .pbr(PbrMaterial::default())
+                                .normal_texture(MaterialTexture::new(normal_map.clone())),
+                        )
+                        .position([0., 0., side * 0.6])
+                        .rotation([0.1, 0.35, 0.])
+                        .scale([-1.2, 0.8, 1.]),
+                    )
+                    .object(
+                        Object::new(Mesh::plane(), Material::color(rgb(0xd4a373)))
+                            .scale([2.5, 2., 1.]),
+                    );
+                let frame = renderer.render(
+                    &scene,
+                    Scene3dOutputConfig {
+                        size: [67, 49],
+                        channels: Scene3dChannels::OBJECT_ID
+                            | Scene3dChannels::LINEAR_DEPTH
+                            | Scene3dChannels::WORLD_NORMAL,
+                        color_samples: 4,
+                    },
+                )?;
+                assert!(frame.gpu().color().is_none());
+                let mut read = frame.readback()?;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let result = loop {
+                    if let Some(result) = read.try_read()? {
+                        break result;
+                    }
+                    anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                };
+                assert_eq!(result.camera(), camera);
+                let pixels = &result.pixels;
+                let depths = pixels.linear_depth.as_ref().unwrap();
+                let normals = pixels.world_normals.as_ref().unwrap();
+                let ids = pixels.object_ids.as_ref().unwrap();
+                let mut hits = 0;
+                for y in (3..49).step_by(7) {
+                    for x in (2..67).step_by(7) {
+                        let index = y * 67 + x;
+                        let p = point(px(x as f32 + 0.5), px(y as f32 + 0.5));
+                        if let Some(hit) = scene.pick(viewport, p) {
+                            if hit.barycentric.iter().any(|v| *v < 0.005) {
+                                continue;
+                            }
+                            hits += 1;
+                            let depth = camera
+                                .world_to_screen(viewport, hit.position)?
+                                .unwrap()
+                                .depth;
+                            let mut depth_tolerance = 0_f32;
+                            // Bound interpolation error by one 8-bit raster subpixel on this face.
+                            for dx in [-1., 1.] {
+                                for dy in [-1., 1.] {
+                                    let ray = camera.screen_to_ray(
+                                        viewport,
+                                        p + point(px(dx / 256.), px(dy / 256.)),
+                                    )?;
+                                    let dot = |a: [f32; 3], b: [f32; 3]| {
+                                        a.into_iter().zip(b).map(|(a, b)| a * b).sum::<f32>()
+                                    };
+                                    let offset =
+                                        std::array::from_fn(|i| hit.position[i] - ray.origin()[i]);
+                                    let distance =
+                                        dot(offset, hit.normal) / dot(ray.direction(), hit.normal);
+                                    let sample_depth = camera
+                                        .world_to_screen(viewport, ray.at(distance))?
+                                        .unwrap()
+                                        .depth;
+                                    depth_tolerance =
+                                        depth_tolerance.max((sample_depth - depth).abs());
+                                }
+                            }
+                            depth_tolerance += 1e-5;
+                            assert!(
+                                (depths[index] - depth).abs() <= depth_tolerance,
+                                "depth at ({x}, {y}), {projection:?}, side {side}, alpha {alpha}: {} != {depth}, tolerance {depth_tolerance}",
+                                depths[index],
+                            );
+                            let world = result.world_position_at(x as u32, y as u32)?.unwrap();
+                            let start =
+                                camera.screen_to_world(viewport, p, depth - depth_tolerance)?;
+                            let end =
+                                camera.screen_to_world(viewport, p, depth + depth_tolerance)?;
+                            for i in 0..3 {
+                                assert!(world[i] >= start[i].min(end[i]) - 1e-5);
+                                assert!(world[i] <= start[i].max(end[i]) + 1e-5);
+                            }
+                            assert_eq!(ids[index], hit.object_index as u32 + 1);
+                            assert_eq!(normals[index][3], 1.);
+                            for (actual, expected) in normals[index][..3].iter().zip(hit.normal) {
+                                assert!(
+                                    (actual - expected).abs() < 0.001,
+                                    "normal at ({x}, {y}), object {}, side {side}: {actual} != {expected}",
+                                    hit.object_index,
+                                );
+                            }
+                        } else {
+                            assert_eq!(result.world_position_at(x as u32, y as u32)?, None);
+                            assert_eq!(ids[index], 0);
+                            assert_eq!(depths[index], 0.);
+                            assert_eq!(normals[index], [0.; 4]);
+                        }
+                    }
+                }
+                assert!(hits > 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn normal_maps_match_vertex_normals_across_reflections_and_back_faces() -> anyhow::Result<()> {
+    use gpui_3d::{Light, MaterialTexture, Object, PbrMaterial, Projection, Scene};
+    use std::sync::Arc;
+    let image = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([230, 153, 204, 0])),
+    )]));
+    let material = Material::color(rgb(0x6897ab)).pbr(PbrMaterial {
+        metallic: 0.3,
+        roughness: 0.6,
+        ..Default::default()
+    });
+    let mut renderer = HeadlessRenderer::new()?;
+    for (scale, side) in [
+        ([1., 1., 1.], 1.),
+        ([-1., 1., 1.], 1.),
+        ([1., 1., 1.], -1.),
+        ([-1.5, 0.6, 2.], -1.),
+    ] {
+        let plane = Mesh::plane();
+        let mut vertices = plane.vertices().to_vec();
+        for vertex in &mut vertices {
+            vertex.normal = [
+                (204. / 255. * 2. - 1.) * f32::abs(scale[0]),
+                -(153. / 255. * 2. - 1.) * f32::abs(scale[1]),
+                (230. / 255. * 2. - 1.) * f32::abs(scale[2]),
+            ];
+        }
+        let reference = Mesh::new(vertices, plane.indices().to_vec());
+        let mut outputs = Vec::new();
+        for (mesh, material) in [
+            (reference, material.clone()),
+            (
+                plane,
+                material
+                    .clone()
+                    .normal_texture(MaterialTexture::new(image.clone())),
+            ),
+        ] {
+            let scene = Scene::new()
+                .camera(Camera {
+                    eye: [0., 0., side * 3.],
+                    projection: Projection::Orthographic { vertical_size: 2. },
+                    ..Default::default()
+                })
+                .light(Light {
+                    direction: [-0.4, 0.5, side],
+                    color: rgb(0xffffff),
+                    intensity: 1.,
+                    ambient: 0.1,
+                })
+                .object(Object::new(mesh, material).scale(scale).id("surface"));
+            let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+            let mut read = frame.readback()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                if let Some(result) = read.try_read()? {
+                    outputs.push(result.pixels);
+                    break;
+                }
+                anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+        let reference = outputs[0].rgba.as_ref().unwrap();
+        let mapped = outputs[1].rgba.as_ref().unwrap();
+        assert_eq!(mapped[(32 * 65 + 32) * 4 + 3], 255);
+        for (actual, expected) in mapped.iter().zip(reference) {
+            assert!(
+                actual.abs_diff(*expected) <= 2,
+                "{actual} != {expected}; scale {scale:?}, side {side}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn material_maps_match_factors_with_independent_sampling_and_zero_alpha() -> anyhow::Result<()> {
+    use gpui_3d::{
+        Light, MaterialTexture, Object, PbrMaterial, Projection, Scene, TextureSampling,
+        UvTransform,
+    };
+    use std::sync::Arc;
+    let image = |pixels: [[u8; 4]; 2]| {
+        Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::from_fn(2, 1, |x, _| {
+                let [r, g, b, a] = pixels[x as usize];
+                image::Rgba([b, g, r, a])
+            }),
+        )]))
+    };
+    let sampling = |u| TextureSampling {
+        transform: UvTransform::from_rows([[0., 0., u], [0., 0., 0.5]]).unwrap(),
+        ..Default::default()
+    };
+    let factors = PbrMaterial {
+        metallic: 0.8,
+        roughness: 0.9,
+        emissive: [0.4, 0.6, 0.8],
+    };
+    let mapped = Material::color(rgb(0x805030))
+        .pbr(factors)
+        .metallic_roughness_texture(
+            MaterialTexture::new(image([[255; 4], [17, 128, 64, 0]])).sampling(sampling(0.75)),
+        )
+        .emissive_texture(
+            MaterialTexture::new(image([[0; 4], [128, 200, 64, 0]])).sampling(sampling(0.5)),
+        );
+    let linear = |byte: u8| ((f32::from(byte) / 255. + 0.055) / 1.055).powf(2.4);
+    let expected = Material::color(rgb(0x805030)).pbr(PbrMaterial {
+        metallic: factors.metallic * 64. / 255.,
+        roughness: factors.roughness * 128. / 255.,
+        emissive: std::array::from_fn(|i| factors.emissive[i] * 0.5 * linear([128, 200, 64][i])),
+    });
+    let mut renderer = HeadlessRenderer::new()?;
+    let mut outputs = Vec::new();
+    for material in [expected, mapped] {
+        let scene = Scene::new()
+            .camera(Camera {
+                projection: Projection::Orthographic { vertical_size: 2. },
+                ..Default::default()
+            })
+            .light(Light {
+                direction: [0., 0., 1.],
+                color: rgb(0xffffff),
+                intensity: 1.,
+                ambient: 0.2,
+            })
+            .object(Object::new(Mesh::plane(), material).id("surface"));
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Some(result) = read.try_read()? {
+                outputs.push(result.pixels);
+                break;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    assert_eq!(outputs[0].object_ids, outputs[1].object_ids);
+    let expected = outputs[0].rgba.as_ref().unwrap();
+    let actual = outputs[1].rgba.as_ref().unwrap();
+    assert_eq!(actual[(32 * 65 + 32) * 4 + 3], 255);
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!(actual.abs_diff(*expected) <= 2, "{actual} != {expected}");
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn pbr_reflection_and_emission_preserve_object_ids() -> anyhow::Result<()> {
+    use gpui_3d::{Light, Object, PbrMaterial, Projection, Scene};
+    let mut renderer = HeadlessRenderer::new()?;
+    let mut reference_ids = None;
+    for (metallic, roughness, emissive, unlit, expected) in [
+        (0., 0.5, [0.; 3], false, [64_u8; 3]),
+        (0., 1., [0.; 3], false, [10; 3]),
+        (1., 0.5, [0.; 3], false, [0; 3]),
+        (1., 0.5, [0., 0., 0.25], false, [0, 0, 137]),
+        (1., 0.5, [0., 0., 0.25], true, [0; 3]),
+    ] {
+        let scene = Scene::new()
+            .camera(Camera {
+                projection: Projection::Orthographic { vertical_size: 2. },
+                ..Default::default()
+            })
+            .light(Light {
+                direction: [0., 0., 1.],
+                color: rgb(0xffffff),
+                intensity: 1.,
+                ambient: 0.,
+            })
+            .object(
+                Object::new(
+                    Mesh::plane(),
+                    Material::color(rgb(0))
+                        .pbr(PbrMaterial {
+                            metallic,
+                            roughness,
+                            emissive,
+                        })
+                        .unlit(unlit),
+                )
+                .id("surface"),
+            );
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(result) = read.try_read()? {
+                break result.pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let rgba = pixels.rgba.unwrap();
+        let offset = (32 * 65 + 32) * 4;
+        for (actual, expected) in rgba[offset..offset + 3].iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 2, "{actual} != {expected}");
+        }
+        assert_eq!(rgba[offset + 3], 255);
+        assert_eq!(&rgba[..4], &[0; 4]);
+        if let Some(previous) = &reference_ids {
+            assert_eq!(previous, &pixels.object_ids);
+        }
+        reference_ids = Some(pixels.object_ids);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn clipped_highlights_preserve_msaa_edges_against_opaque_surfaces() -> anyhow::Result<()> {
+    use gpui_3d::{Light, Object, Projection, Scene};
+    let mut renderer = HeadlessRenderer::new()?;
+    let mut reference = None;
+    for ambient in [1., 16.] {
+        let scene = Scene::new()
+            .camera(Camera {
+                projection: Projection::Orthographic { vertical_size: 2. },
+                ..Default::default()
+            })
+            .light(Light {
+                ambient,
+                intensity: 0.,
+                ..Default::default()
+            })
+            .object(
+                Object::new(Mesh::plane(), Material::color(rgb(0)))
+                    .position([0., 0., -0.1])
+                    .scale([4., 4., 1.]),
+            )
+            .object(
+                Object::new(Mesh::plane(), Material::color(rgb(0xffffff)))
+                    .rotation([0., 0., 0.37])
+                    .scale([1.35, 0.85, 1.]),
+            );
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(result) = read.try_read()? {
+                break result.pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let rgba = pixels.rgba.as_ref().unwrap();
+        assert!(rgba.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(
+            rgba.chunks_exact(4)
+                .any(|pixel| pixel[0] > 0 && pixel[0] < 255)
+        );
+        if let Some((color, ids)) = &reference {
+            assert_eq!(rgba, color);
+            assert_eq!(&pixels.object_ids, ids);
+        }
+        reference = Some((pixels.rgba.unwrap(), pixels.object_ids));
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn linear_shading_and_display_mapping_preserve_coverage_and_ids() -> anyhow::Result<()> {
+    use gpui_3d::{
+        ColorOutput, Light, Object, Scene, TextureColorSpace, TextureSampling, ToneMapping,
+        UvTransform,
+    };
+    let mut renderer = HeadlessRenderer::new()?;
+    let image = |bytes| {
+        std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::from_raw(2, 1, bytes).unwrap(),
+        )]))
+    };
+    let gray = image(vec![128, 128, 128, 255, 128, 128, 128, 255]);
+    let edges = image(vec![0, 0, 0, 255, 255, 255, 255, 255]);
+    let midpoint = TextureSampling {
+        transform: UvTransform::from_rows([[0., 0., 0.5], [0., 0., 0.5]])?,
+        ..Default::default()
+    };
+    let white = Material::color(rgb(0xffffff));
+    let mut ids = None;
+    let mut coverage = None;
+    for (material, ambient, exposure, tone_mapping, expected) in [
+        (white.clone(), 0.25, 0., ToneMapping::None, 137_u8),
+        (white.clone(), 4., -2., ToneMapping::None, 255),
+        (white.clone(), 4., 0., ToneMapping::Reinhard, 231),
+        (white, 4., -2., ToneMapping::Reinhard, 188),
+        (
+            Material::image(gray.clone()).unlit(true),
+            0.,
+            0.,
+            ToneMapping::None,
+            128,
+        ),
+        (
+            Material::image(gray)
+                .unlit(true)
+                .image_color_space(TextureColorSpace::Linear),
+            0.,
+            0.,
+            ToneMapping::None,
+            188,
+        ),
+        (
+            Material::image(edges).unlit(true).image_sampling(midpoint),
+            0.,
+            0.,
+            ToneMapping::None,
+            188,
+        ),
+    ] {
+        let scene = Scene::new()
+            .light(Light {
+                ambient,
+                intensity: 0.,
+                ..Default::default()
+            })
+            .color_output(ColorOutput {
+                exposure,
+                tone_mapping,
+            })
+            .object(Object::new(Mesh::plane(), material).id("surface"));
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(pixels) = read.try_read()? {
+                break pixels.pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let rgba = pixels.rgba.unwrap();
+        let center = (32 * 65 + 32) * 4;
+        for value in &rgba[center..center + 3] {
+            assert!(value.abs_diff(expected) <= 1, "{value} != {expected}");
+        }
+        assert_eq!(rgba[center + 3], 255);
+        assert_eq!(&rgba[..4], &[0; 4]);
+        for pixel in rgba.chunks_exact(4) {
+            for channel in &pixel[..3] {
+                let expected = f32::from(expected) * f32::from(pixel[3]) / 255.;
+                assert!((f32::from(*channel) - expected).abs() <= 2.);
+            }
+        }
+        let alpha = rgba
+            .chunks_exact(4)
+            .map(|pixel| pixel[3])
+            .collect::<Vec<_>>();
+        if let Some(previous) = &ids {
+            assert_eq!(previous, &pixels.object_ids);
+        }
+        if let Some(previous) = &coverage {
+            assert_eq!(previous, &alpha);
+        }
+        ids = Some(pixels.object_ids);
+        coverage = Some(alpha);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn image_sampler_controls_color_and_id_cutouts() -> anyhow::Result<()> {
+    use gpui_3d::{
+        Object, Scene, TextureAddressMode as Address, TextureFilter as Filter, TextureSampling,
+        UvTransform,
+    };
+    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+        image::RgbaImage::from_raw(2, 1, vec![255, 255, 255, 0, 255, 255, 255, 255]).unwrap(),
+    )]));
+    let mut renderer = HeadlessRenderer::new()?;
+    for (address_u, filter, u, cutoff, visible) in [
+        (Address::Clamp, Filter::Linear, 0., 0.4, false),
+        (Address::Repeat, Filter::Linear, 0., 0.4, true),
+        (Address::Repeat, Filter::Nearest, -0.25, 0.9, true),
+        (Address::Mirror, Filter::Nearest, 1.25, 0.9, true),
+        (Address::Clamp, Filter::Linear, 0.625, 0.9, false),
+        (Address::Clamp, Filter::Nearest, 0.625, 0.9, true),
+    ] {
+        let scene = Scene::new().object(
+            Object::new(
+                Mesh::plane(),
+                Material::image(image.clone())
+                    .unlit(true)
+                    .alpha_cutoff(cutoff)
+                    .image_sampling(TextureSampling {
+                        transform: UvTransform::from_rows([[0., 0., u], [0., 0., 0.5]])?,
+                        address_u,
+                        filter,
+                        ..Default::default()
+                    }),
+            )
+            .id("surface"),
+        );
+        let frame = renderer.render(&scene, Scene3dOutputConfig::new([65, 65]))?;
+        let mut read = frame.readback()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let pixels = loop {
+            if let Some(pixels) = read.try_read()? {
+                break pixels;
+            }
+            anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        assert_eq!(pixels.object_at(32, 32).is_some(), visible);
+        assert_eq!(
+            pixels.pixels.rgba.as_ref().unwrap()[(32 * 65 + 32) * 4 + 3] > 0,
+            visible
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn frame_coverage_matches_occlusion_alpha_modes_and_output_resolution() -> anyhow::Result<()> {
+    use gpui::{Bounds, point, rgba, size};
+    use gpui_3d::{AlphaMode, Object, Projection, Scene, Scene3dChannels};
+
+    let mut renderer = HeadlessRenderer::new()?;
+    for extent in [16, 32] {
+        for mode in [AlphaMode::Opaque, AlphaMode::Mask, AlphaMode::Blend] {
+            let camera = Camera {
+                projection: Projection::Orthographic { vertical_size: 4. },
+                ..Default::default()
+            };
+            let scene = Scene::new()
+                .camera(camera)
+                .object(Object::new(Mesh::plane(), Material::color(rgb(0xffffff))).id("back"))
+                .object(
+                    Object::new(
+                        Mesh::plane(),
+                        Material::color(rgba(0xffffff08))
+                            .alpha_cutoff(0.5)
+                            .alpha_mode(mode),
+                    )
+                    .id("front")
+                    .position([0., 0., 1.])
+                    .scale([0.5, 0.5, 1.]),
+                )
+                .object(
+                    Object::new(Mesh::plane(), Material::color(rgb(0xffffff)))
+                        .id("hidden")
+                        .position([0., 0., -1.]),
+                );
+            let output = renderer.render(
+                &scene,
+                Scene3dOutputConfig {
+                    size: [extent, extent],
+                    channels: Scene3dChannels::OBJECT_ID,
+                    color_samples: 1,
+                },
+            )?;
+            let mut pending = output.readback()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let read = loop {
+                if let Some(read) = pending.try_read()? {
+                    break read;
+                }
+                anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            };
+            let coverage = read.coverage()?;
+            drop(read);
+            drop(output);
+            let union = u64::from(extent / 4).pow(2);
+            let front = if mode == AlphaMode::Mask {
+                0
+            } else {
+                u64::from(extent / 8).pow(2)
+            };
+            assert_eq!(
+                coverage.background_pixels(),
+                u64::from(extent).pow(2) - union
+            );
+            assert_eq!(coverage.object(1).unwrap().pixels, union - front);
+            assert_eq!(coverage.object(2).unwrap().pixels, front);
+            assert_eq!(coverage.object(3).unwrap().pixels, 0);
+            assert_eq!(
+                coverage.object(1).unwrap().bounds,
+                Some(Bounds::new(
+                    point(extent * 3 / 8, extent * 3 / 8),
+                    size(extent / 4, extent / 4)
+                ))
+            );
+            assert_eq!(
+                coverage.object(2).unwrap().bounds,
+                (front != 0).then(|| Bounds::new(
+                    point(extent * 7 / 16, extent * 7 / 16),
+                    size(extent / 8, extent / 8)
+                ))
+            );
+            assert_eq!(coverage.object(3).unwrap().bounds, None);
+            assert_eq!(coverage.object(2).unwrap().object.id, Some("front".into()));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn rendered_ids_retain_node_identity_after_graph_edits() -> anyhow::Result<()> {
+    let mut graph = SceneGraph::new();
+    let node = graph.insert(
+        None,
+        Node::new()
+            .id("panel")
+            .mesh(Mesh::plane(), Material::color(rgb(0x80c0e0)).unlit(true)),
+    )?;
+    let mut renderer = HeadlessRenderer::new()?;
+    let old = renderer.render(
+        &graph.evaluate()?.scene(Camera::default()),
+        Scene3dOutputConfig::new([65, 65]),
+    )?;
+    assert_eq!(old.object(1).unwrap().node, Some(node));
+    graph.remove_subtree(node)?;
+    let replacement = graph.insert(
+        None,
+        Node::new()
+            .id("replacement")
+            .mesh(Mesh::cube(), Material::color(rgb(0xffffff))),
+    )?;
+    let new = renderer.render(
+        &graph.evaluate()?.scene(Camera::default()),
+        Scene3dOutputConfig::new([40, 30]),
+    )?;
+    assert_eq!(new.object(1).unwrap().node, Some(replacement));
+    assert_ne!(node, replacement);
+    drop(renderer);
+    drop(graph);
+    let mut read = old.readback()?;
+    drop(old);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let pixels = loop {
+        if let Some(pixels) = read.try_read()? {
+            break pixels;
+        }
+        anyhow::ensure!(std::time::Instant::now() < deadline, "readback timed out");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    assert_eq!(pixels.object_at(32, 32).unwrap().node, Some(node));
+    assert_eq!(pixels.object_at(32, 32).unwrap().id, Some("panel".into()));
+    assert!(pixels.object_at(0, 0).is_none());
+    assert!(pixels.object_at(65, 32).is_none());
+    assert!(pixels.object(u32::MAX).is_none());
+    Ok(())
+}

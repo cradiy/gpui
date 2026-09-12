@@ -1,0 +1,56 @@
+pub(crate) type Matrix = [[f32; 4]; 4];
+pub(crate) fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| a[i] - b[i])
+}
+pub(crate) fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+pub(crate) fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+pub(crate) fn unit(v: [f32; 3]) -> [f32; 3] {
+    let n = v.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>().sqrt();
+    if n == 0. {
+        return [0.; 3];
+    }
+    v.map(|x| (f64::from(x) / n) as f32)
+}
+pub(crate) fn multiply(a: Matrix, b: Matrix) -> Matrix {
+    std::array::from_fn(|c| std::array::from_fn(|r| (0..4).map(|k| a[k][r] * b[c][k]).sum()))
+}
+pub(crate) fn transform(m: Matrix, p: [f32; 4]) -> [f32; 4] {
+    std::array::from_fn(|r| (0..4).map(|c| m[c][r] * p[c]).sum())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Camera, Transform};
+    #[test]
+    fn perspective_maps_clip_planes_and_preserves_camera_target() {
+        let camera = Camera::default();
+        let m = camera.matrix(2.);
+        let center = transform(m, [0., 0., 0., 1.]);
+        assert!(center[0].abs() < 0.00001 && center[1].abs() < 0.00001 && center[3] > 0.);
+        for (distance, depth) in [(camera.near, 0.), (camera.far, 1.)] {
+            let p = transform(m, [0., 0., camera.eye[2] - distance, 1.]);
+            assert!((p[2] / p[3] - depth).abs() < 0.0001);
+        }
+    }
+    #[test]
+    fn normal_transform_remains_orthogonal_under_nonuniform_scale() {
+        let (model, normal) = Transform {
+            rotation: [0.3, 0.6, -0.4],
+            scale: [2., 0.5, 3.],
+            ..Default::default()
+        }
+        .matrices();
+        let t = transform(model, [1., 1., 0., 0.]);
+        let n = transform(normal, [1., -1., 0., 0.]);
+        assert!((t[0] * n[0] + t[1] * n[1] + t[2] * n[2]).abs() < 0.00001);
+    }
+}

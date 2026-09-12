@@ -839,6 +839,29 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
 
+    /// Whether depth-tested mesh viewports are supported.
+    fn supports_scene3d(&self) -> bool {
+        self.scene3d_support().is_supported()
+    }
+
+    /// Current mesh viewport support and unsupported-backend diagnostics.
+    fn scene3d_support(&self) -> crate::Scene3dSupport {
+        crate::Scene3dSupport::Unsupported(crate::Scene3dUnsupportedReason::BackendUnsupported)
+    }
+
+    /// Releases mesh-rendering caches without invalidating shared 2D resources.
+    /// Unsupported backends do nothing. Does not schedule a frame.
+    fn clear_scene3d_caches(&mut self) {}
+
+    /// Mesh output-cache allocations, including nested UI captures, when supported.
+    fn scene3d_output_cache_stats(&self) -> Option<crate::Scene3dOutputCacheStats> {
+        None
+    }
+
+    /// Sets the shared mesh output-cache budget. Zero disables mesh pixel reuse.
+    /// Unsupported backends do nothing. Does not request a frame or wait for the GPU.
+    fn set_scene3d_output_cache_budget(&mut self, _bytes: u64) {}
+
     // macOS specific methods
     fn get_title(&self) -> String {
         String::new()
@@ -1282,6 +1305,11 @@ impl From<RenderImageParams> for AtlasKey {
 
 #[expect(missing_docs)]
 pub trait PlatformAtlas {
+    /// Backend-owned context for device-local resource creation. Unsupported backends return None.
+    fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        None
+    }
+
     fn get_or_insert_with<'a>(
         &self,
         key: &AtlasKey,

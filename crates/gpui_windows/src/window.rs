@@ -43,6 +43,7 @@ impl std::ops::Deref for WindowsWindow {
 }
 
 pub struct WindowsWindowState {
+    pub(crate) destroyed: Cell<bool>,
     pub origin: Cell<Point<Pixels>>,
     pub logical_size: Cell<Size<Pixels>>,
     pub min_size: Option<Size<Pixels>>,
@@ -62,7 +63,7 @@ pub struct WindowsWindowState {
     pub hovered: Cell<bool>,
     pub direct_manipulation: DirectManipulationHandler,
 
-    pub renderer: RefCell<DirectXRenderer>,
+    pub renderer: RefCell<WindowsRenderer>,
     /// Set after a GPU device-lost recovery so the next `draw_window` call is
     /// treated as a forced render. This guarantees the next frame both
     /// re-enables drawing (via `mark_drawable`) and bypasses the GPUI view
@@ -101,12 +102,15 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
     pub(crate) platform_window_handle: HWND,
     pub(crate) parent_hwnd: Option<HWND>,
+    pub(crate) popup: Option<crate::popup::WindowsPopup>,
+    pub(crate) owned_popups: RefCell<Vec<Weak<WindowsWindowInner>>>,
 }
 
 impl WindowsWindowState {
     fn new(
         hwnd: HWND,
         directx_devices: &DirectXDevices,
+        gpu_context: gpui_wgpu::GpuContext,
         window_params: &CREATESTRUCTW,
         current_cursor: Option<HCURSOR>,
         cursor_visible: Arc<AtomicBool>,
@@ -134,8 +138,13 @@ impl WindowsWindowState {
         };
         let border_offset = WindowBorderOffset::default();
         let restore_from_minimized = None;
-        let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
-            .context("Creating DirectX renderer")?;
+        let renderer = WindowsRenderer::new(
+            hwnd,
+            directx_devices,
+            disable_direct_composition,
+            gpu_context,
+        )
+        .context("Creating Windows renderer")?;
         let callbacks = Callbacks::default();
         let input_handler = None;
         let pending_surrogate = None;
@@ -151,6 +160,7 @@ impl WindowsWindowState {
             .context("initializing Direct Manipulation")?;
 
         Ok(Self {
+            destroyed: Cell::new(false),
             origin: Cell::new(origin),
             logical_size: Cell::new(logical_size),
             fullscreen_restore_bounds: Cell::new(fullscreen_restore_bounds),
@@ -243,10 +253,49 @@ impl WindowsWindowState {
 }
 
 impl WindowsWindowInner {
+    pub(crate) fn reposition_owned_popups(&self) {
+        let children: Vec<_> = self
+            .owned_popups
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        self.owned_popups
+            .borrow_mut()
+            .retain(|child| child.strong_count() > 0);
+        for child in children {
+            if child.state.destroyed.get() {
+                continue;
+            }
+            if let Some(popup) = &child.popup {
+                popup.place(child.hwnd, false).log_err();
+            }
+        }
+    }
+
+    pub(crate) fn dismiss_popup(&self) {
+        if self.state.destroyed.get() {
+            return;
+        }
+        let children: Vec<_> = self
+            .owned_popups
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        for child in children {
+            child.dismiss_popup();
+        }
+        unsafe {
+            PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)).log_err();
+        }
+    }
+
     fn new(context: &mut WindowCreateContext, hwnd: HWND, cs: &CREATESTRUCTW) -> Result<Rc<Self>> {
         let state = WindowsWindowState::new(
             hwnd,
             &context.directx_devices,
+            context.gpu_context.clone(),
             cs,
             context.current_cursor,
             context.cursor_visible.clone(),
@@ -272,6 +321,8 @@ impl WindowsWindowInner {
             platform_window_handle: context.platform_window_handle,
             system_settings: WindowsSystemSettings::new(),
             parent_hwnd: context.parent_hwnd,
+            popup: context.popup.take(),
+            owned_popups: RefCell::new(Vec::new()),
         }))
     }
 
@@ -401,8 +452,10 @@ struct WindowCreateContext {
     appearance: WindowAppearance,
     disable_direct_composition: bool,
     directx_devices: DirectXDevices,
+    gpu_context: gpui_wgpu::GpuContext,
     invalidate_devices: Arc<AtomicBool>,
     parent_hwnd: Option<HWND>,
+    popup: Option<crate::popup::WindowsPopup>,
 }
 
 impl WindowsWindow {
@@ -411,12 +464,6 @@ impl WindowsWindow {
         params: WindowParams,
         creation_info: WindowCreationInfo,
     ) -> Result<Self> {
-        // Native popups are not implemented on Windows yet. Rejecting lets callers fall back to
-        // gpui's in-window popovers.
-        if let WindowKind::AnchoredPopup(_) = params.kind {
-            return Err(popup::PopupNotSupportedError.into());
-        }
-
         let WindowCreationInfo {
             icon,
             executor,
@@ -428,8 +475,30 @@ impl WindowsWindow {
             platform_window_handle,
             disable_direct_composition,
             directx_devices,
+            gpu_context,
+            popup_parent,
             invalidate_devices,
         } = creation_info;
+        let popup = if let WindowKind::AnchoredPopup(options) = &params.kind {
+            let parent = popup_parent.as_ref().context("popup parent is missing")?;
+            if options.grab {
+                anyhow::ensure!(
+                    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+                        .iter()
+                        .any(|key| unsafe { GetKeyState(key.0 as i32) } < 0),
+                    "grabbing popups must open during a mouse press"
+                );
+            }
+            Some(crate::popup::WindowsPopup {
+                parent: parent.hwnd,
+                options: options.clone(),
+                size: Cell::new(params.bounds.size),
+            })
+        } else {
+            None
+        };
+        let popup_bounds = popup.as_ref().map(|popup| popup.bounds()).transpose()?;
+        let is_popup = popup.is_some();
         register_window_class(icon);
         let parent_hwnd = if params.kind == WindowKind::Dialog {
             let parent_window = unsafe { GetActiveWindow() };
@@ -445,11 +514,12 @@ impl WindowsWindow {
         } else {
             None
         };
-        let hide_title_bar = params
-            .titlebar
-            .as_ref()
-            .map(|titlebar| titlebar.appears_transparent)
-            .unwrap_or(true);
+        let hide_title_bar = is_popup
+            || params
+                .titlebar
+                .as_ref()
+                .map(|titlebar| titlebar.appears_transparent)
+                .unwrap_or(true);
         let window_name = HSTRING::from(
             params
                 .titlebar
@@ -459,7 +529,17 @@ impl WindowsWindow {
                 .unwrap_or(""),
         );
 
-        let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
+        let (mut dwexstyle, dwstyle) = if let Some(popup) = &popup {
+            (
+                WS_EX_TOOLWINDOW
+                    | if popup.options.grab {
+                        WINDOW_EX_STYLE(0)
+                    } else {
+                        WS_EX_NOACTIVATE
+                    },
+                WS_POPUP,
+            )
+        } else if params.kind == WindowKind::PopUp {
             // PopUp windows must remain above normal windows even when inactive.
             (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
         } else {
@@ -499,10 +579,14 @@ impl WindowsWindow {
             handle,
             hide_title_bar,
             display,
-            is_movable: params.is_movable,
-            is_resizable: params.is_resizable,
-            is_minimizable: params.is_minimizable,
-            min_size: params.window_min_size,
+            is_movable: params.is_movable && !is_popup,
+            is_resizable: params.is_resizable && !is_popup,
+            is_minimizable: params.is_minimizable && !is_popup,
+            min_size: if is_popup {
+                None
+            } else {
+                params.window_min_size
+            },
             executor,
             current_cursor,
             cursor_visible,
@@ -513,8 +597,10 @@ impl WindowsWindow {
             appearance,
             disable_direct_composition,
             directx_devices,
+            gpu_context,
             invalidate_devices,
             parent_hwnd,
+            popup,
         };
         let creation_result = unsafe {
             CreateWindowExW(
@@ -522,11 +608,14 @@ impl WindowsWindow {
                 WINDOW_CLASS_NAME,
                 &window_name,
                 dwstyle,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                parent_hwnd,
+                popup_bounds.map_or(CW_USEDEFAULT, |rect| rect.left),
+                popup_bounds.map_or(CW_USEDEFAULT, |rect| rect.top),
+                popup_bounds.map_or(CW_USEDEFAULT, |rect| (rect.right - rect.left).max(1)),
+                popup_bounds.map_or(CW_USEDEFAULT, |rect| (rect.bottom - rect.top).max(1)),
+                popup_parent
+                    .as_ref()
+                    .map(|parent| parent.hwnd)
+                    .or(parent_hwnd),
                 None,
                 Some(hinstance.into()),
                 Some(&context as *const _ as *const _),
@@ -543,6 +632,16 @@ impl WindowsWindow {
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
         this.state.border_offset.update(hwnd)?;
+        if let Some(popup) = &this.popup {
+            popup_parent
+                .as_ref()
+                .unwrap()
+                .owned_popups
+                .borrow_mut()
+                .push(Rc::downgrade(&this));
+            popup.place(hwnd, params.show)?;
+            return Ok(Self(this));
+        }
         let placement = retrieve_window_placement(
             hwnd,
             display,
@@ -587,6 +686,10 @@ impl Drop for WindowsWindow {
             .executor
             .spawn(async move {
                 let handle = this.hwnd;
+                if this.state.destroyed.get() {
+                    return;
+                }
+                this.state.renderer.borrow_mut().destroy();
                 unsafe {
                     RevokeDragDrop(handle).log_err();
                     DestroyWindow(handle).log_err();
@@ -618,6 +721,24 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn resize(&mut self, size: Size<Pixels>) {
+        if let Some(popup) = &self.0.popup {
+            popup.size.set(size);
+            let this = self.0.clone();
+            self.0
+                .executor
+                .spawn(async move {
+                    if this.state.destroyed.get() {
+                        return;
+                    }
+                    this.popup
+                        .as_ref()
+                        .unwrap()
+                        .place(this.hwnd, false)
+                        .log_err();
+                })
+                .detach();
+            return;
+        }
         let hwnd = self.0.hwnd;
         let bounds = gpui::bounds(self.bounds().origin, size).to_device_pixels(self.scale_factor());
         let rect = calculate_window_rect(bounds, &self.state.border_offset);
@@ -768,6 +889,23 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn activate(&self) {
+        if self.0.popup.is_some() {
+            let this = self.0.clone();
+            self.0
+                .executor
+                .spawn(async move {
+                    if this.state.destroyed.get() {
+                        return;
+                    }
+                    this.popup
+                        .as_ref()
+                        .unwrap()
+                        .place(this.hwnd, true)
+                        .log_err();
+                })
+                .detach();
+            return;
+        }
         let hwnd = self.0.hwnd;
         let this = self.0.clone();
         self.0
@@ -834,11 +972,62 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
-        true
+        self.state
+            .renderer
+            .borrow()
+            .wgpu()
+            .is_none_or(|renderer| renderer.supports_dual_source_blending())
     }
 
     fn supports_backdrop_blur(&self) -> bool {
-        true
+        self.state
+            .renderer
+            .borrow()
+            .wgpu()
+            .is_none_or(|renderer| renderer.supports_backdrop_blur())
+    }
+
+    fn supports_subtree_effects(&self) -> bool {
+        self.state
+            .renderer
+            .borrow()
+            .wgpu()
+            .is_some_and(|renderer| !renderer.device_lost())
+    }
+
+    fn scene3d_support(&self) -> Scene3dSupport {
+        self.state.renderer.borrow().wgpu().map_or(
+            Scene3dSupport::Unsupported(Scene3dUnsupportedReason::RendererUnavailable),
+            |renderer| renderer.scene3d_support(),
+        )
+    }
+
+    fn supports_gpu_particles(&self) -> bool {
+        self.supports_subtree_effects()
+    }
+
+    fn supports_gpu_fluid(&self) -> bool {
+        self.supports_subtree_effects()
+    }
+
+    fn clear_scene3d_caches(&mut self) {
+        if let Some(renderer) = self.state.renderer.borrow_mut().wgpu_mut() {
+            renderer.clear_scene3d_caches();
+        }
+    }
+
+    fn scene3d_output_cache_stats(&self) -> Option<Scene3dOutputCacheStats> {
+        self.state
+            .renderer
+            .borrow()
+            .wgpu()
+            .map(|renderer| renderer.scene3d_output_cache_stats())
+    }
+
+    fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        if let Some(renderer) = self.state.renderer.borrow_mut().wgpu_mut() {
+            renderer.set_scene3d_output_cache_budget(bytes);
+        }
     }
 
     fn set_title(&mut self, title: &str) {
@@ -879,6 +1068,11 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn set_mapped(&self, mapped: bool) -> anyhow::Result<()> {
+        if let Some(popup) = &self.0.popup {
+            if mapped {
+                return popup.place(self.0.hwnd, true);
+            }
+        }
         let cmd = if mapped { SW_SHOW } else { SW_HIDE };
         unsafe { ShowWindowAsync(self.0.hwnd, cmd).ok()? };
         Ok(())

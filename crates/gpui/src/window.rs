@@ -3595,6 +3595,90 @@ impl Window {
         self.platform_window.supports_gpu_fluid()
     }
 
+    /// Whether depth-tested mesh viewports are available on this window.
+    pub fn supports_scene3d(&self) -> bool {
+        self.platform_window.supports_scene3d()
+    }
+
+    /// Current renderer capabilities or the reason mesh viewports are unavailable.
+    /// Query again after renderer/device replacement; this does not schedule a frame.
+    pub fn scene3d_support(&self) -> crate::Scene3dSupport {
+        self.platform_window.scene3d_support()
+    }
+
+    /// Returns the current backend context for device-local resource extensions.
+    /// The concrete type is backend-specific and may change after device recovery.
+    pub fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        self.sprite_atlas.renderer_context()
+    }
+
+    /// Releases mesh-rendering caches for all 3D viewports in this window.
+    /// Shared 2D atlas and UI capture resources remain valid. The next mesh draw
+    /// rebuilds caches lazily; this does not schedule a frame or wait for the GPU.
+    /// Unsupported backends do nothing.
+    pub fn clear_scene3d_caches(&mut self) {
+        self.platform_window.clear_scene3d_caches();
+    }
+
+    /// Mesh output-cache allocations across this window and its UI captures.
+    /// Unsupported backends return `None`. This is not a total GPU-memory report.
+    pub fn scene3d_output_cache_stats(&self) -> Option<crate::Scene3dOutputCacheStats> {
+        self.platform_window.scene3d_output_cache_stats()
+    }
+
+    /// Sets the shared mesh output-cache budget in bytes; zero disables mesh pixel reuse.
+    /// A changed budget releases existing entries. Shared atlas and UI textures remain
+    /// valid. Does not request a frame or wait for the GPU; unsupported backends do nothing.
+    pub fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.platform_window.set_scene3d_output_cache_budget(bytes);
+    }
+
+    /// Draws UI in texture-local coordinates at its own raster density.
+    /// Use the same configuration during prepaint and paint inside a 3D capture.
+    /// Ancestor masks apply to the final viewport, not to the source texture.
+    pub fn with_scene3d_texture<R>(
+        &mut self,
+        texture: crate::UiTexture3d,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        let scale = std::mem::replace(&mut self.scale_factor, texture.scale_factor());
+        let masks = std::mem::replace(
+            &mut self.content_mask_stack,
+            vec![ContentMask {
+                bounds: Bounds::new(Point::default(), texture.logical_size()),
+            }],
+        );
+        let result = f(self);
+        self.content_mask_stack = masks;
+        self.scale_factor = scale;
+        result
+    }
+
+    /// Captures a decorative UI texture and renders a depth-tested mesh scene.
+    /// Prepaint the texture with `prepaint_subtree_effect`. Unsupported platforms
+    /// draw nothing. The caller owns input routing and animation scheduling.
+    pub fn with_scene3d(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        frame: Arc<crate::Scene3dFrame>,
+        paint_texture: impl FnOnce(&mut Self),
+    ) {
+        self.invalidator.debug_assert_paint();
+        if !self.supports_scene3d() || bounds.is_empty() || self.element_opacity <= 0. {
+            return;
+        }
+        self.with_subtree_effect(
+            bounds,
+            EffectShader::wgsl_image("fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return sample_effect_image(input, input.uv); }"),
+            EffectUniforms::default(), 0., 1.,
+            |window| {
+                window.next_frame.scene.set_subtree_scene3d(frame);
+                paint_texture(window);
+            },
+        );
+    }
+
     /// Paints a fluid surface. Unsupported renderers do not draw the surface.
     pub fn paint_fluid(&mut self, bounds: Bounds<Pixels>, frame: Arc<crate::FluidFrame>) {
         self.invalidator.debug_assert_paint();
@@ -7900,5 +7984,101 @@ mod tests {
         .unwrap();
 
         assert_eq!(child_bounds.get().size, size(px(300.), px(200.)));
+    }
+
+    struct TextureContent {
+        renders: Rc<Cell<usize>>,
+        bounds: Rc<Cell<Bounds<Pixels>>>,
+    }
+
+    impl Render for TextureContent {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders.set(self.renders.get() + 1);
+            let bounds = self.bounds.clone();
+            canvas(
+                move |actual, _, _| bounds.set(actual),
+                |bounds, _, window, _| window.paint_quad(crate::fill(bounds, crate::rgb(0xff0000))),
+            )
+            .size_full()
+        }
+    }
+
+    struct TextureRoot {
+        content: crate::Entity<TextureContent>,
+        density: f32,
+    }
+
+    impl Render for TextureRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let config = crate::UiTexture3d::new(size(px(640.), px(400.)), self.density);
+            let content = self.content.clone();
+            div().size(px(60.)).overflow_hidden().child(
+                canvas(
+                    move |_, window, cx| {
+                        let original_mask = window.content_mask();
+                        let original_scale = window.scale_factor();
+                        let content = window.with_scene3d_texture(config, |window| {
+                            let style = div().w(px(640.)).h(px(400.)).style().clone();
+                            let mut content = content.cached(style).into_any_element();
+                            content.prepaint_as_root(
+                                Default::default(),
+                                config.logical_size().into(),
+                                window,
+                                cx,
+                            );
+                            content
+                        });
+                        assert_eq!(window.content_mask(), original_mask);
+                        assert_eq!(window.scale_factor(), original_scale);
+                        content
+                    },
+                    move |_, mut content, window, cx| {
+                        let original_mask = window.content_mask();
+                        let original_scale = window.scale_factor();
+                        window.with_scene3d_texture(config, |window| content.paint(window, cx));
+                        assert_eq!(window.content_mask(), original_mask);
+                        assert_eq!(window.scale_factor(), original_scale);
+                    },
+                )
+                .size_full(),
+            )
+        }
+    }
+
+    #[crate::test]
+    fn ui_texture_density_invalidates_cached_paint_without_changing_layout(
+        cx: &mut TestAppContext,
+    ) {
+        let renders = Rc::new(Cell::new(0));
+        let bounds = Rc::new(Cell::new(Bounds::default()));
+        let window = cx.add_window({
+            let renders = renders.clone();
+            let bounds = bounds.clone();
+            move |_, cx| TextureRoot {
+                content: cx.new(|_| TextureContent { renders, bounds }),
+                density: 1.,
+            }
+        });
+        for (density, render_count) in [(1., 1), (1., 1), (2., 2), (2., 2), (1., 3)] {
+            window
+                .update(cx, |root, _, cx| {
+                    root.density = density;
+                    cx.notify();
+                })
+                .unwrap();
+            cx.update_window(window.into(), |_, window, cx| {
+                window.draw(cx).clear();
+                let quad = window.rendered_frame.scene.quads.last().unwrap();
+                assert_eq!(quad.bounds.size.width.0, 640. * density);
+                assert_eq!(quad.bounds.size.height.0, 400. * density);
+                assert_eq!(quad.content_mask.bounds.size.width.0, 640. * density);
+            })
+            .unwrap();
+            assert_eq!(
+                bounds.get(),
+                Bounds::new(Default::default(), size(px(640.), px(400.)))
+            );
+            assert_eq!(renders.get(), render_count);
+        }
     }
 }

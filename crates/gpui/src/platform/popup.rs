@@ -12,6 +12,10 @@ use crate::{AnyWindowHandle, Bounds, Pixels, Point};
 ///
 /// The popup's size comes from [`WindowOptions::window_bounds`](crate::WindowOptions), whose
 /// origin is ignored. All coordinates are in logical pixels.
+///
+/// Windows popups are owned by their parent, follow its position, and constrain placement to
+/// the anchor monitor's work area according to the requested adjustment flags. Passive popups
+/// do not activate; grabbing popups dismiss on Escape or application deactivation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PopupOptions {
     /// The window the popup is anchored to.

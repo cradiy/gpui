@@ -1,11 +1,27 @@
 mod cosmic_text_system;
+#[cfg(not(target_family = "wasm"))]
+mod id_remap;
 mod offscreen_renderer;
+mod scene3d_material;
+mod scene3d_renderer;
 mod wgpu_atlas;
 mod wgpu_context;
 mod wgpu_renderer;
 
 pub use cosmic_text_system::*;
+#[cfg(not(target_family = "wasm"))]
+pub use id_remap::{IdRemapConfig, WgpuIdRemapper};
 pub use offscreen_renderer::*;
+pub use scene3d_material::{
+    MaterialProgram as Scene3dMaterialProgram, Scene3dMaterialLimits, Scene3dMaterialResource,
+    Scene3dMaterialResourceKind, Scene3dVertexAttribute, Scene3dVertexInterpolation,
+};
+#[cfg(not(target_family = "wasm"))]
+pub use scene3d_material::{
+    Scene3dMaterialBindingLimits, Scene3dMaterialSnapshot, Scene3dMaterialSource,
+    Scene3dMaterialValue, Scene3dVertexStreamValue, Scene3dVertexStreams,
+};
+pub use scene3d_renderer::*;
 pub use wgpu;
 pub use wgpu_atlas::*;
 pub use wgpu_context::*;
@@ -13,6 +29,8 @@ pub use wgpu_renderer::{
     GpuContext, WgpuExternalRenderTarget, WgpuExternalRendererConfig, WgpuRenderer,
     WgpuSurfaceConfig,
 };
+#[cfg(not(target_family = "wasm"))]
+pub use wgpu_renderer::{TextureEffectConfig, WgpuTextureEffect};
 
 #[cfg(test)]
 mod tests {

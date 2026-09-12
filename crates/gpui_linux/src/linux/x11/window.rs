@@ -1614,6 +1614,26 @@ impl PlatformWindow for X11Window {
         true
     }
 
+    fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        self.0.state.borrow().renderer.scene3d_support()
+    }
+
+    fn clear_scene3d_caches(&mut self) {
+        self.0.state.borrow_mut().renderer.clear_scene3d_caches();
+    }
+
+    fn scene3d_output_cache_stats(&self) -> Option<gpui::Scene3dOutputCacheStats> {
+        Some(self.0.state.borrow().renderer.scene3d_output_cache_stats())
+    }
+
+    fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.0
+            .state
+            .borrow_mut()
+            .renderer
+            .set_scene3d_output_cache_budget(bytes);
+    }
+
     fn minimize(&self) {
         let state = self.0.state.borrow();
         const WINDOW_ICONIC_STATE: u32 = 3;

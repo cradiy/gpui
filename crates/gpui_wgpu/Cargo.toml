@@ -18,6 +18,7 @@ font-kit = ["dep:font-kit"]
 [dependencies]
 gpui.workspace = true
 anyhow.workspace = true
+bitflags.workspace = true
 bytemuck = "1"
 collections.workspace = true
 cosmic-text = "0.19.0"
@@ -31,6 +32,7 @@ smallvec.workspace = true
 swash = "0.2.6"
 unicode-segmentation.workspace = true
 gpui_util.workspace = true
+half = "2.7.1"
 wgpu.workspace = true
 
 # Optional: only needed on platforms with multiple font sources (e.g. Linux)
@@ -42,6 +44,14 @@ pollster.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash = "0.38"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-video.workspace = true
+core-foundation.workspace = true
+metal.workspace = true
+foreign-types = "0.5"
+objc2.workspace = true
+objc2-metal = "0.3.2"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 wasm-bindgen.workspace = true

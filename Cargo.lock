@@ -751,6 +751,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bevy_mikktspace"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
+
+[[package]]
 name = "bindgen"
 version = "0.71.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2793,6 +2799,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "gltf"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3ce1918195723ce6ac74e80542c5a96a40c2b26162c1957a5cd70799b8cacf7"
+dependencies = [
+ "byteorder",
+ "gltf-json",
+ "lazy_static",
+ "serde_json",
+]
+
+[[package]]
+name = "gltf-derive"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14070e711538afba5d6c807edb74bcb84e5dbb9211a3bf5dea0dfab5b24f4c51"
+dependencies = [
+ "inflections",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "gltf-json"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6176f9d60a7eab0a877e8e96548605dedbde9190a7ae1e80bbcc1c9af03ab14"
+dependencies = [
+ "gltf-derive",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
 name = "glutin_wgl_sys"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2947,6 +2989,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_3d"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy_mikktspace",
+ "bytemuck",
+ "criterion",
+ "gpui",
+ "gpui_effects",
+ "gpui_platform",
+ "gpui_wgpu",
+ "image",
+ "slotmap",
+ "uic",
+]
+
+[[package]]
+name = "gpui_3d_gltf"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "futures",
+ "gltf",
+ "gpui",
+ "gpui_3d",
+ "gpui_platform",
+ "gpui_wgpu",
+ "image",
+ "indexmap",
+ "parking_lot",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "gpui_effects"
 version = "0.1.0"
 dependencies = [
@@ -3036,7 +3116,9 @@ dependencies = [
  "foreign-types",
  "futures",
  "gpui",
+ "gpui_effects",
  "gpui_util",
+ "gpui_wgpu",
  "image",
  "itertools 0.14.0",
  "libc",
@@ -3163,18 +3245,26 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ash",
+ "bitflags 2.10.0",
  "bytemuck",
  "collections",
+ "core-foundation 0.10.0",
+ "core-video",
  "cosmic-text",
  "criterion",
  "etagere",
+ "foreign-types",
  "gpui",
  "gpui_effects",
  "gpui_util",
+ "half",
  "itertools 0.14.0",
  "js-sys",
  "log",
+ "metal",
  "naga 29.0.4",
+ "objc2 0.6.3",
+ "objc2-metal 0.3.2",
  "parking_lot",
  "pollster 0.4.0",
  "profiling",
@@ -3204,6 +3294,7 @@ dependencies = [
  "gpui-scap",
  "gpui_effects",
  "gpui_util",
+ "gpui_wgpu",
  "image",
  "itertools 0.14.0",
  "log",
@@ -3877,6 +3968,12 @@ dependencies = [
  "serde",
  "serde_core",
 ]
+
+[[package]]
+name = "inflections"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
 
 [[package]]
 name = "inout"

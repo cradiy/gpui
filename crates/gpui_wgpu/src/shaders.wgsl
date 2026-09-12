@@ -770,12 +770,13 @@ fn sample_border_gradient(
 
 @fragment
 fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
-    // Alpha clip first, since we don't have `clip_distance`.
-    if (any(input.clip_distances < vec4<f32>(0.0))) {
+    let quad = b_quads[input.quad_id];
+    // Fragment positions preserve pixel centers at shared edges. Interpolating
+    // clip distances can turn an exact zero negative on Metal.
+    if (any(input.position.xy < quad.content_mask.origin)
+        || any(input.position.xy > quad.content_mask.origin + quad.content_mask.size)) {
         return vec4<f32>(0.0);
     }
-
-    let quad = b_quads[input.quad_id];
 
     let background_color = gradient_color(
         quad.background,

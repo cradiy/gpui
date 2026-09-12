@@ -303,6 +303,8 @@ impl WaylandSurfaceState {
 
             return Ok(WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState {
                 layer_surface,
+                auto_width: width == 0.,
+                auto_height: height == 0.,
             }));
         }
 
@@ -417,6 +419,9 @@ pub struct WaylandXdgSurfaceState {
 
 pub struct WaylandLayerSurfaceState {
     layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    // Keep compositor-sized axes automatic across configure acknowledgements.
+    auto_width: bool,
+    auto_height: bool,
 }
 
 pub struct WaylandPopupSurfaceState {
@@ -540,9 +545,17 @@ impl WaylandSurfaceState {
             WaylandSurfaceState::Xdg(WaylandXdgSurfaceState { xdg_surface, .. }) => {
                 xdg_surface.set_window_geometry(x, y, width, height);
             }
-            WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
-                // cannot set window position of a layer surface
-                layer_surface.set_size(width as u32, height as u32);
+            WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState {
+                layer_surface,
+                auto_width,
+                auto_height,
+            }) => {
+                // A configure reply is an allocated size, not a new fixed-size
+                // request. Preserve zero on axes sized by opposing anchors.
+                layer_surface.set_size(
+                    if *auto_width { 0 } else { width as u32 },
+                    if *auto_height { 0 } else { height as u32 },
+                );
             }
             WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
                 xdg_surface.set_window_geometry(x, y, width, height);
@@ -593,7 +606,7 @@ impl WaylandSurfaceState {
                 toplevel.destroy();
                 xdg_surface.destroy();
             }
-            WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface }) => {
+            WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
                 layer_surface.destroy();
             }
             WaylandSurfaceState::Popup(WaylandPopupSurfaceState {
@@ -1423,7 +1436,12 @@ impl WaylandWindowStatePtr {
 
         {
             let state = self.state.borrow();
-            if let Some(viewport) = &state.viewport {
+            if let Some(viewport) = &state.viewport
+                && size.width > px(0.)
+                && size.height > px(0.)
+            {
+                // Fractional scale can arrive before the first layer configure.
+                // Zero is valid in a layer size request, but not a viewport destination.
                 viewport
                     .set_destination(f32::from(size.width) as i32, f32::from(size.height) as i32);
             }
@@ -1868,6 +1886,24 @@ impl PlatformWindow for WaylandWindow {
 
     fn supports_gpu_fluid(&self) -> bool {
         true
+    }
+
+    fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        self.borrow().renderer.scene3d_support()
+    }
+
+    fn clear_scene3d_caches(&mut self) {
+        self.borrow_mut().renderer.clear_scene3d_caches();
+    }
+
+    fn scene3d_output_cache_stats(&self) -> Option<gpui::Scene3dOutputCacheStats> {
+        Some(self.borrow().renderer.scene3d_output_cache_stats())
+    }
+
+    fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.borrow_mut()
+            .renderer
+            .set_scene3d_output_cache_budget(bytes);
     }
 
     fn minimize(&self) {

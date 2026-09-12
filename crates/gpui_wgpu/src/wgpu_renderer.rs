@@ -24,10 +24,27 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+mod core_video;
 mod distance_field;
 mod fluid;
 mod particle_transition;
 mod particles;
+pub(crate) mod scene3d;
+mod scene_snapshot;
+mod subtree_output;
+#[cfg(not(target_family = "wasm"))]
+mod texture_effect;
+mod ui_capture;
+#[cfg(not(target_family = "wasm"))]
+pub use texture_effect::{TextureEffectConfig, WgpuTextureEffect};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SceneEncoding {
+    Complete,
+    InstanceCapacity,
+    CaptureCapacity,
+}
 
 #[derive(Clone, Copy)]
 struct FeedbackSnapshot {
@@ -419,7 +436,7 @@ pub type GpuContext = Rc<RefCell<Option<WgpuContext>>>;
 
 /// GPU resources that must be dropped together during device recovery.
 struct WgpuResources {
-    instance: wgpu::Instance,
+    capture_context: WgpuContext,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface: Option<wgpu::Surface<'static>>,
@@ -435,6 +452,9 @@ struct WgpuResources {
     particles: Option<particles::ParticleRenderer>,
     particle_transition: Option<particle_transition::ParticleTransitionRenderer>,
     fluid: Option<fluid::FluidRenderer>,
+    scene3d: Option<scene3d::ViewportRenderer>,
+    ui_captures: Vec<ui_capture::UiCapture>,
+    ui_capture_indices: HashMap<usize, usize>,
     failed_effect_pipelines: HashSet<u64>,
     backdrop_effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     failed_backdrop_effect_pipelines: HashSet<u64>,
@@ -455,6 +475,8 @@ struct WgpuResources {
     backdrop_result_texture: Option<wgpu::Texture>,
     backdrop_result_view: Option<wgpu::TextureView>,
     surfaces: HashMap<SurfaceId, CachedSurface>,
+    #[cfg(target_os = "macos")]
+    core_video: core_video::CoreVideoSurfaces,
     #[cfg(target_os = "linux")]
     dma_bufs: HashMap<DmaBufId, CachedDmaBuf>,
     #[cfg(target_os = "linux")]
@@ -474,6 +496,8 @@ impl WgpuResources {
         self.particles = None;
         self.particle_transition = None;
         self.fluid = None;
+        self.scene3d = None;
+        self.ui_capture_indices.clear();
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
@@ -511,6 +535,8 @@ pub struct WgpuRenderer {
     opaque_alpha_mode: wgpu::CompositeAlphaMode,
     max_texture_size: u32,
     backdrop_blur_supported: bool,
+    scene3d_support: gpui::Scene3dSupport,
+    scene3d_output_budget: scene3d::OutputBudget,
     last_error: Arc<Mutex<Option<String>>>,
     failed_frame_count: u32,
     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -558,10 +584,7 @@ impl WgpuRenderer {
         let max_texture_size = context.device.limits().max_texture_dimension_2d;
         let width = (config.size.width.0.max(1) as u32).min(max_texture_size);
         let height = (config.size.height.0.max(1) as u32).min(max_texture_size);
-        // Backdrop copies currently assume a surface-local texture origin. Keep them
-        // disabled for embedded viewports until copy origins are carried through the
-        // backdrop pipeline as well.
-        let backdrop_blur_supported = false;
+        let backdrop_blur_supported = config.target_usage.contains(wgpu::TextureUsages::COPY_SRC);
         let surface_config = wgpu::SurfaceConfiguration {
             usage: config.target_usage,
             format: config.format,
@@ -584,6 +607,7 @@ impl WgpuRenderer {
             config.alpha_mode,
             config.alpha_mode,
             backdrop_blur_supported,
+            None,
         )
     }
 
@@ -823,6 +847,7 @@ impl WgpuRenderer {
             transparent_alpha_mode,
             opaque_alpha_mode,
             backdrop_blur_supported,
+            None,
         )
     }
 
@@ -836,8 +861,18 @@ impl WgpuRenderer {
         transparent_alpha_mode: wgpu::CompositeAlphaMode,
         opaque_alpha_mode: wgpu::CompositeAlphaMode,
         backdrop_blur_supported: bool,
+        shared_error: Option<Arc<Mutex<Option<String>>>>,
     ) -> anyhow::Result<Self> {
         let surface_format = surface_config.format;
+        let scene3d_support =
+            match crate::Scene3dDeviceCapabilities::query_with_formats(context, [surface_format])
+                .viewport(surface_format)
+            {
+                Ok(capabilities) => gpui::Scene3dSupport::Supported(capabilities),
+                Err(error) => gpui::Scene3dSupport::Unsupported(
+                    gpui::Scene3dUnsupportedReason::MissingCapabilities(error.to_string().into()),
+                ),
+            };
         let alpha_mode = surface_config.alpha_mode;
         let device = Arc::clone(&context.device);
         let max_texture_size = device.limits().max_texture_dimension_2d;
@@ -934,15 +969,17 @@ impl WgpuRenderer {
 
         let adapter_info = context.adapter.get_info();
 
-        let last_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let last_error_clone = Arc::clone(&last_error);
-        device.on_uncaptured_error(Arc::new(move |error| {
-            let mut guard = last_error_clone.lock().unwrap();
-            *guard = Some(error.to_string());
-        }));
+        let last_error = shared_error.unwrap_or_else(|| {
+            let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let sink = error.clone();
+            device.on_uncaptured_error(Arc::new(move |error| {
+                *sink.lock().unwrap() = Some(error.to_string());
+            }));
+            error
+        });
 
         let resources = WgpuResources {
-            instance: context.instance.clone(),
+            capture_context: context.clone(),
             device,
             queue,
             surface,
@@ -957,6 +994,9 @@ impl WgpuRenderer {
             particles: None,
             particle_transition: None,
             fluid: None,
+            scene3d: None,
+            ui_captures: Vec::new(),
+            ui_capture_indices: HashMap::new(),
             failed_effect_pipelines: HashSet::default(),
             backdrop_effect_pipelines: HashMap::default(),
             failed_backdrop_effect_pipelines: HashSet::default(),
@@ -979,6 +1019,8 @@ impl WgpuRenderer {
             backdrop_result_texture: None,
             backdrop_result_view: None,
             surfaces: HashMap::default(),
+            #[cfg(target_os = "macos")]
+            core_video: Default::default(),
             #[cfg(target_os = "linux")]
             dma_bufs: HashMap::default(),
             #[cfg(target_os = "linux")]
@@ -1009,6 +1051,8 @@ impl WgpuRenderer {
             opaque_alpha_mode,
             max_texture_size,
             backdrop_blur_supported,
+            scene3d_support,
+            scene3d_output_budget: scene3d::OutputBudget::default(),
             last_error,
             failed_frame_count: 0,
             device_lost: context.device_lost_flag(),
@@ -2078,6 +2122,14 @@ impl WgpuRenderer {
     }
 
     pub fn set_subpixel_layout(&mut self, is_bgr: bool) {
+        if self.is_bgr != is_bgr
+            && let Some(renderer) = self
+                .resources
+                .as_mut()
+                .and_then(|resources| resources.scene3d.as_mut())
+        {
+            renderer.invalidate_outputs();
+        }
         self.is_bgr = is_bgr;
     }
 
@@ -2113,6 +2165,9 @@ impl WgpuRenderer {
             resources.failed_effect_pipelines.clear();
             resources.backdrop_effect_pipelines.clear();
             resources.failed_backdrop_effect_pipelines.clear();
+            if let Some(renderer) = &mut resources.scene3d {
+                renderer.invalidate_outputs();
+            }
         }
     }
 
@@ -2159,6 +2214,54 @@ impl WgpuRenderer {
     /// Returns whether the current surface can be captured for backdrop filters.
     pub fn supports_backdrop_blur(&self) -> bool {
         self.backdrop_blur_supported
+    }
+
+    pub fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        if self.device_lost() {
+            gpui::Scene3dSupport::Unsupported(gpui::Scene3dUnsupportedReason::DeviceLost)
+        } else if self.resources.is_none() {
+            gpui::Scene3dSupport::Unsupported(gpui::Scene3dUnsupportedReason::RendererUnavailable)
+        } else {
+            self.scene3d_support.clone()
+        }
+    }
+
+    /// Releases mesh-rendering caches without clearing shared 2D atlas or UI
+    /// capture resources. Capture contents are invalidated; the next mesh draw
+    /// rebuilds its caches lazily.
+    pub fn clear_scene3d_caches(&mut self) {
+        if let Some(resources) = self.resources.as_mut() {
+            resources.scene3d = None;
+            for capture in &mut resources.ui_captures {
+                capture.clear_scene3d_caches();
+            }
+        }
+    }
+
+    /// Mesh output-cache allocations across this renderer and its UI captures.
+    /// Counts retained allocations, not total device memory or in-flight commands.
+    pub fn scene3d_output_cache_stats(&self) -> gpui::Scene3dOutputCacheStats {
+        self.scene3d_output_budget.stats()
+    }
+
+    /// Sets the shared mesh output-cache budget in bytes; zero disables mesh pixel reuse.
+    /// A changed budget releases existing output-cache entries without clearing mesh,
+    /// atlas, or UI textures. Does not request a frame or wait for the GPU.
+    pub fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        if self.scene3d_output_budget.set_limit(bytes) {
+            self.invalidate_scene3d_outputs();
+        }
+    }
+
+    fn invalidate_scene3d_outputs(&mut self) {
+        if let Some(resources) = self.resources.as_mut() {
+            if let Some(renderer) = &mut resources.scene3d {
+                renderer.invalidate_outputs();
+            }
+            for capture in &mut resources.ui_captures {
+                capture.invalidate_scene3d_outputs();
+            }
+        }
     }
 
     pub fn draw(&mut self, scene: &Scene) -> bool {
@@ -2275,28 +2378,31 @@ impl WgpuRenderer {
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("main_encoder"),
                     });
-            if !self.encode_scene(
+            let encoded = self.encode_scene(
                 scene,
                 &frame.texture,
                 &frame_view,
                 &mut encoder,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            ) {
+                true,
+                &[],
+            );
+            if !matches!(encoded, Ok(SceneEncoding::Complete)) {
+                self.commit_encoded_scene(false);
+                self.commit_scene3d_outputs(false);
                 drop(encoder);
-                if self.instance_buffer_capacity >= self.max_buffer_size {
-                    log::error!(
-                        "instance buffer size grew too large: {}",
-                        self.instance_buffer_capacity
-                    );
-                    self.resources().queue.present(frame);
-                    return true;
+                match encoded {
+                    Err(_) => return false,
+                    Ok(SceneEncoding::InstanceCapacity) => self.grow_instance_buffer(),
+                    _ => {}
                 }
-                self.grow_instance_buffer();
                 continue;
             }
 
             let resources = self.resources();
             resources.queue.submit(std::iter::once(encoder.finish()));
+            self.commit_encoded_scene(true);
+            self.commit_scene3d_outputs(true);
             #[cfg(target_os = "linux")]
             if !dma_buf_leases.is_empty() {
                 resources
@@ -2308,7 +2414,87 @@ impl WgpuRenderer {
         }
     }
 
+    /// Encodes into caller-owned commands without reusing mesh or UI capture pixels.
+    /// Exposed vertex buffers are not recycled for other mesh snapshots; retained
+    /// replacement uploads remain replayable on later draws of the same snapshot.
+    /// Use `draw_external` for renderer-owned submission and output reuse.
     pub fn encode_external(&mut self, scene: &Scene, target: WgpuExternalRenderTarget<'_>) -> bool {
+        let encoded = matches!(
+            self.encode_external_scene(scene, target, false),
+            Ok(SceneEncoding::Complete)
+        );
+        self.commit_encoded_scene(encoded);
+        self.retain_external_scene3d_uploads();
+        encoded
+    }
+
+    /// Clears, encodes, and submits an external target on this renderer's queue.
+    /// Enables reuse of submitted 3D viewport and UI capture pixels. A false result submits no
+    /// frame commands. Instance capacity growth may require a retry; scene preparation
+    /// errors do not grow instance storage. The target must match this
+    /// renderer's configured size/format and support render attachments.
+    pub fn draw_external(
+        &mut self,
+        scene: &Scene,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        clear: wgpu::Color,
+    ) -> bool {
+        let mut encoder =
+            self.resources()
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("gpui_external_encoder"),
+                });
+        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("gpui_external_clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        }));
+        let encoded = matches!(
+            self.encode_external_scene(
+                scene,
+                WgpuExternalRenderTarget {
+                    texture,
+                    view,
+                    command_encoder: &mut encoder,
+                },
+                true,
+            ),
+            Ok(SceneEncoding::Complete)
+        );
+        if encoded {
+            self.resources().queue.submit([encoder.finish()]);
+        }
+        self.commit_encoded_scene(encoded);
+        self.commit_scene3d_outputs(encoded);
+        encoded
+    }
+
+    fn encode_external_scene(
+        &mut self,
+        scene: &Scene,
+        target: WgpuExternalRenderTarget<'_>,
+        retain_outputs: bool,
+    ) -> anyhow::Result<SceneEncoding> {
+        self.encode_external_scene_with_subtree_targets(scene, target, retain_outputs, &[])
+    }
+
+    fn encode_external_scene_with_subtree_targets(
+        &mut self,
+        scene: &Scene,
+        target: WgpuExternalRenderTarget<'_>,
+        retain_outputs: bool,
+        subtree_targets: &[wgpu::Texture],
+    ) -> anyhow::Result<SceneEncoding> {
         assert!(
             self.resources().surface.is_none(),
             "encode_external() requires an external renderer"
@@ -2332,10 +2518,16 @@ impl WgpuRenderer {
             target.view,
             target.command_encoder,
             wgpu::LoadOp::Load,
+            retain_outputs,
+            subtree_targets,
         );
-        if !encoded && self.instance_buffer_capacity < self.max_buffer_size {
-            self.grow_instance_buffer();
-            self.needs_redraw = true;
+        match &encoded {
+            Ok(SceneEncoding::InstanceCapacity) => {
+                self.grow_instance_buffer();
+                self.needs_redraw = true;
+            }
+            Ok(SceneEncoding::CaptureCapacity) => self.needs_redraw = true,
+            _ => {}
         }
         encoded
     }
@@ -2367,7 +2559,8 @@ impl WgpuRenderer {
                     format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::COPY_SRC,
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 }));
         }
@@ -2818,7 +3011,100 @@ impl WgpuRenderer {
         target_view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<wgpu::Color>,
-    ) -> bool {
+        retain_outputs: bool,
+        subtree_targets: &[wgpu::Texture],
+    ) -> anyhow::Result<SceneEncoding> {
+        let mut encoded = self.encode_scene_inner(
+            scene,
+            target_texture,
+            target_view,
+            encoder,
+            load,
+            retain_outputs,
+            subtree_targets,
+        );
+        if matches!(encoded, Ok(SceneEncoding::InstanceCapacity))
+            && self.instance_buffer_capacity >= self.max_buffer_size
+        {
+            encoded = Err(anyhow::anyhow!(
+                "scene instance storage exceeds the device buffer limit of {} bytes",
+                self.max_buffer_size
+            ));
+        }
+        if !matches!(encoded, Ok(SceneEncoding::Complete)) {
+            let error = match &encoded {
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    *self.last_error.lock().unwrap() = Some(message.clone());
+                    message.into()
+                }
+                _ => "3D picking frame was not submitted".into(),
+            };
+            scene3d::fail_pick_captures(scene, error);
+            for capture in &mut self.resources_mut().ui_captures {
+                capture.invalidate_encoding();
+            }
+        }
+        encoded
+    }
+
+    fn encode_scene_inner(
+        &mut self,
+        scene: &Scene,
+        target_texture: &wgpu::Texture,
+        target_view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        load: wgpu::LoadOp<wgpu::Color>,
+        retain_outputs: bool,
+        subtree_targets: &[wgpu::Texture],
+    ) -> anyhow::Result<SceneEncoding> {
+        let mut has_scene3d = false;
+        scene.visit(&mut |scene| {
+            has_scene3d |= scene
+                .subtree_layers
+                .iter()
+                .any(|layer| layer.scene3d.is_some());
+        });
+        let scene3d_capabilities = if has_scene3d {
+            match self.scene3d_support() {
+                gpui::Scene3dSupport::Supported(capabilities) => Some(capabilities),
+                gpui::Scene3dSupport::Unsupported(reason) => {
+                    anyhow::bail!("3D viewport unavailable: {reason}");
+                }
+            }
+        } else {
+            None
+        };
+        if has_scene3d {
+            let mut failure = None;
+            scene.visit(&mut |scene| {
+                for layer in &scene.subtree_layers {
+                    if let Some(frame) = &layer.scene3d
+                        && let Err(error) = crate::scene3d_renderer::validate_frame_settings(
+                            frame,
+                            self.resources().device.limits().max_texture_dimension_2d,
+                            true,
+                        )
+                        .and_then(|()| {
+                            #[cfg(not(target_family = "wasm"))]
+                            scene3d::validate_material_devices(frame, &self.resources().device)?;
+                            crate::scene3d_renderer::gpu_draws::validate_frame(
+                                &self.resources().device,
+                                frame,
+                            )
+                        })
+                    {
+                        failure = Some(error);
+                    }
+                }
+            });
+            if let Some(error) = failure {
+                return Err(error);
+            }
+        }
+        if !self.encode_ui_captures(scene, encoder, retain_outputs)? {
+            return Ok(SceneEncoding::CaptureCapacity);
+        }
         let format = self.surface_config.format;
         let viewport = [
             self.surface_config.width as f32,
@@ -2846,7 +3132,28 @@ impl WgpuRenderer {
         });
         scene.visit(&mut |scene| has_fluid |= !scene.fluids.is_empty());
         {
+            let atlas = self.atlas.clone();
+            let output_budget = self.scene3d_output_budget.clone();
             let resources = self.resources_mut();
+            if has_scene3d && resources.scene3d.is_none() {
+                resources.scene3d = Some(scene3d::ViewportRenderer::new(
+                    resources.capture_context.clone(),
+                    format,
+                    scene3d_capabilities.unwrap(),
+                    output_budget,
+                ));
+            }
+            if let Some(renderer) = &mut resources.scene3d {
+                renderer.prepare(
+                    &resources.device,
+                    &resources.queue,
+                    scene,
+                    viewport[0] as u32,
+                    viewport[1] as u32,
+                    &atlas,
+                    retain_outputs,
+                )?;
+            }
             if has_particle_transition && resources.particle_transition.is_none() {
                 resources.particle_transition = Some(
                     particle_transition::ParticleTransitionRenderer::new(&resources.device, format),
@@ -2918,8 +3225,26 @@ impl WgpuRenderer {
         for textures in self.resources().feedback_textures.values() {
             textures.pending.set(None);
         }
-        let encoded =
-            self.encode_scene_batches(scene, target_texture, target_view, encoder, load, &mut 0, 0);
+        Ok(
+            if self.encode_scene_batches(
+                scene,
+                target_texture,
+                target_view,
+                encoder,
+                load,
+                &mut 0,
+                0,
+                subtree_targets,
+            ) {
+                SceneEncoding::Complete
+            } else {
+                SceneEncoding::InstanceCapacity
+            },
+        )
+    }
+
+    fn commit_encoded_scene(&self, encoded: bool) {
+        self.commit_ui_captures(encoded);
         if let Some(particles) = &self.resources().particles {
             particles.commit(encoded);
         }
@@ -2933,7 +3258,24 @@ impl WgpuRenderer {
                 textures.committed.set(Some(snapshot));
             }
         }
-        encoded
+    }
+
+    fn commit_scene3d_outputs(&self, submitted: bool) {
+        if let Some(renderer) = &self.resources().scene3d {
+            renderer.commit_outputs(submitted);
+        }
+        for capture in &self.resources().ui_captures {
+            capture.commit_scene3d_outputs(submitted);
+        }
+    }
+
+    fn retain_external_scene3d_uploads(&self) {
+        if let Some(renderer) = &self.resources().scene3d {
+            renderer.retain_external_uploads();
+        }
+        for capture in &self.resources().ui_captures {
+            capture.retain_external_scene3d_uploads();
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2946,6 +3288,7 @@ impl WgpuRenderer {
         load: wgpu::LoadOp<wgpu::Color>,
         instance_offset: &mut u64,
         depth: usize,
+        subtree_targets: &[wgpu::Texture],
     ) -> bool {
         let mut overflow = false;
 
@@ -2973,7 +3316,18 @@ impl WgpuRenderer {
                         let capture_view =
                             texture.create_view(&wgpu::TextureViewDescriptor::default());
                         let mut did_draw = true;
-                        for layer in &scene.subtree_layers[range] {
+                        for index in range {
+                            let layer = &scene.subtree_layers[index];
+                            let isolated = subtree_targets.get(index);
+                            let isolated_view =
+                                isolated.map(|texture| texture.create_view(&Default::default()));
+                            let target_texture = isolated.unwrap_or(target_texture);
+                            let target_view = isolated_view.as_ref().unwrap_or(target_view);
+                            let composite_load = if isolated.is_some() {
+                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                            } else {
+                                wgpu::LoadOp::Load
+                            };
                             let pipeline = self
                                 .resources()
                                 .subtree_effect_pipelines
@@ -2988,26 +3342,36 @@ impl WgpuRenderer {
                                     target_texture,
                                     target_view,
                                     encoder,
-                                    wgpu::LoadOp::Load,
+                                    composite_load,
                                     instance_offset,
                                     depth,
+                                    &[],
                                 );
                                 continue;
                             };
-                            if !self.encode_scene_batches(
-                                &layer.scene,
-                                texture,
-                                &capture_view,
-                                encoder,
-                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                instance_offset,
-                                depth + 1,
-                            ) {
+                            let captured = self
+                                .resources()
+                                .ui_capture_indices
+                                .get(&(layer as *const _ as usize))
+                                .map(|index| &self.resources().ui_captures[*index].texture);
+                            if captured.is_none()
+                                && !self.encode_scene_batches(
+                                    &layer.scene,
+                                    texture,
+                                    &capture_view,
+                                    encoder,
+                                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    instance_offset,
+                                    depth + 1,
+                                    &[],
+                                )
+                            {
                                 did_draw = false;
                                 break;
                             }
-                            let mut source_view =
-                                texture.create_view(&wgpu::TextureViewDescriptor::default());
+                            let mut source_view = captured
+                                .unwrap_or(texture)
+                                .create_view(&wgpu::TextureViewDescriptor::default());
                             let second_view = if let Some(second) = &layer.second_scene {
                                 assert!(
                                     layer.intermediate_effects.is_empty(),
@@ -3024,6 +3388,7 @@ impl WgpuRenderer {
                                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                                     instance_offset,
                                     depth + 2,
+                                    &[],
                                 ) {
                                     did_draw = false;
                                     break;
@@ -3278,6 +3643,21 @@ impl WgpuRenderer {
                             if !did_draw {
                                 break;
                             }
+                            if layer.scene3d.is_some() {
+                                let destination = self.resources().subtree_textures[depth + 1]
+                                    .create_view(&Default::default());
+                                let resources = self.resources();
+                                resources.scene3d.as_ref().unwrap().encode(
+                                    &resources.device,
+                                    &resources.queue,
+                                    &self.atlas,
+                                    layer,
+                                    &source_view,
+                                    &resources.subtree_textures[depth + 1],
+                                    encoder,
+                                );
+                                source_view = destination;
+                            }
                             let mut composite_pass =
                                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                     label: Some("subtree_composite"),
@@ -3285,7 +3665,7 @@ impl WgpuRenderer {
                                         view: target_view,
                                         resolve_target: None,
                                         ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
+                                            load: composite_load,
                                             store: wgpu::StoreOp::Store,
                                         },
                                         depth_slice: None,
@@ -3456,10 +3836,16 @@ impl WgpuRenderer {
     }
 
     fn prepare_surfaces(&mut self, scene: &Scene) {
+        #[cfg(target_os = "macos")]
+        self.resources_mut().core_video.prepare_legacy(scene);
         let mut frames = HashMap::<SurfaceId, Arc<SurfaceFrame>>::new();
         scene.visit(&mut |scene| {
             for surface in &scene.surfaces {
-                let Some(frame) = surface.source.frame() else {
+                #[cfg(target_os = "macos")]
+                let frame = self.resources().core_video.frame(&surface.source);
+                #[cfg(not(target_os = "macos"))]
+                let frame = surface.source.frame();
+                let Some(frame) = frame else {
                     continue;
                 };
                 if let Some(previous) = frames.insert(frame.handle().id(), frame.clone())
@@ -3547,7 +3933,7 @@ impl WgpuRenderer {
                 }
 
                 match Self::import_dma_buf(
-                    &resources.instance,
+                    &resources.capture_context.instance,
                     &resources.device,
                     resources.drm_render_device,
                     &frame,
@@ -3568,6 +3954,20 @@ impl WgpuRenderer {
                 continue;
             }
 
+            #[cfg(target_os = "macos")]
+            if let gpui::SurfaceFrameBacking::CoreVideo(buffer) = frame.backing() {
+                resources.surfaces.remove(&id);
+                if let Err(error) = resources
+                    .core_video
+                    .prepare(&resources.device, &frame, buffer)
+                {
+                    log::error!("failed to import CoreVideo surface: {error:#}");
+                }
+                continue;
+            }
+
+            #[cfg(target_os = "macos")]
+            resources.core_video.surfaces.remove(&id);
             let action = surface_cache_action(
                 resources
                     .surfaces
@@ -4236,7 +4636,11 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         for surface in surfaces {
-            let Some(frame) = surface.source.frame() else {
+            #[cfg(target_os = "macos")]
+            let frame = self.resources().core_video.frame(&surface.source);
+            #[cfg(not(target_os = "macos"))]
+            let frame = surface.source.frame();
+            let Some(frame) = frame else {
                 continue;
             };
             let resources = self.resources();
@@ -4251,7 +4655,21 @@ impl WgpuRenderer {
                     .get(&dma_buf.id())
                     .map(|cached| &cached.textures),
             };
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            let cached_textures =
+                if matches!(frame.backing(), gpui::SurfaceFrameBacking::CoreVideo(_)) {
+                    self.resources()
+                        .core_video
+                        .surfaces
+                        .get(&frame.handle().id())
+                        .map(|cached| &cached.textures)
+                } else {
+                    resources
+                        .surfaces
+                        .get(&frame.handle().id())
+                        .map(|cached| &cached.textures)
+                };
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             let cached_textures = resources
                 .surfaces
                 .get(&frame.handle().id())
@@ -5212,6 +5630,7 @@ impl WgpuRenderer {
         self.resources = None;
         self.atlas.handle_device_lost(context);
 
+        let output_budget = self.scene3d_output_budget.clone();
         *self = Self::new_internal(
             Some(gpu_context.clone()),
             context,
@@ -5220,6 +5639,7 @@ impl WgpuRenderer {
             self.compositor_gpu,
             self.atlas.clone(),
         )?;
+        self.scene3d_output_budget = output_budget;
 
         log::info!("GPU recovery complete");
         Ok(())

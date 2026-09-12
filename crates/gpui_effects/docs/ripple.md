@@ -67,7 +67,7 @@ including padding contributed by other stages. `.time()` on the chain does not
 replace the per-wave `elapsed` values.
 
 The effect changes rendered pixels only; layout and hit testing retain their
-original coordinates. Linux WGPU supports subtree effects. On unsupported
+original coordinates. Linux WGPU and macOS Metal support subtree effects. On unsupported
 backends the input is drawn normally; check `window.supports_subtree_effects()`.
 
 ## Example

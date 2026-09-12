@@ -148,6 +148,8 @@ mod tests {
             crate::bloom_extract_shader(),
             crate::bloom_blur_shader(),
             crate::bloom_composite_shader(),
+            crate::depth_fog_shader(),
+            crate::hdr_tone_map_shader(),
             crate::feedback_shader(),
             crate::ripple_shader(),
             crate::lens_shader(),

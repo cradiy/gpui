@@ -30,6 +30,7 @@ struct PendingUpload {
 }
 
 struct WgpuAtlasState {
+    context: Option<Arc<WgpuContext>>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     max_texture_size: u32,
@@ -37,6 +38,8 @@ struct WgpuAtlasState {
     storage: WgpuAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
     pending_uploads: Vec<PendingUpload>,
+    tile_generations: FxHashMap<(AtlasTextureId, u32), u64>,
+    next_generation: u64,
 }
 
 pub struct WgpuTextureInfo {
@@ -51,6 +54,7 @@ impl WgpuAtlas {
     ) -> Self {
         let max_texture_size = device.limits().max_texture_dimension_2d;
         WgpuAtlas(Mutex::new(WgpuAtlasState {
+            context: None,
             device,
             queue,
             max_texture_size,
@@ -58,15 +62,19 @@ impl WgpuAtlas {
             storage: WgpuAtlasStorage::default(),
             tiles_by_key: Default::default(),
             pending_uploads: Vec::new(),
+            tile_generations: FxHashMap::default(),
+            next_generation: 0,
         }))
     }
 
     pub fn from_context(context: &WgpuContext) -> Self {
-        Self::new(
+        let atlas = Self::new(
             context.device.clone(),
             context.queue.clone(),
             context.color_texture_format(),
-        )
+        );
+        atlas.0.lock().context = Some(Arc::new(context.clone()));
+        atlas
     }
 
     pub fn before_frame(&self) {
@@ -82,6 +90,28 @@ impl WgpuAtlas {
         }
     }
 
+    /// Shares an atlas texture for native GPU compositing. Flush uploads with
+    /// `before_frame` and submit the context queue before sampling it externally.
+    pub fn texture(&self, id: AtlasTextureId) -> wgpu::Texture {
+        self.0.lock().storage[id].texture.clone()
+    }
+
+    pub(crate) fn get_tile_info(&self, tile: AtlasTile) -> (wgpu::TextureView, u64) {
+        let lock = self.0.lock();
+        (
+            lock.storage[tile.texture_id].view.clone(),
+            lock.tile_generations[&(tile.texture_id, tile.tile_id.0)],
+        )
+    }
+
+    pub(crate) fn tile_generation(&self, tile: AtlasTile) -> Option<u64> {
+        self.0
+            .lock()
+            .tile_generations
+            .get(&(tile.texture_id, tile.tile_id.0))
+            .copied()
+    }
+
     /// Clears all cached textures and tiles, forcing them to be recreated.
     /// Use this for incremental recovery when the device is still valid.
     pub fn clear(&self) {
@@ -89,22 +119,30 @@ impl WgpuAtlas {
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
+        lock.tile_generations.clear();
     }
 
     /// Handles device lost by clearing all textures and cached tiles.
     /// The atlas will lazily recreate textures as needed on subsequent frames.
     pub fn handle_device_lost(&self, context: &WgpuContext) {
         let mut lock = self.0.lock();
+        lock.context = Some(Arc::new(context.clone()));
         lock.device = context.device.clone();
         lock.queue = context.queue.clone();
         lock.color_texture_format = context.color_texture_format();
         lock.storage = WgpuAtlasStorage::default();
         lock.tiles_by_key.clear();
         lock.pending_uploads.clear();
+        lock.tile_generations.clear();
     }
 }
 
 impl PlatformAtlas for WgpuAtlas {
+    #[cfg(not(target_family = "wasm"))]
+    fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        self.0.lock().context.clone().map(|context| context as _)
+    }
+
     fn get_or_insert_with<'a>(
         &self,
         key: &AtlasKey,
@@ -122,6 +160,12 @@ impl PlatformAtlas for WgpuAtlas {
                 .allocate(size, key.texture_kind())
                 .context("failed to allocate")?;
             lock.upload_texture(tile.texture_id, tile.bounds, &bytes);
+            let generation = lock.next_generation;
+            lock.next_generation = generation
+                .checked_add(1)
+                .expect("atlas generation overflow");
+            lock.tile_generations
+                .insert((tile.texture_id, tile.tile_id.0), generation);
             lock.tiles_by_key.insert(key.clone(), tile);
             Ok(Some(tile))
         }
@@ -134,6 +178,8 @@ impl PlatformAtlas for WgpuAtlas {
             return;
         };
         let id = tile.texture_id;
+        lock.tile_generations
+            .remove(&(tile.texture_id, tile.tile_id.0));
 
         let Some(texture_slot) = lock.storage[id.kind].textures.get_mut(id.index as usize) else {
             return;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::BackgroundExecutor;
 use crate::{Asset, Image, ImageAssetLoader, Resource, TestAppContext};
 use futures::{FutureExt, io::Cursor as AsyncCursor};
 use image::{
@@ -327,4 +328,237 @@ fn input_limit_accepts_exact_length_and_releases_cancelled_reader() {
         drop(future);
         assert!(dropped.load(Ordering::Relaxed));
     });
+}
+
+#[crate::test]
+async fn incremental_frames_match_eager_decode_and_release_evicted_frames(
+    executor: BackgroundExecutor,
+) {
+    for bytes in [gif(3), webp(3)] {
+        let expected = decode(&bytes, ImageLoadLimits::default()).unwrap();
+        let poster = load_image(
+            &bytes,
+            image::guess_format(&bytes).ok(),
+            &renderer(),
+            ImageLoadLimits {
+                max_decoded_bytes: 96,
+                ..Default::default()
+            },
+            ImageAnimationOptions { cache_frames: 2 },
+        )
+        .unwrap();
+        assert_eq!(poster.frame_count(), 1);
+        let source = poster.animation().unwrap();
+        assert_eq!(source.frame_count(), 3);
+        let first = source.frame(1, &executor).await.unwrap();
+        let first_id = first.id;
+        let weak = Arc::downgrade(&first);
+        let second = source.frame(2, &executor).await.unwrap();
+        assert_eq!(first.as_bytes(0), expected.as_bytes(1));
+        assert_eq!(second.as_bytes(0), expected.as_bytes(2));
+        assert!(weak.upgrade().is_some());
+        drop(first);
+        assert!(weak.upgrade().is_none());
+        let first = source.frame(1, &executor).await.unwrap();
+        assert_eq!(first.id, first_id);
+        assert_eq!(first.as_bytes(0), expected.as_bytes(1));
+        for index in [0, 1, 2, 0, 1, 2] {
+            let actual = source.frame(index, &executor).await.unwrap();
+            assert_eq!(actual.as_bytes(0), expected.as_bytes(index));
+            assert_eq!(actual.delay(0), expected.delay(index));
+        }
+        assert!(source.frame(3, &executor).await.is_err());
+    }
+}
+
+fn composited_gif() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = gif::Encoder::new(&mut bytes, 4, 3, &[]).unwrap();
+        for (left, top, width, height, color, dispose) in [
+            (0, 0, 4, 3, [80, 40, 20, 255], gif::DisposalMethod::Keep),
+            (1, 1, 2, 1, [20, 80, 40, 255], gif::DisposalMethod::Previous),
+            (
+                0,
+                0,
+                1,
+                2,
+                [40, 20, 80, 255],
+                gif::DisposalMethod::Background,
+            ),
+            (0, 0, 4, 3, [0, 0, 0, 0], gif::DisposalMethod::Keep),
+        ] {
+            let mut pixels = color.repeat(width as usize * height as usize);
+            let mut frame = gif::Frame::from_rgba_speed(width, height, &mut pixels, 10);
+            frame.left = left;
+            frame.top = top;
+            frame.dispose = dispose;
+            frame.delay = 3;
+            encoder.write_frame(&frame).unwrap();
+        }
+    }
+    bytes
+}
+
+#[crate::test]
+async fn incremental_gif_preserves_subframes_transparency_and_disposal(
+    executor: BackgroundExecutor,
+) {
+    let bytes = composited_gif();
+    let expected = decode(&bytes, ImageLoadLimits::default()).unwrap();
+    let poster = load_image(
+        &bytes,
+        Some(ImageFormat::Gif),
+        &renderer(),
+        ImageLoadLimits::default(),
+        ImageAnimationOptions { cache_frames: 2 },
+    )
+    .unwrap();
+    let source = poster.animation().unwrap();
+    for index in [0, 1, 2, 3, 0, 1, 3, 2] {
+        let actual = source.frame(index, &executor).await.unwrap();
+        assert_eq!(
+            actual.as_bytes(0),
+            expected.as_bytes(index),
+            "frame {index}"
+        );
+        assert_eq!(actual.delay(0), expected.delay(index));
+    }
+}
+
+#[crate::test]
+fn animation_playback_keeps_current_frame_until_ready(cx: &mut TestAppContext) {
+    let bytes = gif(3);
+    let poster = load_image(
+        &bytes,
+        Some(ImageFormat::Gif),
+        &renderer(),
+        ImageLoadLimits::default(),
+        ImageAnimationOptions::default(),
+    )
+    .unwrap();
+    let mut player = AnimationPlayback::new(poster.clone(), poster.animation().unwrap().clone());
+    let now = scheduler::Instant::now();
+    let executor = cx.background_executor.clone();
+    let first = player.update(now, true, &executor).unwrap();
+    let later = now + std::time::Duration::from_secs(1);
+    assert_eq!(player.update(later, true, &executor).unwrap().id, first.id);
+    cx.run_until_parked();
+    let second = player.update(later, true, &executor).unwrap();
+    assert_ne!(second.id, first.id);
+    cx.run_until_parked();
+    let paused = later + std::time::Duration::from_secs(1);
+    assert_eq!(
+        player.update(paused, false, &executor).unwrap().id,
+        second.id
+    );
+    assert_eq!(
+        player.update(paused, true, &executor).unwrap().id,
+        second.id
+    );
+    assert_ne!(
+        player
+            .update(
+                paused + std::time::Duration::from_millis(20),
+                true,
+                &executor
+            )
+            .unwrap()
+            .id,
+        second.id
+    );
+}
+
+#[test]
+fn incremental_loading_checks_metadata_and_cache_budgets() {
+    for bytes in [gif(3), webp(3)] {
+        assert_limit(
+            load_image(
+                &bytes,
+                image::guess_format(&bytes).ok(),
+                &renderer(),
+                ImageLoadLimits {
+                    max_frames: 2,
+                    ..Default::default()
+                },
+                ImageAnimationOptions::default(),
+            ),
+            "frame count",
+        );
+        assert_limit(
+            load_image(
+                &bytes,
+                image::guess_format(&bytes).ok(),
+                &renderer(),
+                ImageLoadLimits {
+                    max_decoded_bytes: 95,
+                    ..Default::default()
+                },
+                ImageAnimationOptions::default(),
+            ),
+            "decoded bytes",
+        );
+    }
+}
+
+#[crate::test(iterations = 10)]
+async fn concurrent_animation_requests_and_cancellation_preserve_frames(
+    executor: BackgroundExecutor,
+) {
+    let bytes = composited_gif();
+    let expected = decode(&bytes, ImageLoadLimits::default()).unwrap();
+    let poster = load_image(
+        &bytes,
+        Some(ImageFormat::Gif),
+        &renderer(),
+        ImageLoadLimits::default(),
+        ImageAnimationOptions { cache_frames: 2 },
+    )
+    .unwrap();
+    let source = poster.animation().unwrap();
+    let cancelled = source.frame(3, &executor);
+    let first = source.frame(1, &executor);
+    let third = source.frame(3, &executor);
+    drop(cancelled);
+    let (first, third) = futures::join!(first, third);
+    assert_eq!(first.unwrap().as_bytes(0), expected.as_bytes(1));
+    assert_eq!(third.unwrap().as_bytes(0), expected.as_bytes(3));
+}
+
+#[crate::test]
+async fn image_asset_loader_returns_an_incremental_animation(cx: &mut TestAppContext) {
+    let bytes = gif(3);
+    let client = http_client::FakeHttpClient::create(move |_| {
+        let bytes = bytes.clone();
+        async move {
+            Ok(http_client::Response::builder()
+                .status(200)
+                .body(bytes.into())
+                .unwrap())
+        }
+    });
+    let task = cx.update(|cx| {
+        cx.set_http_client(client);
+        cx.set_global(ImageLoadLimits {
+            max_decoded_bytes: 96,
+            ..Default::default()
+        });
+        let future = ImageAssetLoader::load(
+            Resource::Uri("https://example.test/animation.gif".into()),
+            cx,
+        );
+        cx.background_executor().spawn(future)
+    });
+    let poster = task.await.unwrap();
+    assert_eq!(poster.frame_count(), 1);
+    assert_eq!(poster.animation().unwrap().frame_count(), 3);
+    let weak = Arc::downgrade(poster.animation().unwrap());
+    let pending = poster
+        .animation()
+        .unwrap()
+        .frame(2, &cx.background_executor);
+    drop(pending);
+    drop(poster);
+    cx.run_until_parked();
+    assert!(weak.upgrade().is_none());
 }

@@ -1,7 +1,7 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -117,6 +117,16 @@ impl Render for ImageShowcase {
                             .flex()
                             .flex_row()
                             .gap_8()
+                            .child(
+                                div().flex_col().child("Animated image").child(
+                                    img(Path::new(concat!(
+                                        env!("CARGO_MANIFEST_DIR"),
+                                        "/examples/image/black-cat-typing.gif"
+                                    )))
+                                    .id("animated-image")
+                                    .w(px(256.)),
+                                ),
+                            )
                             .child(
                                 div()
                                     .flex_col()

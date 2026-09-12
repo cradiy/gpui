@@ -253,6 +253,7 @@ impl DerefMut for Stateful<Img> {
 
 /// The image state between frames
 struct ImgState {
+    animation: Option<crate::image_loading::AnimationPlayback>,
     frame_index: usize,
     last_frame_time: Option<Instant>,
     started_loading: Option<(Instant, Task<()>)>,
@@ -260,6 +261,7 @@ struct ImgState {
 
 /// The image layout state between frames
 pub struct ImgLayoutState {
+    animation_frame: Option<Result<Arc<RenderImage>, ImageCacheError>>,
     frame_index: usize,
     replacement: Option<AnyElement>,
 }
@@ -284,6 +286,7 @@ impl Element for Img {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut layout_state = ImgLayoutState {
+            animation_frame: None,
             frame_index: 0,
             replacement: None,
         };
@@ -291,6 +294,7 @@ impl Element for Img {
         window.with_optional_element_state(global_id, |state, window| {
             let mut state = state.map(|state| {
                 state.unwrap_or(ImgState {
+                    animation: None,
                     frame_index: 0,
                     last_frame_time: None,
                     started_loading: None,
@@ -307,13 +311,48 @@ impl Element for Img {
                 |mut style, window, cx| {
                     let mut replacement_id = None;
 
-                    match self.source.use_data(
-                        self.image_cache
-                            .clone()
-                            .or_else(|| window.image_cache_stack.last().cloned()),
-                        window,
-                        cx,
-                    ) {
+                    let data = self
+                        .source
+                        .use_data(
+                            self.image_cache
+                                .clone()
+                                .or_else(|| window.image_cache_stack.last().cloned()),
+                            window,
+                            cx,
+                        )
+                        .map(|result| {
+                            result.and_then(|data| {
+                                if let Some(state) = &mut state {
+                                    if let Some(animation) = data.animation() {
+                                        if state
+                                            .animation
+                                            .as_ref()
+                                            .is_none_or(|player| player.image_id != data.id)
+                                        {
+                                            state.animation =
+                                                Some(crate::image_loading::AnimationPlayback::new(
+                                                    data.clone(),
+                                                    animation.clone(),
+                                                ));
+                                        }
+                                        let frame = state.animation.as_mut().unwrap().update(
+                                            Instant::now(),
+                                            window.is_window_active(),
+                                            cx.background_executor(),
+                                        );
+                                        layout_state.animation_frame = Some(frame.clone());
+                                        let frame = frame?;
+                                        if window.is_window_active() {
+                                            window.request_animation_frame();
+                                        }
+                                        return Ok(frame);
+                                    }
+                                    state.animation = None;
+                                }
+                                Ok(data)
+                            })
+                        });
+                    match data {
                         Some(Ok(data)) => {
                             let frame_count = data.frame_count();
                             let max_frame_index = frame_count.saturating_sub(1);
@@ -386,6 +425,11 @@ impl Element for Img {
                             }
                         }
                         Some(_err) => {
+                            if layout_state.animation_frame.is_none()
+                                && let Some(state) = &mut state
+                            {
+                                state.animation = None;
+                            }
                             if let Some(fallback) = self.style.fallback.as_ref() {
                                 let mut element = fallback();
                                 replacement_id = Some(element.request_layout(window, cx));
@@ -397,6 +441,7 @@ impl Element for Img {
                         }
                         None => {
                             if let Some(state) = &mut state {
+                                state.animation = None;
                                 if let Some((started_loading, _)) = state.started_loading {
                                     if started_loading.elapsed() > LOADING_DELAY
                                         && let Some(loading) = self.style.loading.as_ref()
@@ -475,13 +520,15 @@ impl Element for Img {
             window,
             cx,
             |style, window, cx| {
-                if let Some(Ok(data)) = source.use_data(
-                    self.image_cache
-                        .clone()
-                        .or_else(|| window.image_cache_stack.last().cloned()),
-                    window,
-                    cx,
-                ) {
+                if let Some(Ok(data)) = layout_state.animation_frame.clone().or_else(|| {
+                    source.use_data(
+                        self.image_cache
+                            .clone()
+                            .or_else(|| window.image_cache_stack.last().cloned()),
+                        window,
+                        cx,
+                    )
+                }) {
                     if data.frame_count() == 0 {
                         return;
                     }
@@ -604,11 +651,27 @@ impl Asset for ImageDecoder {
             .try_global::<ImageLoadLimits>()
             .copied()
             .unwrap_or_default();
-        async move { source.to_image_data_with_limits(renderer, limits) }
+        let options = cx
+            .try_global::<crate::ImageAnimationOptions>()
+            .copied()
+            .unwrap_or_default();
+        async move {
+            crate::image_loading::load_image(
+                &source.bytes,
+                image::ImageFormat::from_mime_type(source.format.mime_type()),
+                &renderer,
+                limits,
+                options,
+            )
+        }
     }
 }
 
-/// An image loader for the GPUI asset system
+/// An image loader for the GPUI asset system.
+///
+/// Animated images return a poster with a [`RenderImage::animation`] source.
+/// The `img` element plays it automatically; custom consumers request frames
+/// from that source on a background executor.
 #[derive(Clone)]
 pub enum ImageAssetLoader {}
 
@@ -625,12 +688,16 @@ impl Asset for ImageAssetLoader {
         // let scale_factor = cx.scale_factor();
         let svg_renderer = cx.svg_renderer();
         let asset_source = cx.asset_source().clone();
+        let options = cx
+            .try_global::<crate::ImageAnimationOptions>()
+            .copied()
+            .unwrap_or_default();
         let limits = cx
             .try_global::<ImageLoadLimits>()
             .copied()
             .unwrap_or_default();
         async move {
-            use crate::image_loading::{decode_image, read_image_bytes};
+            use crate::image_loading::{load_image, read_image_bytes};
             let bytes = match source {
                 Resource::Path(uri) => {
                     let file = std::fs::File::open(uri.as_ref())?;
@@ -670,11 +737,12 @@ impl Asset for ImageAssetLoader {
                 }
             };
 
-            decode_image(
+            load_image(
                 &bytes,
                 image::guess_format(&bytes).ok(),
                 &svg_renderer,
                 limits,
+                options,
             )
         }
     }

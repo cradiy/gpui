@@ -7,12 +7,34 @@ use image::{
 use smallvec::SmallVec;
 use std::{io::Cursor, sync::Arc};
 
+mod animation;
+mod playback;
+pub use animation::{ImageAnimation, ImageAnimationOptions};
+pub(crate) use playback::AnimationPlayback;
+
+pub(crate) fn load_image(
+    bytes: &[u8],
+    format: Option<ImageFormat>,
+    svg_renderer: &SvgRenderer,
+    limits: ImageLoadLimits,
+    options: ImageAnimationOptions,
+) -> Result<Arc<RenderImage>, ImageCacheError> {
+    if matches!(format, Some(ImageFormat::Gif | ImageFormat::WebP)) {
+        limits.check_input(bytes.len() as u64)?;
+        animation::load(Arc::from(bytes), format.unwrap(), limits, options)
+    } else {
+        decode_image(bytes, format, svg_renderer, limits)
+    }
+}
+
 /// Per-image resource limits for GPUI's built-in image loaders.
 ///
 /// Install with `cx.set_global(ImageLoadLimits { ..Default::default() })` before
 /// loading images. Each new load captures the current limits; cached images are
 /// unchanged. Custom loaders and already decoded `RenderImage` values are excluded.
 /// Decoder scratch allocations and SVG parsing are not strictly memory-bounded.
+/// GIF and animated WebP loaders retain a poster and a bounded decoded frame cache;
+/// frames held by callers can outlive that cache.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageLoadLimits {
     /// Maximum encoded input size, in bytes. Defaults to 64 MiB.

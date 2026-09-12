@@ -6,7 +6,10 @@ use std::{
     borrow::Cow,
     fmt,
     hash::Hash,
-    sync::atomic::{AtomicUsize, Ordering::SeqCst},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering::SeqCst},
+    },
 };
 
 /// A source of assets for this app to use.
@@ -32,6 +35,13 @@ impl AssetSource for () {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ImageId(pub usize);
 
+impl ImageId {
+    pub(crate) fn allocate() -> Self {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+        Self(NEXT_ID.fetch_add(1, SeqCst))
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Clone)]
 #[expect(missing_docs)]
 pub struct RenderImageParams {
@@ -45,7 +55,8 @@ pub struct RenderImage {
     pub id: ImageId,
     /// The scale factor of this image on render.
     pub(crate) scale_factor: f32,
-    data: SmallVec<[Frame; 1]>,
+    data: Arc<SmallVec<[Frame; 1]>>,
+    animation: Option<Arc<crate::ImageAnimation>>,
 }
 
 impl PartialEq for RenderImage {
@@ -59,12 +70,25 @@ impl Eq for RenderImage {}
 impl RenderImage {
     /// Create a new image from the given data.
     pub fn new(data: impl Into<SmallVec<[Frame; 1]>>) -> Self {
-        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
-
         Self {
-            id: ImageId(NEXT_ID.fetch_add(1, SeqCst)),
+            id: ImageId::allocate(),
             scale_factor: 1.0,
-            data: data.into(),
+            data: Arc::new(data.into()),
+            animation: None,
+        }
+    }
+
+    /// The asynchronous animation source, if this image is an animation poster.
+    pub fn animation(&self) -> Option<&Arc<crate::ImageAnimation>> {
+        self.animation.as_ref()
+    }
+
+    pub(crate) fn with_animation(&self, animation: Arc<crate::ImageAnimation>) -> Self {
+        Self {
+            id: self.id,
+            scale_factor: self.scale_factor,
+            data: self.data.clone(),
+            animation: Some(animation),
         }
     }
 
@@ -100,7 +124,9 @@ impl RenderImage {
             .unwrap_or(Delay::from_numer_denom_ms(100, 1))
     }
 
-    /// Get the number of frames for this image.
+    /// Number of resident frames in this image. An asynchronous animation poster
+    /// contains one frame; use [`ImageAnimation::frame_count`](crate::ImageAnimation::frame_count)
+    /// for its full animation length.
     pub fn frame_count(&self) -> usize {
         self.data.len()
     }

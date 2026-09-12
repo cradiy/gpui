@@ -5342,6 +5342,18 @@ impl Window {
 
     /// Removes an image from the sprite atlas.
     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
+        if let Some(animation) = data.animation() {
+            for image_id in animation.frame_ids() {
+                self.sprite_atlas.remove(
+                    &RenderImageParams {
+                        image_id: *image_id,
+                        frame_index: 0,
+                    }
+                    .into(),
+                );
+            }
+            return Ok(());
+        }
         for frame_index in 0..data.frame_count() {
             let params = RenderImageParams {
                 image_id: data.id,

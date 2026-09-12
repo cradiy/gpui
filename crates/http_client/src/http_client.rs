@@ -1,6 +1,4 @@
 mod async_body;
-#[cfg(not(target_family = "wasm"))]
-pub mod github;
 
 pub use anyhow::{Result, anyhow};
 pub use async_body::{AsyncBody, Inner, Json};

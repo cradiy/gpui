@@ -8,6 +8,9 @@ use gpui_3d_gltf::GpuSceneDeformation;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
+#[path = "grid.rs"]
+mod grid;
+
 fn read<T>(mut poll: impl FnMut() -> anyhow::Result<Option<T>>) -> anyhow::Result<T> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -23,7 +26,17 @@ fn read<T>(mut poll: impl FnMut() -> anyhow::Result<Option<T>>) -> anyhow::Resul
 #[ignore = "requires a compute-capable GPU with SHADER_F64"]
 fn imported_generated_directions_render_and_pick_retained_deformation_frames() -> anyhow::Result<()>
 {
-    let mut fixture = generated_fixture(false);
+    for fixture in [
+        generated_fixture(false),
+        grid::fixture(false),
+        grid::fixture(true),
+    ] {
+        render_retained_frames(fixture)?;
+    }
+    Ok(())
+}
+
+fn render_retained_frames(mut fixture: super::super::Fixture) -> anyhow::Result<()> {
     fixture.json["meshes"].as_array_mut().unwrap().truncate(1);
     fixture.json["meshes"][0]["primitives"]
         .as_array_mut()
@@ -57,17 +70,17 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
     let viewport = Bounds::new(point(px(0.), px(0.)), size(px(96.), px(80.)));
     let mut retained = Vec::new();
     let mut packing = None;
-    for (index, weight) in [None, Some(-0.4), Some(0.), Some(0.8)]
+    for (index, weight) in [None, Some(-0.4), Some(0.), Some(0.8), Some(0.)]
         .into_iter()
         .enumerate()
     {
         graph.set_transform(
             joint,
-            AffineTransform::from_translation([
-                index as f32 * 0.12,
-                -0.15,
-                0.2 + index as f32 * 0.1,
-            ])?,
+            AffineTransform::from_trs(
+                [index as f32 * 0.08, -0.15, 0.2 + index as f32 * 0.1],
+                [0., 0.1, 0.05, 1.],
+                [1.2, 0.8, 1.4],
+            )?,
         )?;
         let poses = graph.evaluate()?;
         let weights = weight
@@ -96,16 +109,16 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
             f32::from(projected.position.x).floor() as u32,
             f32::from(projected.position.y).floor() as u32,
         ];
-        let cpu_scene = poses.with_meshes(cpu_meshes)?.scene(camera);
+        let cpu_scene = poses.with_meshes(cpu_meshes.clone())?.scene(camera);
         let ray = camera.screen_to_ray(
             viewport,
             point(px(pixel[0] as f32 + 0.5), px(pixel[1] as f32 + 0.5)),
         )?;
         let expected_hit = cpu_scene.raycast(ray).unwrap();
         assert_eq!(expected_hit.node, Some(primitive));
-        let cpu_frame = renderer.render(&cpu_scene, config)?;
 
         let outputs = deformation.evaluate(&instance, &poses, &weights, None)?;
+        let retained_outputs = outputs.clone();
         let scene = poses
             .with_meshes(
                 outputs
@@ -133,8 +146,22 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
                 bounds: [prepared.bounds().min(), prepared.bounds().max()],
             });
         }
-        let frame = renderer.render_with_geometry(&scene, config, &draws)?;
-        retained.push((frame, cpu_frame, pixel, camera));
+        for color_samples in [1, 4] {
+            let config = Scene3dOutputConfig {
+                color_samples,
+                ..config
+            };
+            let cpu_frame = renderer.render(&cpu_scene, config)?;
+            let frame = renderer.render_with_geometry(&scene, config, &draws)?;
+            retained.push((
+                frame,
+                cpu_frame,
+                pixel,
+                camera,
+                retained_outputs.clone(),
+                cpu_meshes.clone(),
+            ));
+        }
     }
     drop(deformation);
     drop(packing);
@@ -144,7 +171,11 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
     drop(renderer);
 
     let mut previous_id = None;
-    for (frame, cpu_frame, pixel, camera) in retained {
+    for (frame, cpu_frame, pixel, camera, outputs, cpu_meshes) in retained.into_iter().rev() {
+        for ((node, output), (expected_node, mesh)) in outputs.iter().zip(cpu_meshes) {
+            assert_eq!(*node, expected_node);
+            super::same_mesh(&output.readback()?, &mesh);
+        }
         assert_ne!(previous_id.as_ref(), Some(frame.frame_id()));
         previous_id = Some(frame.frame_id().clone());
         let mut request = frame.readback()?;
@@ -183,6 +214,15 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
                     .zip(expected.pixels.linear_rgba.as_ref().unwrap()[i])
                 {
                     assert!((a - b).abs() < 2e-3, "color at ({x}, {y}): {a} != {b}");
+                }
+                for (a, b) in actual.pixels.rgba.as_ref().unwrap()[i * 4..i * 4 + 4]
+                    .iter()
+                    .zip(&expected.pixels.rgba.as_ref().unwrap()[i * 4..i * 4 + 4])
+                {
+                    assert!(
+                        a.abs_diff(*b) <= 1,
+                        "encoded color at ({x}, {y}): {a} != {b}"
+                    );
                 }
             }
         }

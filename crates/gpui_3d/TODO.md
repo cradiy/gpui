@@ -234,11 +234,11 @@ Core implementation order:
      - [x] **Imported palette admission**: Compose every mapped Skin palette before batch budget admission and GPU work; retain validated matrices through upload with primitive/joint error context.
      - [x] **Imported capability admission**: CPU-only asset-wide enabled-feature and compute-stage limit checks before source upload, with source primitive/stage diagnostics and independent render-packing requirements.
      - [x] **Imported source admission**: CPU-only aggregate retained-buffer planning, core payload checks before the first upload, per-occurrence source accounting, bind-direction snapshots, and viewer source budgets independent of evaluation.
-     - [ ] **Source admission GPU validation**: Verify constructor budget boundaries, retained reports, direction-stage allocations and multi-primitive source lifetime on supported adapters.
-     - [ ] **Evaluation budget GPU validation**: Verify signed/default/zero-weight plans, exact aggregate limits, retained output sizes, source reuse, and rejection before dispatch on supported adapters.
+     - [x] **Source admission GPU validation**: Verify constructor budget boundaries, retained reports, direction-stage allocations and multi-primitive source lifetime on supported adapters.
+     - [x] **Evaluation budget GPU validation**: Verify signed/default/zero-weight plans, exact aggregate limits, retained output sizes, source reuse, and rejection before dispatch on supported adapters.
      - [x] **Imported GPU viewer**: Explicit CPU/GPU modes, retained material-coordinate inputs independent of image readiness, complete pose/bounds publication, and submitted-frame primitive selection in the existing model viewer.
      - [ ] **Imported viewer GPU validation**: Verify animated GLB assets, CPU/GPU pose parity, asynchronous selection, image loading, resize, authored cameras, and mode/reload changes on supported adapters.
-     - [ ] **Generated tangents**: Preserve imported MikkTSpace policies on deformed GPU geometry, including vertex correspondence and handedness.
+     - [x] **Generated tangents**: Preserve imported MikkTSpace policies on deformed GPU geometry, including vertex correspondence and handedness.
        - [x] **GPU triangle derivatives**: Retained indices and selected UVs, immutable input/face pairing, derivative directions and magnitudes, mirrored-orientation and degeneracy classification, and bounded payload admission.
        - [x] **Corner source preparation**: Bounded unshared expansion, bit-preserved vertex attributes and tangent-set identity, output-to-source correspondence, and shared glTF Morph topology preparation.
        - [x] **Deformation source remapping**: Output-to-source Morph/Skin rebinding, exact delta and normalized-weight preservation, shared joint bindings, identity-map sharing, and validation before allocation.
@@ -254,12 +254,12 @@ Core implementation order:
            - [x] **Corner frame GPU validation**: Verify nonuniform angles, mirrored/opposing directions, deformed normals and positions, collapsed faces, donor selection across workgroups, seams, numeric failures, and retained snapshots against CPU tangent generation on supported adapters.
          - [x] **Adjacency GPU validation**: Verify mirrored boundaries, non-manifold ranks, point-only contact, collapsed/collinear and failed faces, dynamic pairing, and retained results on supported adapters.
          - [x] **Welding GPU validation**: Verify dynamic split/merge, shared indices, seams, signed zero, failed corners, multi-workgroup sorting, and retained frames on supported adapters.
-       - [ ] **GPU tangent publication**: Normal-orthogonal frames, imported repair policy, handedness checks, Morph-to-Skin composition, and CPU MikkTSpace parity on supported adapters.
+       - [x] **GPU tangent publication**: Normal-orthogonal frames, imported repair policy, handedness checks, Morph-to-Skin composition, and CPU MikkTSpace parity on supported adapters.
          - [x] **Fixed-order tangent vertices**: Initial tangent-source metadata, normal projection, explicit Strict/Inherit/Repair modes, triangle handedness rejection, independent repair tags, and canonical deformation output for Skin and render packing.
          - [x] **Combined tangent generation**: Reusable stage ownership, direct deformation-to-tangent evaluation, aggregate payload admission, retained output identity, and explicit normal-reconstruction ordering.
          - [x] **Imported tangent dispatch**: Selected-UV Repair generation after Morph and normal reconstruction, retained zero-weight base directions, ordered corner admission, Morph-to-Skin composition, and output-specific render source identity.
          - [x] **Publication GPU validation**: Verify deformed frame projection, repair selection, mixed signs, original failure propagation, retained outputs, and Morph/Skin/render composition on supported adapters.
-         - [ ] **CPU/GPU generation parity**: Verify welding keys, edge ordering, normalization, and degenerate-frame inheritance across core and imported evaluation paths, including generated tangents and zero-weight transitions.
+         - [x] **CPU/GPU generation parity**: Verify welding keys, edge ordering, normalization, and degenerate-frame inheritance across core and imported evaluation paths, including generated tangents and zero-weight transitions.
            - [x] **Regular-frame thresholds**: Strict lower bounds for the UV determinant and derivative magnitudes, independent zero-UV classification, and undefined-frame inheritance eligibility.
            - [x] **Publication numeric admission**: Retained CPU UV-degeneracy classification, edge/derivative range checks, and unrepaired numeric failure status in every generation mode.
            - [x] **Projected normalization**: Unscaled f32 direction normalization, explicit underflow-to-undefined handling, subgroup-local repair eligibility, and independent bitangent validity.
@@ -268,7 +268,7 @@ Core implementation order:
            - [x] **CPU topology rules**: Exact-bit corner welding, deterministic representatives, and face-ordered opposite-edge pairing, including non-manifold edges.
            - [x] **Publication precision**: Device-admitted f64 normal projection and relative degeneracy threshold, wide geometric-area classification, and CPU-ordered derivative repair rounding.
            - [x] **Derivative area classification**: Shared f64 geometric-area rules across derivative records and tangent publication, independent of f32 direction eligibility and UV orientation.
-     - [ ] **Imported GPU validation**: Verify signed/default weights, multiple primitives and instances, direction reconstruction, source identity, and retained outputs against CPU evaluation on supported adapters.
+     - [x] **Imported GPU validation**: Verify signed/default weights, multiple primitives and instances, direction reconstruction, source identity, and retained outputs against CPU evaluation on supported adapters.
    - [x] **Nonblocking mesh readback**: Owned staging requests, pre-allocation byte limits, explicit completion polling, and independent CPU mesh publication.
    - [x] **Bounds reduction**: Reusable GPU position reduction, fixed-size nonblocking readback, per-request admission, invalid-output rejection, and explicit geometry/bounds pairing.
    - [ ] **Render integration**: Consume deformation buffers without CPU readback, with explicit bounds and query synchronization policies.

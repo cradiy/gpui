@@ -22,6 +22,9 @@ mod resource_tests;
 #[cfg(all(test, not(target_family = "wasm")))]
 mod interpolation_tests;
 
+#[cfg(all(test, not(target_family = "wasm")))]
+mod attribute_tests;
+
 #[cfg(not(target_family = "wasm"))]
 pub(super) struct Pipelines {
     _source: Scene3dMaterialSource,

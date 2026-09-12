@@ -1,0 +1,20 @@
+[package]
+name = "gpui_3d_effects"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "MIT"
+description = "Reusable spatial effects for GPUI interfaces"
+
+[dependencies]
+gpui.workspace = true
+gpui_3d.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+gpui_3d = { workspace = true, features = ["wgpu"] }
+gpui_effects.workspace = true
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+
+[lints]
+workspace = true

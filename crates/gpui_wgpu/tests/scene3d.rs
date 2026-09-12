@@ -6,6 +6,9 @@ use gpui::{
 use gpui_wgpu::WgpuOffscreenRenderer;
 use std::{rc::Rc, sync::Arc};
 
+#[path = "scene3d/submissions.rs"]
+mod submissions;
+
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn viewport_pick_outputs_retain_frame_identity_across_resize_and_capture_errors()

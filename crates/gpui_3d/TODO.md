@@ -349,7 +349,7 @@ contract. Core APIs do not own a physics world, character controller, or editor 
   - [x] **Imported source rebinding**: Mesh-allocation-aware render-source reuse across direction regeneration and zero-weight transitions, with retained displayed batches.
   - [x] **Viewer packing cache**: One current source per node, aggregate source-plus-result admission before upload, coordinate/device preflight, and transactional replacement after batch request creation.
   - [ ] **Packing cache GPU validation**: Verify UV and mesh replacements, shared index retention, removed entries, and displayed output lifetime on supported adapters.
-  - [ ] **Submission acceptance**: Verify combined GPU geometry, custom streams, material/pass changes, retained outputs and asynchronous coverage identities across viewport and headless rendering.
+  - [x] **Submission acceptance**: Verify combined GPU geometry, custom streams, material/pass changes, retained outputs and asynchronous coverage identities across viewport and headless rendering.
 - [ ] **Deformed custom-material picking**: Bind regional ID/depth and coverage results to the submitted geometry, material resources, camera, and viewport identity; reject stale results and preserve retained-frame reads after updates.
   - [x] **Output provenance**: Opaque output identities carried through regional/full readbacks, picks, CPU coverage/labels and GPU labels, with mounted-viewport freshness checks before or after completion.
   - [x] **Publication provenance**: Successful and failed viewport captures retain weak source-frame identities; frame-filtered reads reject earlier publications before backend downcast.

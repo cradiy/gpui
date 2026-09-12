@@ -1,5 +1,7 @@
 # 3D viewports
 
+[Overview and documentation](../README.md) · [Examples](examples.md)
+
 `gpui_3d` embeds depth-tested mesh scenes in ordinary GPUI layouts. A viewport
 supports perspective and orthographic cameras, indexed triangle geometry, direct lights,
 and solid, image or captured-UI materials.
@@ -24,23 +26,6 @@ Give the viewport an explicit size or a bounded parent. Standard `Styled`
 methods control its layout and outer appearance. Use an enclosing interactive
 `div` for pointer handlers; update the camera and notify the view after input.
 The viewport does not schedule animation frames itself.
-
-## Topics
-
-| Topic | Content |
-| --- | --- |
-| [Geometry](topics/geometry.md) | Coordinates, mesh construction, primitives, normals, and vertex updates. |
-| [Scenes](topics/scenes.md) | Node hierarchy, identities, reusable subtrees, cameras, and light nodes. |
-| [Cameras](topics/camera.md) | Projection, optics, framing, Orbit controls, and damping. |
-| [Animation](topics/animation.md) | Transform and weight tracks, pose blending, Morph, and skinning. |
-| [Constraints](topics/constraints.md) | Follow, Aim, joint limits, and IK chains. |
-| [GPU deformation](topics/deformation.md) | Morph/Skin computation, viewport/headless geometry, retained buffers, and CPU readback. |
-| [Materials](topics/materials.md) | PBR, transparency, texture sampling, tangent frames, and color output. |
-| [Lighting](topics/lighting.md) | Direct lights, shadows, HDR backgrounds, and diffuse/specular environments. |
-| [Queries](topics/queries.md) | Rays, bounds, spatial indices, filtering, and object picking. |
-| [UI textures](topics/ui.md) | Captured UI sizing, pointer routing, and interaction limits. |
-| [Rendering](topics/rendering.md) | Resource preparation, batching, quality, effects, caches, and measurements. |
-| [Headless output](topics/headless.md) | Output channels, GPU ownership, readback, and resource limits. |
 
 ## Backend support
 
@@ -87,55 +72,3 @@ returns independently selectable display-color, linear-HDR, object-ID, linear-de
 textures with a frame-local identity map and bounded
 nonblocking CPU readback. See [Headless rendering](topics/headless.md) for formats,
 coverage, resource readiness, and ownership.
-
-## Examples
-
-Each example is an independent executable.
-
-| Example | Controls and content |
-| --- | --- |
-| `scene` | Shared mesh assemblies, hierarchy edits, subtree instances, selection, free/rig cameras, attached spot lights, transform tracks, vertex tapering, two-target morph blending, and two-joint skin bending with independent weights and playback controls. |
-| `materials` | Dielectric/metal/emissive spheres, normal and ORM maps, roughness, emission, exposure, tone mapping, UV addressing, mipmaps, anisotropy, and alpha modes. |
-| `lighting` | Direct lights, diffuse/specular environments, roughness, independent HDR background, directional shadows, map resolution, soft edges, Bloom, and color adjustment. |
-| `ui` | Captured UI buttons, slider and scrolling, occlusion, logical layout size and raster density. |
-| `headless` | Window-free display/HDR/ID/depth/normal readback, PNG previews and object identity inspection. |
-
-```sh
-cargo run -p gpui_3d --example scene
-cargo run -p gpui_3d --example materials
-cargo run -p gpui_3d --example lighting
-cargo run -p gpui_3d --example ui
-cargo run -p gpui_3d --features wgpu --example headless -- /tmp/gpui-3d-outputs
-```
-
-In `scene`, hover an assembly to highlight its toolbar control, or click it to
-select it. The numbered controls also select assemblies. Move or
-tint its body, rotate the assembly, or hide its subtree. Other instances retain
-their own properties. Right-drag to orbit, middle-drag to pan, and scroll to zoom.
-Projection preserves the apparent size at the target; Frame selected fits the
-selected assembly's bounds.
-Camera damping toggles an 80 ms response half-life for manual camera controls.
-
-Normal map applies a directional ridge pattern to the bodies. Regenerate tangents
-derives their tangent frames from the deformed geometry before skinning. Combine
-it with Blend shapes and Bend skin, then switch CPU/GPU deformation at a paused
-time to compare shading. The GPU control requires the `wgpu` feature; tangent
-regeneration also requires [device-enabled `SHADER_F64`](topics/tangent_weld.md#work-and-memory).
-GPU tangent generation expands triangle corners and remaps Morph and Skin bindings; it keeps
-the prepared initial pose or last validated output visible while the next result
-is pending. Errors are displayed in the viewport without switching to CPU evaluation.
-
-In `materials`, the spheres share geometry and expose different material responses.
-Normal and occlusion maps toggle independently of metallic-roughness and emissive
-maps. The strip below the spheres shows image alpha over an opaque background.
-Cycle Opaque/Mask/Blend, Clamp/Repeat/Mirror, and Nearest/Linear; density and offset
-also affect the strip. Exposure and tone mapping apply to the complete 3D scene.
-
-In `lighting`, move the pointer to steer the source. Shadow controls apply only
-to the directional source. Lift the objects to inspect detached shadows, or toggle
-the environment and fill light to inspect illumination inside shadowed areas.
-
-In `ui`, drag the slider beyond the panel and scroll the notes. Toggle the occluder
-to block part of the panel. Density changes raster quality without reflow; canvas
-width changes layout and the mesh aspect ratio. Right-drag to orbit, or left-drag
-empty space. Scroll outside the panel to zoom.

@@ -1,4 +1,4 @@
-## Skeletal skins
+# Skeletal skins
 
 `PreparedDocument::skin(index, options)` converts a skin's document-local joint
 indices, optional skeleton/name, and inverse bind matrices into `SkinDefinition`.
@@ -19,7 +19,7 @@ invalid references, and incompatible bindings produce contextual errors before
 image decoding. Core failures while evaluating the initial pose are returned by
 `resolve_images`/`decode_images`.
 
-### Instances and pose evaluation
+## Instances and pose evaluation
 
 `SceneAsset::subtree()` contains geometry evaluated at the authored joint pose
 and default Morph weights.
@@ -83,7 +83,7 @@ skinned result. For caller-owned Morph data, evaluate Morph first, then use
 `binding().evaluate_world` with the same instance-space mapping. Evaluation is
 synchronous CPU work; callers own scheduling and time selection.
 
-### Limits
+## Limits
 
 `SkinOptions::joint_limit` defaults to 65,536 joints per definition.
 `GeometryOptions::influence_limit` bounds input and generated vertex slots.

@@ -1,4 +1,4 @@
-## Animation clips
+# Animation clips
 
 `PreparedDocument::animation(index, options)` converts one animation into shared,
 CPU-only `AnimationClip` data. Translation, XYZW rotation, scale, and Morph weight
@@ -20,7 +20,7 @@ timestamps that collapse at nanosecond precision are rejected.
 [`AnimationPlayback`](playback.md) provides optional caller-advanced time controls
 for pause, seek, signed speed and looping without changing track data.
 
-### Scene instances
+## Scene instances
 
 `AnimationClip::bind(instance, policy)` maps tracks to a `SceneInstance` once.
 `AnimationTargetPolicy::RequireAll` rejects targets outside that scene;
@@ -47,7 +47,7 @@ for masked override or reference-relative additive mixing. Supply a complete bas
 for every layered target; sparse clip samples do not insert unanimated defaults.
 Pass the mixed collection's `weights()` into instance deformation.
 
-### Authored bases
+## Authored bases
 
 `SceneInstance::authored_pose()` builds a core `Pose` containing every
 TRS-authored node in the selected scene, including unanimated nodes. Values use
@@ -94,7 +94,7 @@ For layered overrides, blend sparse samples directly onto the current base with
 the desired weight and optional mask. The authored bases can also be retained
 as additive references.
 
-### Scene evaluation
+## Scene evaluation
 
 ```no_run
 use std::time::Duration;
@@ -127,7 +127,7 @@ evaluation rejects expired handles. Bind separately for each instance and combin
 sampled poses and mesh replacements before final scene evaluation. Playback,
 layer mixing, constraints, and release of graph nodes remain caller-owned.
 
-### Admission and errors
+## Admission and errors
 
 `AnimationOptions` bounds channels, aggregate keyframes, and retained f32
 values/derivatives per conversion. Shared samplers are charged per channel.

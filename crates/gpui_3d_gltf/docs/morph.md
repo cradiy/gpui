@@ -1,4 +1,4 @@
-## Morph geometry
+# Morph geometry
 
 `PrimitiveGeometry::morph()` returns optional shared `MorphGeometry`. Each target
 retains float VEC3 position, normal, and tangent deltas mapped to the converted
@@ -27,7 +27,7 @@ nonzero geometric area. Invalid normals, incompatible tangent handedness, or
 unrepresentable results return errors without changing topology or dropping
 triangles.
 
-### Attribute inputs
+## Attribute inputs
 
 `attribute_targets()` exposes the shared core `MorphTargets` before direction
 regeneration. Cloning it retains the converted vertex order and target arrays.
@@ -55,7 +55,7 @@ Generated tangents are absent from `attribute_targets().base_mesh()`, even when
 `MorphGeometry::base_mesh()` contains them. For zero weights, `evaluate` returns
 the complete base mesh, including its generated directions.
 
-### Scene weights and deformation
+## Scene weights and deformation
 
 `SceneAsset::morphs()` associates each morphable primitive with its source node,
 geometry, and authored weights. Node weights take precedence over mesh weights;
@@ -93,7 +93,7 @@ authored graph remains unchanged. Graph edits between pose sampling and final
 evaluation require resampling. See
 [Scene evaluation](../../gpui_3d/docs/topics/evaluation.md) for override semantics.
 
-### Validation and limits
+## Validation and limits
 
 Each target attribute requires its corresponding base attribute and matching
 accessor count. Position targets require finite, ordered VEC3 min/max metadata;

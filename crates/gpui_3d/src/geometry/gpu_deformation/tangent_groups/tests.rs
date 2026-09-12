@@ -4,6 +4,8 @@ use crate::{
     MorphTarget, MorphTargets, Vertex,
 };
 
+mod regular;
+
 #[test]
 fn pass_bound_covers_bidirectional_chains_cycles_and_disconnected_vertices() {
     for count in [3usize, 6, 63, 66, 129, 258] {

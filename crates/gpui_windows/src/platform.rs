@@ -241,6 +241,7 @@ impl WindowsPlatform {
             disable_direct_composition: self.disable_direct_composition,
             directx_devices: self.inner.state.directx_devices.borrow().clone().unwrap(),
             gpu_context: self.inner.state.gpu_context.clone(),
+            popup_parent: None,
             invalidate_devices: self.invalidate_devices.clone(),
         }
     }
@@ -537,7 +538,18 @@ impl Platform for WindowsPlatform {
         handle: AnyWindowHandle,
         options: WindowParams,
     ) -> Result<Box<dyn PlatformWindow>> {
-        let window = WindowsWindow::new(handle, options, self.generate_creation_info())?;
+        let mut creation_info = self.generate_creation_info();
+        if let WindowKind::AnchoredPopup(popup) = &options.kind {
+            creation_info.popup_parent = Some(
+                self.raw_window_handles
+                    .read()
+                    .iter()
+                    .filter_map(|hwnd| window_from_hwnd(hwnd.as_raw()))
+                    .find(|window| window.handle == popup.parent)
+                    .context("popup parent must be an open window on this platform")?,
+            );
+        }
+        let window = WindowsWindow::new(handle, options, creation_info)?;
         let handle = window.get_raw_handle();
         self.raw_window_handles.write().push(handle.into());
 
@@ -1197,6 +1209,7 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) disable_direct_composition: bool,
     pub(crate) directx_devices: DirectXDevices,
     pub(crate) gpu_context: gpui_wgpu::GpuContext,
+    pub(crate) popup_parent: Option<Rc<WindowsWindowInner>>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
     pub(crate) invalidate_devices: Arc<AtomicBool>,

@@ -42,10 +42,19 @@ impl WindowsWindowInner {
         let handled = match msg {
             // eagerly activate the window, so calls to `active_window` will work correctly
             WM_MOUSEACTIVATE => {
+                if self.popup.as_ref().is_some_and(|popup| !popup.options.grab) {
+                    return LRESULT(MA_NOACTIVATE as isize);
+                }
                 unsafe { SetActiveWindow(handle).ok() };
                 None
             }
             WM_ACTIVATE => self.handle_activate_msg(wparam),
+            WM_ACTIVATEAPP
+                if wparam.0 == 0 && self.popup.as_ref().is_some_and(|popup| popup.options.grab) =>
+            {
+                self.dismiss_popup();
+                Some(0)
+            }
             WM_CREATE => self.handle_create_msg(handle),
             WM_MOVE => self.handle_move_msg(handle, lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
@@ -153,6 +162,7 @@ impl WindowsWindowInner {
             callback();
             self.state.callbacks.moved.set(Some(callback));
         }
+        self.reposition_owned_popups();
         Some(0)
     }
 
@@ -221,6 +231,7 @@ impl WindowsWindowInner {
             callback(new_logical_size, scale_factor);
             self.state.callbacks.resize.set(Some(callback));
         }
+        self.reposition_owned_popups();
     }
 
     fn handle_size_move_loop(&self, handle: HWND) -> Option<isize> {
@@ -272,6 +283,10 @@ impl WindowsWindowInner {
     }
 
     fn handle_destroy_msg(&self, handle: HWND) -> Option<isize> {
+        if self.state.destroyed.replace(true) {
+            return Some(0);
+        }
+        self.state.renderer.borrow_mut().destroy();
         let callback = { self.state.callbacks.close.take() };
         // Re-enable parent window if this was a modal dialog
         if let Some(parent_hwnd) = self.parent_hwnd {
@@ -362,6 +377,12 @@ impl WindowsWindowInner {
     // It's a known bug that you can't trigger `ctrl-shift-0`. See:
     // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
     fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+        if wparam.0 == VK_ESCAPE.0 as usize
+            && self.popup.as_ref().is_some_and(|popup| popup.options.grab)
+        {
+            self.dismiss_popup();
+            return Some(0);
+        }
         let Some(input) = handle_key_event(
             wparam,
             lparam,
@@ -814,10 +835,27 @@ impl WindowsWindowInner {
         let new_scale_factor = new_dpi / USER_DEFAULT_SCREEN_DPI as f32;
         self.state.scale_factor.set(new_scale_factor);
         self.state.border_offset.update(handle).log_err();
-
         self.state
             .direct_manipulation
             .set_scale_factor(new_scale_factor);
+        if let Some(popup) = &self.popup {
+            popup.place(handle, false).log_err();
+            let mut rect = RECT::default();
+            if unsafe { GetClientRect(handle, &mut rect) }
+                .log_err()
+                .is_some()
+            {
+                self.handle_size_change(
+                    size(
+                        DevicePixels(rect.right - rect.left),
+                        DevicePixels(rect.bottom - rect.top),
+                    ),
+                    self.state.scale_factor.get(),
+                    true,
+                );
+            }
+            return Some(0);
+        }
 
         if is_maximized {
             // Get the monitor and its work area at the new DPI
@@ -888,6 +926,9 @@ impl WindowsWindowInner {
     }
 
     fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+        if self.popup.is_some() {
+            return Some(HTCLIENT as isize);
+        }
         if self.state.is_fullscreen() {
             return None;
         }

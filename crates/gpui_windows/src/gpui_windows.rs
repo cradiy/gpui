@@ -12,6 +12,7 @@ mod display;
 mod events;
 mod keyboard;
 mod platform;
+mod popup;
 mod renderer;
 mod system_settings;
 mod tray;

@@ -39,6 +39,7 @@ impl From<FrameExtractionSuperseded> for MediaError {
 /// Configuration for an independent frame extraction pipeline.
 #[derive(Clone, Copy, Debug)]
 pub struct VideoFrameExtractorOptions {
+    pub video_decoder: crate::VideoDecoderPolicy,
     pub timeout: Duration,
     pub seek_mode: SeekMode,
     /// Maximum number of extraction requests waiting behind the active seek.
@@ -51,6 +52,7 @@ pub struct VideoFrameExtractorOptions {
 impl Default for VideoFrameExtractorOptions {
     fn default() -> Self {
         Self {
+            video_decoder: crate::VideoDecoderPolicy::Auto,
             timeout: Duration::from_secs(10),
             seek_mode: SeekMode::Accurate,
             request_queue_capacity: 2,
@@ -110,6 +112,7 @@ impl VideoFrameExtractor {
         let session = backend.open_frame_extractor(FrameExtractorBackendRequest {
             source,
             timeout: options.timeout,
+            video_decoder: options.video_decoder,
         })?;
         let (request_tx, request_rx) =
             async_channel::bounded::<WorkerRequest>(options.request_queue_capacity);

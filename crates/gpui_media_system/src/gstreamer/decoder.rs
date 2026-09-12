@@ -6,6 +6,8 @@ use std::sync::{
 use gpui_media_core::{DecoderAcceleration, DecoderDeviceProperty, VideoDecoderInfo, VideoFrame};
 use gst::prelude::*;
 
+pub(super) mod selection;
+
 struct Observation {
     pad: gst::glib::WeakRef<gst::Pad>,
     stream_id: gst::glib::GString,

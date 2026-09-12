@@ -7,7 +7,8 @@ a GUI or rendering dependency.
 - `MediaOutputSink` publishes frames through a bounded latest-frame queue and
   media events through an independent channel.
 - `VideoFrameExtractor` serializes extraction requests on a worker, with exact
-  requests and a latest-only preview mailbox.
+  requests and a latest-only preview mailbox. Options carry a per-session
+  `VideoDecoderPolicy`; backends must enforce explicit policies or return an error.
 - `VideoFrame` carries presentation timestamps, an immutable `FrameBuffer`, and
   optional `VideoDecoderInfo` supplied by the backend.
 - `FrameBuffer` validates coded dimensions, crop, display size, pixel format,

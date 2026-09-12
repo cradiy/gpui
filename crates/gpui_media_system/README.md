@@ -111,6 +111,37 @@ budget per active extraction request, including initial preroll and seek
 retries. Time spent queued behind another request is not included. Synchronous
 plugin calls cannot be forcibly interrupted by this budget.
 
+On Linux/macOS, `VideoFrameExtractorOptions::video_decoder` selects the video
+decoder policy for each extraction session:
+
+| Policy | Allowed video decoders |
+| --- | --- |
+| `Auto` (default) | System registry selection |
+| `SoftwareOnly` | Decoders without the GStreamer `Hardware` classification |
+| `HardwareOnly` | Decoders with the GStreamer `Hardware` classification |
+
+```rust
+use gpui_media_system::{VideoDecoderPolicy, VideoFrameExtractorOptions};
+
+let options = VideoFrameExtractorOptions {
+    video_decoder: VideoDecoderPolicy::SoftwareOnly,
+    ..Default::default()
+};
+let extractor = VideoFrameExtractor::with_options(source, options, backend)?;
+```
+
+Explicit policies filter candidates within the session and verify the observed
+decoder before returning frames. They do not change global plugin ranks or
+other sessions. Missing compatible decoders, unidentifiable decoders, or failed
+output negotiation return errors; an excluded decoder is not a fallback.
+The policy controls decoder classification, not a plugin's internal execution
+or fallback behavior, and does not select a GPU device or frame transport.
+
+Automatic extraction uses `playbin3`; explicit policies use `playbin` with
+`uridecodebin` candidate filtering. Windows supports `Auto` and rejects explicit
+policies with `MediaErrorKind::Unsupported`. Playback sessions use automatic
+decoder selection independently of extraction options.
+
 ## Platform capabilities
 
 Linux supports CPU frames and DMA-BUF transport, including consumer-advertised
@@ -121,8 +152,8 @@ container support depend on the system's installed media components.
 `MediaPlaybackRequest::output_capabilities` describes native layouts accepted
 by the consumer. It does not choose the decoder or its device. GStreamer
 selects decoders from its plugin registry; CPU frame output does not imply
-software decoding. This backend does not expose an explicit hardware-decoder
-selection policy.
+software decoding. Playback sessions do not expose an explicit hardware-decoder
+selection policy; extraction policies are described above.
 
 `VideoFrame::decoder_info()` exposes a snapshot of the observed video decoder.
 GStreamer reports the factory name after its output pad produces raw video,
@@ -145,6 +176,7 @@ available for the opened source.
 
 ```sh
 cargo run -p gpui_media_system --example frame_at -- /path/to/video.mp4 5
+cargo run -p gpui_media_system --example frame_at -- /path/to/video.mp4 5 software
 ```
 
 GUI examples live in `gpui_media`:

@@ -1,5 +1,17 @@
 use std::sync::Arc;
 
+/// Restricts which video decoder implementations an extraction session may use.
+///
+/// Explicit policies exclude decoders outside the requested acceleration class.
+/// A backend that cannot enforce a policy must return an error.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VideoDecoderPolicy {
+    #[default]
+    Auto,
+    SoftwareOnly,
+    HardwareOnly,
+}
+
 /// The acceleration type reported by the decoder implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecoderAcceleration {

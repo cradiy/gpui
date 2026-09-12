@@ -76,6 +76,7 @@ pub struct MediaPlaybackRequest {
 pub struct FrameExtractorBackendRequest {
     pub source: MediaSource,
     pub timeout: Duration,
+    pub video_decoder: crate::VideoDecoderPolicy,
 }
 
 /// Thread-safe publisher shared with a media playback backend.

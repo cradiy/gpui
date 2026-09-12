@@ -1,13 +1,15 @@
 use std::time::Duration;
 
-use gpui_media_system::{MediaSource, VideoFrameExtractor};
+use gpui_media_system::{
+    MediaSource, VideoDecoderPolicy, VideoFrameExtractor, VideoFrameExtractorOptions,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = std::env::args().skip(1);
     let input = arguments.next().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "usage: cargo run -p gpui_media_system --example frame_at -- <media> [seconds]",
+            "usage: cargo run -p gpui_media_system --example frame_at -- <media> [seconds] [auto|software|hardware]",
         )
     })?;
     let seconds = arguments
@@ -29,8 +31,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let extractor = VideoFrameExtractor::new(
+    let video_decoder = match arguments.next().as_deref() {
+        None | Some("auto") => VideoDecoderPolicy::Auto,
+        Some("software") => VideoDecoderPolicy::SoftwareOnly,
+        Some("hardware") => VideoDecoderPolicy::HardwareOnly,
+        Some(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "decoder policy must be auto, software, or hardware",
+            )
+            .into());
+        }
+    };
+    let extractor = VideoFrameExtractor::with_options(
         MediaSource::parse(input)?,
+        VideoFrameExtractorOptions {
+            video_decoder,
+            ..Default::default()
+        },
         std::sync::Arc::new(gpui_media_system::SystemBackend),
     )?;
     let frame = extractor.frame_at_blocking(Duration::from_secs_f64(seconds))?;

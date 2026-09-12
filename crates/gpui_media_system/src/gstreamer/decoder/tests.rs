@@ -67,8 +67,12 @@ fn raw_output_does_not_imply_a_software_decoder() {
 #[test]
 #[ignore = "requires GStreamer MP4 and H.264 decoding plugins"]
 fn extraction_reports_decoder_across_seeks_and_retains_snapshot() {
-    let mut session =
-        GstreamerFrameExtractionSession::new(&source(), Duration::from_secs(5)).unwrap();
+    let mut session = GstreamerFrameExtractionSession::new(
+        &source(),
+        Duration::from_secs(5),
+        gpui_media_core::VideoDecoderPolicy::Auto,
+    )
+    .unwrap();
     let initial = session.initial_frame().unwrap();
     let info = initial.decoder_info().unwrap().clone();
     assert_video_decoder(&info);
@@ -80,6 +84,39 @@ fn extraction_reports_decoder_across_seeks_and_retains_snapshot() {
     drop(session);
     assert!(Arc::ptr_eq(initial.decoder_info().unwrap(), &info));
     assert_eq!(later.decoder_info().unwrap().as_ref(), info.as_ref());
+}
+
+#[test]
+#[ignore = "requires GStreamer MP4 and H.264 decoding plugins"]
+fn software_extraction_is_independent_of_an_automatic_session() {
+    use gpui_media_core::{VideoDecoderPolicy, VideoFrameExtractor, VideoFrameExtractorOptions};
+    let backend = Arc::new(crate::SystemBackend);
+    let software = VideoFrameExtractor::with_options(
+        source(),
+        VideoFrameExtractorOptions {
+            video_decoder: VideoDecoderPolicy::SoftwareOnly,
+            ..Default::default()
+        },
+        backend.clone(),
+    )
+    .unwrap();
+    let automatic = VideoFrameExtractor::new(source(), backend).unwrap();
+    std::thread::scope(|scope| {
+        let software_frames = scope.spawn(|| {
+            let first = software.initial_frame_blocking().unwrap();
+            let later = software.frame_at_blocking(Duration::from_secs(1)).unwrap();
+            assert!(later.timestamp() > first.timestamp());
+            for frame in [first, later] {
+                assert_eq!(
+                    frame.decoder_info().unwrap().acceleration,
+                    DecoderAcceleration::Software
+                );
+            }
+        });
+        let automatic_frame = automatic.initial_frame_blocking().unwrap();
+        assert_video_decoder(automatic_frame.decoder_info().unwrap());
+        software_frames.join().unwrap();
+    });
 }
 
 #[test]

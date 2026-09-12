@@ -10,7 +10,7 @@ use gst::prelude::*;
 
 use gpui_media_core::{
     FrameExtractionSession, MediaError, MediaErrorKind, MediaRecovery, MediaResult, MediaSource,
-    SeekMode, VideoFrame,
+    SeekMode, VideoDecoderPolicy, VideoFrame,
 };
 
 use super::{
@@ -19,6 +19,8 @@ use super::{
 };
 
 pub(super) struct GstreamerFrameExtractionSession {
+    source: MediaSource,
+    video_decoder: VideoDecoderPolicy,
     decoder_tracker: super::decoder::DecoderTracker,
     playbin: gst::Element,
     appsink: gst_app::AppSink,
@@ -30,7 +32,11 @@ pub(super) struct GstreamerFrameExtractionSession {
 }
 
 impl GstreamerFrameExtractionSession {
-    pub(super) fn new(source: &MediaSource, timeout: Duration) -> MediaResult<Self> {
+    pub(super) fn new(
+        source: &MediaSource,
+        timeout: Duration,
+        video_decoder: VideoDecoderPolicy,
+    ) -> MediaResult<Self> {
         super::initialize()?;
         let caps = appsink_caps(None)?;
         let appsink = gst_app::AppSink::builder()
@@ -58,11 +64,22 @@ impl GstreamerFrameExtractionSession {
             .map_err(|error| {
                 gst_backend_error("GStreamer element 'fakesink' is not installed", error)
             })?;
-        let playbin = gst::ElementFactory::make("playbin3")
+        let factory = if video_decoder == VideoDecoderPolicy::Auto {
+            "playbin3"
+        } else {
+            "playbin"
+        };
+        let playbin = gst::ElementFactory::make(factory)
             .build()
             .map_err(|error| {
-                gst_backend_error("GStreamer element 'playbin3' is not installed", error)
+                gst_backend_error(
+                    format!("GStreamer element '{factory}' is not installed"),
+                    error,
+                )
             })?;
+        if video_decoder != VideoDecoderPolicy::Auto {
+            super::decoder::selection::configure(&playbin, video_decoder);
+        }
         configure_playbin_network(&playbin, source.network_options());
         let decoder_tracker = super::decoder::DecoderTracker::default();
         decoder_tracker.attach(&playbin);
@@ -71,6 +88,8 @@ impl GstreamerFrameExtractionSession {
         playbin.set_property("audio-sink", &audio_sink);
 
         Ok(Self {
+            source: source.clone(),
+            video_decoder,
             decoder_tracker,
             playbin,
             appsink,
@@ -118,7 +137,9 @@ impl GstreamerFrameExtractionSession {
                     None,
                 )?;
                 self.sequence = self.sequence.wrapping_add(1).max(1);
-                return Ok(self.decoder_tracker.annotate(frame, &self.appsink));
+                let frame = self.decoder_tracker.annotate(frame, &self.appsink);
+                super::decoder::selection::validate(&frame, self.video_decoder)?;
+                return Ok(frame);
             }
         }
 
@@ -137,6 +158,28 @@ impl GstreamerFrameExtractionSession {
         })
     }
 
+    fn extraction_error(&self, fallback: MediaError) -> MediaError {
+        let detail =
+            self.playbin
+                .bus()
+                .and_then(|bus| bus.pop_filtered(&[gst::MessageType::Error]))
+                .and_then(|message| match message.view() {
+                    gst::MessageView::Error(error) => Some(
+                        super::media_error_from_gstreamer_message(error, &self.source),
+                    ),
+                    _ => None,
+                });
+        let mut error = detail.unwrap_or(fallback);
+        if self.video_decoder != VideoDecoderPolicy::Auto {
+            error.message = format!(
+                "video decoder policy {:?}: {}",
+                self.video_decoder, error.message
+            )
+            .into();
+        }
+        error
+    }
+
     fn preroll_initial_frame(&mut self, deadline: Instant) -> MediaResult<Arc<VideoFrame>> {
         if let Some(frame) = &self.initial_frame {
             return Ok(frame.clone());
@@ -145,15 +188,25 @@ impl GstreamerFrameExtractionSession {
         remaining_timeout(deadline)?;
         self.playbin
             .set_state(gst::State::Paused)
-            .map_err(|error| gst_backend_error("failed to prepare frame extraction", error))?;
+            .map_err(|error| {
+                self.extraction_error(gst_decode_error("frame extraction preroll failed", error))
+            })?;
         self.playbin
             .state(remaining_timeout(deadline)?)
             .0
-            .map_err(|error| gst_decode_error("frame extraction preroll failed", error))?;
+            .map_err(|error| {
+                self.extraction_error(gst_decode_error("frame extraction preroll failed", error))
+            })?;
         let sample = self
             .appsink
             .try_pull_preroll(remaining_timeout(deadline)?)
-            .ok_or_else(|| MediaError::timeout("timed out waiting for the initial video frame"))?;
+            .ok_or_else(|| {
+                self.extraction_error(if Instant::now() >= deadline {
+                    MediaError::timeout("timed out waiting for the initial video frame")
+                } else {
+                    super::gst_decode_message("frame extraction ended without video output")
+                })
+            })?;
         self.end_guard = estimated_frame_duration(&sample)
             .unwrap_or(self.end_guard)
             .max(Duration::from_millis(1));
@@ -166,6 +219,7 @@ impl GstreamerFrameExtractionSession {
         )?;
         self.sequence = self.sequence.wrapping_add(1).max(1);
         let frame = self.decoder_tracker.annotate(frame, &self.appsink);
+        super::decoder::selection::validate(&frame, self.video_decoder)?;
         self.initial_frame = Some(frame.clone());
         Ok(frame)
     }
@@ -271,6 +325,45 @@ mod tests {
     };
 
     #[test]
+    fn eos_without_a_video_frame_is_not_reported_as_timeout() {
+        gst::init().unwrap();
+        let pipeline = gst::Pipeline::new();
+        let source = gst_app::AppSrc::builder()
+            .caps(
+                &gst::Caps::builder("video/x-raw")
+                    .field("format", "RGBA")
+                    .field("width", 1_i32)
+                    .field("height", 1_i32)
+                    .build(),
+            )
+            .build();
+        let appsink = gst_app::AppSink::builder().sync(false).build();
+        pipeline
+            .add_many([source.upcast_ref::<gst::Element>(), appsink.upcast_ref()])
+            .unwrap();
+        source.link(&appsink).unwrap();
+        pipeline.set_state(gst::State::Paused).unwrap();
+        source.end_of_stream().unwrap();
+        let mut session = GstreamerFrameExtractionSession {
+            source: gpui_media_core::MediaSource::parse("https://example.test/video").unwrap(),
+            video_decoder: gpui_media_core::VideoDecoderPolicy::HardwareOnly,
+            decoder_tracker: Default::default(),
+            playbin: pipeline.upcast(),
+            appsink,
+            surface_handle: FrameHandle::new(),
+            sequence: 1,
+            timeout: Duration::from_secs(5),
+            initial_frame: None,
+            end_guard: Duration::from_millis(1),
+        };
+        let error = session
+            .preroll_initial_frame(session.request_deadline().unwrap())
+            .unwrap_err();
+        assert_eq!(error.kind, MediaErrorKind::Decode);
+        assert!(error.message.contains("HardwareOnly"));
+    }
+
+    #[test]
     fn stalled_seek_exhausts_request_budget_without_retrying() {
         gst::init().unwrap();
         let pipeline = gst::Pipeline::new();
@@ -321,6 +414,8 @@ mod tests {
         )
         .unwrap();
         let mut session = GstreamerFrameExtractionSession {
+            source: gpui_media_core::MediaSource::parse("https://example.test/video").unwrap(),
+            video_decoder: gpui_media_core::VideoDecoderPolicy::Auto,
             decoder_tracker: super::super::decoder::DecoderTracker::default(),
             playbin: pipeline.upcast(),
             appsink,

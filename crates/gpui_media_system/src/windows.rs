@@ -1056,6 +1056,11 @@ struct WindowsFrameExtractor {
 
 impl WindowsFrameExtractor {
     fn new(request: FrameExtractorBackendRequest) -> MediaResult<Self> {
+        if request.video_decoder != gpui_media_core::VideoDecoderPolicy::Auto {
+            return Err(MediaError::unsupported(
+                "Media Foundation frame extraction does not support explicit video decoder policies",
+            ));
+        }
         let (sink, output) = MediaOutputSink::channel();
         let playback = WindowsPlayback::new(
             MediaPlaybackRequest {

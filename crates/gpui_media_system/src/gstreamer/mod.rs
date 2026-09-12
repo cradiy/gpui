@@ -790,12 +790,16 @@ impl MediaBackend for GstreamerSystemBackend {
         &self,
         request: FrameExtractorBackendRequest,
     ) -> MediaResult<Box<dyn FrameExtractionSession>> {
-        frame_extractor::GstreamerFrameExtractionSession::new(&request.source, request.timeout)
-            .map(|session| Box::new(session) as Box<dyn FrameExtractionSession>)
-            .map_err(|mut error| {
-                error.message = request.source.redact_error_message(&error.message).into();
-                error
-            })
+        frame_extractor::GstreamerFrameExtractionSession::new(
+            &request.source,
+            request.timeout,
+            request.video_decoder,
+        )
+        .map(|session| Box::new(session) as Box<dyn FrameExtractionSession>)
+        .map_err(|mut error| {
+            error.message = request.source.redact_error_message(&error.message).into();
+            error
+        })
     }
 }
 

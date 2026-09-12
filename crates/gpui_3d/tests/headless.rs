@@ -15,6 +15,9 @@ mod submissions;
 #[path = "headless/environment.rs"]
 mod environment;
 
+#[path = "headless/shadow_material.rs"]
+mod shadow_material;
+
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn target_budget_rejects_before_images_and_preserves_retained_outputs() -> anyhow::Result<()> {

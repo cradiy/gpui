@@ -211,6 +211,7 @@ fn material_deformation_captures_survive_replay_resize_and_device_replacement() 
     let original = compose(&objects, &captures, false);
     let changed = compose(&objects, &captures, true);
     let mut retained: Vec<(Arc<WgpuScene3dPickFrame>, usize)> = Vec::new();
+    let mut previous: Option<&Scene> = None;
     for (scene, swapped, extent) in [
         (&original, false, 160),
         (&original, false, 160),
@@ -218,6 +219,21 @@ fn material_deformation_captures_survive_replay_resize_and_device_replacement() 
         (&changed, true, 176),
         (&original, false, 160),
     ] {
+        for (index, capture) in captures.iter().enumerate() {
+            let source = scene.subtree_layers[index].scene3d.as_ref().unwrap();
+            let same_source = previous.is_some_and(|previous| {
+                Arc::ptr_eq(
+                    source,
+                    previous.subtree_layers[index].scene3d.as_ref().unwrap(),
+                )
+            });
+            assert_eq!(
+                capture
+                    .read_for_frame::<WgpuScene3dPickFrame>(source)
+                    .is_some(),
+                same_source
+            );
+        }
         renderer.resize(size(DevicePixels(extent), DevicePixels(80)));
         let pixels = renderer.render_rgba(scene)?;
         for index in 0..2 {
@@ -227,6 +243,23 @@ fn material_deformation_captures_survive_replay_resize_and_device_replacement() 
                 .context("capture missing")?
                 .unwrap();
             assert!(frame.matches_frame(scene.subtree_layers[index].scene3d.as_ref().unwrap()));
+            let other = if swapped { &original } else { &changed };
+            let other_source = other.subtree_layers[index].scene3d.as_ref().unwrap();
+            assert!(!frame.matches_frame(other_source));
+            assert!(
+                captures[index]
+                    .read_for_frame::<WgpuScene3dPickFrame>(other_source)
+                    .is_none()
+            );
+            assert!(Arc::ptr_eq(
+                &frame,
+                &captures[index]
+                    .read_for_frame::<WgpuScene3dPickFrame>(
+                        scene.subtree_layers[index].scene3d.as_ref().unwrap(),
+                    )
+                    .unwrap()
+                    .unwrap(),
+            ));
             assert!(
                 retained
                     .iter()
@@ -254,6 +287,7 @@ fn material_deformation_captures_survive_replay_resize_and_device_replacement() 
             verify(&frame, revision)?;
             retained.push((frame, revision));
         }
+        previous = Some(scene);
     }
     let mut replacement = WgpuOffscreenRenderer::new(size(DevicePixels(160), DevicePixels(80)))?;
     assert!(replacement.render_rgba(&original).is_err());
@@ -292,10 +326,37 @@ fn material_deformation_captures_survive_replay_resize_and_device_replacement() 
     fresh_objects[0].gpu_geometry = saved;
     fresh_objects[0].mesh = saved_mesh;
     let renewed = compose(&fresh_objects, &captures, false);
+    for (index, capture) in captures.iter().enumerate() {
+        assert!(
+            capture
+                .read_for_frame::<WgpuScene3dPickFrame>(
+                    renewed.subtree_layers[index].scene3d.as_ref().unwrap(),
+                )
+                .is_none()
+        );
+        assert!(
+            capture
+                .read_for_frame::<WgpuScene3dPickFrame>(
+                    mixed.subtree_layers[index].scene3d.as_ref().unwrap(),
+                )
+                .unwrap()
+                .is_err()
+        );
+    }
     replacement.render_rgba(&renewed)?;
     for (index, capture) in captures.iter().enumerate() {
         let frame = capture.read::<WgpuScene3dPickFrame>().unwrap().unwrap();
         assert!(frame.matches_frame(renewed.subtree_layers[index].scene3d.as_ref().unwrap()));
+        assert!(
+            capture
+                .read_for_frame::<WgpuScene3dPickFrame>(
+                    mixed.subtree_layers[index].scene3d.as_ref().unwrap(),
+                )
+                .is_none()
+        );
+        assert!(retained.iter().all(|(old, _)| {
+            !old.matches_frame(renewed.subtree_layers[index].scene3d.as_ref().unwrap())
+        }));
         verify(&frame, index)?;
     }
     drop((renderer, objects, original, changed));

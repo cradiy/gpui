@@ -76,6 +76,11 @@ let frame = extractor.frame_at(Duration::from_secs(5)).await?;
 Frame extraction owns an independent session and does not seek an active
 player.
 
+For GStreamer, `VideoFrameExtractorOptions::timeout` is one shared waiting
+budget per active extraction request, including initial preroll and seek
+retries. Time spent queued behind another request is not included. Synchronous
+plugin calls cannot be forcibly interrupted by this budget.
+
 ## Platform capabilities
 
 Linux supports CPU frames and DMA-BUF transport, including renderer-gated

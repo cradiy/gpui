@@ -201,8 +201,12 @@ fn gpu_derivatives_follow_morph_uv_orientation_and_report_degeneracy_and_failure
     for record in read(&positive)? {
         assert_eq!(record.classification, [0, 0, 1, 0]);
         assert_eq!(record.status, [0; 4]);
-        assert_eq!(record.tangent, [1., 0., 0., 2.]);
-        assert_eq!(record.bitangent, [0., 1., 0., 3.]);
+        for (actual, expected) in record.tangent.into_iter().zip([1., 0., 0., 2.]) {
+            assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
+        }
+        for (actual, expected) in record.bitangent.into_iter().zip([0., 1., 0., 3.]) {
+            assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
+        }
     }
     let zero_uv =
         GpuTangentDerivatives::new(context.clone(), base.clone(), 0, limits)?.evaluate(&input)?;

@@ -247,7 +247,7 @@ fn gpu_attribute_versions_preserve_geometry_and_share_packing_resources() {
     context.queue.write_buffer(
         &color_buffer,
         0,
-        bytemuck::cast_slice(&[[1., 1., 1., 2.]; 3]),
+        bytemuck::cast_slice(&[[1_f32, 1., 1., 2.]; 3]),
     );
     assert_eq!(
         read(&context, &external.source),

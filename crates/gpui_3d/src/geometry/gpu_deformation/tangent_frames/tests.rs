@@ -188,6 +188,15 @@ fn close(actual: f32, expected: f32) {
     assert!((actual - expected).abs() < 2e-5, "{actual} != {expected}");
 }
 
+fn close_angle(actual: f32, expected: f32) {
+    // WGSL acos can inherit atan2's 4096-ULP accuracy.
+    let ulp = f32::from_bits(expected.to_bits() + 1) - expected;
+    assert!(
+        (actual - expected).abs() <= 4096. * ulp,
+        "{actual} != {expected}"
+    );
+}
+
 #[test]
 #[ignore = "requires a compute-capable GPU"]
 fn gpu_frames_weight_corners_preserve_subgroups_and_retain_deformed_inputs() -> Result<()> {
@@ -306,7 +315,7 @@ fn gpu_frames_weight_corners_preserve_subgroups_and_retain_deformed_inputs() -> 
             close(records[0].tangent[0], v[0] / length);
             close(records[0].tangent[1], v[1] / length);
             close(records[0].tangent[3], (4. + std::f32::consts::SQRT_2) / 3.);
-            close(records[0].angle_weight, std::f32::consts::FRAC_PI_4 * 3.);
+            close_angle(records[0].angle_weight, std::f32::consts::FRAC_PI_4 * 3.);
         }
     }
     let base = mesh(true);
@@ -321,8 +330,8 @@ fn gpu_frames_weight_corners_preserve_subgroups_and_retain_deformed_inputs() -> 
     assert_eq!(records[0].identity[1], records[3].identity[1]);
     close(records[0].tangent[0], 1.);
     close(records[3].tangent[0], -1.);
-    close(records[0].angle_weight, std::f32::consts::FRAC_PI_2);
-    close(records[3].angle_weight, std::f32::consts::FRAC_PI_4);
+    close_angle(records[0].angle_weight, std::f32::consts::FRAC_PI_2);
+    close_angle(records[3].angle_weight, std::f32::consts::FRAC_PI_4);
     Ok(())
 }
 

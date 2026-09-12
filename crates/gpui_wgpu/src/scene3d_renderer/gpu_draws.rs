@@ -337,7 +337,10 @@ mod tests {
         assert_eq!(actual_pixels.linear_rgba, expected_pixels.linear_rgba);
         assert_eq!(actual_pixels.linear_depth, expected_pixels.linear_depth);
         assert_eq!(actual_pixels.world_normals, expected_pixels.world_normals);
-        assert_eq!(actual.geometry_memory().indirect_bytes, 40);
+        assert_eq!(
+            actual.geometry_memory().indirect_bytes,
+            template.memory().draw_bytes * 2
+        );
         assert_eq!(
             actual.geometry_memory().index_bytes,
             template.memory().index_bytes

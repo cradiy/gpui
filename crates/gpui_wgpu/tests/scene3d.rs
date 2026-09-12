@@ -298,9 +298,21 @@ fn viewport_bloom_and_grading_preserve_nested_clipping_and_group_opacity() {
         let faded = renderer.render_rgba(&scene(processed.clone())).unwrap();
         for (x, y) in [(32, 32), (13, 32)] {
             for channel in 0..3 {
-                let full = u16::from(pixel(&image, x, y)[channel]);
-                let faded = u16::from(pixel(&faded, x, y)[channel]);
-                assert!((2 * faded).abs_diff(full) <= 2);
+                let linear = |value: u8| {
+                    let value = f32::from(value) / 255.;
+                    if value <= 0.04045 {
+                        value / 12.92
+                    } else {
+                        ((value + 0.055) / 1.055).powf(2.4)
+                    }
+                };
+                let full = linear(pixel(&image, x, y)[channel]);
+                let faded = linear(pixel(&faded, x, y)[channel]);
+                assert!(
+                    (2. * faded - full).abs() <= 0.015,
+                    "linear opacity: {faded} != {}",
+                    full * 0.5
+                );
             }
         }
         processed.composite.content_mask.bounds = bounds(0., 0., 32., 64.);
@@ -863,7 +875,7 @@ fn instance_batches_keep_concurrent_viewport_uploads_independent() -> anyhow::Re
             (16, [255, 0, 0, 255]),
             (48, [0, 0, 255, 255]),
             (80, [0, 255, 0, 255]),
-            (112, [0; 4]),
+            (112, [0, 0, 0, 255]),
         ] {
             let index = (32 * 128 + x) * 4;
             assert_eq!(&pixels[index..index + 4], &color);
@@ -918,7 +930,7 @@ fn vertex_snapshots_preserve_concurrent_views_and_replayed_frames() -> anyhow::R
     let pixels = renderer.render_rgba(&input)?;
     let at = |x: usize| &pixels[(32 * 128 + x) * 4..(32 * 128 + x) * 4 + 4];
     assert_eq!(at(32), &[255, 0, 0, 255]);
-    assert_eq!(at(96), &[0; 4]);
+    assert_eq!(at(96), &[0, 0, 0, 255]);
     assert_eq!(at(120), &[0, 255, 0, 255]);
     assert_eq!(renderer.render_rgba(&input)?, pixels);
     Ok(())
@@ -1044,11 +1056,11 @@ fn environment_backgrounds_preserve_viewport_clipping_opacity_and_shared_maps() 
     let pixels = renderer.render_rgba(&input)?;
     let at = |x: usize, y: usize| &pixels[(y * 128 + x) * 4..(y * 128 + x) * 4 + 4];
     assert_eq!(at(30, 30), &[255, 0, 0, 255]);
-    assert!(at(80, 30)[0].abs_diff(128) <= 1);
-    assert!(at(80, 30)[3].abs_diff(128) <= 1);
-    assert_eq!(at(104, 30), &[0; 4]);
-    assert_eq!(at(64, 30), &[0; 4]);
-    assert_eq!(at(30, 80), &[0; 4]);
+    assert!(at(80, 30)[0].abs_diff(188) <= 1);
+    assert_eq!(&at(80, 30)[1..], &[0, 0, 255]);
+    assert_eq!(at(104, 30), &[0, 0, 0, 255]);
+    assert_eq!(at(64, 30), &[0, 0, 0, 255]);
+    assert_eq!(at(30, 80), &[0, 0, 0, 255]);
     let original = renderer.render_rgba(&scene(left.clone()))?;
     Arc::make_mut(left.scene3d.as_mut().unwrap()).background = None;
     let cleared = renderer.render_rgba(&scene(left))?;
@@ -1056,7 +1068,7 @@ fn environment_backgrounds_preserve_viewport_clipping_opacity_and_shared_maps() 
         &original[(30 * 128 + 30) * 4..(30 * 128 + 30) * 4 + 4],
         &[255, 0, 0, 255]
     );
-    assert!(cleared.iter().all(|v| *v == 0));
+    assert!(cleared.chunks_exact(4).all(|pixel| pixel == [0, 0, 0, 255]));
     Ok(())
 }
 
@@ -1307,8 +1319,8 @@ fn viewport_quality_keeps_mixed_samples_and_ui_texture_coordinates_independent()
                 (30, 45, [0, 255, 0, 255]),
                 (70, 45, [0, 0, 255, 255]),
                 (150, 45, [255, 0, 0, 255]),
-                (100, 45, [0; 4]),
-                (150, 90, [0; 4]),
+                (100, 45, [0, 0, 0, 255]),
+                (150, 90, [0, 0, 0, 255]),
             ] {
                 let index = (y * 208 + x) * 4;
                 assert_eq!(
@@ -1362,7 +1374,7 @@ fn viewport_pixel_mapping_survives_offset_clipping_and_target_resize() -> anyhow
                     let index = ((ry * 96 + rx) * 4) as usize;
                     &reference[index..index + 4]
                 } else {
-                    &[0; 4]
+                    &[0, 0, 0, 255]
                 };
                 let index = ((y * width + x) * 4) as usize;
                 for (actual, expected) in pixels[index..index + 4].iter().zip(expected) {

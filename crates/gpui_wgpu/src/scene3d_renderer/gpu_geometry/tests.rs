@@ -271,7 +271,63 @@ fn source_rebinding_shares_kernels_and_topology_without_inheriting_stream_update
     drop(source);
     drop(updated);
     drop(rebound);
-    assert_eq!(read(&context, &different.indices), [0, 2, 1]);
+    let copied = context.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: different.indices.size(),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                r#"
+            @group(0) @binding(0) var<storage, read> indices: array<u32>;
+            @group(0) @binding(1) var<storage, read_write> copied: array<u32>;
+            @compute @workgroup_size(1)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                copied[id.x] = indices[id.x];
+            }
+        "#
+                .into(),
+            ),
+        });
+    let pipeline = context
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+    let bindings = context
+        .device
+        .create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: different.indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: copied.as_entire_binding(),
+                },
+            ],
+        });
+    let mut encoder = context.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bindings, &[]);
+        pass.dispatch_workgroups(3, 1, 1);
+    }
+    context.queue.submit([encoder.finish()]);
+    assert_eq!(read(&context, &copied), [0, 2, 1]);
 }
 
 #[test]

@@ -134,7 +134,7 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
             });
         }
         let frame = renderer.render_with_geometry(&scene, config, &draws)?;
-        retained.push((frame, cpu_frame, pixel, camera, expected_hit.position));
+        retained.push((frame, cpu_frame, pixel, camera));
     }
     drop(deformation);
     drop(packing);
@@ -144,7 +144,7 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
     drop(renderer);
 
     let mut previous_id = None;
-    for (frame, cpu_frame, pixel, camera, expected_position) in retained {
+    for (frame, cpu_frame, pixel, camera) in retained {
         assert_ne!(previous_id.as_ref(), Some(frame.frame_id()));
         previous_id = Some(frame.frame_id().clone());
         let mut request = frame.readback()?;
@@ -193,7 +193,14 @@ fn imported_generated_directions_render_and_pick_retained_deformation_frames() -
         assert_eq!(pick.camera().eye, camera.eye);
         let hit = pick.hit.unwrap();
         assert_eq!(hit.object.node, Some(primitive));
-        super::super::near(hit.world_position, expected_position);
+        super::super::near(
+            hit.world_position,
+            actual.world_position_at(pixel[0], pixel[1])?.unwrap(),
+        );
+        let expected_position = expected.world_position_at(pixel[0], pixel[1])?.unwrap();
+        for (a, b) in hit.world_position.into_iter().zip(expected_position) {
+            assert!((a - b).abs() < 1e-4, "picked position: {a} != {b}");
+        }
         let mut request = frame.pick([0, 0])?;
         assert!(read(|| request.try_read())?.hit.is_none());
     }

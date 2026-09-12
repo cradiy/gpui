@@ -60,7 +60,7 @@ fn prepared_geometry_pairs_retained_bounds_and_rejects_invalid_attributes() -> R
     assert!(format!("{error:#}").contains("source mesh mismatch"));
     let colors = context.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
-        contents: bytemuck::cast_slice(&vec![[1., 1., 1., -0.5]; mesh.vertex_count()]),
+        contents: bytemuck::cast_slice(&vec![[1_f32, 1., 1., -0.5]; mesh.vertex_count()]),
         usage: wgpu::BufferUsages::COPY_SRC,
     });
     let invalid_source =

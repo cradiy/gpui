@@ -941,10 +941,43 @@ fn geometry_outputs_match_projected_surface_depth_and_vertex_normals() -> anyhow
                                 .world_to_screen(viewport, hit.position)?
                                 .unwrap()
                                 .depth;
-                            assert!((depths[index] - depth).abs() < 0.001);
+                            let mut depth_tolerance = 0_f32;
+                            // Bound interpolation error by one 8-bit raster subpixel on this face.
+                            for dx in [-1., 1.] {
+                                for dy in [-1., 1.] {
+                                    let ray = camera.screen_to_ray(
+                                        viewport,
+                                        p + point(px(dx / 256.), px(dy / 256.)),
+                                    )?;
+                                    let dot = |a: [f32; 3], b: [f32; 3]| {
+                                        a.into_iter().zip(b).map(|(a, b)| a * b).sum::<f32>()
+                                    };
+                                    let offset =
+                                        std::array::from_fn(|i| hit.position[i] - ray.origin()[i]);
+                                    let distance =
+                                        dot(offset, hit.normal) / dot(ray.direction(), hit.normal);
+                                    let sample_depth = camera
+                                        .world_to_screen(viewport, ray.at(distance))?
+                                        .unwrap()
+                                        .depth;
+                                    depth_tolerance =
+                                        depth_tolerance.max((sample_depth - depth).abs());
+                                }
+                            }
+                            depth_tolerance += 1e-5;
+                            assert!(
+                                (depths[index] - depth).abs() <= depth_tolerance,
+                                "depth at ({x}, {y}), {projection:?}, side {side}, alpha {alpha}: {} != {depth}, tolerance {depth_tolerance}",
+                                depths[index],
+                            );
                             let world = result.world_position_at(x as u32, y as u32)?.unwrap();
-                            for (actual, expected) in world.into_iter().zip(hit.position) {
-                                assert!((actual - expected).abs() < 0.001);
+                            let start =
+                                camera.screen_to_world(viewport, p, depth - depth_tolerance)?;
+                            let end =
+                                camera.screen_to_world(viewport, p, depth + depth_tolerance)?;
+                            for i in 0..3 {
+                                assert!(world[i] >= start[i].min(end[i]) - 1e-5);
+                                assert!(world[i] <= start[i].max(end[i]) + 1e-5);
                             }
                             assert_eq!(ids[index], hit.object_index as u32 + 1);
                             assert_eq!(normals[index][3], 1.);

@@ -53,7 +53,7 @@ pub struct GpuDeformationVertex {
     /// W is tangent handedness; zero when the mesh has no tangents.
     pub tangent: [f32; 4],
     /// X: zero for valid output, one for detected nonfinite arithmetic, two for an undefined
-    /// tangent, three for a singular or unrepresentable blended Skin transform,
+    /// normal or tangent, three for a singular or unrepresentable blended Skin transform,
     /// four for a rejected zero-area triangle during normal or tangent generation,
     /// five for tangent input outside the supported numeric range.
     /// Remaining lanes are reserved and zero.

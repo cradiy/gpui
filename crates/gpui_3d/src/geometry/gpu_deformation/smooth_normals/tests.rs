@@ -1,6 +1,8 @@
 use super::*;
 use crate::{GpuMorph, MorphTarget, MorphTargets, NormalMode, Vertex};
 
+mod external;
+
 fn mesh() -> Mesh {
     Mesh::new(
         [
@@ -244,6 +246,7 @@ fn gpu_smooth_normals_match_deformed_area_weights_and_keep_source_correspondence
 #[ignore = "requires a compute-capable GPU with SHADER_F64"]
 fn gpu_smooth_normals_reject_degenerate_cancelled_and_failed_incident_faces() -> Result<()> {
     let context = WgpuContext::new_headless()?;
+    let bounds = crate::GpuDeformationBounds::new(context.clone())?;
     for (indices, invalid, expected) in [
         (vec![0, 1, 2, 0, 2, 1], None, [2, 0, 0, 0]),
         (vec![0, 0, 2], None, [4, 0, 0, 0]),
@@ -269,15 +272,37 @@ fn gpu_smooth_normals_reject_degenerate_cancelled_and_failed_incident_faces() ->
             }),
         };
         let normals = GpuSmoothNormals::new(context.clone(), base, Default::default())?;
-        let error = normals
-            .evaluate(&input)?
-            .readback()
-            .unwrap_err()
-            .to_string();
+        let output = normals.evaluate(&input)?;
+        let source = output.render_source([0; 5], None)?;
+        let geometry = output.render_geometry(&source)?;
+        let mut status = geometry.request_status(None)?;
+        let mut preparation = output.prepare_render_geometry(&source, &bounds, None)?;
+        let error = output.readback().unwrap_err().to_string();
         assert!(
             error.contains(&format!("vertex 0 failed with status {expected:?}")),
             "{error}"
         );
+        context.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(30)),
+        })?;
+        let status = status.try_read()?.expect("normal status pending");
+        assert!(!status.is_drawable());
+        assert!(
+            status
+                .issues
+                .contains(gpui_wgpu::Scene3dGeometryIssues::DEFORMATION_STATUS)
+        );
+        assert_eq!(status.first_invalid_vertex, Some(0));
+        let error = preparation
+            .try_read()
+            .err()
+            .expect("invalid normals published");
+        assert!(
+            error.to_string().contains("DEFORMATION_STATUS"),
+            "{error:#}"
+        );
+        assert!(preparation.try_read().is_err());
     }
     Ok(())
 }

@@ -6,7 +6,12 @@ publish.workspace = true
 license = "MIT"
 description = "Reusable spatial effects for GPUI interfaces"
 
+[features]
+default = ["wgpu"]
+wgpu = ["gpui_3d/wgpu", "dep:anyhow"]
+
 [dependencies]
+anyhow = { workspace = true, optional = true }
 gpui.workspace = true
 gpui_3d.workspace = true
 
@@ -15,6 +20,10 @@ anyhow.workspace = true
 gpui_3d = { workspace = true, features = ["wgpu"] }
 gpui_effects.workspace = true
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+
+[[example]]
+name = "floating"
+required-features = ["wgpu"]
 
 [lints]
 workspace = true

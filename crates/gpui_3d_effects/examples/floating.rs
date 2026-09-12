@@ -5,9 +5,10 @@ use gpui::{
     prelude::*, px, rgb, rgba, size,
 };
 use gpui_3d::{
-    Camera, Light, Material, Mesh, Object, PbrMaterial, Scene, SphereOptions, viewport3d,
+    Camera, Light, Material, Mesh, Object, PbrMaterial, Scene, SphereOptions, WgpuContext,
+    viewport3d,
 };
-use gpui_3d_effects::{FloatingMotion, OrbitLight};
+use gpui_3d_effects::{FloatingMotion, LightSweep, OrbitLight};
 use gpui_effects::{BloomOptions, EffectStage, subtree_effect_chain};
 use gpui_platform::application;
 
@@ -16,6 +17,9 @@ struct Demo {
     shape: usize,
     motion: FloatingMotion,
     orbit: OrbitLight,
+    sweep: Option<LightSweep>,
+    sweep_error: Option<String>,
+    sweep_on: bool,
     elapsed: Duration,
     last_frame: Instant,
     paused: bool,
@@ -26,6 +30,14 @@ struct Demo {
 
 impl Demo {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (sweep, sweep_error) = match WgpuContext::for_window(window).map(LightSweep::new) {
+            Some(Ok(sweep)) => (
+                Some(sweep.direction([1., 0.35, 0.]).range([-0.9, 0.9])),
+                None,
+            ),
+            Some(Err(error)) => (None, Some(error.to_string())),
+            None => (None, None),
+        };
         Self {
             shapes: [
                 Mesh::cube(),
@@ -38,10 +50,13 @@ impl Demo {
             shape: 0,
             motion: FloatingMotion::default(),
             orbit: OrbitLight::default().color(rgb(0x98e5f2)),
+            sweep,
+            sweep_error,
+            sweep_on: true,
             elapsed: Duration::ZERO,
             last_frame: Instant::now(),
             paused: false,
-            light_on: true,
+            light_on: false,
             glow: true,
             _activation: cx.observe_window_activation(window, |this, _, cx| {
                 this.last_frame = Instant::now();
@@ -75,6 +90,7 @@ impl Demo {
                     "shape" => this.shape = 1 - this.shape,
                     "light" => this.light_on = !this.light_on,
                     "glow" => this.glow = !this.glow,
+                    "sweep" => this.sweep_on = !this.sweep_on,
                     _ => {}
                 }
                 cx.notify();
@@ -94,6 +110,23 @@ impl Render for Demo {
         }
         self.last_frame = now;
         let pose = self.motion.sample(self.elapsed);
+        let mut material = Material::color(rgb(0x527d94)).pbr(PbrMaterial {
+            metallic: 0.2,
+            roughness: 0.32,
+            ..Default::default()
+        });
+        if self.sweep_on
+            && let Some(sweep) = &self.sweep
+        {
+            let progress = ((self.elapsed.as_secs_f64() % 3.6) / 2.8).min(1.) as f32;
+            match sweep.pass(progress) {
+                Ok(pass) => {
+                    material = material.mesh_passes([pass]);
+                    self.sweep_error = None;
+                }
+                Err(error) => self.sweep_error = Some(error.to_string()),
+            }
+        }
         let mut scene = Scene::new()
             .background(None)
             .camera(Camera::orbit(0.25, 0.15, 4.8))
@@ -103,17 +136,7 @@ impl Render for Demo {
                 intensity: 2.5,
                 ambient: 0.22,
             })
-            .object(
-                Object::new(
-                    self.shapes[self.shape].clone(),
-                    Material::color(rgb(0x527d94)).pbr(PbrMaterial {
-                        metallic: 0.2,
-                        roughness: 0.32,
-                        ..Default::default()
-                    }),
-                )
-                .transform(pose),
-            );
+            .object(Object::new(self.shapes[self.shape].clone(), material).transform(pose));
         if self.light_on {
             scene = scene.object(
                 self.orbit
@@ -128,9 +151,9 @@ impl Render for Demo {
                 .color_samples(4)
                 .resolution_scale(1.5),
             [EffectStage::bloom(BloomOptions {
-                threshold: 0.55,
-                radius: px(24.),
-                intensity: 1.3,
+                threshold: if self.light_on { 0.55 } else { 0.75 },
+                radius: px(if self.light_on { 24. } else { 12. }),
+                intensity: if self.light_on { 1.3 } else { 0.35 },
                 ..Default::default()
             })
             .enabled(self.glow)],
@@ -159,6 +182,7 @@ impl Render for Demo {
                 cx,
             ))
             .child(self.button("light", "Orbit light", self.light_on, cx))
+            .child(self.button("sweep", "Light sweep", self.sweep_on, cx))
             .child(self.button("glow", "Glow", self.glow, cx));
         div()
             .size_full()
@@ -173,7 +197,7 @@ impl Render for Demo {
                 div()
                     .text_sm()
                     .text_color(rgb(0x8fa7b8))
-                    .child("Floating motion · Depth-tested light · Transparent composition"),
+                    .child("Floating motion · Surface light sweep · Orbit light"),
             )
             .child(
                 div()
@@ -207,6 +231,9 @@ impl Render for Demo {
             )
             .when(!window.supports_scene3d(), |root| {
                 root.child("3D rendering is unavailable on this window.")
+            })
+            .when_some(self.sweep_error.clone(), |root, error| {
+                root.child(div().text_color(rgb(0xffaa88)).child(error))
             })
     }
 }

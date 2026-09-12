@@ -32,7 +32,7 @@ use gpui::{
     KeyContext, Keymap, Menu, MenuItem, OsMenu, OwnedMenu, PathPromptOptions, Platform,
     PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
     PlatformWindow, Result, SystemMenuType, Task, ThermalState, TrayEvent, TrayId, TrayOptions,
-    WindowAppearance, WindowKind, WindowParams, popup::PopupNotSupportedError,
+    WindowAppearance, WindowParams,
 };
 use gpui_util::{ResultExt, new_std_command};
 use itertools::Itertools;
@@ -712,12 +712,6 @@ impl Platform for MacPlatform {
         handle: AnyWindowHandle,
         options: WindowParams,
     ) -> Result<Box<dyn PlatformWindow>> {
-        // Native popups are not implemented on macOS yet. Rejecting lets callers fall back to
-        // gpui's in-window popovers.
-        if let WindowKind::AnchoredPopup(_) = options.kind {
-            return Err(PopupNotSupportedError.into());
-        }
-
         let (cursor_visible, foreground_executor, background_executor, renderer_context) = {
             let guard = self.0.lock();
             (
@@ -735,7 +729,7 @@ impl Platform for MacPlatform {
             foreground_executor,
             background_executor,
             renderer_context,
-        )))
+        )?))
     }
 
     fn window_appearance(&self) -> WindowAppearance {

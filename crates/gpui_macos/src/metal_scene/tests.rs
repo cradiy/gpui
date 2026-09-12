@@ -305,3 +305,174 @@ fn metal_scene3d_atlas_uploads_reach_native_sprites_and_transparent_meshes() -> 
         Ok(())
     })
 }
+
+#[test]
+fn core_video_surfaces_are_sampled_in_subtree_captures() -> anyhow::Result<()> {
+    use core_foundation::{base::TCFType, dictionary::CFDictionary, string::CFString};
+    use core_video::pixel_buffer::{
+        CVPixelBuffer, kCVPixelBufferIOSurfacePropertiesKey, kCVPixelFormatType_32BGRA,
+        kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+    };
+    use gpui::{
+        CoreVideoHandle, PaintSurface, SurfaceColorInfo, SurfaceFormat, SurfaceFrame, SurfaceHandle,
+    };
+    objc::rc::autoreleasepool(|| {
+        let attributes = CFDictionary::from_CFType_pairs(&[(
+            unsafe { CFString::wrap_under_get_rule(kCVPixelBufferIOSurfacePropertiesKey) },
+            CFDictionary::<CFString, CFString>::from_CFType_pairs(&[]).as_CFType(),
+        )]);
+        let mut renderer =
+            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())));
+        let region = bounds(0., 0., 16., 16.);
+        let handle = SurfaceHandle::new();
+        for sequence in 0..4 {
+            let nv12 = sequence % 2 == 1;
+            let buffer = CVPixelBuffer::new(
+                if nv12 {
+                    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+                } else {
+                    kCVPixelFormatType_32BGRA
+                },
+                8,
+                8,
+                Some(&attributes),
+            )
+            .unwrap();
+            assert_eq!(buffer.lock_base_address(0), 0);
+            unsafe {
+                if nv12 {
+                    for row in 0..8 {
+                        std::ptr::write_bytes(
+                            buffer
+                                .get_base_address_of_plane(0)
+                                .cast::<u8>()
+                                .add(row * buffer.get_bytes_per_row_of_plane(0)),
+                            235,
+                            8,
+                        );
+                    }
+                    for row in 0..4 {
+                        std::ptr::write_bytes(
+                            buffer
+                                .get_base_address_of_plane(1)
+                                .cast::<u8>()
+                                .add(row * buffer.get_bytes_per_row_of_plane(1)),
+                            128,
+                            8,
+                        );
+                    }
+                } else {
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            let color = if x < 4 {
+                                [0, 0, 255, 255]
+                            } else {
+                                [0, 255, 0, 255]
+                            };
+                            std::ptr::copy_nonoverlapping(
+                                color.as_ptr(),
+                                buffer
+                                    .get_base_address()
+                                    .cast::<u8>()
+                                    .add(y * buffer.get_bytes_per_row() + x * 4),
+                                4,
+                            );
+                        }
+                    }
+                }
+            }
+            assert_eq!(buffer.unlock_base_address(0), 0);
+            let frame = SurfaceFrame::from_core_video(
+                handle.clone(),
+                sequence,
+                Bounds::new(
+                    point(DevicePixels(0), DevicePixels(0)),
+                    size(DevicePixels(4), DevicePixels(8)),
+                ),
+                size(DevicePixels(4), DevicePixels(8)),
+                if nv12 {
+                    SurfaceFormat::Nv12
+                } else {
+                    SurfaceFormat::Bgra8
+                },
+                unsafe { CoreVideoHandle::new(buffer.clone()) },
+                SurfaceColorInfo::default(),
+            )?;
+            let mut content = Scene::default();
+            content.insert_primitive(PaintSurface {
+                order: 0,
+                bounds: region,
+                clip_bounds: region,
+                content_mask: ContentMask { bounds: region },
+                corner_radii: Default::default(),
+                opacity: 1.,
+                source: frame.into(),
+            });
+            let mut capture = layer(region, content, vec![], 1.);
+            capture.scene3d = None;
+            let captured = scene(capture);
+            let pixels = renderer
+                .render_scene_to_image(&captured, size(DevicePixels(16), DevicePixels(16)))?;
+            let center = pixels.get_pixel(8, 8).0;
+            if nv12 {
+                assert!(center[..3].iter().all(|c| *c >= 250), "{center:?}");
+            } else {
+                assert_eq!(center, [255, 0, 0, 255]);
+            }
+            if nv12 {
+                let mut legacy = Scene::default();
+                legacy.insert_primitive(PaintSurface {
+                    order: 0,
+                    bounds: region,
+                    clip_bounds: region,
+                    content_mask: ContentMask { bounds: region },
+                    corner_radii: Default::default(),
+                    opacity: 1.,
+                    source: buffer.into(),
+                });
+                let mut capture = layer(region, legacy, vec![], 1.);
+                capture.scene3d = None;
+                let pixels = renderer.render_scene_to_image(
+                    &scene(capture),
+                    size(DevicePixels(16), DevicePixels(16)),
+                )?;
+                assert!(pixels.get_pixel(8, 8).0[..3].iter().all(|c| *c >= 250));
+            }
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn captured_backdrop_blur_samples_preceding_content() -> anyhow::Result<()> {
+    objc::rc::autoreleasepool(|| {
+        let mut renderer =
+            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())));
+        let region = bounds(0., 0., 64., 32.);
+        let mut content = Scene::default();
+        content.insert_primitive(quad(region, 0x000000ff));
+        content.insert_primitive(quad(bounds(0., 0., 32., 32.), 0xffffffff));
+        content.insert_primitive(gpui::BackdropBlur {
+            order: 0,
+            bounds: region,
+            content_mask: ContentMask { bounds: region },
+            corner_radii: Default::default(),
+            blur_radius: ScaledPixels(6.),
+            opacity: 1.,
+            shader: None,
+            uniforms: Default::default(),
+            time: 0.,
+            pointer: point(0., 0.),
+            pointer_active: false,
+        });
+        let mut capture = layer(region, content, vec![], 1.);
+        capture.scene3d = None;
+        let image = renderer
+            .render_scene_to_image(&scene(capture), size(DevicePixels(64), DevicePixels(32)))?;
+        assert!(image.get_pixel(28, 16).0[0] < 250);
+        assert!(image.get_pixel(36, 16).0[0] > 5);
+        assert!(image.get_pixel(8, 16).0[0] > 245);
+        assert!(image.get_pixel(56, 16).0[0] < 10);
+        Ok(())
+    })
+}

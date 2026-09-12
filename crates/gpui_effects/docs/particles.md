@@ -150,7 +150,7 @@ retained simulation state. A surface keeps its logical coordinates when moved;
 changing its size, device scale or capacity resets its GPU state. Removing it
 from a rendered scene releases its buffers. Device recovery also resets them.
 
-Linux WGPU supports GPU particles. Check `window.supports_gpu_particles()`;
+Linux WGPU and macOS Metal support GPU particles. Check `window.supports_gpu_particles()`;
 unsupported renderers do not draw the particle surface.
 
 ## Example

@@ -1,12 +1,16 @@
 use anyhow::{Context as _, Result};
 use foreign_types::ForeignTypeRef;
-use gpui::{DevicePixels, Scene, Size};
+use gpui::{
+    Bounds, ContentMask, DevicePixels, EffectQuad, EffectShader, Scene, Size, SubtreeLayer,
+};
 use gpui_wgpu::{WgpuContext, WgpuExternalRendererConfig, WgpuRenderer, wgpu};
+use std::{rc::Rc, sync::Arc};
 
 pub(crate) struct MetalSceneRenderer {
     pub context: WgpuContext,
     pub renderer: WgpuRenderer,
     targets: Vec<wgpu::Texture>,
+    composite_shader: EffectShader,
 }
 
 impl MetalSceneRenderer {
@@ -22,13 +26,17 @@ impl MetalSceneRenderer {
                 format: wgpu::TextureFormat::Bgra8Unorm,
                 alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
                 target_usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
             },
         )?;
         Ok(Self {
             context,
             renderer,
             targets: Vec::new(),
+            composite_shader: EffectShader::wgsl_image(
+                "fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return sample_effect_image(input, input.uv); }",
+            ),
         })
     }
 
@@ -63,12 +71,50 @@ impl MetalSceneRenderer {
         scene: &Scene,
         size: Size<DevicePixels>,
     ) -> Result<Vec<metal::Texture>> {
+        let mut layers = scene.subtree_layers.clone();
+        for primitive in scene
+            .particles
+            .iter()
+            .cloned()
+            .map(gpui::Primitive::Particles)
+            .chain(scene.fluids.iter().cloned().map(gpui::Primitive::Fluid))
+        {
+            let mut content = Scene::default();
+            content.insert_primitive(primitive);
+            content.finish();
+            let bounds = Bounds::new(
+                gpui::point(gpui::ScaledPixels(0.), gpui::ScaledPixels(0.)),
+                size.map(|px| gpui::ScaledPixels(px.0 as f32)),
+            );
+            layers.push(SubtreeLayer {
+                scene: Rc::new(content),
+                scene3d: None,
+                second_scene: None,
+                intermediate_effects: Arc::default(),
+                composite: EffectQuad {
+                    order: 0,
+                    bounds,
+                    effect_bounds: bounds,
+                    content_mask: ContentMask { bounds },
+                    transformation: Default::default(),
+                    corner_radii: Default::default(),
+                    shader: self.composite_shader.clone(),
+                    uniforms: Default::default(),
+                    time: 0.,
+                    opacity: 1.,
+                    image_tile: None,
+                    second_image_tile: None,
+                    third_image_tile: None,
+                    fourth_image_tile: None,
+                },
+            });
+        }
         if self.renderer.viewport_size() != size {
             self.renderer.update_drawable_size(size);
             self.targets.clear();
         }
-        self.targets.truncate(scene.subtree_layers.len());
-        while self.targets.len() < scene.subtree_layers.len() {
+        self.targets.truncate(layers.len());
+        while self.targets.len() < layers.len() {
             self.targets.push(
                 self.context
                     .device
@@ -84,13 +130,13 @@ impl MetalSceneRenderer {
                         dimension: wgpu::TextureDimension::D2,
                         format: wgpu::TextureFormat::Bgra8Unorm,
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_SRC,
                         view_formats: &[],
                     }),
             );
         }
-        self.renderer
-            .draw_subtree_layers(&scene.subtree_layers, &self.targets)?;
+        self.renderer.draw_subtree_layers(&layers, &self.targets)?;
         // Native-only frames also need pending atlas writes submitted before the
         // Metal command buffer that samples them.
         self.renderer.sprite_atlas().before_frame();
@@ -143,3 +189,6 @@ pub(crate) fn composite_pipeline(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod effects_tests;

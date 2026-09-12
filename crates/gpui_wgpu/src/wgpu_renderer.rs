@@ -24,6 +24,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+mod core_video;
 mod distance_field;
 mod fluid;
 mod particle_transition;
@@ -473,6 +475,8 @@ struct WgpuResources {
     backdrop_result_texture: Option<wgpu::Texture>,
     backdrop_result_view: Option<wgpu::TextureView>,
     surfaces: HashMap<SurfaceId, CachedSurface>,
+    #[cfg(target_os = "macos")]
+    core_video: core_video::CoreVideoSurfaces,
     #[cfg(target_os = "linux")]
     dma_bufs: HashMap<DmaBufId, CachedDmaBuf>,
     #[cfg(target_os = "linux")]
@@ -580,10 +584,7 @@ impl WgpuRenderer {
         let max_texture_size = context.device.limits().max_texture_dimension_2d;
         let width = (config.size.width.0.max(1) as u32).min(max_texture_size);
         let height = (config.size.height.0.max(1) as u32).min(max_texture_size);
-        // Backdrop copies currently assume a surface-local texture origin. Keep them
-        // disabled for embedded viewports until copy origins are carried through the
-        // backdrop pipeline as well.
-        let backdrop_blur_supported = false;
+        let backdrop_blur_supported = config.target_usage.contains(wgpu::TextureUsages::COPY_SRC);
         let surface_config = wgpu::SurfaceConfiguration {
             usage: config.target_usage,
             format: config.format,
@@ -1018,6 +1019,8 @@ impl WgpuRenderer {
             backdrop_result_texture: None,
             backdrop_result_view: None,
             surfaces: HashMap::default(),
+            #[cfg(target_os = "macos")]
+            core_video: Default::default(),
             #[cfg(target_os = "linux")]
             dma_bufs: HashMap::default(),
             #[cfg(target_os = "linux")]
@@ -3833,10 +3836,16 @@ impl WgpuRenderer {
     }
 
     fn prepare_surfaces(&mut self, scene: &Scene) {
+        #[cfg(target_os = "macos")]
+        self.resources_mut().core_video.prepare_legacy(scene);
         let mut frames = HashMap::<SurfaceId, Arc<SurfaceFrame>>::new();
         scene.visit(&mut |scene| {
             for surface in &scene.surfaces {
-                let Some(frame) = surface.source.frame() else {
+                #[cfg(target_os = "macos")]
+                let frame = self.resources().core_video.frame(&surface.source);
+                #[cfg(not(target_os = "macos"))]
+                let frame = surface.source.frame();
+                let Some(frame) = frame else {
                     continue;
                 };
                 if let Some(previous) = frames.insert(frame.handle().id(), frame.clone())
@@ -3945,6 +3954,20 @@ impl WgpuRenderer {
                 continue;
             }
 
+            #[cfg(target_os = "macos")]
+            if let gpui::SurfaceFrameBacking::CoreVideo(buffer) = frame.backing() {
+                resources.surfaces.remove(&id);
+                if let Err(error) = resources
+                    .core_video
+                    .prepare(&resources.device, &frame, buffer)
+                {
+                    log::error!("failed to import CoreVideo surface: {error:#}");
+                }
+                continue;
+            }
+
+            #[cfg(target_os = "macos")]
+            resources.core_video.surfaces.remove(&id);
             let action = surface_cache_action(
                 resources
                     .surfaces
@@ -4613,7 +4636,11 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
         for surface in surfaces {
-            let Some(frame) = surface.source.frame() else {
+            #[cfg(target_os = "macos")]
+            let frame = self.resources().core_video.frame(&surface.source);
+            #[cfg(not(target_os = "macos"))]
+            let frame = surface.source.frame();
+            let Some(frame) = frame else {
                 continue;
             };
             let resources = self.resources();
@@ -4628,7 +4655,21 @@ impl WgpuRenderer {
                     .get(&dma_buf.id())
                     .map(|cached| &cached.textures),
             };
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            let cached_textures =
+                if matches!(frame.backing(), gpui::SurfaceFrameBacking::CoreVideo(_)) {
+                    self.resources()
+                        .core_video
+                        .surfaces
+                        .get(&frame.handle().id())
+                        .map(|cached| &cached.textures)
+                } else {
+                    resources
+                        .surfaces
+                        .get(&frame.handle().id())
+                        .map(|cached| &cached.textures)
+                };
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             let cached_textures = resources
                 .surfaces
                 .get(&frame.handle().id())

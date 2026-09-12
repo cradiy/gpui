@@ -68,7 +68,7 @@ Layout and accessibility retain their original coordinates. Enable
 `.map_interaction(true)` to align pointer targets and event positions with the
 lens. See [Interaction mapping](interaction_mapping.md) for supported chains.
 
-Linux WGPU supports subtree effects. Unsupported backends draw the input
+Linux WGPU and macOS Metal support subtree effects. Unsupported backends draw the input
 normally; check `window.supports_subtree_effects()` for availability.
 
 ## Example

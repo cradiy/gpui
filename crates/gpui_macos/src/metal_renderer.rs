@@ -13,7 +13,6 @@ use gpui::{
     SurfaceFormat, SurfaceFrame, SurfaceFrameBacking, SurfaceId, TransformationMatrix, Underline,
     WeakSurfaceHandle, YuvMatrix, point, size,
 };
-#[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
 
 use core_foundation::base::TCFType;
@@ -347,6 +346,17 @@ impl MetalRenderer {
         Self::new_internal(device, None, true, instance_buffer_pool)
     }
 
+    pub(crate) fn new_auxiliary(&self) -> Self {
+        let mut renderer = Self::new_internal(
+            self.device.clone(),
+            None,
+            false,
+            self.instance_buffer_pool.clone(),
+        );
+        renderer.sprite_atlas = self.sprite_atlas.clone();
+        renderer
+    }
+
     fn create_device() -> metal::Device {
         // Prefer low‐power integrated GPUs on Intel Mac. On Apple
         // Silicon, there is only ever one GPU, so this is equivalent to
@@ -583,6 +593,14 @@ impl MetalRenderer {
         self.scene_renderer
             .as_ref()
             .is_some_and(|renderer| !renderer.context.device_lost())
+    }
+
+    pub fn gpu_specs(&self) -> gpui::GpuSpecs {
+        gpui::GpuSpecs {
+            device_name: self.device.name().to_owned(),
+            driver_name: "Metal".to_owned(),
+            ..Default::default()
+        }
     }
 
     pub fn clear_scene3d_caches(&mut self) {
@@ -871,7 +889,6 @@ impl MetalRenderer {
     ///
     /// This is the primary method for headless rendering. It creates an offscreen
     /// texture, renders the scene to it, and returns the pixel data as an RGBA image.
-    #[cfg(any(test, feature = "test-support"))]
     pub fn render_scene_to_image(
         &mut self,
         scene: &Scene,
@@ -1083,7 +1100,9 @@ impl MetalRenderer {
             renderer.prepare(scene, viewport_size)?
         } else {
             anyhow::ensure!(
-                scene.subtree_layers.is_empty(),
+                scene.subtree_layers.is_empty()
+                    && scene.particles.is_empty()
+                    && scene.fluids.is_empty(),
                 "Metal subtree renderer is unavailable"
             );
             Vec::new()
@@ -1156,8 +1175,26 @@ impl MetalRenderer {
                     viewport_size,
                     command_encoder,
                 ),
-                PrimitiveBatch::Particles(_) => true,
-                PrimitiveBatch::Fluids(_) => true,
+                PrimitiveBatch::Particles(range) => {
+                    command_encoder.set_render_pipeline_state(&self.subtree_pipeline_state);
+                    let base = scene.subtree_layers.len();
+                    for index in range {
+                        command_encoder
+                            .set_fragment_texture(0, Some(&subtree_textures[base + index]));
+                        command_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+                    }
+                    true
+                }
+                PrimitiveBatch::Fluids(range) => {
+                    command_encoder.set_render_pipeline_state(&self.subtree_pipeline_state);
+                    let base = scene.subtree_layers.len() + scene.particles.len();
+                    for index in range {
+                        command_encoder
+                            .set_fragment_texture(0, Some(&subtree_textures[base + index]));
+                        command_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+                    }
+                    true
+                }
                 PrimitiveBatch::Paths(range) => {
                     let paths = &scene.paths[range];
                     command_encoder.end_encoding();

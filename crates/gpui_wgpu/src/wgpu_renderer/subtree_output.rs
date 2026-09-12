@@ -18,6 +18,18 @@ impl WgpuRenderer {
         scene.subtree_layers = layers.to_vec();
         let Some(target) = targets.first() else {
             self.clear_scene3d_caches();
+            let resources = self.resources_mut();
+            resources.particles = None;
+            resources.fluid = None;
+            resources.particle_transition = None;
+            resources.feedback_textures.clear();
+            resources.ui_captures.clear();
+            resources.subtree_textures.clear();
+            resources.surfaces.clear();
+            #[cfg(target_os = "macos")]
+            {
+                resources.core_video = Default::default();
+            }
             return Ok(());
         };
         for target in targets {

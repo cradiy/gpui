@@ -97,8 +97,9 @@ let surface = subtree_effect_chain(
 );
 ```
 
-Linux WGPU supports GPU fluid. Check `window.supports_gpu_fluid()` before
-offering the effect on other renderers; unsupported renderers draw no surface.
+Linux WGPU and macOS Metal support GPU fluid without an extra Cargo feature.
+Check `window.supports_gpu_fluid()` before offering the effect; unsupported
+renderers draw no surface.
 
 ## Example
 

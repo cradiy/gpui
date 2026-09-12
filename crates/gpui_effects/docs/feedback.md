@@ -90,7 +90,7 @@ history textures. Device recovery also starts with empty history.
 The effect retains pixels, not interactive elements. Hit testing and layout stay
 with the current content. Parent clipping applies to the visible trail.
 
-Linux Wayland and X11 windows support feedback through WGPU. Check
+Linux Wayland/X11 and macOS Metal windows support feedback. Check
 `window.supports_subtree_effects()` for availability. Unsupported backends paint
 the current input directly.
 

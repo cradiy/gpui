@@ -61,7 +61,7 @@ fn depth_parallax_preserves_framing_and_resolves_depth() -> anyhow::Result<()> {
     check(&mut renderer)
 }
 
-fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> {
+pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> {
     let gradient = (0..32)
         .flat_map(|y| (0..64).flat_map(move |x| [0, (y * 8) as u8, (x * 4) as u8, 255]))
         .collect::<Vec<_>>();

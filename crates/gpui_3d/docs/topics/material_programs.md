@@ -42,6 +42,11 @@ and helper functions are allowed. Surface evaluation returns unpremultiplied lin
 RGBA; shading returns linear HDR RGB. Renderer entry points own face/alpha clipping,
 HDR clamping, alpha premultiplication, and data-channel output.
 
+The returned alpha follows the material's [transparency rules](materials.md#transparency),
+including nearest-surviving-surface selection for ID, depth, and normal outputs.
+Texture, vertex, and tint alpha participate only when the surface evaluator uses
+them, as `builtin_surface` does.
+
 `SurfaceInput` contains world position, the interpolated world normal and tangent,
 packed material UV sets, and linear vertex color including the object tint. It does
 not expose raster position or output IDs. `face_sign` orients shading normals for

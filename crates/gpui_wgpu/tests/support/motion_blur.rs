@@ -72,10 +72,18 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
             assert!(blurred[center] < source[center]);
             let outside = if displacement[0] == 0. {
                 pixel(32, 17)
+            } else if displacement[1] != 0. {
+                // Probe inside the diagonal trail, away from its rasterized edge.
+                pixel(29, 20)
             } else {
                 pixel(27, 24)
             };
-            assert!(blurred[outside] > source[outside]);
+            assert!(
+                blurred[outside] > source[outside],
+                "no blur spread at scale {scale}, displacement {displacement:?}: {} <= {}",
+                blurred[outside],
+                source[outside]
+            );
             if displacement[1] == 0. {
                 assert_eq!(blurred[pixel(32, 18)], 0);
             }

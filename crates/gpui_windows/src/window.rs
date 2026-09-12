@@ -875,6 +875,14 @@ impl PlatformWindow for WindowsWindow {
         )
     }
 
+    fn supports_gpu_particles(&self) -> bool {
+        self.supports_subtree_effects()
+    }
+
+    fn supports_gpu_fluid(&self) -> bool {
+        self.supports_subtree_effects()
+    }
+
     fn clear_scene3d_caches(&mut self) {
         if let Some(renderer) = self.state.renderer.borrow_mut().wgpu_mut() {
             renderer.clear_scene3d_caches();

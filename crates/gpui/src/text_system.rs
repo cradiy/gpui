@@ -50,12 +50,18 @@ pub const SUBPIXEL_VARIANTS_Y: u8 = 1;
 /// The GPUI text rendering sub system.
 pub struct TextSystem {
     platform_text_system: Arc<dyn PlatformTextSystem>,
-    font_ids_by_font: RwLock<FxHashMap<Font, Result<FontId>>>,
+    font_cache: RwLock<FontCache>,
     font_metrics: RwLock<FxHashMap<FontId, FontMetrics>>,
     raster_bounds: RwLock<FxHashMap<RenderGlyphParams, Bounds<DevicePixels>>>,
     wrapper_pool: Mutex<FxHashMap<FontIdWithSize, Vec<LineWrapper>>>,
     font_runs_pool: Mutex<Vec<Vec<FontRun>>>,
     fallback_font_stack: SmallVec<[Font; 2]>,
+}
+
+#[derive(Default)]
+struct FontCache {
+    ids_by_font: FxHashMap<Font, Result<FontId>>,
+    fonts_by_id: FxHashMap<FontId, Font>,
 }
 
 impl TextSystem {
@@ -65,7 +71,7 @@ impl TextSystem {
             platform_text_system,
             font_metrics: RwLock::default(),
             raster_bounds: RwLock::default(),
-            font_ids_by_font: RwLock::default(),
+            font_cache: RwLock::default(),
             wrapper_pool: Mutex::default(),
             font_runs_pool: Mutex::default(),
             fallback_font_stack: smallvec![
@@ -100,7 +106,10 @@ impl TextSystem {
 
     /// Add a font's data to the text system.
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-        self.platform_text_system.add_fonts(fonts)
+        let mut cache = self.font_cache.write();
+        let result = self.platform_text_system.add_fonts(fonts);
+        cache.ids_by_font.clear();
+        result
     }
 
     /// Get the FontId for the configure font family and style.
@@ -112,31 +121,28 @@ impl TextSystem {
             }
         }
 
-        let font_id = self
-            .font_ids_by_font
-            .read()
-            .get(font)
-            .map(clone_font_id_result);
-        if let Some(font_id) = font_id {
-            font_id
-        } else {
-            let font_id = self.platform_text_system.font_id(font);
-            self.font_ids_by_font
-                .write()
-                .insert(font.clone(), clone_font_id_result(&font_id));
-            font_id
+        if let Some(font_id) = self.font_cache.read().ids_by_font.get(font) {
+            return clone_font_id_result(font_id);
         }
+
+        let cache = self.font_cache.upgradable_read();
+        if let Some(font_id) = cache.ids_by_font.get(font) {
+            return clone_font_id_result(font_id);
+        }
+        let font_id = self.platform_text_system.font_id(font);
+        let mut cache = RwLockUpgradableReadGuard::upgrade(cache);
+        if let Ok(id) = font_id {
+            cache.fonts_by_id.entry(id).or_insert_with(|| font.clone());
+        }
+        cache
+            .ids_by_font
+            .insert(font.clone(), clone_font_id_result(&font_id));
+        font_id
     }
 
     /// Get the Font for the Font Id.
     pub fn get_font_for_id(&self, id: FontId) -> Option<Font> {
-        let lock = self.font_ids_by_font.read();
-        lock.iter()
-            .filter_map(|(font, result)| match result {
-                Ok(font_id) if *font_id == id => Some(font.clone()),
-                _ => None,
-            })
-            .next()
+        self.font_cache.read().fonts_by_id.get(&id).cloned()
     }
 
     /// Resolves the specified font, falling back to the default font stack if

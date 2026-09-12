@@ -921,6 +921,7 @@ fn check_is_known_emoji_font(postscript_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{FontWeight, px};
 
     const LILEX_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
     const LILEX_BOLD: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf");
@@ -979,6 +980,70 @@ mod tests {
 
         assert!(system.0.read().font_ids_by_family_cache.is_empty());
         assert!(system.0.read().resolved_font_cache.is_empty());
+    }
+
+    #[test]
+    fn shared_font_resolution_refreshes_after_loading_a_missing_family() {
+        let platform = Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+        let system = Arc::new(gpui::TextSystem::new(platform.clone()));
+        system
+            .add_fonts(vec![Cow::Borrowed(LILEX_REGULAR)])
+            .unwrap();
+        let requested = gpui::font("IBM Plex Sans");
+        let fallback_id = system.resolve_font(&requested);
+        let fallback_font = system.get_font_for_id(fallback_id).unwrap();
+        let window = gpui::WindowTextSystem::new(system.clone());
+        let text: SharedString = "Minimum width".into();
+        let runs = [gpui::TextRun {
+            len: text.len(),
+            font: requested.clone(),
+            color: gpui::white(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }];
+        let before = window.shape_line(text.clone(), px(20.), &runs, None);
+
+        system
+            .add_fonts(vec![Cow::Borrowed(include_bytes!(
+                "../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf"
+            ))])
+            .unwrap();
+
+        let loaded_id = system.resolve_font(&requested);
+        assert_ne!(loaded_id, fallback_id);
+        assert_eq!(system.get_font_for_id(loaded_id), Some(requested));
+        assert_eq!(system.get_font_for_id(fallback_id), Some(fallback_font));
+        assert!(platform.glyph_for_char(fallback_id, 'M').is_some());
+        let after = window.shape_line(text, px(20.), &runs, None);
+        assert_ne!(before.width, after.width);
+        assert_eq!(after.runs[0].font_id, loaded_id);
+    }
+
+    #[test]
+    fn shared_font_resolution_refreshes_style_substitution() {
+        let platform = Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+        let system = gpui::TextSystem::new(platform.clone());
+        system
+            .add_fonts(vec![Cow::Borrowed(LILEX_REGULAR)])
+            .unwrap();
+        let mut requested = gpui::font("Lilex");
+        requested.weight = FontWeight::BOLD;
+        let substituted_id = system.resolve_font(&requested);
+        let original_face = platform.0.read().loaded_font(substituted_id).font.id();
+
+        system.add_fonts(vec![Cow::Borrowed(LILEX_BOLD)]).unwrap();
+
+        let loaded_id = system.resolve_font(&requested);
+        let state = platform.0.read();
+        let loaded_face = state.loaded_font(loaded_id).font.id();
+        assert_ne!(original_face, loaded_face);
+        assert_eq!(state.loaded_font(substituted_id).font.id(), original_face);
+        assert_eq!(
+            state.font_system.db().face(loaded_face).unwrap().weight,
+            cosmic_text::Weight::BOLD
+        );
+        assert_eq!(system.get_font_for_id(substituted_id), Some(requested));
     }
 
     #[test]

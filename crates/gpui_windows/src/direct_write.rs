@@ -381,6 +381,7 @@ impl DirectWriteState {
         let set = unsafe { components.builder.CreateFontSet()? };
         let collection = unsafe { components.factory.CreateFontCollectionFromFontSet(&set)? };
         self.custom_font_collection = collection;
+        self.font_to_font_id.clear();
 
         Ok(())
     }

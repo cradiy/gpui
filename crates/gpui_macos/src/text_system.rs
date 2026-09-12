@@ -269,8 +269,10 @@ impl MacTextSystemState {
                 Cow::Owned(bytes) => Ok(Handle::from_memory(Arc::new(bytes), 0)),
             })
             .collect::<Result<Vec<_>>>()?;
-        self.memory_source.add_fonts(fonts.into_iter())?;
-        Ok(())
+        let result = self.memory_source.add_fonts(fonts.into_iter());
+        self.font_selections.clear();
+        self.font_ids_by_font_key.clear();
+        result.map_err(Into::into)
     }
 
     fn load_family(

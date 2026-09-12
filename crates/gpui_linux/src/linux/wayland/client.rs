@@ -723,6 +723,11 @@ pub struct WaylandClient(Rc<RefCell<WaylandClientState>>);
 
 impl Drop for WaylandClient {
     fn drop(&mut self) {
+        // Temporary client clones share all windows and input objects. Only the
+        // final owner may tear down the connection state.
+        if Rc::strong_count(&self.0) != 1 {
+            return;
+        }
         let mut state = self.0.borrow_mut();
         state.windows.clear();
 

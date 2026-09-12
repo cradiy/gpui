@@ -31,7 +31,7 @@ does not configure a graphics device or select a hardware decoder.
 
 ## Integration
 
-[`gpui_media_system`](../gpui_media_system/README.md) provides the platform
+[`gpui_media_backend`](../gpui_media_backend/README.md) provides the platform
 backend and re-exports these types. Applications can depend on that crate alone
 for playback sessions or frame extraction.
 

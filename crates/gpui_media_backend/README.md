@@ -1,4 +1,4 @@
-# gpui_media_system
+# gpui_media_backend
 
 A renderer-independent media backend with no GPUI dependency.
 `SystemBackend` uses GStreamer on Linux and macOS, and Media Foundation on
@@ -9,7 +9,7 @@ platform. Media types are re-exported from
 ## Dependencies
 
 ```toml
-gpui_media_system = { path = ".../gpui_media_system" }
+gpui_media_backend = { path = ".../gpui_media_backend" }
 ```
 
 Linux and macOS require GStreamer development libraries at build time and
@@ -31,7 +31,7 @@ load multiple library versions. The Rust bindings remain on the 0.25 release
 series.
 
 ```toml
-gpui_media_system = { path = ".../gpui_media_system", features = ["v1_28"] }
+gpui_media_backend = { path = ".../gpui_media_backend", features = ["v1_28"] }
 ```
 
 At least one version feature must be enabled on Linux/macOS. The same features
@@ -40,7 +40,7 @@ have no effect on Windows: all GStreamer dependencies are target-specific.
 ## Playback sessions
 
 ```rust
-use gpui_media_system::{
+use gpui_media_backend::{
     MediaBackend, MediaOutputSink, MediaPlaybackRequest, MediaSource, SystemBackend,
 };
 
@@ -72,7 +72,7 @@ gpui_media = { path = ".../gpui_media", default-features = false, features = ["v
 
 ```rust
 use gpui_media::{MediaSource, VideoPlayer, VideoPlayerOptions};
-use gpui_media_system::SystemBackend;
+use gpui_media_backend::SystemBackend;
 
 let source = MediaSource::parse("/path/to/video.mp4")?;
 let player = cx.new(|cx| {
@@ -94,7 +94,7 @@ containers, subtitles, controls and timeline access.
 
 ```rust
 use std::{sync::Arc, time::Duration};
-use gpui_media_system::{MediaSource, VideoFrameExtractor, SystemBackend};
+use gpui_media_backend::{MediaSource, VideoFrameExtractor, SystemBackend};
 
 let extractor = VideoFrameExtractor::new(
     MediaSource::parse("/path/to/video.mp4")?,
@@ -121,7 +121,7 @@ decoder policy for each extraction session:
 | `HardwareOnly` | Decoders with the GStreamer `Hardware` classification |
 
 ```rust
-use gpui_media_system::{VideoDecoderPolicy, VideoFrameExtractorOptions};
+use gpui_media_backend::{VideoDecoderPolicy, VideoFrameExtractorOptions};
 
 let options = VideoFrameExtractorOptions {
     video_decoder: VideoDecoderPolicy::SoftwareOnly,
@@ -175,8 +175,8 @@ available for the opened source.
 ## Examples
 
 ```sh
-cargo run -p gpui_media_system --example frame_at -- /path/to/video.mp4 5
-cargo run -p gpui_media_system --example frame_at -- /path/to/video.mp4 5 software
+cargo run -p gpui_media_backend --example frame_at -- /path/to/video.mp4 5
+cargo run -p gpui_media_backend --example frame_at -- /path/to/video.mp4 5 software
 ```
 
 GUI examples live in `gpui_media`:

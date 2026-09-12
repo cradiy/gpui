@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = MediaSource::from_uri(url)?.with_network_options(network);
     let title = format!("gpui_media WebDAV · {}", source.display_name());
 
-    gpui_media_system::SystemBackend::initialize()?;
+    gpui_media_backend::SystemBackend::initialize()?;
     gpui_platform::application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.0), px(680.0)), cx);
         let result = cx.open_window(
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             move |window, cx| {
                 window.set_window_title(&title);
                 let player = cx.new(|cx| {
-                    let builder = VideoPlayer::builder(source, gpui_media_system::SystemBackend)
+                    let builder = VideoPlayer::builder(source, gpui_media_backend::SystemBackend)
                         .options(VideoPlayerOptions::default());
                     builder
                         .build_in_window(window, cx)

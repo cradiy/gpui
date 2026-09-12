@@ -79,10 +79,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let source = MediaSource::parse(input)?;
 
-    gpui_media_system::SystemBackend::initialize()?;
+    gpui_media_backend::SystemBackend::initialize()?;
     let initial_frame = VideoFrameExtractor::new(
         source.clone(),
-        std::sync::Arc::new(gpui_media_system::SystemBackend),
+        std::sync::Arc::new(gpui_media_backend::SystemBackend),
     )?
     .initial_frame_blocking()?;
     let video_size = initial_frame.display_size();
@@ -114,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             move |window, cx| {
                 window.set_window_title(&title);
                 let player = cx.new(|cx| {
-                    VideoPlayer::builder(source, gpui_media_system::SystemBackend)
+                    VideoPlayer::builder(source, gpui_media_backend::SystemBackend)
                         .build_in_window(window, cx)
                         .expect("failed to create video player")
                 });

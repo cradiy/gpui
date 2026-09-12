@@ -2,7 +2,7 @@
 
 `gpui_media` provides GPUI playback entities and frame presentation with pluggable backends.
 One media session owns demuxing, video/audio decoding, audio output and the
-shared playback clock. The [`gpui_media_system`](../gpui_media_system/README.md)
+shared playback clock. The [`gpui_media_backend`](../gpui_media_backend/README.md)
 crate provides a platform-selected `SystemBackend`. Applications can also
 inject their own backend implementation. Video frame rendering and
 extraction remain separate from player chrome so applications can build
@@ -46,23 +46,23 @@ backend; the core does not link GStreamer or Media Foundation.
 
 ```toml
 gpui_media = { path = ".../gpui_media" }
-gpui_media_system = { path = ".../gpui_media_system" }
+gpui_media_backend = { path = ".../gpui_media_backend" }
 ```
 
 For video without the independent audio player:
 
 ```toml
 gpui_media = { path = ".../gpui_media", default-features = false, features = ["video"] }
-gpui_media_system = { path = ".../gpui_media_system", features = ["v1_26"] }
+gpui_media_backend = { path = ".../gpui_media_backend", features = ["v1_26"] }
 ```
 
-`gpui_media_system::SystemBackend` selects GStreamer on Linux/macOS and Media
+`gpui_media_backend::SystemBackend` selects GStreamer on Linux/macOS and Media
 Foundation on Windows. GStreamer requires at least 1.24; version features and
-runtime requirements are documented in the [backend guide](../gpui_media_system/README.md).
+runtime requirements are documented in the [backend guide](../gpui_media_backend/README.md).
 
 ```rust
 use gpui_media::{MediaSource, VideoPlayer};
-use gpui_media_system::SystemBackend;
+use gpui_media_backend::SystemBackend;
 
 let player = VideoPlayer::builder(source, SystemBackend)
     .build_in_window(window, cx)?;
@@ -453,7 +453,7 @@ Requests beyond the video stream duration return the closest available frame bef
 ## DMA-BUF status
 
 `VideoPlayer::new_in_window` translates the active renderer's import support
-into `FrameOutputCapabilities`. `gpui_media_system` advertises native NV12
+into `FrameOutputCapabilities`. `gpui_media_backend` advertises native NV12
 modifiers accepted by the consumer with two memory planes. It preserves the
 GStreamer DMA-BUF object layout and maps both NV12 image planes to the same
 object when appropriate. Rendering import status remains in the GPUI adapter.

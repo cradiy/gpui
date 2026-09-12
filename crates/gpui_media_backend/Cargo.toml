@@ -1,5 +1,5 @@
 [package]
-name = "gpui_media_system"
+name = "gpui_media_backend"
 version = "0.1.0"
 publish.workspace = true
 edition.workspace = true

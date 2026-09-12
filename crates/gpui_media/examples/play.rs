@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = MediaSource::parse(&input)?;
     let title = format!("gpui_media · {}", source.display_name());
 
-    gpui_media_system::SystemBackend::initialize()?;
+    gpui_media_backend::SystemBackend::initialize()?;
     gpui_platform::application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.0), px(680.0)), cx);
         let result = cx.open_window(
@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 let player = cx.new(|cx| {
-                    VideoPlayer::builder(source, gpui_media_system::SystemBackend).build_in_window(window, cx)
+                    VideoPlayer::builder(source, gpui_media_backend::SystemBackend).build_in_window(window, cx)
                         .expect("failed to create video player")
                 });
 

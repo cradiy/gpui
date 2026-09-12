@@ -22,7 +22,6 @@ members = [
   "crates/http_client_tls",
   "crates/media",
   "crates/util_macros",
-  "crates/util",
   "crates/refineable",
   "crates/refineable/derive_refineable",
   "crates/reqwest_client",
@@ -44,10 +43,7 @@ edition = "2024"
 #
 
 collections = { path = "crates/collections", version = "0.1.0" }
-console = "0.16"
-crossbeam = "0.8.4"
 derive_refineable = { path = "crates/refineable/derive_refineable" }
-dialoguer = { version = "0.12", default-features = false }
 gpui = { path = "crates/gpui", default-features = false }
 gpui_media = { path = "crates/gpui_media" }
 gpui_media_core = { path = "crates/gpui_media_core" }
@@ -70,19 +66,11 @@ scheduler = { path = "crates/scheduler" }
 sum_tree = { path = "crates/sum_tree" }
 http_client_tls = { path = "crates/http_client_tls" }
 media = { path = "crates/media" }
-mime = "0.3.17"
 naga = { version = "29.0.4", features = ["wgsl-in", "msl-out", "hlsl-out"] }
 util_macros = { path = "crates/util_macros" }
-util = { path = "crates/util" }
 uic_macros = { package = "uic-macros", path = "uic/macros", version = "0.1.0" }
 refineable = { path = "crates/refineable" }
 reqwest_client = { path = "crates/reqwest_client" }
-rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", features = [
-  "wav",
-  "playback",
-  "wav_output",
-  "recording",
-] }
 
 
 #
@@ -93,10 +81,6 @@ accesskit = "0.24.0"
 accesskit_macos = "0.26.0"
 accesskit_unix = "0.21.0"
 accesskit_windows = "0.33.1"
-agent-client-protocol = { version = "=1.1.0", features = ["unstable"] }
-aho-corasick = "1.1"
-alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "4c129667ce56611becdc82de6e28218c80e2e88f" }
-any_vec = "0.14"
 anyhow = "1.0.86"
 ashpd = { version = "0.13", default-features = false, features = [
   "async-io",
@@ -107,34 +91,7 @@ ashpd = { version = "0.13", default-features = false, features = [
   "trash",
 ] }
 async-channel = "2.5.0"
-async-compat = "0.2.1"
-async-compression = { version = "0.4", features = [
-  "bzip2",
-  "gzip",
-  "futures-io",
-] }
-async-dispatcher = "0.1"
-async-fs = "2.1"
-async-io = "2.6.0"
-async-lock = "3.4.2"
-async-pipe = { git = "https://github.com/zed-industries/async-pipe-rs", rev = "82d00a04211cf4e1236029aa03e6b6ce2a74c553" }
-async-recursion = "1.0.0"
-async-tar = "0.5.1"
 async-task = "4.7"
-async-trait = "0.1"
-async-tungstenite = "0.31.0"
-async-process = "2.5.0"
-async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
-aws-config = { version = "1.8.10", features = ["behavior-version-latest"] }
-aws-credential-types = { version = "1.2.8", features = [
-  "hardcoded-credentials",
-] }
-aws-sdk-bedrockruntime = { version = "1.112.0", features = [
-  "behavior-version-latest",
-] }
-aws-sigv4 = { version = "1.4.0", features = ["http1"] }
-aws-smithy-runtime-api = { version = "1.9.2", features = ["http-1x", "client"] }
-aws-smithy-types = { version = "1.3.4", features = ["http-body-1-x"] }
 backtrace = "0.3"
 base64 = "0.22"
 bevy_mikktspace = { version = "1.0.0", features = [
@@ -142,32 +99,16 @@ bevy_mikktspace = { version = "1.0.0", features = [
   "corrected-vertex-welding",
 ] }
 bitflags = "2.6.0"
-brotli = "8.0.2"
 bytes = "1.0"
-cargo_metadata = "0.19"
-cargo_toml = "0.21"
-brush-parser = "0.3"
-cfg-if = "1.0.3"
-chardetng = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-ciborium = "0.2"
-circular-buffer = "1.0"
-clap = { version = "4.4", features = ["derive", "wrap_help"] }
-clap_complete = { version = "4.4" }
-clap_complete_nushell = { version = "4.4" }
 cocoa = "=0.26.0"
 cocoa-foundation = "=0.2.0"
-const_format = "0.2"
-convert_case = "0.11.0"
 core-foundation = "=0.10.0"
 core-foundation-sys = "0.8.6"
 core-video = { version = "0.5.2", features = ["metal"] }
 cpal = "0.17"
-crash-handler = "0.7"
 criterion = { version = "0.5", features = ["html_reports"] }
 ctor = "1.0.6"
-dap-types = { git = "https://github.com/zed-industries/dap-types", rev = "1b461b310481d01e02b2603c16d7144b926339f8" }
-dashmap = "6.0"
 derive_more = { version = "2.1.1", features = [
   "add",
   "add_assign",
@@ -179,77 +120,29 @@ derive_more = { version = "2.1.1", features = [
   "mul_assign",
   "not",
 ] }
-dirs = "6.0"
-documented = "0.9.1"
-dotenvy = "0.15.0"
 dunce = "1.0"
-ec4rs = { version = "1.2", features = ["allow-empty-values"] }
-emojis = "0.6.1"
 env_logger = "0.11"
-encoding_rs = "0.8"
-exec = "0.3.1"
-fancy-regex = "0.18.0"
-fork = "0.4.0"
 futures = "0.3.32"
 futures-concurrency = "7.7.1"
-futures-lite = "1.13"
-futures-util = "0.3.32"
-gh-workflow = { git = "https://github.com/zed-industries/gh-workflow", rev = "37f3c0575d379c218a9c455ee67585184e40d43f" }
 
-globset = "0.4"
 heapless = "0.9.2"
-handlebars = "4.3"
 heck = "0.5"
 hdrhistogram = "7"
-heed = { version = "0.21.0", features = ["read-txn-no-tls"] }
-hex = "0.4.3"
-human_bytes = "0.4.1"
-html5ever = "0.27.0"
 http = "1.1"
 http-body = "1.0"
-httparse = "1.10"
-idna = "1.0"
-ignore = "0.4.22"
 image = "0.25.1"
 gif = "0.14.2"
 image-webp = "0.2.4"
-imara-diff = "0.1.8"
 indexmap = { version = "2.7.0", features = ["serde"] }
-indoc = "2"
 inventory = "0.3.19"
 itertools = "0.14.0"
 ksni = { version = "0.3.6", default-features = false, features = ["async-io"] }
-json_dotpath = "1.1"
-jsonschema = "0.37.0"
-jsonwebtoken = "10.0"
-jupyter-protocol = "1.4.0"
-jupyter-websocket-client = "1.1.0"
 libc = "0.2"
-libsqlite3-sys = { version = "0.30.1", features = ["bundled"] }
-linkify = "0.10.0"
-libwebrtc = "0.3.26"
-livekit = { version = "0.7.32", features = [
-  "tokio",
-  "rustls-tls-native-roots",
-] }
 log = { version = "0.4.16", features = ["kv_unstable_serde", "serde"] }
-lru = "0.16"
-lsp-types = { git = "https://github.com/zed-industries/lsp-types", rev = "f4dfa89a21ca35cd929b70354b1583fabae325f8" }
 mach2 = "0.5"
-markup5ever_rcdom = "0.3.0"
 metal = "0.33"
-minidumper = "0.9"
-moka = { version = "0.12.10", features = ["sync"] }
-nanoid = "0.4"
-nbformat = "1.2.0"
-nix = "0.29"
-nucleo = "0.5"
-num-format = "0.4.4"
 objc = "0.2"
 objc2 = "0.6"
-objc2-av-foundation = { version = "0.3.2", default-features = false }
-objc2-core-media = { version = "0.3.2", default-features = false }
-objc2-core-video = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSButton",
   "NSControl",
@@ -284,39 +177,15 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = [
   "objc2-core-foundation",
   "std",
 ] }
-open = "5.0.0"
-ordered-float = "2.1.1"
-palette = { version = "0.7.5", default-features = false, features = ["std"] }
 parking_lot = "0.12.1"
-partial-json-fixer = "0.5.3"
-parse_int = "0.9"
-pciid-parser = "0.8.0"
-pathdiff = "0.2"
-percent-encoding = "2.3.2"
-pet = { git = "https://github.com/microsoft/python-environment-tools.git", rev = "9e61a22af989fe54937bf07c9f9cff1bc53d9056" }
-pet-conda = { git = "https://github.com/microsoft/python-environment-tools.git", rev = "9e61a22af989fe54937bf07c9f9cff1bc53d9056" }
-pet-core = { git = "https://github.com/microsoft/python-environment-tools.git", rev = "9e61a22af989fe54937bf07c9f9cff1bc53d9056" }
-pet-fs = { git = "https://github.com/microsoft/python-environment-tools.git", rev = "9e61a22af989fe54937bf07c9f9cff1bc53d9056" }
-pet-poetry = { git = "https://github.com/microsoft/python-environment-tools.git", rev = "9e61a22af989fe54937bf07c9f9cff1bc53d9056" }
-pet-reporter = { git = "https://github.com/microsoft/python-environment-tools.git", rev = "9e61a22af989fe54937bf07c9f9cff1bc53d9056" }
-pet-virtualenv = { git = "https://github.com/microsoft/python-environment-tools.git", rev = "9e61a22af989fe54937bf07c9f9cff1bc53d9056" }
-portable-pty = "0.9.0"
 postage = { version = "0.5", features = ["futures-traits"] }
-pretty_assertions = { version = "1.3.0", features = ["unstable"] }
 proc-macro2 = "1.0.93"
 profiling = "1"
 # replace this with main when #635 is merged
 proptest = { git = "https://github.com/proptest-rs/proptest", rev = "3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b", features = [
   "attr-macro",
 ] }
-proptest-derive = "0.8.0"
-proxyvars = "0.2"
-prost = "0.9"
-prost-build = "0.9"
-prost-types = "0.9"
 pollster = "0.4.0"
-pulldown-cmark = { version = "0.13.0", default-features = false }
-quick-xml = "0.38"
 quote = "1.0.9"
 rand = "0.9"
 rayon = "1.8"
@@ -334,126 +203,37 @@ resvg = { version = "0.46.0", default-features = false, features = [
   "memmap-fonts",
   "raster-images",
 ] }
-rsa = "0.9.6"
-runtimelib = { version = "1.4.0", default-features = false, features = [
-  "async-dispatcher-runtime",
-  "aws-lc-rs",
-] }
-rust-embed = { version = "8.11", features = ["include-exclude"] }
 rustc-hash = "2.1.0"
 rustls = { version = "0.23.26" }
 rustls-platform-verifier = "0.5.0"
 # WARNING: If you change this, you must also publish a new version of gpui-scap to crates.io
 scap = { git = "https://github.com/cradiy/scap.git", rev = "2a9b6529dd45b861a263ee34af047c8ae495d6ec", default-features = false, package = "gpui-scap", version = "0.0.9-gpui" }
 schemars = { version = "1.0", features = ["indexmap2"] }
-seccompiler = "0.5"
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1.0.221", features = ["derive", "rc"] }
 serde_json = { version = "1.0.144", features = ["preserve_order", "raw_value"] }
-serde_yaml_ng = "0.10"
-serde_json_lenient = { version = "0.2", features = [
-  "preserve_order",
-  "raw_value",
-] }
-serde_yaml = "0.9.34"
-serde_path_to_error = "0.1.17"
 serde_urlencoded = "0.7"
 sha2 = "0.10"
-shellexpand = "3.1"
-shlex = "1.3.0"
-simplelog = "0.12.2"
 slotmap = "1.0.6"
 smallvec = { version = "1.6", features = ["union", "const_new"] }
 smol = "2.0"
-sqlformat = "0.2"
 stacksafe = "1.0.2"
-streaming-iterator = "0.1"
-strsim = "0.11"
 strum = { version = "0.28", features = ["derive"] }
 syn = { version = "2.0.101", features = ["full", "extra-traits", "visit-mut"] }
-sys-locale = "0.3.1"
-sysinfo = "0.37.0"
-take-until = "0.2.0"
 tempfile = "3.20.0"
 thiserror = "2.0.12"
-time = { version = "0.3", features = [
-  "macros",
-  "parsing",
-  "serde",
-  "serde-well-known",
-  "formatting",
-  "local-offset",
-] }
 tokio = { version = "1" }
-tokio-socks = { version = "0.5.2", default-features = false, features = [
-  "futures-io",
-  "tokio",
-] }
-toml = "0.8"
-toml_edit = { version = "0.22", default-features = false, features = [
-  "display",
-  "parse",
-  "serde",
-] }
-tower-http = "0.4.4"
-tree-sitter = { version = "0.26.9", features = ["wasm"] }
-tree-sitter-bash = "0.25.1"
-tree-sitter-c = "0.24.1"
-tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "5cb9b693cfd7bfacab1d9ff4acac1a4150700609" }
-tree-sitter-css = "0.23"
-tree-sitter-diff = "0.1.0"
-tree-sitter-elixir = "0.3"
-tree-sitter-embedded-template = "0.23.0"
-tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
-tree-sitter-go = "0.25"
-tree-sitter-go-mod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a", package = "tree-sitter-gomod" }
-tree-sitter-gowork = { git = "https://github.com/zed-industries/tree-sitter-go-work", rev = "acb0617bf7f4fda02c6217676cc64acb89536dc7" }
-tree-sitter-heex = { git = "https://github.com/zed-industries/tree-sitter-heex", rev = "1dd45142fbb05562e35b2040c6129c9bca346592" }
-tree-sitter-html = "0.23"
-tree-sitter-jsdoc = "0.23"
-tree-sitter-json = "0.24"
-tree-sitter-md = { git = "https://github.com/zed-industries/tree-sitter-markdown", rev = "b596e737286780d7bfa9fcddceaeeb754574b352" } # fork of 9a23c1a with serialize() buffer-overflow fix; https://github.com/tree-sitter-grammars/tree-sitter-markdown/issues/243
-tree-sitter-python = "0.25"
-tree-sitter-regex = "0.24"
-tree-sitter-ruby = "0.23"
-tree-sitter-rust = "0.24.2"
-tree-sitter-typescript = { git = "https://github.com/zed-industries/tree-sitter-typescript", rev = "e2c53597d6a5d9cf7bbe8dccde576fe1e46c5899" } # https://github.com/tree-sitter/tree-sitter-typescript/pull/347
-tree-sitter-yaml = { git = "https://github.com/zed-industries/tree-sitter-yaml", rev = "baff0b51c64ef6a1fb1f8390f3ad6015b83ec13a" }
 tracing = "0.1.40"
-unicase = "2.6"
-unicode-script = "0.5.7"
 unicode-segmentation = "1.10"
-unicode-width = "0.2"
-unindent = "0.2.0"
 url = "2.2"
 ureq = { version = "3.3", default-features = false, features = ["rustls"] }
-urlencoding = "2.1.2"
 usvg = { version = "0.46.0", default-features = false }
 uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
-vte = { version = "0.15.0", features = ["ansi"] }
-walkdir = "2.5"
-wasm-encoder = "0.252"
-wasmparser = "0.252"
-wasmtime = { version = "36", default-features = false, features = [
-  "async",
-  "demangle",
-  "runtime",
-  "cranelift",
-  "component-model",
-  "incremental-cache",
-  "parallel-compilation",
-] }
-wasmtime-wasi = "36"
-wax = "0.7"
 which = "6.0.0"
 wasm-bindgen = "0.2.120"
 web-time = "1.1.0"
 wgpu = "30.0.0"
 windows-core = "0.61"
-yaml-rust2 = "0.8"
-yawc = "0.2.5"
-zeroize = "1.8"
-zstd = "0.11"
 
 
 [workspace.dependencies.windows]

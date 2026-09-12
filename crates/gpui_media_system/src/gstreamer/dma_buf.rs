@@ -8,18 +8,20 @@ use std::{
     sync::Arc,
 };
 
-use gpui::{
-    DRM_FORMAT_NV12, DmaBufHandle, DmaBufImage, DmaBufObject, DmaBufPlane, DmaBufPlaneLayout,
-    DrmDevice, GpuSpecs, SurfaceFormat, SurfaceFrame, SurfaceHandle,
+use gpui_media_core::{
+    DRM_FORMAT_NV12, DmaBufImage, DmaBufObject, DmaBufPlaneLayout, DrmDevice, FrameBacking,
+    FrameBuffer, FrameHandle, FrameOutputCapabilities, PixelFormat,
 };
 
-use gpui_media::{MediaError, MediaErrorKind, MediaRecovery, MediaResult};
+use gpui_media_core::{MediaError, MediaErrorKind, MediaRecovery, MediaResult};
 
 use super::{
     gst_video_output_error, gst_video_output_message, surface_color_info, video_frame_geometry,
 };
 
-pub(super) fn appsink_caps(gpu_specs: Option<&GpuSpecs>) -> MediaResult<gst::Caps> {
+pub(super) fn appsink_caps(
+    output_capabilities: Option<&FrameOutputCapabilities>,
+) -> MediaResult<gst::Caps> {
     let linear_drm_formats = [
         gst_video::VideoFormat::Nv12,
         gst_video::VideoFormat::Bgra,
@@ -40,12 +42,10 @@ pub(super) fn appsink_caps(gpu_specs: Option<&GpuSpecs>) -> MediaResult<gst::Cap
         .join(",");
 
     let mut native_nv12_formats = Vec::new();
-    if let Some(gpu_specs) = gpu_specs
-        && gpu_specs.supports_native_nv12_dma_buf_import
-    {
+    if let Some(output_capabilities) = output_capabilities {
         let nv12_fourcc = gst_video::dma_drm_fourcc_from_format(gst_video::VideoFormat::Nv12)
             .map_err(|error| gst_video_output_error("no DRM fourcc for NV12", error))?;
-        for candidate in &gpu_specs.native_nv12_dma_buf_modifiers {
+        for candidate in &output_capabilities.native_nv12_dma_buf_modifiers {
             if candidate.plane_count == 2 {
                 let format = gst_video::dma_drm_fourcc_to_string(nv12_fourcc, candidate.modifier)
                     .to_string();
@@ -89,10 +89,10 @@ pub(super) fn sample_uses_dma_buf(sample: &gst::Sample) -> bool {
 
 pub(super) fn sample_to_surface_frame(
     sample: &gst::Sample,
-    handle: SurfaceHandle,
+    handle: FrameHandle,
     sequence: u64,
     producer_drm_device: Option<DrmDevice>,
-) -> MediaResult<SurfaceFrame> {
+) -> MediaResult<FrameBuffer> {
     let caps = sample
         .caps()
         .ok_or_else(|| gst_video_output_message("decoded sample has no caps"))?;
@@ -108,8 +108,8 @@ pub(super) fn sample_to_surface_frame(
         .map(|meta| (meta.offset().to_vec(), meta.stride().to_vec()))
         .unwrap_or_else(|| (info.offset().to_vec(), info.stride().to_vec()));
     let expected_planes = match format {
-        SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => 1,
-        SurfaceFormat::Nv12 => 2,
+        PixelFormat::Bgra8 | PixelFormat::Rgba8 => 1,
+        PixelFormat::Nv12 => 2,
     };
     if offsets.len() < expected_planes || strides.len() < expected_planes {
         return Err(gst_video_output_message(format!(
@@ -125,83 +125,35 @@ pub(super) fn sample_to_surface_frame(
             buffer.as_ref(),
             offsets[plane_index],
             strides[plane_index],
-            modifier,
         )?);
     }
 
     let lifetime_guard: Arc<dyn Send + Sync> = Arc::new(buffer);
-    let dma_buf = match format {
-        SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => {
-            if modifier != 0 {
-                return Err(gst_video_output_message(format!(
-                    "non-linear RGB DMA-BUF modifier {modifier:#018x} is not supported"
-                )));
-            }
-            let plane = planes.pop().expect("validated RGB plane");
-            // SAFETY: The descriptor and layout come from GStreamer's negotiated
-            // DMA-BUF caps and GstVideoMeta. The retained GstBuffer prevents the
-            // decoder pool from reusing the allocation while GPUI samples it.
-            unsafe {
-                DmaBufHandle::new_with_lifetime_guard(
-                    plane.fd,
-                    frame_size,
-                    format,
-                    plane.modifier,
-                    plane.offset,
-                    plane.stride,
-                    lifetime_guard,
-                )
-            }
-        }
-        SurfaceFormat::Nv12 => {
-            if modifier == 0 {
-                let uv = planes.pop().expect("validated NV12 UV plane");
-                let y = planes.pop().expect("validated NV12 Y plane");
-                // SAFETY: Both descriptors and their plane layouts are supplied by
-                // GStreamer. Retaining the GstBuffer keeps both allocations leased.
-                unsafe {
-                    DmaBufHandle::new_nv12_with_lifetime_guard(
-                        frame_size,
-                        y.into_gpui(),
-                        uv.into_gpui(),
-                        lifetime_guard,
-                    )
-                }
-            } else {
-                if drm_fourcc != DRM_FORMAT_NV12 {
-                    return Err(gst_video_output_message(format!(
-                        "unexpected DRM fourcc for native NV12: {drm_fourcc:#010x}"
-                    )));
-                }
-                let (objects, layouts) = native_image_layout(planes, modifier)?;
-                if objects.len() != 1 {
-                    return Err(gst_video_output_message(format!(
-                        "native NV12 import requires one DMA-BUF object, received {}",
-                        objects.len()
-                    )));
-                }
-                let mut image = DmaBufImage::new(frame_size, drm_fourcc, objects, layouts);
-                if let Some(device) = producer_drm_device {
-                    image = image.with_drm_device(device);
-                }
-                // SAFETY: The object and image-plane mapping comes from the
-                // negotiated DMA_DRM caps and GstVideoMeta. The retained buffer
-                // keeps the decoder allocation leased while GPUI samples it.
-                unsafe { DmaBufHandle::from_image_with_lifetime_guard(image, lifetime_guard) }
-            }
-        }
+    if modifier != 0 && drm_fourcc != DRM_FORMAT_NV12 {
+        return Err(gst_video_output_message(
+            "non-linear RGB DMA-BUF is unsupported",
+        ));
     }
-    .map_err(|error| gst_video_output_error("GPUI rejected DMA-BUF frame layout", error))?;
+    let (objects, layouts) = native_image_layout(planes, modifier)?;
+    // SAFETY: Negotiated caps and VideoMeta describe these descriptors. Keeping
+    // the GstBuffer leased prevents decoder pool reuse until consumers finish.
+    let mut image =
+        unsafe { DmaBufImage::new(frame_size, drm_fourcc, objects, layouts, lifetime_guard) };
+    if let Some(device) = producer_drm_device {
+        image = image.with_drm_device(device);
+    }
 
-    SurfaceFrame::from_dma_buf_with_color(
+    FrameBuffer::with_backing(
         handle,
         sequence,
+        frame_size,
         visible_rect,
         display_size,
-        dma_buf,
+        format,
+        FrameBacking::DmaBuf(Arc::new(image)),
         surface_color_info(&info),
     )
-    .map_err(|error| gst_video_output_error("GPUI rejected DMA-BUF surface frame", error))
+    .map_err(|error| gst_video_output_error("invalid DMA-BUF surface frame", error))
 }
 
 fn video_info(caps: &gst::CapsRef) -> MediaResult<(gst_video::VideoInfo, u32, u64)> {
@@ -223,11 +175,11 @@ fn video_info(caps: &gst::CapsRef) -> MediaResult<(gst_video::VideoInfo, u32, u6
     }
 }
 
-fn surface_format(format: gst_video::VideoFormat) -> MediaResult<SurfaceFormat> {
+fn surface_format(format: gst_video::VideoFormat) -> MediaResult<PixelFormat> {
     match format {
-        gst_video::VideoFormat::Bgra => Ok(SurfaceFormat::Bgra8),
-        gst_video::VideoFormat::Rgba => Ok(SurfaceFormat::Rgba8),
-        gst_video::VideoFormat::Nv12 => Ok(SurfaceFormat::Nv12),
+        gst_video::VideoFormat::Bgra => Ok(PixelFormat::Bgra8),
+        gst_video::VideoFormat::Rgba => Ok(PixelFormat::Rgba8),
+        gst_video::VideoFormat::Nv12 => Ok(PixelFormat::Nv12),
         format => Err(MediaError::new(
             MediaErrorKind::UnsupportedCodec,
             format!("unsupported DMA-BUF video format: {format:?}"),
@@ -239,7 +191,6 @@ fn surface_format(format: gst_video::VideoFormat) -> MediaResult<SurfaceFormat> 
 struct ImportedPlane {
     fd: OwnedFd,
     object_key: DmaBufObjectKey,
-    modifier: u64,
     offset: u64,
     stride: u32,
 }
@@ -278,17 +229,10 @@ fn native_image_layout(
     Ok((objects, layouts))
 }
 
-impl ImportedPlane {
-    fn into_gpui(self) -> DmaBufPlane {
-        DmaBufPlane::new(self.fd, self.modifier, self.offset, self.stride)
-    }
-}
-
 fn import_plane(
     buffer: &gst::BufferRef,
     buffer_offset: usize,
     stride: i32,
-    modifier: u64,
 ) -> MediaResult<ImportedPlane> {
     if stride <= 0 {
         return Err(gst_video_output_message(format!(
@@ -331,7 +275,6 @@ fn import_plane(
     Ok(ImportedPlane {
         fd,
         object_key,
-        modifier,
         offset,
         stride: stride as u32,
     })

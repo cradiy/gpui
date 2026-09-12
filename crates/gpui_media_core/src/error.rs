@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, io};
 
-use gpui::SharedString;
+use std::sync::Arc;
 
 /// A backend-independent category for media failures.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,14 +40,14 @@ pub enum MediaRecovery {
 #[non_exhaustive]
 pub struct MediaError {
     pub kind: MediaErrorKind,
-    pub message: SharedString,
+    pub message: Arc<str>,
     pub recovery: MediaRecovery,
 }
 
 impl MediaError {
     pub fn new(
         kind: MediaErrorKind,
-        message: impl Into<SharedString>,
+        message: impl Into<Arc<str>>,
         recovery: MediaRecovery,
     ) -> Self {
         Self {
@@ -57,19 +57,19 @@ impl MediaError {
         }
     }
 
-    pub fn backend(message: impl Into<SharedString>) -> Self {
+    pub fn backend(message: impl Into<Arc<str>>) -> Self {
         Self::new(MediaErrorKind::Backend, message, MediaRecovery::None)
     }
 
-    pub fn backend_retryable(message: impl Into<SharedString>) -> Self {
+    pub fn backend_retryable(message: impl Into<Arc<str>>) -> Self {
         Self::new(MediaErrorKind::Backend, message, MediaRecovery::Retry)
     }
 
-    pub fn invalid_input(message: impl Into<SharedString>) -> Self {
+    pub fn invalid_input(message: impl Into<Arc<str>>) -> Self {
         Self::new(MediaErrorKind::InvalidInput, message, MediaRecovery::None)
     }
 
-    pub fn timeout(message: impl Into<SharedString>) -> Self {
+    pub fn timeout(message: impl Into<Arc<str>>) -> Self {
         Self::new(MediaErrorKind::Timeout, message, MediaRecovery::Retry)
     }
 
@@ -106,7 +106,7 @@ impl MediaError {
         Self::new(kind, format!("{context}: {error}"), recovery)
     }
 
-    pub fn unsupported(message: impl Into<SharedString>) -> Self {
+    pub fn unsupported(message: impl Into<Arc<str>>) -> Self {
         Self::new(
             MediaErrorKind::UnsupportedOperation,
             message,

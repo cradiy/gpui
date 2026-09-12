@@ -1,16 +1,17 @@
 use std::fmt;
 
-use gpui::{DevicePixels, SharedString, Size};
+use crate::FrameSize;
+use std::sync::Arc;
 
 /// Opaque identifier for one stream in an opened media source.
 ///
 /// Identifiers only need to remain stable for the lifetime of the corresponding
 /// source or playback session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MediaStreamId(SharedString);
+pub struct MediaStreamId(Arc<str>);
 
 impl MediaStreamId {
-    pub fn new(id: impl Into<SharedString>) -> Self {
+    pub fn new(id: impl Into<Arc<str>>) -> Self {
         Self(id.into())
     }
 
@@ -41,12 +42,12 @@ impl From<&'static str> for MediaStreamId {
 #[derive(Clone, Debug)]
 pub struct VideoStreamInfo {
     pub id: MediaStreamId,
-    pub codec: Option<SharedString>,
-    pub coded_size: Option<Size<DevicePixels>>,
-    pub display_size: Option<Size<DevicePixels>>,
+    pub codec: Option<Arc<str>>,
+    pub coded_size: Option<FrameSize>,
+    pub display_size: Option<FrameSize>,
     pub frame_rate: Option<f64>,
     pub bitrate: Option<u64>,
-    pub language: Option<SharedString>,
+    pub language: Option<Arc<str>>,
     pub selected: bool,
 }
 
@@ -54,12 +55,12 @@ pub struct VideoStreamInfo {
 #[derive(Clone, Debug)]
 pub struct AudioStreamInfo {
     pub id: MediaStreamId,
-    pub codec: Option<SharedString>,
+    pub codec: Option<Arc<str>>,
     pub channels: Option<u32>,
     pub sample_rate: Option<u32>,
     pub bitrate: Option<u64>,
-    pub language: Option<SharedString>,
-    pub title: Option<SharedString>,
+    pub language: Option<Arc<str>>,
+    pub title: Option<Arc<str>>,
     pub selected: bool,
 }
 
@@ -67,9 +68,9 @@ pub struct AudioStreamInfo {
 #[derive(Clone, Debug)]
 pub struct SubtitleStreamInfo {
     pub id: MediaStreamId,
-    pub codec: Option<SharedString>,
-    pub language: Option<SharedString>,
-    pub title: Option<SharedString>,
+    pub codec: Option<Arc<str>>,
+    pub language: Option<Arc<str>>,
+    pub title: Option<Arc<str>>,
     pub forced: bool,
     pub selected: bool,
 }

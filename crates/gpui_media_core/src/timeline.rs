@@ -52,15 +52,13 @@ impl PlaybackTimeline {
         Some((self.position.as_secs_f64() / duration.as_secs_f64()).clamp(0.0, 1.0))
     }
 
-    #[cfg(any(feature = "video", test))]
-    pub(crate) fn target_after(&self, amount: Duration) -> Duration {
+    pub fn target_after(&self, amount: Duration) -> Duration {
         let target = self.position.saturating_add(amount);
         self.duration
             .map_or(target, |duration| target.min(duration))
     }
 
-    #[cfg(any(feature = "video", test))]
-    pub(crate) fn target_before(&self, amount: Duration) -> Duration {
+    pub fn target_before(&self, amount: Duration) -> Duration {
         self.position.saturating_sub(amount)
     }
 }

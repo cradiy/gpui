@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use gpui::GpuSpecs;
+use crate::FrameOutputCapabilities;
 
 use crate::{
     MediaError, MediaInfo, MediaResult, MediaSource, MediaStreamId, PlaybackTimeline, SeekMode,
@@ -10,7 +10,7 @@ use crate::{
 use super::stats::PlaybackCounters;
 
 // One queued frame is the current presentation candidate and the second
-// absorbs a single slow GPUI render/upload interval. A larger queue would turn
+// absorbs a single slow render/upload interval. A larger queue would turn
 // sustained stalls into visible A/V latency.
 const VIDEO_FRAME_QUEUE_CAPACITY: usize = 2;
 
@@ -45,7 +45,7 @@ pub struct MediaCapabilities {
     pub transport_switching: bool,
 }
 
-/// Preferred way for decoded frames to reach GPUI.
+/// Preferred way for decoded frames to reach a consumer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FrameTransportPreference {
     /// Let the backend choose the best transport for the active renderer.
@@ -68,7 +68,7 @@ pub enum TransportChange {
 #[derive(Clone, Debug)]
 pub struct MediaPlaybackRequest {
     pub source: MediaSource,
-    pub gpu_specs: Option<GpuSpecs>,
+    pub output_capabilities: Option<FrameOutputCapabilities>,
 }
 
 /// Data supplied when a backend opens an independent frame extractor.
@@ -96,7 +96,7 @@ pub struct MediaOutputSink {
 pub struct MediaOutput {
     pub video_frames: async_channel::Receiver<Arc<VideoFrame>>,
     pub events: async_channel::Receiver<MediaBackendEvent>,
-    pub(crate) counters: Arc<PlaybackCounters>,
+    pub counters: Arc<PlaybackCounters>,
 }
 
 impl MediaOutputSink {
@@ -122,7 +122,7 @@ impl MediaOutputSink {
     }
 
     /// Publishes a decoded frame, replacing a stale frame that has not yet
-    /// reached the GPUI player entity.
+    /// reached the frame consumer.
     ///
     /// Returns `true` when an older frame was dropped.
     pub fn publish_video_frame(&self, frame: Arc<VideoFrame>) -> bool {
@@ -134,13 +134,13 @@ impl MediaOutputSink {
                 if let Some(dropped) = &dropped {
                     let dropped_count = self.counters.record_dropped_frame();
                     log::debug!(
-                        target: "gpui_media::frame_drop",
+                        target: "gpui_media_core::frame_drop",
                         "video output-queue-drop: count={dropped_count} \
                          dropped_sequence={} dropped_pts={:?} \
                          replacement_sequence={} replacement_pts={:?}",
-                        dropped.surface().sequence(),
+                        dropped.buffer().sequence(),
                         dropped.timestamp(),
-                        frame.surface().sequence(),
+                        frame.buffer().sequence(),
                         frame.timestamp(),
                     );
                 }
@@ -241,8 +241,8 @@ pub trait FrameExtractionSession: Send {
 
 /// Factory for unified media playback and video frame-extraction sessions.
 ///
-/// Applications may implement this trait in another crate and pass it to
-/// `VideoPlayer` or `VideoFrameExtractor`.
+/// Applications may implement this trait for another decoder and use the same
+/// playback channels and [`crate::VideoFrameExtractor`].
 pub trait MediaBackend: Send + Sync + 'static {
     fn name(&self) -> &'static str;
 
@@ -267,16 +267,16 @@ pub trait MediaBackend: Send + Sync + 'static {
 mod tests {
     use std::sync::Arc;
 
-    use gpui::{DevicePixels, SurfaceFrame, SurfaceHandle, size};
+    use crate::{FrameBuffer, FrameHandle, FrameSize};
 
     use super::MediaOutputSink;
     use crate::VideoFrame;
 
     fn frame(sequence: u64) -> Arc<VideoFrame> {
-        let surface = SurfaceFrame::rgba(
-            SurfaceHandle::new(),
+        let surface = FrameBuffer::rgba(
+            FrameHandle::new(),
             sequence,
-            size(DevicePixels(1), DevicePixels(1)),
+            FrameSize::new(1, 1),
             vec![0, 0, 0, 255],
             4,
         )
@@ -292,11 +292,11 @@ mod tests {
         assert!(!sink.publish_video_frame(frame(2)));
         assert!(sink.publish_video_frame(frame(3)));
         assert_eq!(
-            output.video_frames.try_recv().unwrap().surface().sequence(),
+            output.video_frames.try_recv().unwrap().buffer().sequence(),
             2
         );
         assert_eq!(
-            output.video_frames.try_recv().unwrap().surface().sequence(),
+            output.video_frames.try_recv().unwrap().buffer().sequence(),
             3
         );
 

@@ -475,7 +475,7 @@ fn classify_stream_error(error: StreamError) -> Option<OutputFailure> {
 }
 
 fn audio_output_message(
-    message: impl Into<gpui::SharedString>,
+    message: impl Into<std::sync::Arc<str>>,
     recovery: MediaRecovery,
 ) -> MediaError {
     MediaError::new(MediaErrorKind::AudioOutput, message, recovery)

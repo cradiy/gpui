@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use gpui_media::MediaSource;
+use gpui_media_core::MediaSource;
 
 const BOX_HEADER_SIZE: u64 = 8;
 

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
-use gpui::{DevicePixels, SurfaceFrame, SurfaceHandle, size};
-use gpui_media::{
+use gpui_media_core::{FrameBuffer, FrameHandle, FrameSize};
+use gpui_media_core::{
     FrameExtractionSession, FrameExtractorBackendRequest, MediaBackend, MediaCapabilities,
     MediaError, MediaOutputSink, MediaPlaybackRequest, MediaPlaybackSession, MediaResult,
     MediaSource, PlaybackTimeline, SeekMode, VideoFrame, VideoFrameExtractor,
@@ -92,10 +92,10 @@ impl FrameExtractionSession for CustomExtractor {
 }
 
 fn test_frame(sequence: u64, timestamp: Duration) -> Arc<VideoFrame> {
-    let surface = SurfaceFrame::rgba(
-        SurfaceHandle::new(),
+    let surface = FrameBuffer::rgba(
+        FrameHandle::new(),
         sequence,
-        size(DevicePixels(1), DevicePixels(1)),
+        FrameSize::new(1, 1),
         vec![20, 40, 60, 255],
         4,
     )
@@ -118,5 +118,5 @@ fn external_backend_drives_the_generic_frame_extractor() {
 
     let preview = extractor.frame_at_blocking(Duration::from_secs(3)).unwrap();
     assert_eq!(preview.timestamp(), Some(Duration::from_secs(3)));
-    assert_eq!(preview.surface().sequence(), 2);
+    assert_eq!(preview.buffer().sequence(), 2);
 }

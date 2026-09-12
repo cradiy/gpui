@@ -226,7 +226,7 @@ fn format_time(duration: Duration) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::env::args().nth(1).unwrap_or_else(|| {
         eprintln!(
-            "Usage: cargo run -p gpui_media_system --example overlay_controls -- <video file or URI>"
+            "Usage: cargo run -p gpui_media --example overlay_controls -- <video file or URI>"
         );
         std::process::exit(2);
     });

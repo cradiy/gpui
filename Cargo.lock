@@ -3087,10 +3087,22 @@ dependencies = [
  "base64 0.22.1",
  "cpal",
  "gpui",
+ "gpui_media_core",
+ "gpui_media_system",
  "gpui_platform",
  "log",
  "symphonia",
  "ureq",
+ "url",
+]
+
+[[package]]
+name = "gpui_media_core"
+version = "0.1.0"
+dependencies = [
+ "async-channel 2.5.0",
+ "core-video",
+ "log",
  "url",
 ]
 
@@ -3100,9 +3112,7 @@ version = "0.1.0"
 dependencies = [
  "core-foundation 0.10.0",
  "core-video",
- "gpui",
- "gpui_media",
- "gpui_platform",
+ "gpui_media_core",
  "gstreamer",
  "gstreamer-allocators",
  "gstreamer-app",

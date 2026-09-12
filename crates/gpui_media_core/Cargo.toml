@@ -1,0 +1,18 @@
+[package]
+name = "gpui_media_core"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "Renderer-independent media sessions, decoded frames, and extraction"
+
+[dependencies]
+async-channel.workspace = true
+log.workspace = true
+url.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-video = { version = "0.5.2", default-features = false, features = ["link"] }
+
+[lints]
+workspace = true

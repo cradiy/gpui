@@ -1,14 +1,14 @@
 # gpui_media_system
 
-A platform-selected backend for [gpui_media](../gpui_media/README.md).
+A renderer-independent media backend with no GPUI dependency.
 `SystemBackend` uses GStreamer on Linux and macOS, and Media Foundation on
 Windows. Applications use the same player and frame-extraction APIs on each
-platform.
+platform. Media types are re-exported from
+[`gpui_media_core`](../gpui_media_core/README.md).
 
 ## Dependencies
 
 ```toml
-gpui_media = { path = ".../gpui_media", default-features = false, features = ["video"] }
 gpui_media_system = { path = ".../gpui_media_system" }
 ```
 
@@ -37,7 +37,38 @@ gpui_media_system = { path = ".../gpui_media_system", features = ["v1_28"] }
 At least one version feature must be enabled on Linux/macOS. The same features
 have no effect on Windows: all GStreamer dependencies are target-specific.
 
-## Playback
+## Playback sessions
+
+```rust
+use gpui_media_system::{
+    MediaBackend, MediaOutputSink, MediaPlaybackRequest, MediaSource, SystemBackend,
+};
+
+let (sink, output) = MediaOutputSink::channel();
+let mut session = SystemBackend.open_playback(
+    MediaPlaybackRequest {
+        source: MediaSource::parse("/path/to/video.mp4")?,
+        output_capabilities: None,
+    },
+    sink,
+)?;
+session.play()?;
+let frame = output.video_frames.recv_blocking()?;
+```
+
+The session owns audio output and A/V synchronization. Consume both the frame
+and event channels during playback; events include readiness, buffering,
+stream metadata, subtitles, errors, and end of stream. CPU frames expose
+immutable planes, offsets, and strides. Native frames retain their platform
+allocations until consumers release them.
+
+## GPUI playback
+
+Add `gpui_media` with its `video` feature for a GPUI player entity:
+
+```toml
+gpui_media = { path = ".../gpui_media", default-features = false, features = ["video"] }
+```
 
 ```rust
 use gpui_media::{MediaSource, VideoPlayer, VideoPlayerOptions};
@@ -63,8 +94,7 @@ containers, subtitles, controls and timeline access.
 
 ```rust
 use std::{sync::Arc, time::Duration};
-use gpui_media::{MediaSource, VideoFrameExtractor};
-use gpui_media_system::SystemBackend;
+use gpui_media_system::{MediaSource, VideoFrameExtractor, SystemBackend};
 
 let extractor = VideoFrameExtractor::new(
     MediaSource::parse("/path/to/video.mp4")?,
@@ -74,7 +104,7 @@ let frame = extractor.frame_at(Duration::from_secs(5)).await?;
 ```
 
 Frame extraction owns an independent session and does not seek an active
-player.
+player. It requires no window, application context, or rendering device.
 
 For GStreamer, `VideoFrameExtractorOptions::timeout` is one shared waiting
 budget per active extraction request, including initial preroll and seek
@@ -83,10 +113,16 @@ plugin calls cannot be forcibly interrupted by this budget.
 
 ## Platform capabilities
 
-Linux supports CPU frames and DMA-BUF transport, including renderer-gated
+Linux supports CPU frames and DMA-BUF transport, including consumer-advertised
 native NV12 modifiers. macOS can deliver CoreVideo frames and CPU frames.
 Windows delivers CPU frames through Media Foundation and WIC. Decoder and
 container support depend on the system's installed media components.
+
+`MediaPlaybackRequest::output_capabilities` describes native layouts accepted
+by the consumer. It does not choose the decoder or its device. GStreamer
+selects decoders from its plugin registry; CPU frame output does not imply
+software decoding. This backend does not expose an explicit hardware-decoder
+selection policy.
 
 On Linux/macOS, network source options configure supported GStreamer source
 properties. Windows rejects custom network options that Media Foundation does
@@ -96,18 +132,17 @@ available for the opened source.
 ## Examples
 
 ```sh
-cargo run -p gpui_media_system --example play -- /path/to/video.mp4
-cargo run -p gpui_media_system --example borderless -- /path/to/video.mp4
-cargo run -p gpui_media_system --example overlay_controls -- /path/to/video.mp4
 cargo run -p gpui_media_system --example frame_at -- /path/to/video.mp4 5
-cargo run -p gpui_media_system --example tracks_and_subtitles -- \
-  crates/gpui_media_system/examples/assets/tracks_and_subtitles.mp4 \
-  crates/gpui_media_system/examples/assets/tracks_and_subtitles_external.srt
 ```
 
-The `webdav` example accepts a direct media URL and optional
-`GPUI_MEDIA_WEBDAV_USERNAME` / `GPUI_MEDIA_WEBDAV_PASSWORD` environment
-variables.
+GUI examples live in `gpui_media`:
+
+```sh
+cargo run -p gpui_media --example play -- /path/to/video.mp4
+cargo run -p gpui_media --example tracks_and_subtitles -- \
+  crates/gpui_media/examples/assets/tracks_and_subtitles.mp4 \
+  crates/gpui_media/examples/assets/tracks_and_subtitles_external.srt
+```
 
 ## GStreamer distribution
 

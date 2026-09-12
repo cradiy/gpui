@@ -1,9 +1,6 @@
 //! Platform-selected system media backend.
 
-use gpui_media::{
-    FrameExtractionSession, FrameExtractorBackendRequest, MediaBackend, MediaOutputSink,
-    MediaPlaybackRequest, MediaPlaybackSession, MediaResult,
-};
+pub use gpui_media_core::*;
 
 #[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "v1_24")))]
 compile_error!("enable a GStreamer version feature: v1_24, v1_26, or v1_28");

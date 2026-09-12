@@ -241,7 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let media = arguments.next().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "usage: cargo run -p gpui_media_system --example tracks_and_subtitles -- \
+            "usage: cargo run -p gpui_media --example tracks_and_subtitles -- \
              <media file or URI> [external subtitle.srt|vtt|ass]",
         )
     })?;

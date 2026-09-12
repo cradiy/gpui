@@ -4,7 +4,7 @@ version = "0.1.0"
 publish.workspace = true
 edition.workspace = true
 license = "MIT"
-description = "Platform-selected GStreamer and Media Foundation backend for gpui_media"
+description = "Renderer-independent GStreamer and Media Foundation media backend"
 
 [features]
 default = ["v1_24"]
@@ -16,8 +16,7 @@ v1_26 = ["v1_24", "gst/v1_26", "gst-app/v1_26", "gst-video/v1_26", "gst-allocato
 v1_28 = ["v1_26", "gst/v1_28", "gst-app/v1_28", "gst-video/v1_28", "gst-allocators/v1_28"]
 
 [dependencies]
-gpui.workspace = true
-gpui_media = { path = "../gpui_media", default-features = false, features = ["video"] }
+gpui_media_core.workspace = true
 log.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
@@ -31,7 +30,7 @@ gst-allocators = { package = "gstreamer-allocators", version = "0.25", optional 
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation.workspace = true
-core-video.workspace = true
+core-video = { version = "0.5.2", default-features = false, features = ["link"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
@@ -43,9 +42,6 @@ windows = { workspace = true, features = [
   "Win32_System_Variant",
 ] }
 windows-core.workspace = true
-
-[dev-dependencies]
-gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
 
 [lints]
 workspace = true

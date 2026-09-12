@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{DevicePixels, SurfaceFrame, SurfaceHandle, size};
+use gpui_media_core::{FrameBuffer, FrameHandle, FrameSize};
 use windows::{
     Win32::{
         Foundation::{RECT, S_FALSE},
@@ -43,7 +43,7 @@ use windows::{
     core::{BSTR, GUID, Interface, PWSTR, implement},
 };
 
-use gpui_media::{
+use gpui_media_core::{
     AudioStreamInfo, FrameExtractionSession, FrameExtractorBackendRequest, MediaBackendEvent,
     MediaCapabilities, MediaError, MediaErrorKind, MediaInfo, MediaOutputSink,
     MediaPlaybackRequest, MediaPlaybackSession, MediaRecovery, MediaResult, MediaStreamId,
@@ -356,7 +356,7 @@ struct MediaFoundationWorker {
     _timed_text_notify: Option<IMFTimedTextNotify>,
     timed_text_changes: Receiver<()>,
     bitmap: Option<(u32, u32, IWICBitmap)>,
-    surface_handle: SurfaceHandle,
+    surface_handle: FrameHandle,
     sequence: u64,
     com_initialized: bool,
     mf_initialized: bool,
@@ -463,7 +463,7 @@ impl MediaFoundationWorker {
                 _timed_text_notify: timed_text_notify,
                 timed_text_changes,
                 bitmap: None,
-                surface_handle: SurfaceHandle::new(),
+                surface_handle: FrameHandle::new(),
                 sequence: 1,
                 com_initialized: true,
                 mf_initialized: true,
@@ -927,12 +927,9 @@ impl MediaFoundationWorker {
         let bytes = unsafe { std::slice::from_raw_parts(buffer, required) }.to_vec();
         drop(lock);
 
-        let frame_size = size(
-            DevicePixels(destination.right),
-            DevicePixels(destination.bottom),
-        );
-        let surface = SurfaceFrame::bgra(
-            self.surface_handle.clone(),
+        let frame_size = FrameSize::new(destination.right, destination.bottom);
+        let surface = FrameBuffer::bgra(
+            self.surface_handle,
             self.sequence,
             frame_size,
             bytes,
@@ -942,7 +939,7 @@ impl MediaFoundationWorker {
             MediaError::from_error(
                 MediaErrorKind::VideoOutput,
                 MediaRecovery::None,
-                "GPUI rejected a Media Foundation video frame",
+                "invalid Media Foundation video frame",
                 error,
             )
         })?;
@@ -1053,7 +1050,7 @@ impl Drop for MediaFoundationWorker {
 
 struct WindowsFrameExtractor {
     playback: WindowsPlayback,
-    output: gpui_media::MediaOutput,
+    output: gpui_media_core::MediaOutput,
     timeout: Duration,
 }
 
@@ -1063,7 +1060,7 @@ impl WindowsFrameExtractor {
         let playback = WindowsPlayback::new(
             MediaPlaybackRequest {
                 source: request.source,
-                gpu_specs: None,
+                output_capabilities: None,
             },
             sink,
         )?;

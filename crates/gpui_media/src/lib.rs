@@ -12,10 +12,6 @@
 
 #[cfg(feature = "audio")]
 mod audio;
-mod error;
-mod playback_state;
-mod source;
-mod timeline;
 #[cfg(feature = "video")]
 mod video;
 
@@ -24,9 +20,6 @@ pub use audio::{
     AudioInfo, AudioPlayer, AudioPlayerBuilder, AudioPlayerEvent, AudioPlayerOptions, AudioSource,
     AudioStreamHint, AudioStreamWriter,
 };
-pub use error::{MediaError, MediaErrorKind, MediaRecovery, MediaResult};
-pub use playback_state::PlaybackState;
-pub use source::{MediaSource, NetworkSourceOptions};
-pub use timeline::{PlaybackTimeline, SeekMode};
+pub use gpui_media_core::*;
 #[cfg(feature = "video")]
 pub use video::*;

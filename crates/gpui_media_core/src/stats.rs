@@ -17,7 +17,7 @@ impl VideoPlaybackStats {
         self.decoded_frames
     }
 
-    /// Frames delivered to the GPUI player entity.
+    /// Frames delivered to the frame consumer.
     pub fn delivered_frames(self) -> u64 {
         self.delivered_frames
     }
@@ -38,7 +38,7 @@ impl VideoPlaybackStats {
 }
 
 #[derive(Default)]
-pub(crate) struct PlaybackCounters {
+pub struct PlaybackCounters {
     decoded_frames: AtomicU64,
     dropped_frames: AtomicU64,
 }
@@ -52,7 +52,7 @@ impl PlaybackCounters {
         self.dropped_frames.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    pub(crate) fn snapshot(&self, delivered_frames: u64) -> VideoPlaybackStats {
+    pub fn snapshot(&self, delivered_frames: u64) -> VideoPlaybackStats {
         VideoPlaybackStats {
             decoded_frames: self.decoded_frames.load(Ordering::Relaxed),
             delivered_frames,

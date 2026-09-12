@@ -15,6 +15,7 @@ async-channel.workspace = true
 base64 = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
 gpui.workspace = true
+gpui_media_core.workspace = true
 log.workspace = true
 symphonia = { version = "0.6.0", default-features = false, features = [
   "all-codecs",
@@ -25,6 +26,7 @@ ureq = { workspace = true, optional = true }
 url.workspace = true
 
 [dev-dependencies]
+gpui_media_system.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
 
@@ -32,8 +34,24 @@ gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
 name = "audio"
 required-features = ["audio"]
 
-[[test]]
-name = "custom_backend"
+[[example]]
+name = "play"
+required-features = ["video"]
+
+[[example]]
+name = "borderless"
+required-features = ["video"]
+
+[[example]]
+name = "overlay_controls"
+required-features = ["video"]
+
+[[example]]
+name = "tracks_and_subtitles"
+required-features = ["video"]
+
+[[example]]
+name = "webdav"
 required-features = ["video"]
 
 [lints]

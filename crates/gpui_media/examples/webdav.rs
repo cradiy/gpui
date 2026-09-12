@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::io::ErrorKind::InvalidInput,
             "usage: GPUI_MEDIA_WEBDAV_USERNAME=user \
              GPUI_MEDIA_WEBDAV_PASSWORD=password \
-             cargo run -p gpui_media_system --example webdav -- <direct WebDAV file URL>",
+             cargo run -p gpui_media --example webdav -- <direct WebDAV file URL>",
         )
     })?;
     let username = env::var("GPUI_MEDIA_WEBDAV_USERNAME").ok();

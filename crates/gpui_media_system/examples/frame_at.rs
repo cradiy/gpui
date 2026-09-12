@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui_media::{MediaSource, VideoFrameExtractor};
+use gpui_media_system::{MediaSource, VideoFrameExtractor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = std::env::args().skip(1);
@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("timestamp={:?}", frame.timestamp());
     println!("duration={:?}", frame.duration());
-    println!("size={}x{}", size.width.0, size.height.0);
+    println!("size={}x{}", size.width, size.height);
     println!("transport={:?}", frame.transport());
     Ok(())
 }

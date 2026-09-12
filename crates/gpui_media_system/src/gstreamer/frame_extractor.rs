@@ -5,10 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::SurfaceHandle;
+use gpui_media_core::FrameHandle;
 use gst::prelude::*;
 
-use gpui_media::{
+use gpui_media_core::{
     FrameExtractionSession, MediaError, MediaErrorKind, MediaRecovery, MediaResult, MediaSource,
     SeekMode, VideoFrame,
 };
@@ -21,7 +21,7 @@ use super::{
 pub(super) struct GstreamerFrameExtractionSession {
     playbin: gst::Element,
     appsink: gst_app::AppSink,
-    surface_handle: SurfaceHandle,
+    surface_handle: FrameHandle,
     sequence: u64,
     timeout: Duration,
     initial_frame: Option<Arc<VideoFrame>>,
@@ -70,7 +70,7 @@ impl GstreamerFrameExtractionSession {
         Ok(Self {
             playbin,
             appsink,
-            surface_handle: SurfaceHandle::new(),
+            surface_handle: FrameHandle::new(),
             sequence: 1,
             timeout,
             initial_frame: None,
@@ -108,7 +108,7 @@ impl GstreamerFrameExtractionSession {
             if let Some(sample) = self.appsink.try_pull_preroll(remaining_timeout(deadline)?) {
                 let frame = sample_to_video_frame(
                     &sample,
-                    self.surface_handle.clone(),
+                    self.surface_handle,
                     self.sequence,
                     #[cfg(target_os = "linux")]
                     None,
@@ -155,7 +155,7 @@ impl GstreamerFrameExtractionSession {
             .max(Duration::from_millis(1));
         let frame = sample_to_video_frame(
             &sample,
-            self.surface_handle.clone(),
+            self.surface_handle,
             self.sequence,
             #[cfg(target_os = "linux")]
             None,
@@ -257,8 +257,8 @@ mod tests {
         time::Duration,
     };
 
-    use gpui::{DevicePixels, SurfaceFrame, SurfaceHandle, size};
-    use gpui_media::{MediaErrorKind, SeekMode, VideoFrame};
+    use gpui_media_core::{FrameBuffer, FrameHandle, FrameSize};
+    use gpui_media_core::{MediaErrorKind, SeekMode, VideoFrame};
     use gst::prelude::*;
 
     use super::{
@@ -306,11 +306,11 @@ mod tests {
             },
         );
         pipeline.set_state(gst::State::Paused).unwrap();
-        let surface_handle = SurfaceHandle::new();
-        let surface = SurfaceFrame::rgba(
-            surface_handle.clone(),
+        let surface_handle = FrameHandle::new();
+        let surface = FrameBuffer::rgba(
+            surface_handle,
             1,
-            size(DevicePixels(1), DevicePixels(1)),
+            FrameSize::new(1, 1),
             vec![0, 0, 0, 255],
             4,
         )

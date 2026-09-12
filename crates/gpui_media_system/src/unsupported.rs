@@ -1,4 +1,4 @@
-use gpui_media::{
+use gpui_media_core::{
     FrameExtractionSession, FrameExtractorBackendRequest, MediaError, MediaOutputSink,
     MediaPlaybackRequest, MediaPlaybackSession, MediaResult,
 };

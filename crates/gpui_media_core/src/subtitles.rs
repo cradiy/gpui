@@ -1,7 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use gpui::SharedString;
-
 use crate::{MediaError, MediaResult, MediaStreamId};
 
 /// A supported text-subtitle format.
@@ -21,12 +19,12 @@ pub enum SubtitleFormat {
 /// format-specific information for hosts that need richer presentation.
 #[derive(Clone, Debug)]
 pub struct SubtitleCue {
-    pub id: Option<SharedString>,
+    pub id: Option<Arc<str>>,
     pub start: Duration,
     pub end: Duration,
-    pub text: SharedString,
-    pub raw: SharedString,
-    pub settings: Option<SharedString>,
+    pub text: Arc<str>,
+    pub raw: Arc<str>,
+    pub settings: Option<Arc<str>>,
     pub format: SubtitleFormat,
 }
 

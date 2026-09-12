@@ -10,14 +10,14 @@ use std::{
     time::Duration,
 };
 
-use gpui::{
-    Bounds, ColorRange, DevicePixels, GpuSpecs, SurfaceColorInfo, SurfaceFormat, SurfaceFrame,
-    SurfaceHandle, SurfacePlane, YuvMatrix, point, size,
+use gpui_media_core::{
+    ColorRange, FrameBuffer, FrameColorInfo, FrameHandle, FrameOutputCapabilities, FramePlane,
+    FramePoint, FrameRect, FrameSize, PixelFormat, YuvMatrix,
 };
 use gst::prelude::*;
 
-use gpui_media::normalize_subtitle_text;
-use gpui_media::{
+use gpui_media_core::normalize_subtitle_text;
+use gpui_media_core::{
     AudioStreamInfo, FrameExtractionSession, FrameExtractorBackendRequest,
     FrameTransportPreference, MediaBackend, MediaBackendEvent, MediaCapabilities, MediaError,
     MediaErrorKind, MediaInfo, MediaOutputSink, MediaPlaybackRequest, MediaPlaybackSession,
@@ -68,13 +68,13 @@ pub(crate) struct GstreamerPlayback {
 impl GstreamerPlayback {
     pub fn new(
         source: &MediaSource,
-        gpu_specs: Option<&GpuSpecs>,
+        output_capabilities: Option<&FrameOutputCapabilities>,
         output: MediaOutputSink,
     ) -> MediaResult<Self> {
         initialize()?;
         let container_duration = iso_bmff::fragmented_duration(source);
 
-        let caps = appsink_caps(gpu_specs)?;
+        let caps = appsink_caps(output_capabilities)?;
         let appsink = gst_app::AppSink::builder()
             .caps(&caps)
             .max_buffers(2)
@@ -92,8 +92,8 @@ impl GstreamerPlayback {
         let selected_subtitle = Arc::new(RwLock::new(None));
         let sequence = Arc::new(AtomicU64::new(1));
         let sequence_for_preroll = sequence.clone();
-        let surface_handle = SurfaceHandle::new();
-        let surface_handle_for_preroll = surface_handle.clone();
+        let surface_handle = FrameHandle::new();
+        let surface_handle_for_preroll = surface_handle;
         #[cfg(target_os = "linux")]
         let producer_drm_device = Arc::new(std::sync::RwLock::new(None));
         #[cfg(target_os = "linux")]
@@ -616,9 +616,9 @@ fn media_info_from_stream_collection(
             let height = structure
                 .and_then(|structure| structure.get::<i32>("height").ok())
                 .and_then(|value| u32::try_from(value).ok());
-            let coded_size = width.zip(height).map(|(width, height)| {
-                size(DevicePixels(width as i32), DevicePixels(height as i32))
-            });
+            let coded_size = width
+                .zip(height)
+                .map(|(width, height)| FrameSize::new(width as i32, height as i32));
             let frame_rate = structure
                 .and_then(|structure| structure.get::<gst::Fraction>("framerate").ok())
                 .and_then(|rate| {
@@ -731,14 +731,14 @@ fn publish_subtitle_sample(
 fn publish_appsink_sample(
     sample: &gst::Sample,
     output: &MediaOutputSink,
-    surface_handle: &SurfaceHandle,
+    surface_handle: &FrameHandle,
     sequence: &AtomicU64,
-    #[cfg(target_os = "linux")] producer_drm_device: Option<gpui::DrmDevice>,
+    #[cfg(target_os = "linux")] producer_drm_device: Option<gpui_media_core::DrmDevice>,
 ) -> std::result::Result<gst::FlowSuccess, gst::FlowError> {
     let next_sequence = sequence.fetch_add(1, Ordering::Relaxed);
     let frame = sample_to_video_frame(
         sample,
-        surface_handle.clone(),
+        *surface_handle,
         next_sequence,
         #[cfg(target_os = "linux")]
         producer_drm_device,
@@ -762,12 +762,16 @@ impl MediaBackend for GstreamerSystemBackend {
         request: MediaPlaybackRequest,
         output: MediaOutputSink,
     ) -> MediaResult<Box<dyn MediaPlaybackSession>> {
-        GstreamerPlayback::new(&request.source, request.gpu_specs.as_ref(), output)
-            .map(|playback| Box::new(playback) as Box<dyn MediaPlaybackSession>)
-            .map_err(|mut error| {
-                error.message = request.source.redact_error_message(&error.message).into();
-                error
-            })
+        GstreamerPlayback::new(
+            &request.source,
+            request.output_capabilities.as_ref(),
+            output,
+        )
+        .map(|playback| Box::new(playback) as Box<dyn MediaPlaybackSession>)
+        .map_err(|mut error| {
+            error.message = request.source.redact_error_message(&error.message).into();
+            error
+        })
     }
 
     fn open_frame_extractor(
@@ -895,7 +899,7 @@ fn gst_video_output_error(
 }
 
 #[cfg(target_os = "linux")]
-fn gst_video_output_message(message: impl Into<gpui::SharedString>) -> MediaError {
+fn gst_video_output_message(message: impl Into<std::sync::Arc<str>>) -> MediaError {
     MediaError::new(MediaErrorKind::VideoOutput, message, MediaRecovery::Retry)
 }
 
@@ -907,7 +911,7 @@ fn gst_decode_error(context: impl std::fmt::Display, error: impl std::fmt::Debug
     )
 }
 
-fn gst_decode_message(message: impl Into<gpui::SharedString>) -> MediaError {
+fn gst_decode_message(message: impl Into<std::sync::Arc<str>>) -> MediaError {
     MediaError::new(MediaErrorKind::Decode, message, MediaRecovery::None)
 }
 
@@ -1040,10 +1044,12 @@ pub(crate) fn clock_time(duration: Duration) -> MediaResult<gst::ClockTime> {
     })
 }
 
-pub(crate) fn appsink_caps(_gpu_specs: Option<&GpuSpecs>) -> MediaResult<gst::Caps> {
+pub(crate) fn appsink_caps(
+    _output_capabilities: Option<&FrameOutputCapabilities>,
+) -> MediaResult<gst::Caps> {
     #[cfg(target_os = "linux")]
     {
-        dma_buf::appsink_caps(_gpu_specs)
+        dma_buf::appsink_caps(_output_capabilities)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1063,12 +1069,12 @@ fn cpu_appsink_caps() -> MediaResult<gst::Caps> {
 
 fn sample_to_surface_frame(
     sample: &gst::Sample,
-    handle: SurfaceHandle,
+    handle: FrameHandle,
     sequence: u64,
-    #[cfg(target_os = "linux")] producer_drm_device: Option<gpui::DrmDevice>,
-) -> MediaResult<SurfaceFrame> {
+    #[cfg(target_os = "linux")] producer_drm_device: Option<gpui_media_core::DrmDevice>,
+) -> MediaResult<FrameBuffer> {
     #[cfg(target_os = "macos")]
-    if let Some(frame) = core_video::sample_to_surface_frame(sample, handle.clone(), sequence)? {
+    if let Some(frame) = core_video::sample_to_surface_frame(sample, handle, sequence)? {
         return Ok(frame);
     }
 
@@ -1082,9 +1088,9 @@ fn sample_to_surface_frame(
 
 pub(crate) fn sample_to_video_frame(
     sample: &gst::Sample,
-    handle: SurfaceHandle,
+    handle: FrameHandle,
     sequence: u64,
-    #[cfg(target_os = "linux")] producer_drm_device: Option<gpui::DrmDevice>,
+    #[cfg(target_os = "linux")] producer_drm_device: Option<gpui_media_core::DrmDevice>,
 ) -> MediaResult<Arc<VideoFrame>> {
     let buffer = sample
         .buffer()
@@ -1103,13 +1109,13 @@ pub(crate) fn sample_to_video_frame(
 }
 
 #[cfg(target_os = "linux")]
-fn drm_device_from_context(context: &gst::Context) -> Option<gpui::DrmDevice> {
+fn drm_device_from_context(context: &gst::Context) -> Option<gpui_media_core::DrmDevice> {
     use std::os::unix::fs::MetadataExt as _;
 
     let path = context.structure().get::<String>("path").ok()?;
     let metadata = std::fs::metadata(path).ok()?;
     let device = metadata.rdev();
-    Some(gpui::DrmDevice {
+    Some(gpui_media_core::DrmDevice {
         major: linux_device_major(device),
         minor: linux_device_minor(device),
     })
@@ -1127,9 +1133,9 @@ fn linux_device_minor(device: u64) -> u32 {
 
 fn sample_to_cpu_surface_frame(
     sample: &gst::Sample,
-    handle: SurfaceHandle,
+    handle: FrameHandle,
     sequence: u64,
-) -> MediaResult<SurfaceFrame> {
+) -> MediaResult<FrameBuffer> {
     let caps = sample
         .caps()
         .ok_or_else(|| gst_decode_message("decoded sample has no caps"))?;
@@ -1156,56 +1162,56 @@ fn sample_to_cpu_surface_frame(
     };
 
     match info.format() {
-        gst_video::VideoFormat::Bgra => SurfaceFrame::new(
+        gst_video::VideoFormat::Bgra => FrameBuffer::new(
             handle,
             sequence,
             coded_size,
             visible_rect,
             display_size,
-            SurfaceFormat::Bgra8,
-            [SurfacePlane::new(
+            PixelFormat::Bgra8,
+            [FramePlane::new(
                 frame
                     .plane_data(0)
                     .map_err(|error| gst_decode_error("failed to read BGRA plane", error))?
                     .to_vec(),
                 stride(0)?,
             )],
-            SurfaceColorInfo::default(),
+            FrameColorInfo::default(),
         )
-        .map_err(|error| gst_video_output_error("GPUI rejected BGRA frame", error)),
-        gst_video::VideoFormat::Rgba => SurfaceFrame::new(
+        .map_err(|error| gst_video_output_error("invalid BGRA frame", error)),
+        gst_video::VideoFormat::Rgba => FrameBuffer::new(
             handle,
             sequence,
             coded_size,
             visible_rect,
             display_size,
-            SurfaceFormat::Rgba8,
-            [SurfacePlane::new(
+            PixelFormat::Rgba8,
+            [FramePlane::new(
                 frame
                     .plane_data(0)
                     .map_err(|error| gst_decode_error("failed to read RGBA plane", error))?
                     .to_vec(),
                 stride(0)?,
             )],
-            SurfaceColorInfo::default(),
+            FrameColorInfo::default(),
         )
-        .map_err(|error| gst_video_output_error("GPUI rejected RGBA frame", error)),
-        gst_video::VideoFormat::Nv12 => SurfaceFrame::new(
+        .map_err(|error| gst_video_output_error("invalid RGBA frame", error)),
+        gst_video::VideoFormat::Nv12 => FrameBuffer::new(
             handle,
             sequence,
             coded_size,
             visible_rect,
             display_size,
-            SurfaceFormat::Nv12,
+            PixelFormat::Nv12,
             [
-                SurfacePlane::new(
+                FramePlane::new(
                     frame
                         .plane_data(0)
                         .map_err(|error| gst_decode_error("failed to read NV12 Y plane", error))?
                         .to_vec(),
                     stride(0)?,
                 ),
-                SurfacePlane::new(
+                FramePlane::new(
                     frame
                         .plane_data(1)
                         .map_err(|error| gst_decode_error("failed to read NV12 UV plane", error))?
@@ -1215,7 +1221,7 @@ fn sample_to_cpu_surface_frame(
             ],
             surface_color_info(&info),
         )
-        .map_err(|error| gst_video_output_error("GPUI rejected NV12 frame", error)),
+        .map_err(|error| gst_video_output_error("invalid NV12 frame", error)),
         format => Err(MediaError::new(
             MediaErrorKind::UnsupportedCodec,
             format!("unsupported decoded video format: {format:?}"),
@@ -1227,45 +1233,29 @@ fn sample_to_cpu_surface_frame(
 pub(super) fn video_frame_geometry(
     buffer: &gst::BufferRef,
     info: &gst_video::VideoInfo,
-) -> MediaResult<(
-    gpui::Size<DevicePixels>,
-    Bounds<DevicePixels>,
-    gpui::Size<DevicePixels>,
-)> {
-    let coded_size = size(
-        DevicePixels(
-            i32::try_from(info.width())
-                .map_err(|error| gst_decode_error("video width is too large", error))?,
-        ),
-        DevicePixels(
-            i32::try_from(info.height())
-                .map_err(|error| gst_decode_error("video height is too large", error))?,
-        ),
+) -> MediaResult<(FrameSize, FrameRect, FrameSize)> {
+    let coded_size = FrameSize::new(
+        i32::try_from(info.width())
+            .map_err(|error| gst_decode_error("video width is too large", error))?,
+        i32::try_from(info.height())
+            .map_err(|error| gst_decode_error("video height is too large", error))?,
     );
     let (x, y, width, height) = buffer
         .meta::<gst_video::VideoCropMeta>()
         .map(|crop| crop.rect())
         .unwrap_or((0, 0, info.width(), info.height()));
-    let visible_rect = Bounds {
-        origin: point(
-            DevicePixels(
-                i32::try_from(x)
-                    .map_err(|error| gst_decode_error("video crop x is too large", error))?,
-            ),
-            DevicePixels(
-                i32::try_from(y)
-                    .map_err(|error| gst_decode_error("video crop y is too large", error))?,
-            ),
+    let visible_rect = FrameRect {
+        origin: FramePoint::new(
+            i32::try_from(x)
+                .map_err(|error| gst_decode_error("video crop x is too large", error))?,
+            i32::try_from(y)
+                .map_err(|error| gst_decode_error("video crop y is too large", error))?,
         ),
-        size: size(
-            DevicePixels(
-                i32::try_from(width)
-                    .map_err(|error| gst_decode_error("video crop width is too large", error))?,
-            ),
-            DevicePixels(
-                i32::try_from(height)
-                    .map_err(|error| gst_decode_error("video crop height is too large", error))?,
-            ),
+        size: FrameSize::new(
+            i32::try_from(width)
+                .map_err(|error| gst_decode_error("video crop width is too large", error))?,
+            i32::try_from(height)
+                .map_err(|error| gst_decode_error("video crop height is too large", error))?,
         ),
     };
 
@@ -1281,21 +1271,17 @@ pub(super) fn video_frame_geometry(
         .and_then(|scaled| scaled.checked_add(denominator / 2))
         .map(|scaled| scaled / denominator)
         .ok_or_else(|| gst_decode_message("video display width overflow"))?;
-    let display_size = size(
-        DevicePixels(
-            i32::try_from(display_width)
-                .map_err(|error| gst_decode_error("video display width is too large", error))?,
-        ),
-        DevicePixels(
-            i32::try_from(height)
-                .map_err(|error| gst_decode_error("video display height is too large", error))?,
-        ),
+    let display_size = FrameSize::new(
+        i32::try_from(display_width)
+            .map_err(|error| gst_decode_error("video display width is too large", error))?,
+        i32::try_from(height)
+            .map_err(|error| gst_decode_error("video display height is too large", error))?,
     );
 
     Ok((coded_size, visible_rect, display_size))
 }
 
-fn surface_color_info(info: &gst_video::VideoInfo) -> SurfaceColorInfo {
+fn surface_color_info(info: &gst_video::VideoInfo) -> FrameColorInfo {
     let colorimetry = info.colorimetry();
     let matrix = match colorimetry.matrix() {
         gst_video::VideoColorMatrix::Bt601 => YuvMatrix::Bt601,
@@ -1308,7 +1294,7 @@ fn surface_color_info(info: &gst_video::VideoInfo) -> SurfaceColorInfo {
         _ => ColorRange::Limited,
     };
 
-    SurfaceColorInfo { matrix, range }
+    FrameColorInfo { matrix, range }
 }
 
 #[cfg(test)]
@@ -1317,9 +1303,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     use std::fs::File;
 
-    use gpui::{SurfaceFrameBacking, SurfaceHandle};
+    use gpui_media_core::{FrameBacking, FrameHandle};
 
-    use gpui_media::{MediaErrorKind, MediaRecovery, MediaSource, NetworkSourceOptions};
+    use gpui_media_core::{MediaErrorKind, MediaRecovery, MediaSource, NetworkSourceOptions};
 
     use super::{
         add_required_allocation_metas, appsink_caps, buffering_percent,
@@ -1445,14 +1431,14 @@ mod tests {
         let (coded_size, visible_rect, display_size) =
             video_frame_geometry(buffer.as_ref(), &info).unwrap();
 
-        assert_eq!(coded_size.width.0, 100);
-        assert_eq!(coded_size.height.0, 60);
-        assert_eq!(visible_rect.origin.x.0, 10);
-        assert_eq!(visible_rect.origin.y.0, 5);
-        assert_eq!(visible_rect.size.width.0, 80);
-        assert_eq!(visible_rect.size.height.0, 50);
-        assert_eq!(display_size.width.0, 160);
-        assert_eq!(display_size.height.0, 50);
+        assert_eq!(coded_size.width, 100);
+        assert_eq!(coded_size.height, 60);
+        assert_eq!(visible_rect.origin.x, 10);
+        assert_eq!(visible_rect.origin.y, 5);
+        assert_eq!(visible_rect.size.width, 80);
+        assert_eq!(visible_rect.size.height, 50);
+        assert_eq!(display_size.width, 160);
+        assert_eq!(display_size.height, 50);
     }
 
     #[test]
@@ -1488,21 +1474,21 @@ mod tests {
     fn appsink_caps_advertise_only_supported_native_nv12_layouts() {
         crate::SystemBackend::initialize().unwrap();
         let modifier = 0x0200_0000_0840_1b04;
-        let gpu_specs = gpui::GpuSpecs {
-            supports_native_nv12_dma_buf_import: true,
+        let output_capabilities = gpui_media_core::FrameOutputCapabilities {
             native_nv12_dma_buf_modifiers: vec![
-                gpui::DmaBufModifier {
+                gpui_media_core::DmaBufModifier {
                     modifier,
                     plane_count: 2,
                 },
-                gpui::DmaBufModifier {
+                gpui_media_core::DmaBufModifier {
                     modifier: 0x1234,
                     plane_count: 3,
                 },
             ],
-            ..Default::default()
         };
-        let serialized = appsink_caps(Some(&gpu_specs)).unwrap().to_string();
+        let serialized = appsink_caps(Some(&output_capabilities))
+            .unwrap()
+            .to_string();
 
         assert!(serialized.contains("NV12:0x0200000008401b04"));
         assert!(!serialized.contains("NV12:0x0000000000001234"));
@@ -1518,14 +1504,14 @@ mod tests {
         let sample = gst::Sample::builder().caps(&caps).buffer(&buffer).build();
         let frame = sample_to_surface_frame(
             &sample,
-            SurfaceHandle::new(),
+            FrameHandle::new(),
             1,
             #[cfg(target_os = "linux")]
             None,
         )
         .unwrap();
 
-        assert!(matches!(frame.backing(), SurfaceFrameBacking::Cpu(_)));
+        assert!(matches!(frame.backing(), FrameBacking::Cpu(_)));
     }
 
     #[cfg(target_os = "linux")]
@@ -1546,9 +1532,9 @@ mod tests {
         let mut buffer = gst::Buffer::new();
         buffer.get_mut().unwrap().append_memory(memory);
         let sample = gst::Sample::builder().caps(&caps).buffer(&buffer).build();
-        let frame = sample_to_surface_frame(&sample, SurfaceHandle::new(), 1, None).unwrap();
+        let frame = sample_to_surface_frame(&sample, FrameHandle::new(), 1, None).unwrap();
 
-        assert!(matches!(frame.backing(), SurfaceFrameBacking::DmaBuf(_)));
+        assert!(matches!(frame.backing(), FrameBacking::DmaBuf(_)));
     }
 
     #[cfg(target_os = "linux")]
@@ -1584,17 +1570,17 @@ mod tests {
         )
         .unwrap();
         let sample = gst::Sample::builder().caps(&caps).buffer(&buffer).build();
-        let producer = gpui::DrmDevice {
+        let producer = gpui_media_core::DrmDevice {
             major: 226,
             minor: 128,
         };
         let frame =
-            sample_to_surface_frame(&sample, SurfaceHandle::new(), 1, Some(producer)).unwrap();
+            sample_to_surface_frame(&sample, FrameHandle::new(), 1, Some(producer)).unwrap();
 
-        let SurfaceFrameBacking::DmaBuf(dma_buf) = frame.backing() else {
+        let FrameBacking::DmaBuf(dma_buf) = frame.backing() else {
             panic!("expected DMA-BUF surface backing");
         };
-        let image = dma_buf.image().expect("expected native DMA-BUF image");
+        let image = dma_buf;
         assert_eq!(image.objects().len(), 1);
         assert_eq!(image.planes().len(), 2);
         assert_eq!(image.planes()[0].object_index(), 0);

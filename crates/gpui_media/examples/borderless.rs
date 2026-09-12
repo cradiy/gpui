@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::env::args().nth(1).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "usage: cargo run -p gpui_media_system --example borderless -- <video file or URI>",
+            "usage: cargo run -p gpui_media --example borderless -- <video file or URI>",
         )
     })?;
     let source = MediaSource::parse(input)?;
@@ -86,6 +86,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?
     .initial_frame_blocking()?;
     let video_size = initial_frame.display_size();
+    let video_size = size(
+        DevicePixels(video_size.width),
+        DevicePixels(video_size.height),
+    );
     let title = format!("gpui_media · {}", source.display_name());
 
     gpui_platform::application().run(move |cx: &mut App| {

@@ -4,9 +4,9 @@ use std::ffi::{c_char, c_void};
 
 use core_foundation::base::TCFType as _;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
-use gpui::{CoreVideoHandle, SurfaceFormat, SurfaceFrame, SurfaceHandle};
+use gpui_media_core::{CoreVideoHandle, FrameBacking, FrameBuffer, FrameHandle, PixelFormat};
 
-use gpui_media::MediaResult;
+use gpui_media_core::MediaResult;
 
 use super::{
     gst_decode_error, gst_decode_message, gst_video_output_error, surface_color_info,
@@ -55,9 +55,9 @@ fn core_video_pixel_buffer(buffer: &gst::BufferRef) -> Option<CVPixelBuffer> {
 
 pub(super) fn sample_to_surface_frame(
     sample: &gst::Sample,
-    handle: SurfaceHandle,
+    handle: FrameHandle,
     sequence: u64,
-) -> MediaResult<Option<SurfaceFrame>> {
+) -> MediaResult<Option<FrameBuffer>> {
     let caps = sample
         .caps()
         .ok_or_else(|| gst_decode_message("decoded sample has no caps"))?;
@@ -71,12 +71,12 @@ pub(super) fn sample_to_surface_frame(
     };
 
     let format = match info.format() {
-        gst_video::VideoFormat::Bgra => SurfaceFormat::Bgra8,
-        gst_video::VideoFormat::Rgba => SurfaceFormat::Rgba8,
-        gst_video::VideoFormat::Nv12 => SurfaceFormat::Nv12,
+        gst_video::VideoFormat::Bgra => PixelFormat::Bgra8,
+        gst_video::VideoFormat::Rgba => PixelFormat::Rgba8,
+        gst_video::VideoFormat::Nv12 => PixelFormat::Nv12,
         _ => return Ok(None),
     };
-    if format == SurfaceFormat::Nv12 && pixel_buffer.get_plane_count() < 2 {
+    if format == PixelFormat::Nv12 && pixel_buffer.get_plane_count() < 2 {
         return Ok(None);
     }
     if pixel_buffer.get_width() != info.width() as usize
@@ -85,24 +85,25 @@ pub(super) fn sample_to_surface_frame(
         return Ok(None);
     }
 
-    let (_, visible_rect, display_size) = video_frame_geometry(buffer, &info)?;
-    let color = if format == SurfaceFormat::Nv12 {
+    let (coded_size, visible_rect, display_size) = video_frame_geometry(buffer, &info)?;
+    let color = if format == PixelFormat::Nv12 {
         surface_color_info(&info)
     } else {
         Default::default()
     };
-    let frame = SurfaceFrame::from_core_video(
+    let frame = FrameBuffer::with_backing(
         handle,
         sequence,
+        coded_size,
         visible_rect,
         display_size,
         format,
         // SAFETY: GStreamer owns the decoded buffer and publishes it only
         // after VideoToolbox has finished writing the frame. Retaining the
         // CVPixelBuffer keeps that immutable frame allocation alive.
-        unsafe { CoreVideoHandle::new(pixel_buffer) },
+        FrameBacking::CoreVideo(unsafe { CoreVideoHandle::new(pixel_buffer) }),
         color,
     )
-    .map_err(|error| gst_video_output_error("GPUI rejected CoreVideo frame", error))?;
+    .map_err(|error| gst_video_output_error("invalid CoreVideo frame", error))?;
     Ok(Some(frame))
 }

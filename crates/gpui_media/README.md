@@ -1,12 +1,14 @@
 # gpui_media
 
-`gpui_media` is a reusable GPUI media playback core with pluggable backends.
+`gpui_media` provides GPUI playback entities and frame presentation with pluggable backends.
 One media session owns demuxing, video/audio decoding, audio output and the
 shared playback clock. The [`gpui_media_system`](../gpui_media_system/README.md)
 crate provides a platform-selected `SystemBackend`. Applications can also
 inject their own backend implementation. Video frame rendering and
 extraction remain separate from player chrome so applications can build
-different interfaces on top of the same core.
+different interfaces on top of the same core. Media contracts and decoded
+frames come from [`gpui_media_core`](../gpui_media_core/README.md), which has
+no GPUI dependency. This crate re-exports those types for UI applications.
 
 Pure audio playback is provided separately by `AudioPlayer`. It uses the same
 Symphonia and CPAL pipeline on every supported platform and does not depend on
@@ -34,7 +36,7 @@ both audio and video. See the complete
 - CPU, macOS CoreVideo and Linux DMA-BUF frame transport
 - HTTP request headers, authentication, proxy, timeout and source retry options
 - network buffering progress and an explicit host-controlled reload operation
-- standalone file, sequential HTTP and caller-fed encoded audio streams
+- file, sequential HTTP and caller-fed encoded audio streams
 - bounded asynchronous backpressure for caller-fed audio chunks
 
 ## Select media features and a playback backend
@@ -74,7 +76,7 @@ For audio without video, enable only `gpui_media`'s `audio` feature with
 Implement `MediaBackend` to open a unified `MediaPlaybackSession` and,
 optionally, a `FrameExtractionSession`. The session owns audio output and A/V
 synchronization. It publishes timestamped `VideoFrame` values and playback
-events through `MediaOutputSink`; `gpui_media` owns the bounded latest-video
+events through `MediaOutputSink`; `gpui_media_core` owns the bounded latest-video
 queue and common frame statistics.
 
 ```rust
@@ -129,7 +131,7 @@ let player = cx.new(|cx| {
 });
 ```
 
-The entity itself implements `Render`, but deliberately paints only the current video frame. It does not install pointer handlers, draw status overlays, provide controls or manage fullscreen. Applications can wrap it with any interaction and control layout, or render `current_frame().surface()` directly when they need custom fitting and composition.
+The entity itself implements `Render`, but deliberately paints only the current video frame. It does not install pointer handlers, draw status overlays, provide controls or manage fullscreen. Applications can wrap it with any interaction and control layout, or render `current_surface()` directly when they need custom fitting and composition.
 
 ## Draw controls over the video container
 
@@ -170,6 +172,7 @@ let source = MediaSource::parse(input)?;
 let initial_frame = VideoFrameExtractor::new(source.clone(), Arc::new(SystemBackend))?
     .initial_frame_blocking()?;
 let video_size = initial_frame.display_size();
+let video_size = gpui::size(gpui::DevicePixels(video_size.width), gpui::DevicePixels(video_size.height));
 
 gpui_platform::application().run(move |cx: &mut App| {
     let display = cx
@@ -206,7 +209,7 @@ probed.
 Run the complete borderless example with:
 
 ```sh
-cargo run -p gpui_media_system --example borderless -- /path/to/video.mp4
+cargo run -p gpui_media --example borderless -- /path/to/video.mp4
 ```
 
 The example marks the window as non-resizable. GPUI exposes that as equal
@@ -223,7 +226,7 @@ visible area.
 Run the custom play/pause and timeline example with:
 
 ```sh
-cargo run -p gpui_media_system --example overlay_controls -- /path/to/video.mp4
+cargo run -p gpui_media --example overlay_controls -- /path/to/video.mp4
 ```
 
 ## Read the timeline
@@ -275,7 +278,7 @@ line:
 ```sh
 GPUI_MEDIA_WEBDAV_USERNAME='user' \
 GPUI_MEDIA_WEBDAV_PASSWORD='password' \
-cargo run -p gpui_media_system --example webdav -- \
+cargo run -p gpui_media --example webdav -- \
   'https://dav.example.com/remote.php/dav/files/user/video.mp4'
 ```
 
@@ -367,7 +370,7 @@ selection, composition, styling and rendering remain application-owned.
 ```rust
 let frame = player.read(cx).current_frame().cloned();
 if let Some(frame) = frame {
-    let surface = frame.surface();
+    let buffer = frame.buffer();
     let timestamp = frame.timestamp();
     let frame_duration = frame.duration();
     let coded_size = frame.coded_size();
@@ -389,7 +392,18 @@ let dropped = stats.dropped_frames();
 let drop_ratio = stats.drop_ratio();
 ```
 
-The returned frame owns or leases all resources required by its `SurfaceFrame`. Keep the `Arc<VideoFrame>` alive while another subsystem needs the pixels.
+The returned frame owns or leases its decoded allocation independently of GPUI.
+`VideoPlayer::current_surface()` returns the adapted GPUI surface. For extracted
+frames or another presentation stream, retain a `VideoSurface` adapter:
+
+```rust
+let surface = adapter.set_frame(&frame)?;
+let element = gpui::surface(surface);
+```
+
+Create `adapter` with `VideoSurface::new()`. Adapted surfaces share CPU bytes
+and retain native allocation leases, including after the decoded frame is
+released. Reusing the adapter preserves surface identity and import status.
 
 ## Extract a frame without changing playback
 
@@ -438,6 +452,10 @@ Requests beyond the video stream duration return the closest available frame bef
 
 ## DMA-BUF status
 
-Use `VideoPlayer::new_in_window` to pass the active renderer's `GpuSpecs` into the decoder setup. `gpui_media_system` advertises only native NV12 modifiers that GPUI reports as sampleable with two memory planes. It preserves the GStreamer DMA-BUF object identity and maps both NV12 image planes to the same object when appropriate.
+`VideoPlayer::new_in_window` translates the active renderer's import support
+into `FrameOutputCapabilities`. `gpui_media_system` advertises native NV12
+modifiers accepted by the consumer with two memory planes. It preserves the
+GStreamer DMA-BUF object layout and maps both NV12 image planes to the same
+object when appropriate. Rendering import status remains in the GPUI adapter.
 
 If GPUI reports `DmaBufImportStatus::Failed` after presentation, the player automatically restricts the appsink to CPU frames and seeks to the current position to force renegotiation. Linear NV12/BGRA/RGBA DMA-BUF remains available when native import is not supported.

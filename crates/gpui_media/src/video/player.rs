@@ -14,7 +14,8 @@ use crate::{
     SubtitleEvent, TransportChange, VideoFrame, VideoFrameExtractor, VideoPlaybackStats,
 };
 
-use super::stats::PlaybackCounters;
+use super::surface::VideoSurface;
+use gpui_media_core::PlaybackCounters;
 
 /// Initial behavior for a [`VideoPlayer`].
 #[derive(Clone, Copy, Debug)]
@@ -101,6 +102,7 @@ pub struct VideoPlayer {
     playback: Box<dyn MediaPlaybackSession>,
     counters: Arc<PlaybackCounters>,
     frame: Option<Arc<VideoFrame>>,
+    video_surface: VideoSurface,
     frame_transport: Option<FrameTransport>,
     state: PlaybackState,
     state_after_seek: Option<PlaybackState>,
@@ -158,7 +160,7 @@ impl VideoPlayer {
         let mut playback = backend.open_playback(
             MediaPlaybackRequest {
                 source: source.clone(),
-                gpu_specs,
+                output_capabilities: gpu_specs.as_ref().map(VideoSurface::output_capabilities),
             },
             output_sink,
         )?;
@@ -188,6 +190,10 @@ impl VideoPlayer {
                         );
                         player.timeline =
                             timeline_without_regression(player.timeline, frame_timeline);
+                    }
+                    if let Err(error) = player.video_surface.set_frame(&frame) {
+                        player.set_state(PlaybackState::Error(Arc::new(error)), cx);
+                        return;
                     }
                     let transport = frame.transport();
                     if player.frame_transport != Some(transport) {
@@ -271,6 +277,7 @@ impl VideoPlayer {
                     MediaBackendEvent::Error(error) => {
                         player.set_state(PlaybackState::Error(error), cx);
                     }
+                    _ => {}
                 });
             }
         })
@@ -303,6 +310,7 @@ impl VideoPlayer {
             playback,
             counters: output.counters,
             frame: None,
+            video_surface: VideoSurface::new(),
             frame_transport: None,
             state: if options.autoplay {
                 PlaybackState::Loading
@@ -382,6 +390,11 @@ impl VideoPlayer {
 
     pub fn current_frame(&self) -> Option<&Arc<VideoFrame>> {
         self.frame.as_ref()
+    }
+
+    /// Returns the adapted surface for custom GPUI fitting and composition.
+    pub fn current_surface(&self) -> Option<&Arc<gpui::SurfaceFrame>> {
+        self.video_surface.surface()
     }
 
     /// Creates an independent extractor for thumbnails, previews and scrubbing.
@@ -481,6 +494,7 @@ impl VideoPlayer {
     pub fn reload(&mut self, autoplay: bool, cx: &mut Context<Self>) -> MediaResult<()> {
         self.playback.reload(autoplay)?;
         self.frame = None;
+        self.video_surface.clear();
         self.frame_transport = None;
         self.state_after_seek = None;
         self.timeline = PlaybackTimeline::default();
@@ -645,10 +659,10 @@ impl VideoPlayer {
 
     #[cfg(target_os = "linux")]
     fn check_frame_import(&mut self, cx: &mut Context<Self>) -> MediaResult<()> {
-        let Some(frame) = self.frame.as_deref() else {
+        let Some(frame) = self.video_surface.surface() else {
             return Ok(());
         };
-        let SurfaceFrameBacking::DmaBuf(dma_buf) = frame.surface().backing() else {
+        let SurfaceFrameBacking::DmaBuf(dma_buf) = frame.backing() else {
             return Ok(());
         };
         let DmaBufImportStatus::Failed(reason) = dma_buf.import_status() else {
@@ -718,14 +732,14 @@ impl EventEmitter<VideoPlayerEvent> for VideoPlayer {}
 
 impl Render for VideoPlayer {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let frame = self.frame.clone();
+        let frame = self.video_surface.surface().cloned();
 
         div()
             .relative()
             .size_full()
             .overflow_hidden()
             .when_some(frame, |this, frame| {
-                this.child(surface(frame.surface().clone()).absolute().size_full())
+                this.child(surface(frame).absolute().size_full())
             })
     }
 }

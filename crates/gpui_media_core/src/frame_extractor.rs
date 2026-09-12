@@ -58,7 +58,7 @@ impl Default for VideoFrameExtractorOptions {
     }
 }
 
-/// Extracts frames without changing a [`crate::VideoPlayer`] playback timeline.
+/// Extracts frames without changing an active playback session's timeline.
 ///
 /// A single backend extraction session is reused by all requests. Clones share
 /// the same worker and serialize frame extraction requests.

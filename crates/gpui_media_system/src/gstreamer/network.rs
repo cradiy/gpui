@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gst::prelude::*;
 
-use gpui_media::NetworkSourceOptions;
+use gpui_media_core::NetworkSourceOptions;
 
 pub(crate) fn configure_playbin_network(playbin: &gst::Element, options: &NetworkSourceOptions) {
     if let Some(buffer_duration) = options.buffer_duration() {
@@ -153,7 +153,7 @@ mod tests {
         apply_network_source_options, configure_playbin_progressive_download,
         duration_seconds_ceil, extra_headers,
     };
-    use gpui_media::NetworkSourceOptions;
+    use gpui_media_core::NetworkSourceOptions;
 
     #[test]
     fn header_structure_preserves_custom_request_headers() {

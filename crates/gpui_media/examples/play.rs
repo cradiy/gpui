@@ -3,7 +3,7 @@ use gpui_media::{MediaSource, VideoPlayer, VideoPlayerEvent};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("Usage: cargo run -p gpui_media_system --example play -- <video file or URI>");
+        eprintln!("Usage: cargo run -p gpui_media --example play -- <video file or URI>");
         std::process::exit(2);
     });
     let source = MediaSource::parse(&input)?;
@@ -43,19 +43,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     #[cfg(target_os = "linux")]
                     VideoPlayerEvent::FrameReady(frame) if !reported_frame_layout => {
                         reported_frame_layout = true;
-                        if let gpui::SurfaceFrameBacking::DmaBuf(dma_buf) =
-                            frame.surface().backing()
+                        if let gpui_media::FrameBacking::DmaBuf(image) =
+                            frame.buffer().backing()
                         {
                             eprintln!(
-                                "gpui_media: DMA-BUF modifier={:#018x} native_image={} objects={} planes={} producer_device={:?}",
-                                dma_buf.drm_modifier(),
-                                dma_buf.image().is_some(),
-                                dma_buf.image().map_or(0, |image| image.objects().len()),
-                                dma_buf.image().map_or_else(
-                                    || dma_buf.planes().len(),
-                                    |image| image.planes().len()
-                                ),
-                                dma_buf.image().and_then(|image| image.drm_device())
+                                "gpui_media: DMA-BUF modifier={:#018x} objects={} planes={} producer_device={:?}",
+                                image.objects()[0].modifier(),
+                                image.objects().len(),
+                                image.planes().len(),
+                                image.drm_device()
                             );
                         }
                     }

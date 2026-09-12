@@ -51,8 +51,6 @@ use async_task::Runnable;
 use futures::channel::oneshot;
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
-use image::codecs::gif::GifDecoder;
-use image::{AnimationDecoder as _, Frame};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use scheduler::Instant;
 pub use scheduler::RunnableMeta;
@@ -62,7 +60,6 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
-use std::io::Cursor;
 use std::ops;
 use std::time::Duration;
 use std::{
@@ -2519,63 +2516,30 @@ impl Image {
         ImageSource::Image(self).remove_asset(cx);
     }
 
-    /// Convert the clipboard image to an `ImageData` object.
+    /// Decodes an image using the default [`crate::ImageLoadLimits`].
     pub fn to_image_data(&self, svg_renderer: SvgRenderer) -> Result<Arc<RenderImage>> {
-        fn frames_for_image(
-            bytes: &[u8],
-            format: image::ImageFormat,
-        ) -> Result<SmallVec<[Frame; 1]>> {
-            let mut data = image::load_from_memory_with_format(bytes, format)?.into_rgba8();
+        self.to_image_data_with_limits(svg_renderer, crate::ImageLoadLimits::default())
+            .map_err(Into::into)
+    }
 
-            // Convert from RGBA to BGRA.
-            for pixel in data.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-
-            Ok(SmallVec::from_elem(Frame::new(data), 1))
-        }
-
-        let frames = match self.format {
-            ImageFormat::Gif => {
-                let decoder = GifDecoder::new(Cursor::new(&self.bytes))?;
-                let mut frames = SmallVec::new();
-
-                for frame in decoder.into_frames() {
-                    match frame {
-                        Ok(mut frame) => {
-                            // Convert from RGBA to BGRA.
-                            for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                pixel.swap(0, 2);
-                            }
-                            frames.push(frame);
-                        }
-                        Err(err) => {
-                            log::debug!("Skipping GIF frame due to decode error: {err}");
-                        }
-                    }
-                }
-
-                if frames.is_empty() {
-                    anyhow::bail!("GIF could not be decoded: all frames failed");
-                }
-
-                frames
-            }
-            ImageFormat::Png => frames_for_image(&self.bytes, image::ImageFormat::Png)?,
-            ImageFormat::Jpeg => frames_for_image(&self.bytes, image::ImageFormat::Jpeg)?,
-            ImageFormat::Webp => frames_for_image(&self.bytes, image::ImageFormat::WebP)?,
-            ImageFormat::Bmp => frames_for_image(&self.bytes, image::ImageFormat::Bmp)?,
-            ImageFormat::Tiff => frames_for_image(&self.bytes, image::ImageFormat::Tiff)?,
-            ImageFormat::Ico => frames_for_image(&self.bytes, image::ImageFormat::Ico)?,
-            ImageFormat::Svg => {
-                return svg_renderer
-                    .render_single_frame(&self.bytes, 1.0)
-                    .map_err(Into::into);
-            }
-            ImageFormat::Pnm => frames_for_image(&self.bytes, image::ImageFormat::Pnm)?,
+    /// Decodes an image using explicit resource limits.
+    pub fn to_image_data_with_limits(
+        &self,
+        svg_renderer: SvgRenderer,
+        limits: crate::ImageLoadLimits,
+    ) -> Result<Arc<RenderImage>, crate::ImageCacheError> {
+        let format = match self.format {
+            ImageFormat::Gif => Some(image::ImageFormat::Gif),
+            ImageFormat::Png => Some(image::ImageFormat::Png),
+            ImageFormat::Jpeg => Some(image::ImageFormat::Jpeg),
+            ImageFormat::Webp => Some(image::ImageFormat::WebP),
+            ImageFormat::Bmp => Some(image::ImageFormat::Bmp),
+            ImageFormat::Tiff => Some(image::ImageFormat::Tiff),
+            ImageFormat::Ico => Some(image::ImageFormat::Ico),
+            ImageFormat::Pnm => Some(image::ImageFormat::Pnm),
+            ImageFormat::Svg => None,
         };
-
-        Ok(Arc::new(RenderImage::new(frames)))
+        crate::image_loading::decode_image(&self.bytes, format, &svg_renderer, limits)
     }
 
     /// Get the format of the clipboard image

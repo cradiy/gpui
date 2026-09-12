@@ -24,6 +24,7 @@ mod element;
 mod elements;
 mod executor;
 mod fluid;
+mod image_loading;
 mod particle_transition;
 mod particles;
 mod platform_scheduler;
@@ -119,6 +120,7 @@ pub use global::*;
 pub use gpui_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,
 };
+pub use image_loading::ImageLoadLimits;
 pub use particle_transition::*;
 pub use particles::*;
 pub use scene3d::*;

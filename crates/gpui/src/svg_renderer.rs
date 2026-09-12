@@ -1,6 +1,6 @@
 use crate::{
-    AssetSource, DevicePixels, Hsla, IsZero, RenderImage, Result, Rgba, SharedString, Size,
-    swap_rgba_pa_to_bgra,
+    AssetSource, DevicePixels, Hsla, ImageCacheError, ImageLoadLimits, IsZero, RenderImage, Result,
+    Rgba, SharedString, Size, swap_rgba_pa_to_bgra,
 };
 use image::Frame;
 use resvg::tiny_skia::Pixmap;
@@ -200,19 +200,27 @@ impl SvgRenderer {
             SvgSize::ScaleFactor(scale_factor * SMOOTH_SVG_SCALE_FACTOR),
             None,
         )
-        .map(|pixmap| {
-            let mut buffer =
-                image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())
-                    .unwrap();
+        .map(pixmap_to_image)
+    }
 
-            for pixel in buffer.chunks_exact_mut(4) {
-                swap_rgba_pa_to_bgra(pixel);
-            }
-
-            let mut image = RenderImage::new(SmallVec::from_const([Frame::new(buffer)]));
-            image.scale_factor = SMOOTH_SVG_SCALE_FACTOR;
-            Arc::new(image)
-        })
+    /// Renders an SVG with input and output pixel limits.
+    ///
+    /// Dimensions include the smoothing scale factor. Parsing and embedded SVG
+    /// resources are not covered by the decoded pixel budget.
+    pub fn render_single_frame_with_limits(
+        &self,
+        bytes: &[u8],
+        scale_factor: f32,
+        limits: ImageLoadLimits,
+    ) -> Result<Arc<RenderImage>, ImageCacheError> {
+        limits.check_input(bytes.len() as u64)?;
+        self.render_pixmap_checked(
+            bytes,
+            SvgSize::ScaleFactor(scale_factor * SMOOTH_SVG_SCALE_FACTOR),
+            None,
+            |width, height| limits.check_frame(width, height).map(|_| ()),
+        )
+        .map(pixmap_to_image)
     }
 
     pub(crate) fn render_alpha_mask(
@@ -287,6 +295,16 @@ impl SvgRenderer {
         size: SvgSize,
         style_sheet: Option<String>,
     ) -> Result<Pixmap, usvg::Error> {
+        self.render_pixmap_checked(bytes, size, style_sheet, |_, _| Ok(()))
+    }
+
+    fn render_pixmap_checked<E: From<usvg::Error>>(
+        &self,
+        bytes: &[u8],
+        size: SvgSize,
+        style_sheet: Option<String>,
+        check_dimensions: impl FnOnce(u32, u32) -> Result<(), E>,
+    ) -> Result<Pixmap, E> {
         // Cap the size of the rendered pixmap to avoid texture allocation panics
         // Related issue: #56466
         const MAX_SIZE: f32 = 8192.0;
@@ -313,11 +331,11 @@ impl SvgRenderer {
         }
 
         // Render the SVG to a pixmap with the specified width and height.
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(
-            (svg_size.width() * scale) as u32,
-            (svg_size.height() * scale) as u32,
-        )
-        .ok_or(usvg::Error::InvalidSize)?;
+        let width = (svg_size.width() * scale) as u32;
+        let height = (svg_size.height() * scale) as u32;
+        check_dimensions(width, height)?;
+        let mut pixmap =
+            resvg::tiny_skia::Pixmap::new(width, height).ok_or(usvg::Error::InvalidSize)?;
 
         let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
 
@@ -325,6 +343,17 @@ impl SvgRenderer {
 
         Ok(pixmap)
     }
+}
+
+fn pixmap_to_image(pixmap: Pixmap) -> Arc<RenderImage> {
+    let mut buffer =
+        image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take()).unwrap();
+    for pixel in buffer.chunks_exact_mut(4) {
+        swap_rgba_pa_to_bgra(pixel);
+    }
+    let mut image = RenderImage::new(SmallVec::from_const([Frame::new(buffer)]));
+    image.scale_factor = SMOOTH_SVG_SCALE_FACTOR;
+    Arc::new(image)
 }
 
 fn color_svg_style_sheet(params: &RenderColorSvgParams) -> String {

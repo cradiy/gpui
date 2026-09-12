@@ -1,22 +1,17 @@
 use crate::{
     AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, DefiniteLength, Element, ElementId,
-    Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
-    Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
-    SharedString, SharedUri, StyleRefinement, Styled, Task, Window, px,
+    Entity, GlobalElementId, Hitbox, Image, ImageCache, ImageLoadLimits, InspectorElementId,
+    InteractiveElement, Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels,
+    RenderImage, Resource, SharedString, SharedUri, StyleRefinement, Styled, Task, Window, px,
 };
 use anyhow::Result;
 
 use futures::Future;
 use gpui_util::ResultExt;
-use image::{
-    AnimationDecoder, DynamicImage, Frame, ImageError, ImageFormat, Rgba,
-    codecs::{gif::GifDecoder, webp::WebPDecoder},
-};
+use image::ImageError;
 use scheduler::Instant;
-use smallvec::SmallVec;
 use std::{
-    fs,
-    io::{self, Cursor},
+    io,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     str::FromStr,
@@ -605,7 +600,11 @@ impl Asset for ImageDecoder {
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
         let renderer = cx.svg_renderer();
-        async move { source.to_image_data(renderer).map_err(Into::into) }
+        let limits = cx
+            .try_global::<ImageLoadLimits>()
+            .copied()
+            .unwrap_or_default();
+        async move { source.to_image_data_with_limits(renderer, limits) }
     }
 }
 
@@ -626,19 +625,26 @@ impl Asset for ImageAssetLoader {
         // let scale_factor = cx.scale_factor();
         let svg_renderer = cx.svg_renderer();
         let asset_source = cx.asset_source().clone();
+        let limits = cx
+            .try_global::<ImageLoadLimits>()
+            .copied()
+            .unwrap_or_default();
         async move {
-            let bytes = match source.clone() {
-                Resource::Path(uri) => fs::read(uri.as_ref())?,
+            use crate::image_loading::{decode_image, read_image_bytes};
+            let bytes = match source {
+                Resource::Path(uri) => {
+                    let file = std::fs::File::open(uri.as_ref())?;
+                    limits.check_input(file.metadata()?.len())?;
+                    read_image_bytes(futures::io::AllowStdIo::new(file), limits).await?
+                }
                 Resource::Uri(uri) => {
                     use anyhow::Context as _;
-                    use futures::AsyncReadExt as _;
 
                     let mut response = client
                         .get(uri.as_ref(), ().into(), true)
                         .await
                         .with_context(|| format!("loading image asset from {uri:?}"))?;
-                    let mut body = Vec::new();
-                    response.body_mut().read_to_end(&mut body).await?;
+                    let body = read_image_bytes(response.body_mut(), limits).await?;
                     if !response.status().is_success() {
                         let mut body = String::from_utf8_lossy(&body).into_owned();
                         let first_line = body.lines().next().unwrap_or("").trim_end();
@@ -652,9 +658,10 @@ impl Asset for ImageAssetLoader {
                     body
                 }
                 Resource::Embedded(path) => {
-                    let data = asset_source.load(&path).ok().flatten();
+                    let data = asset_source.load(&path)?;
                     if let Some(data) = data {
-                        data.to_vec()
+                        limits.check_input(data.len() as u64)?;
+                        data.into_owned()
                     } else {
                         return Err(ImageCacheError::Asset(
                             format!("Embedded resource not found: {}", path).into(),
@@ -663,98 +670,12 @@ impl Asset for ImageAssetLoader {
                 }
             };
 
-            if let Ok(format) = image::guess_format(&bytes) {
-                let data = match format {
-                    ImageFormat::Gif => {
-                        let decoder = GifDecoder::new(Cursor::new(&bytes))?;
-                        let mut frames = SmallVec::new();
-
-                        for frame in decoder.into_frames() {
-                            match frame {
-                                Ok(mut frame) => {
-                                    // Convert from RGBA to BGRA.
-                                    for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                        pixel.swap(0, 2);
-                                    }
-                                    frames.push(frame);
-                                }
-                                Err(err) => {
-                                    log::debug!(
-                                        "Skipping GIF frame in {source:?} due to decode error: {err}"
-                                    );
-                                }
-                            }
-                        }
-
-                        if frames.is_empty() {
-                            return Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(
-                                "GIF could not be decoded: all frames failed ({source:?})"
-                            ))));
-                        }
-
-                        frames
-                    }
-                    ImageFormat::WebP => {
-                        let mut decoder = WebPDecoder::new(Cursor::new(&bytes))?;
-
-                        if decoder.has_animation() {
-                            let _ = decoder.set_background_color(Rgba([0, 0, 0, 0]));
-                            let mut frames = SmallVec::new();
-
-                            for frame in decoder.into_frames() {
-                                match frame {
-                                    Ok(mut frame) => {
-                                        // Convert from RGBA to BGRA.
-                                        for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                            pixel.swap(0, 2);
-                                        }
-                                        frames.push(frame);
-                                    }
-                                    Err(err) => {
-                                        log::debug!(
-                                            "Skipping WebP frame in {source:?} due to decode error: {err}"
-                                        );
-                                    }
-                                }
-                            }
-
-                            if frames.is_empty() {
-                                return Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(
-                                    "WebP could not be decoded: all frames failed ({source:?})"
-                                ))));
-                            }
-
-                            frames
-                        } else {
-                            let mut data = DynamicImage::from_decoder(decoder)?.into_rgba8();
-
-                            // Convert from RGBA to BGRA.
-                            for pixel in data.chunks_exact_mut(4) {
-                                pixel.swap(0, 2);
-                            }
-
-                            SmallVec::from_elem(Frame::new(data), 1)
-                        }
-                    }
-                    _ => {
-                        let mut data =
-                            image::load_from_memory_with_format(&bytes, format)?.into_rgba8();
-
-                        // Convert from RGBA to BGRA.
-                        for pixel in data.chunks_exact_mut(4) {
-                            pixel.swap(0, 2);
-                        }
-
-                        SmallVec::from_elem(Frame::new(data), 1)
-                    }
-                };
-
-                Ok(Arc::new(RenderImage::new(data)))
-            } else {
-                svg_renderer
-                    .render_single_frame(&bytes, 1.0)
-                    .map_err(Into::into)
-            }
+            decode_image(
+                &bytes,
+                image::guess_format(&bytes).ok(),
+                &svg_renderer,
+                limits,
+            )
         }
     }
 }
@@ -762,6 +683,16 @@ impl Asset for ImageAssetLoader {
 /// An error that can occur when interacting with the image cache.
 #[derive(Debug, Error, Clone)]
 pub enum ImageCacheError {
+    /// A configured image resource limit was exceeded.
+    #[error("image {resource} limit exceeded: {actual} > {limit}")]
+    LimitExceeded {
+        /// The resource whose limit was exceeded.
+        resource: &'static str,
+        /// The observed resource usage.
+        actual: u64,
+        /// The configured upper bound.
+        limit: u64,
+    },
     /// Some other kind of error occurred
     #[error("error: {0}")]
     Other(#[from] Arc<anyhow::Error>),
@@ -818,6 +749,7 @@ mod tests {
     use super::*;
     use crate::{DevicePixels, ParentElement as _, TestAppContext, canvas, div, point, px, size};
     use image::{Frame, ImageBuffer, Rgba};
+    use smallvec::SmallVec;
 
     const TEST_IMG_ID: &str = "test-img";
 

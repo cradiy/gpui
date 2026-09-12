@@ -20,6 +20,7 @@ pub struct VideoFrame {
     buffer: Arc<FrameBuffer>,
     timestamp: Option<Duration>,
     duration: Option<Duration>,
+    decoder_info: Option<Arc<crate::VideoDecoderInfo>>,
 }
 
 impl VideoFrame {
@@ -32,7 +33,19 @@ impl VideoFrame {
             buffer,
             timestamp,
             duration,
+            decoder_info: None,
         }
+    }
+
+    /// Attaches a snapshot of the backend's observed video decoder.
+    pub fn with_decoder_info(mut self, info: Arc<crate::VideoDecoderInfo>) -> Self {
+        self.decoder_info = Some(info);
+        self
+    }
+
+    /// Returns decoder metadata, or `None` when the backend cannot identify it.
+    pub fn decoder_info(&self) -> Option<&Arc<crate::VideoDecoderInfo>> {
+        self.decoder_info.as_ref()
     }
 
     /// Returns the image buffer backing this decoded frame.
@@ -93,6 +106,7 @@ impl fmt::Debug for VideoFrame {
             .field("duration", &self.duration)
             .field("coded_size", &self.coded_size())
             .field("transport", &self.transport())
+            .field("decoder_info", &self.decoder_info)
             .finish()
     }
 }

@@ -1,5 +1,6 @@
 //! Renderer-independent media playback contracts and decoded frame ownership.
 
+mod decoder;
 mod error;
 mod frame;
 mod frame_extractor;
@@ -11,6 +12,7 @@ mod stats;
 mod subtitles;
 mod timeline;
 
+pub use decoder::*;
 pub use error::*;
 pub use frame::*;
 pub use frame_extractor::*;

@@ -124,6 +124,18 @@ selects decoders from its plugin registry; CPU frame output does not imply
 software decoding. This backend does not expose an explicit hardware-decoder
 selection policy.
 
+`VideoFrame::decoder_info()` exposes a snapshot of the observed video decoder.
+GStreamer reports the factory name after its output pad produces raw video,
+matched to the output stream. Acceleration follows the factory's `Hardware`
+classification; it is not a measurement of GPU usage. Available device
+properties use backend-specific names, such as `device-path` or `cuda-device-id`.
+Metadata is absent when no unique decoder can be identified. Media Foundation
+does not currently expose decoder metadata through this backend.
+
+Decoder metadata is available on both playback and extracted frames. It is
+independent of `VideoFrame::transport()`: a hardware decoder can deliver CPU
+frames. Retained frames keep their metadata when the session changes or closes.
+
 On Linux/macOS, network source options configure supported GStreamer source
 properties. Windows rejects custom network options that Media Foundation does
 not expose through this backend. Session capabilities report the operations

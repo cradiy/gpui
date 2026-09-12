@@ -40,5 +40,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("duration={:?}", frame.duration());
     println!("size={}x{}", size.width, size.height);
     println!("transport={:?}", frame.transport());
+    match frame.decoder_info() {
+        Some(decoder) => {
+            println!("decoder={}", decoder.name);
+            println!("acceleration={:?}", decoder.acceleration);
+            for property in &decoder.device_properties {
+                println!("device.{}={}", property.name, property.value);
+            }
+        }
+        None => println!("decoder=unknown"),
+    }
     Ok(())
 }

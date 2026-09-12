@@ -29,6 +29,7 @@ use network::{configure_playbin_network, configure_playbin_progressive_download}
 
 #[cfg(target_os = "macos")]
 mod core_video;
+mod decoder;
 #[cfg(target_os = "linux")]
 mod dma_buf;
 mod frame_extractor;
@@ -87,6 +88,9 @@ impl GstreamerPlayback {
         appsink.set_drop(true);
 
         let output_for_preroll = output.clone();
+        let decoder_tracker = decoder::DecoderTracker::default();
+        let decoder_for_preroll = decoder_tracker.clone();
+        let decoder_for_samples = decoder_tracker.clone();
         let output_for_samples = output.clone();
         let media_info = Arc::new(RwLock::new(None));
         let selected_subtitle = Arc::new(RwLock::new(None));
@@ -111,6 +115,7 @@ impl GstreamerPlayback {
                     let sample = sink.pull_preroll().map_err(|_| gst::FlowError::Eos)?;
                     publish_appsink_sample(
                         &sample,
+                        decoder_for_preroll.info(sink),
                         &output_for_preroll,
                         &surface_handle_for_preroll,
                         &sequence_for_preroll,
@@ -125,6 +130,7 @@ impl GstreamerPlayback {
                     let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
                     publish_appsink_sample(
                         &sample,
+                        decoder_for_samples.info(sink),
                         &output_for_samples,
                         &surface_handle,
                         &sequence,
@@ -174,6 +180,7 @@ impl GstreamerPlayback {
                 gst_backend_error("GStreamer element 'playbin3' is not installed", error)
             })?;
         configure_playbin_network(&playbin, source.network_options());
+        decoder_tracker.attach(&playbin);
         playbin.set_property("uri", source.uri());
         playbin.set_property("video-sink", &appsink);
         playbin.set_property("text-sink", &subtitle_sink);
@@ -730,6 +737,7 @@ fn publish_subtitle_sample(
 
 fn publish_appsink_sample(
     sample: &gst::Sample,
+    decoder_info: Option<Arc<gpui_media_core::VideoDecoderInfo>>,
     output: &MediaOutputSink,
     surface_handle: &FrameHandle,
     sequence: &AtomicU64,
@@ -748,7 +756,11 @@ fn publish_appsink_sample(
         gst::FlowError::Error
     })?;
 
-    output.publish_video_frame(frame);
+    let frame = match decoder_info {
+        Some(info) => frame.with_decoder_info(info),
+        None => frame,
+    };
+    output.publish_video_frame(Arc::new(frame));
     Ok(gst::FlowSuccess::Ok)
 }
 
@@ -1091,7 +1103,7 @@ pub(crate) fn sample_to_video_frame(
     handle: FrameHandle,
     sequence: u64,
     #[cfg(target_os = "linux")] producer_drm_device: Option<gpui_media_core::DrmDevice>,
-) -> MediaResult<Arc<VideoFrame>> {
+) -> MediaResult<VideoFrame> {
     let buffer = sample
         .buffer()
         .ok_or_else(|| gst_decode_message("decoded sample has no buffer"))?;
@@ -1105,7 +1117,7 @@ pub(crate) fn sample_to_video_frame(
         producer_drm_device,
     )?);
 
-    Ok(Arc::new(VideoFrame::new(surface, timestamp, duration)))
+    Ok(VideoFrame::new(surface, timestamp, duration))
 }
 
 #[cfg(target_os = "linux")]

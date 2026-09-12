@@ -19,6 +19,7 @@ use super::{
 };
 
 pub(super) struct GstreamerFrameExtractionSession {
+    decoder_tracker: super::decoder::DecoderTracker,
     playbin: gst::Element,
     appsink: gst_app::AppSink,
     surface_handle: FrameHandle,
@@ -63,11 +64,14 @@ impl GstreamerFrameExtractionSession {
                 gst_backend_error("GStreamer element 'playbin3' is not installed", error)
             })?;
         configure_playbin_network(&playbin, source.network_options());
+        let decoder_tracker = super::decoder::DecoderTracker::default();
+        decoder_tracker.attach(&playbin);
         playbin.set_property("uri", source.uri());
         playbin.set_property("video-sink", &appsink);
         playbin.set_property("audio-sink", &audio_sink);
 
         Ok(Self {
+            decoder_tracker,
             playbin,
             appsink,
             surface_handle: FrameHandle::new(),
@@ -114,7 +118,7 @@ impl GstreamerFrameExtractionSession {
                     None,
                 )?;
                 self.sequence = self.sequence.wrapping_add(1).max(1);
-                return Ok(frame);
+                return Ok(self.decoder_tracker.annotate(frame, &self.appsink));
             }
         }
 
@@ -161,6 +165,7 @@ impl GstreamerFrameExtractionSession {
             None,
         )?;
         self.sequence = self.sequence.wrapping_add(1).max(1);
+        let frame = self.decoder_tracker.annotate(frame, &self.appsink);
         self.initial_frame = Some(frame.clone());
         Ok(frame)
     }
@@ -316,6 +321,7 @@ mod tests {
         )
         .unwrap();
         let mut session = GstreamerFrameExtractionSession {
+            decoder_tracker: super::super::decoder::DecoderTracker::default(),
             playbin: pipeline.upcast(),
             appsink,
             surface_handle,

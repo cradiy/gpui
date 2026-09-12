@@ -8,7 +8,8 @@ a GUI or rendering dependency.
   media events through an independent channel.
 - `VideoFrameExtractor` serializes extraction requests on a worker, with exact
   requests and a latest-only preview mailbox.
-- `VideoFrame` carries presentation timestamps and an immutable `FrameBuffer`.
+- `VideoFrame` carries presentation timestamps, an immutable `FrameBuffer`, and
+  optional `VideoDecoderInfo` supplied by the backend.
 - `FrameBuffer` validates coded dimensions, crop, display size, pixel format,
   color metadata, and plane layouts.
 

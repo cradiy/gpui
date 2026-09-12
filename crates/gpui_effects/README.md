@@ -28,6 +28,32 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Contour relief](docs/contour_relief.md): raised and recessed bevels with directional lighting.
 - [Contour shadow](docs/contour_shadow.md): directional soft shadows following text and image silhouettes.
 
+## Progressive blur
+
+`progressive_blur` smoothly reduces blur strength away from an edge of an element
+subtree. Content outside the transition range remains sharp.
+
+```rust
+use gpui::px;
+use gpui_effects::progressive_blur;
+
+let content = progressive_blur(content).top(px(64.));
+```
+
+Use `.bottom(...)`, `.left(...)` or `.right(...)` to select another edge.
+Each direction setter replaces the previous selection. `.radius(px(12.))`
+sets the maximum filter support radius (0–24 logical pixels).
+`.enabled(false)` bypasses offscreen rendering. Zero or invalid extents and
+radii also disable the effect.
+
+Style and size the wrapped content normally. Layout and pointer targets remain
+unchanged; filtering stays within the capture bounds and clamps sampling at its
+edges. The filter uses two spatially varying Gaussian passes and does not schedule
+animation. Animate the extent or radius with the application's animation clock
+when needed. Use `.into_effect().then(...)` to append other effects.
+
+Run `cargo run -p gpui_effects --example subtree_effect` for the comparison.
+
 ## Local deformation
 
 `subtree_deformation` applies a smooth local displacement to text, images and

@@ -21,3 +21,5 @@ workspace = true
 [dev-dependencies]
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 naga.workspace = true
+pollster.workspace = true
+wgpu.workspace = true

@@ -5,8 +5,8 @@ use gpui::{
     WindowOptions, div, img, prelude::*, px, rgb, rgba, size,
 };
 use gpui_effects::{
-    EffectStage, SubtreeColorOptions, SubtreeWaveOptions, subtree_blur, subtree_color_adjust,
-    subtree_effect_chain, subtree_identity, subtree_wave,
+    EffectStage, SubtreeColorOptions, SubtreeWaveOptions, progressive_blur, subtree_blur,
+    subtree_color_adjust, subtree_effect_chain, subtree_identity, subtree_wave,
 };
 use gpui_platform::application;
 
@@ -31,7 +31,7 @@ impl SubtreePreview {
                 include_bytes!("album-cover.svg").to_vec(),
             ))
             .into(),
-            mode: 4,
+            mode: 5,
             strength: 0.5,
             blur_enabled: true,
             color_enabled: true,
@@ -133,6 +133,14 @@ impl Render for SubtreePreview {
         self.last_frame = now;
         let card = self.card(true, cx);
         let processed = match self.mode {
+            5 => progressive_blur(card)
+                .top(px(180.))
+                .radius(px(self.strength * 24.))
+                .into_effect(),
+            6 => progressive_blur(card)
+                .bottom(px(180.))
+                .radius(px(self.strength * 24.))
+                .into_effect(),
             1 => subtree_blur(card, px(self.strength * 8.)),
             2 => subtree_wave(
                 card,
@@ -180,6 +188,8 @@ impl Render for SubtreePreview {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .flex_wrap()
+                    .gap_4()
                     .child(
                         div()
                             .flex()
@@ -194,29 +204,37 @@ impl Render for SubtreePreview {
                             ),
                     )
                     .child(
-                        div().flex().gap_2().children(
-                            ["Original", "Blur", "Wave", "Color", "Chain"]
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, label)| {
-                                    div()
-                                        .id(("mode", index))
-                                        .px_4()
-                                        .py_2()
-                                        .rounded_lg()
-                                        .bg(if self.mode == index {
-                                            rgb(0x5b4b91)
-                                        } else {
-                                            rgb(0x23263a)
-                                        })
-                                        .cursor_pointer()
-                                        .child(label)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.mode = index;
-                                            this.last_frame = Instant::now();
-                                            cx.notify();
-                                        }))
-                                }),
+                        div().flex().flex_wrap().gap_2().children(
+                            [
+                                "Original",
+                                "Blur",
+                                "Wave",
+                                "Color",
+                                "Chain",
+                                "Top blur",
+                                "Bottom blur",
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, label)| {
+                                div()
+                                    .id(("mode", index))
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_lg()
+                                    .bg(if self.mode == index {
+                                        rgb(0x5b4b91)
+                                    } else {
+                                        rgb(0x23263a)
+                                    })
+                                    .cursor_pointer()
+                                    .child(label)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.mode = index;
+                                        this.last_frame = Instant::now();
+                                        cx.notify();
+                                    }))
+                            }),
                         ),
                     ),
             )

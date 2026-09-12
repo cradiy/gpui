@@ -2965,9 +2965,11 @@ dependencies = [
  "gpui_platform",
  "image",
  "naga 29.0.4",
+ "pollster 0.4.0",
  "refineable",
  "smallvec",
  "uic-macros",
+ "wgpu",
 ]
 
 [[package]]

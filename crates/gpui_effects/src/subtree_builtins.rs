@@ -143,6 +143,7 @@ mod tests {
         for shader in [
             subtree_identity_shader(),
             subtree_blur_shader(),
+            crate::progressive_blur_shader(),
             subtree_wave_shader(),
             subtree_color_adjust_shader(),
             crate::bloom_extract_shader(),

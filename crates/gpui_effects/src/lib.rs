@@ -47,6 +47,7 @@ mod motion;
 mod motion_blur;
 mod particle_transition;
 mod particles;
+mod progressive_blur;
 mod ripple;
 mod sdf;
 mod sticky;
@@ -109,6 +110,7 @@ pub use particle_transition::{ParticleTransitionOptions, subtree_particle_transi
 pub use particles::{
     ParticleMask, ParticlePhysics, ParticleSpawn, Particles, particles, subtree_particles,
 };
+pub use progressive_blur::{ProgressiveBlur, progressive_blur, progressive_blur_shader};
 pub use ripple::{MAX_RIPPLES, Ripple, RippleOptions, ripple_shader, subtree_ripples};
 pub use sdf::{MAX_SDF_SHAPES, SdfOptions, SdfScene, SdfShape, SdfTransform, sdf};
 pub use sticky::{StickyShape, paint_sticky_shapes, sticky_shape_shader};

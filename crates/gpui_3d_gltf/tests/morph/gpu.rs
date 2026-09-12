@@ -5,6 +5,9 @@ use gpui_3d_gltf::{GpuSceneDeformation, GpuSceneSourceMemory, SceneAsset};
 #[path = "rendering.rs"]
 mod rendering;
 
+#[path = "batch.rs"]
+mod batch;
+
 #[path = "support.rs"]
 mod support;
 

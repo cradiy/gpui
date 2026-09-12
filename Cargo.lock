@@ -796,11 +796,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bit-readers"
-version = "0.1.0"
-source = "git+https://github.com/cradiy/decv?rev=747b168ce9aa13950a17b8b16a947cddd30775ea#747b168ce9aa13950a17b8b16a947cddd30775ea"
-
-[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1813,74 +1808,6 @@ dependencies = [
  "libc",
  "libdbus-sys",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "decv"
-version = "0.1.0"
-source = "git+https://github.com/cradiy/decv?rev=747b168ce9aa13950a17b8b16a947cddd30775ea#747b168ce9aa13950a17b8b16a947cddd30775ea"
-dependencies = [
- "decv-audio",
- "decv-core",
- "decv-h264",
- "decv-mp4",
- "decv-network",
- "decv-vp9",
-]
-
-[[package]]
-name = "decv-audio"
-version = "0.1.0"
-source = "git+https://github.com/cradiy/decv?rev=747b168ce9aa13950a17b8b16a947cddd30775ea#747b168ce9aa13950a17b8b16a947cddd30775ea"
-dependencies = [
- "decv-core",
- "symphonia",
-]
-
-[[package]]
-name = "decv-core"
-version = "0.1.0"
-source = "git+https://github.com/cradiy/decv?rev=747b168ce9aa13950a17b8b16a947cddd30775ea#747b168ce9aa13950a17b8b16a947cddd30775ea"
-dependencies = [
- "aligned-vec",
-]
-
-[[package]]
-name = "decv-h264"
-version = "0.1.0"
-source = "git+https://github.com/cradiy/decv?rev=747b168ce9aa13950a17b8b16a947cddd30775ea#747b168ce9aa13950a17b8b16a947cddd30775ea"
-dependencies = [
- "bit-readers",
- "decv-core",
- "memchr",
- "rayon",
- "smallvec",
-]
-
-[[package]]
-name = "decv-mp4"
-version = "0.1.0"
-source = "git+https://github.com/cradiy/decv?rev=747b168ce9aa13950a17b8b16a947cddd30775ea#747b168ce9aa13950a17b8b16a947cddd30775ea"
-dependencies = [
- "decv-core",
-]
-
-[[package]]
-name = "decv-network"
-version = "0.1.0"
-source = "git+https://github.com/cradiy/decv?rev=747b168ce9aa13950a17b8b16a947cddd30775ea#747b168ce9aa13950a17b8b16a947cddd30775ea"
-dependencies = [
- "decv-core",
- "ureq",
-]
-
-[[package]]
-name = "decv-vp9"
-version = "0.1.0"
-source = "git+https://github.com/cradiy/decv?rev=747b168ce9aa13950a17b8b16a947cddd30775ea#747b168ce9aa13950a17b8b16a947cddd30775ea"
-dependencies = [
- "bit-readers",
- "decv-core",
 ]
 
 [[package]]
@@ -3158,19 +3085,29 @@ version = "0.1.0"
 dependencies = [
  "async-channel 2.5.0",
  "base64 0.22.1",
+ "cpal",
+ "gpui",
+ "gpui_platform",
+ "log",
+ "symphonia",
+ "ureq",
+ "url",
+]
+
+[[package]]
+name = "gpui_media_system"
+version = "0.1.0"
+dependencies = [
  "core-foundation 0.10.0",
  "core-video",
- "cpal",
- "decv",
  "gpui",
+ "gpui_media",
  "gpui_platform",
  "gstreamer",
  "gstreamer-allocators",
  "gstreamer-app",
  "gstreamer-video",
  "log",
- "symphonia",
- "ureq",
  "url",
  "windows 0.61.3",
  "windows-core 0.61.2",

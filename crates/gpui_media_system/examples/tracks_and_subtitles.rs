@@ -6,7 +6,7 @@ use gpui::{
 };
 use gpui_media::{
     MediaInfo, MediaSource, MediaStreamId, PlaybackState, SubtitleCue, SubtitleEvent, VideoPlayer,
-    VideoPlayerEvent, VideoPlayerOptions, parse_subtitles, video_container,
+    VideoPlayerEvent, parse_subtitles, video_container,
 };
 
 struct TracksAndSubtitlesDemo {
@@ -241,7 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let media = arguments.next().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "usage: cargo run -p gpui_media --example tracks_and_subtitles -- \
+            "usage: cargo run -p gpui_media_system --example tracks_and_subtitles -- \
              <media file or URI> [external subtitle.srt|vtt|ass]",
         )
     })?;
@@ -256,7 +256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?
         .unwrap_or_default();
 
-    gpui_media::init()?;
+    gpui_media_system::SystemBackend::initialize()?;
     gpui_platform::application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.0), px(680.0)), cx);
         let result = cx.open_window(
@@ -267,7 +267,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             move |window, cx| {
                 window.set_window_title("gpui_media · tracks and subtitles");
                 let player = cx.new(|cx| {
-                    VideoPlayer::new_in_window(source, VideoPlayerOptions::default(), window, cx)
+                    VideoPlayer::builder(source, gpui_media_system::SystemBackend)
+                        .build_in_window(window, cx)
                         .expect("failed to create video player")
                 });
                 cx.new(|cx| TracksAndSubtitlesDemo::new(player, external_cues, cx))

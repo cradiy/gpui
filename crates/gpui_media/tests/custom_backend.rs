@@ -111,7 +111,7 @@ fn test_frame(sequence: u64, timestamp: Duration) -> Arc<VideoFrame> {
 fn external_backend_drives_the_generic_frame_extractor() {
     let source = MediaSource::from_uri("custom-test://video").unwrap();
     let backend: Arc<dyn MediaBackend> = Arc::new(CustomBackend);
-    let extractor = VideoFrameExtractor::new_with_backend(source, backend).unwrap();
+    let extractor = VideoFrameExtractor::new(source, backend).unwrap();
 
     let initial = extractor.initial_frame_blocking().unwrap();
     assert_eq!(initial.timestamp(), Some(Duration::ZERO));

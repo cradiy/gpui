@@ -1,8 +1,6 @@
 use std::{env, time::Duration};
 
 use gpui::{App, AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-#[cfg(feature = "backend-decv")]
-use gpui_media::DecvBackend;
 use gpui_media::{
     MediaSource, NetworkSourceOptions, PlaybackState, VideoPlayer, VideoPlayerEvent,
     VideoPlayerOptions,
@@ -14,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::io::ErrorKind::InvalidInput,
             "usage: GPUI_MEDIA_WEBDAV_USERNAME=user \
              GPUI_MEDIA_WEBDAV_PASSWORD=password \
-             cargo run -p gpui_media --example webdav -- <direct WebDAV file URL>",
+             cargo run -p gpui_media_system --example webdav -- <direct WebDAV file URL>",
         )
     })?;
     let username = env::var("GPUI_MEDIA_WEBDAV_USERNAME").ok();
@@ -40,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = MediaSource::from_uri(url)?.with_network_options(network);
     let title = format!("gpui_media WebDAV · {}", source.display_name());
 
-    gpui_media::init()?;
+    gpui_media_system::SystemBackend::initialize()?;
     gpui_platform::application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.0), px(680.0)), cx);
         let result = cx.open_window(
@@ -51,10 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             move |window, cx| {
                 window.set_window_title(&title);
                 let player = cx.new(|cx| {
-                    let builder =
-                        VideoPlayer::builder(source).options(VideoPlayerOptions::default());
-                    #[cfg(feature = "backend-decv")]
-                    let builder = builder.backend(DecvBackend::new());
+                    let builder = VideoPlayer::builder(source, gpui_media_system::SystemBackend)
+                        .options(VideoPlayerOptions::default());
                     builder
                         .build_in_window(window, cx)
                         .expect("failed to create WebDAV video player")

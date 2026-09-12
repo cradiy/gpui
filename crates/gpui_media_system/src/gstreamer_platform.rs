@@ -1,4 +1,4 @@
-use crate::{
+use gpui_media::{
     FrameExtractionSession, FrameExtractorBackendRequest, MediaBackend, MediaOutputSink,
     MediaPlaybackRequest, MediaPlaybackSession, MediaResult,
 };

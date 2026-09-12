@@ -6,7 +6,7 @@ use core_foundation::base::TCFType as _;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{CoreVideoHandle, SurfaceFormat, SurfaceFrame, SurfaceHandle};
 
-use crate::MediaResult;
+use gpui_media::MediaResult;
 
 use super::{
     gst_decode_error, gst_decode_message, gst_video_output_error, surface_color_info,

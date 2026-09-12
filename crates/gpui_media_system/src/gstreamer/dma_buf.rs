@@ -13,7 +13,7 @@ use gpui::{
     DrmDevice, GpuSpecs, SurfaceFormat, SurfaceFrame, SurfaceHandle,
 };
 
-use crate::{MediaError, MediaErrorKind, MediaRecovery, MediaResult};
+use gpui_media::{MediaError, MediaErrorKind, MediaRecovery, MediaResult};
 
 use super::{
     gst_video_output_error, gst_video_output_message, surface_color_info, video_frame_geometry,

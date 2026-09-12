@@ -14,7 +14,7 @@ use crate::{
     SubtitleEvent, TransportChange, VideoFrame, VideoFrameExtractor, VideoPlaybackStats,
 };
 
-use super::{media_backend::default_media_backend, stats::PlaybackCounters};
+use super::stats::PlaybackCounters;
 
 /// Initial behavior for a [`VideoPlayer`].
 #[derive(Clone, Copy, Debug)]
@@ -29,7 +29,7 @@ pub struct VideoPlayerOptions {
 pub struct VideoPlayerBuilder {
     source: MediaSource,
     options: VideoPlayerOptions,
-    backend: Option<Arc<dyn MediaBackend>>,
+    backend: Arc<dyn MediaBackend>,
 }
 
 impl VideoPlayerBuilder {
@@ -39,21 +39,17 @@ impl VideoPlayerBuilder {
     }
 
     pub fn backend(mut self, backend: impl MediaBackend) -> Self {
-        self.backend = Some(Arc::new(backend));
+        self.backend = Arc::new(backend);
         self
     }
 
     pub fn shared_backend(mut self, backend: Arc<dyn MediaBackend>) -> Self {
-        self.backend = Some(backend);
+        self.backend = backend;
         self
     }
 
     pub fn build(self, cx: &mut Context<VideoPlayer>) -> MediaResult<VideoPlayer> {
-        let backend = match self.backend {
-            Some(backend) => backend,
-            None => default_media_backend()?,
-        };
-        VideoPlayer::new_with_backend(self.source, self.options, backend, cx)
+        VideoPlayer::new(self.source, self.options, self.backend, cx)
     }
 
     pub fn build_in_window(
@@ -61,11 +57,7 @@ impl VideoPlayerBuilder {
         window: &Window,
         cx: &mut Context<VideoPlayer>,
     ) -> MediaResult<VideoPlayer> {
-        let backend = match self.backend {
-            Some(backend) => backend,
-            None => default_media_backend()?,
-        };
-        VideoPlayer::new_in_window_with_backend(self.source, self.options, backend, window, cx)
+        VideoPlayer::new_in_window(self.source, self.options, self.backend, window, cx)
     }
 }
 
@@ -123,44 +115,15 @@ pub struct VideoPlayer {
 }
 
 impl VideoPlayer {
-    pub fn builder(source: MediaSource) -> VideoPlayerBuilder {
+    pub fn builder(source: MediaSource, backend: impl MediaBackend) -> VideoPlayerBuilder {
         VideoPlayerBuilder {
             source,
             options: VideoPlayerOptions::default(),
-            backend: None,
+            backend: Arc::new(backend),
         }
     }
 
     pub fn new(
-        source: MediaSource,
-        options: VideoPlayerOptions,
-        cx: &mut Context<Self>,
-    ) -> MediaResult<Self> {
-        Self::new_with_backend_and_gpu_specs(source, options, default_media_backend()?, None, cx)
-    }
-
-    /// Creates a player configured for the renderer backing `window`.
-    ///
-    /// Use this constructor to enable capability-gated native NV12 DMA-BUF
-    /// negotiation. [`Self::new`] retains the portable CPU and linear DMA-BUF
-    /// paths when no window is available during construction.
-    pub fn new_in_window(
-        source: MediaSource,
-        options: VideoPlayerOptions,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> MediaResult<Self> {
-        Self::new_with_backend_and_gpu_specs(
-            source,
-            options,
-            default_media_backend()?,
-            window.gpu_specs(),
-            cx,
-        )
-    }
-
-    /// Creates a player using an application-provided backend.
-    pub fn new_with_backend(
         source: MediaSource,
         options: VideoPlayerOptions,
         backend: Arc<dyn MediaBackend>,
@@ -169,9 +132,12 @@ impl VideoPlayer {
         Self::new_with_backend_and_gpu_specs(source, options, backend, None, cx)
     }
 
-    /// Creates a player using an application-provided backend and the active
-    /// renderer's native-frame capabilities.
-    pub fn new_in_window_with_backend(
+    /// Creates a player configured for the renderer backing `window`.
+    ///
+    /// Use this constructor to enable capability-gated native NV12 DMA-BUF
+    /// negotiation. [`Self::new`] retains the portable CPU and linear DMA-BUF
+    /// paths when no window is available during construction.
+    pub fn new_in_window(
         source: MediaSource,
         options: VideoPlayerOptions,
         backend: Arc<dyn MediaBackend>,
@@ -421,7 +387,7 @@ impl VideoPlayer {
     /// Creates an independent extractor for thumbnails, previews and scrubbing.
     /// Reuse the returned extractor for multiple frame requests.
     pub fn frame_extractor(&self) -> MediaResult<VideoFrameExtractor> {
-        VideoFrameExtractor::new_with_backend(self.source.clone(), self.backend.clone())
+        VideoFrameExtractor::new(self.source.clone(), self.backend.clone())
     }
 
     pub fn frame_transport(&self) -> Option<FrameTransport> {

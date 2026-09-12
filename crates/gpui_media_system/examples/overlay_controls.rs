@@ -5,9 +5,7 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, Window, WindowBounds,
     WindowOptions, canvas, div, prelude::*, px, relative, rgba, size,
 };
-use gpui_media::{
-    MediaSource, PlaybackState, SeekMode, VideoPlayer, VideoPlayerOptions, video_container,
-};
+use gpui_media::{MediaSource, PlaybackState, SeekMode, VideoPlayer, video_container};
 
 struct VideoControlsDemo {
     player: Entity<VideoPlayer>,
@@ -228,13 +226,13 @@ fn format_time(duration: Duration) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::env::args().nth(1).unwrap_or_else(|| {
         eprintln!(
-            "Usage: cargo run -p gpui_media --example overlay_controls -- <video file or URI>"
+            "Usage: cargo run -p gpui_media_system --example overlay_controls -- <video file or URI>"
         );
         std::process::exit(2);
     });
     let source = MediaSource::parse(input)?;
 
-    gpui_media::init()?;
+    gpui_media_system::SystemBackend::initialize()?;
     gpui_platform::application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.0), px(680.0)), cx);
         let result = cx.open_window(
@@ -245,20 +243,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             move |window, cx| {
                 window.set_window_title("gpui_media · custom overlay controls");
                 let player = cx.new(|cx| {
-                    #[cfg(feature = "backend-decv")]
-                    let player = VideoPlayer::builder(source)
-                        .options(VideoPlayerOptions::default())
-                        .backend(gpui_media::DecvBackend::new())
+                    let player = VideoPlayer::builder(source, gpui_media_system::SystemBackend)
                         .build_in_window(window, cx)
-                        .expect("failed to create decv video player");
-                    #[cfg(not(feature = "backend-decv"))]
-                    let player = VideoPlayer::new_in_window(
-                        source,
-                        VideoPlayerOptions::default(),
-                        window,
-                        cx,
-                    )
-                    .expect("failed to create video player");
+                        .expect("failed to create video player");
                     player
                 });
                 cx.new(|cx| VideoControlsDemo::new(player, cx))

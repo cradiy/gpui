@@ -2,32 +2,17 @@
 
 `gpui_media` is a reusable GPUI media playback core with pluggable backends.
 One media session owns demuxing, video/audio decoding, audio output and the
-shared playback clock. The default `SystemBackend` uses the media stack and
-decoder plugins installed on the host. Applications can opt into another
-built-in backend or inject their own implementation. Video frame rendering and
+shared playback clock. The [`gpui_media_system`](../gpui_media_system/README.md)
+crate provides a platform-selected `SystemBackend`. Applications can also
+inject their own backend implementation. Video frame rendering and
 extraction remain separate from player chrome so applications can build
 different interfaces on top of the same core.
 
 Pure audio playback is provided separately by `AudioPlayer`. It uses the same
 Symphonia and CPAL pipeline on every supported platform and does not depend on
-`VideoPlayer` or a built-in video backend. The default feature set enables
+`VideoPlayer` or a video backend. The default feature set enables
 both audio and video. See the complete
 [audio player guide](docs/audio-player.md).
-
-`SystemBackend` uses GStreamer on Linux and macOS, and Media Foundation on
-Windows.
-
-## GStreamer distribution
-
-Applications are responsible for complying with the licenses of the exact
-GStreamer libraries and plugins they distribute. In particular, an application
-that bundles GStreamer should retain the applicable notices, include the LGPL
-license, provide the corresponding source as required, and keep dynamically
-linked libraries replaceable. Plugin licenses can be inspected with
-`gst-inspect-1.0 <plugin-or-element>`. Applications that use a system-installed
-GStreamer do not redistribute those system libraries, but should still document
-the runtime dependency. See the
-[GStreamer licensing guidance](https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html).
 
 ## Public capabilities
 
@@ -54,69 +39,37 @@ the runtime dependency. See the
 
 ## Select media features and a playback backend
 
-The default feature set enables standalone audio, video, and `SystemBackend`:
+The default features enable audio and video APIs. Video playback requires a
+backend; the core does not link GStreamer or Media Foundation.
 
 ```toml
 gpui_media = { path = ".../gpui_media" }
+gpui_media_system = { path = ".../gpui_media_system" }
 ```
 
-Enable only standalone audio when the application does not need video:
+For video without the independent audio player:
 
 ```toml
-gpui_media = {
-    path = ".../gpui_media",
-    default-features = false,
-    features = ["audio"],
-}
+gpui_media = { path = ".../gpui_media", default-features = false, features = ["video"] }
+gpui_media_system = { path = ".../gpui_media_system", features = ["v1_26"] }
 ```
 
-Enable video with the platform backend, without standalone audio:
-
-```toml
-gpui_media = {
-    path = ".../gpui_media",
-    default-features = false,
-    features = ["video", "backend-system"],
-}
-```
-
-Applications that provide their own video backend can omit both built-in
-backends:
-
-```toml
-gpui_media = {
-    path = ".../gpui_media",
-    default-features = false,
-    features = ["video"],
-}
-```
-
-The pure-Rust decv backend supports local and HTTP/WebDAV MP4 files with H.264
-or VP9 video, CPU-backed NV12 output, and AAC-LC audio. It is opt-in:
-
-```toml
-gpui_media = {
-    path = ".../gpui_media",
-    default-features = false,
-    features = ["video", "backend-decv"],
-}
-```
-
-Parallelism is selected per backend instance without exposing `decv` types
-through the public API. `Auto` remains the default:
+`gpui_media_system::SystemBackend` selects GStreamer on Linux/macOS and Media
+Foundation on Windows. GStreamer requires at least 1.24; version features and
+runtime requirements are documented in the [backend guide](../gpui_media_system/README.md).
 
 ```rust
-use gpui_media::{DecvBackend, DecvParallelism};
+use gpui_media::{MediaSource, VideoPlayer};
+use gpui_media_system::SystemBackend;
 
-let backend = DecvBackend::new().parallelism(DecvParallelism::Serial);
+let player = VideoPlayer::builder(source, SystemBackend)
+    .build_in_window(window, cx)?;
 ```
 
-Run the dedicated comparison example with:
+For audio without video, enable only `gpui_media`'s `audio` feature with
+`default-features = false`; no backend crate is required.
 
-```sh
-cargo run -p gpui_media --example decv_play -- \
-  --parallelism serial /path/to/video.mp4
-```
+## Custom backends
 
 Implement `MediaBackend` to open a unified `MediaPlaybackSession` and,
 optionally, a `FrameExtractionSession`. The session owns audio output and A/V
@@ -130,7 +83,7 @@ let player_source = source.clone();
 let player_backend = backend.clone();
 
 let player = cx.new(move |cx| {
-    VideoPlayer::new_in_window_with_backend(
+    VideoPlayer::new_in_window(
         player_source,
         VideoPlayerOptions::default(),
         player_backend,
@@ -140,20 +93,10 @@ let player = cx.new(move |cx| {
     .expect("failed to create video player")
 });
 
-let extractor =
-    VideoFrameExtractor::new_with_backend(source.clone(), backend)?;
+let extractor = VideoFrameExtractor::new(source.clone(), backend)?;
 ```
 
-The builder provides the same selection:
-
-```rust
-let player = VideoPlayer::builder(source)
-    .backend(MyBackend::new())
-    .build_in_window(window, cx)?;
-```
-
-Cargo features determine which built-in backends are available; the backend is
-selected per player at runtime. Multiple compiled backends may coexist.
+Backends are selected per player. Multiple backend implementations may coexist.
 
 ## Media session boundary
 
@@ -179,6 +122,7 @@ let player = cx.new(|cx| {
             autoplay: true,
             ..VideoPlayerOptions::default()
         },
+        Arc::new(SystemBackend),
         window,
         cx,
     )
@@ -223,7 +167,7 @@ reduced proportionally to the display's visible area without cropping.
 
 ```rust
 let source = MediaSource::parse(input)?;
-let initial_frame = VideoFrameExtractor::new(source.clone())?
+let initial_frame = VideoFrameExtractor::new(source.clone(), Arc::new(SystemBackend))?
     .initial_frame_blocking()?;
 let video_size = initial_frame.display_size();
 
@@ -244,7 +188,7 @@ gpui_platform::application().run(move |cx: &mut App| {
         },
         move |window, cx| {
             cx.new(|cx| {
-                VideoPlayer::new_in_window(source, Default::default(), window, cx)
+                VideoPlayer::builder(source, SystemBackend).build_in_window(window, cx)
                     .expect("failed to create video player")
             })
         },
@@ -262,7 +206,7 @@ probed.
 Run the complete borderless example with:
 
 ```sh
-cargo run -p gpui_media --example borderless -- /path/to/video.mp4
+cargo run -p gpui_media_system --example borderless -- /path/to/video.mp4
 ```
 
 The example marks the window as non-resizable. GPUI exposes that as equal
@@ -279,7 +223,7 @@ visible area.
 Run the custom play/pause and timeline example with:
 
 ```sh
-cargo run -p gpui_media --example overlay_controls -- /path/to/video.mp4
+cargo run -p gpui_media_system --example overlay_controls -- /path/to/video.mp4
 ```
 
 ## Read the timeline
@@ -331,7 +275,7 @@ line:
 ```sh
 GPUI_MEDIA_WEBDAV_USERNAME='user' \
 GPUI_MEDIA_WEBDAV_PASSWORD='password' \
-cargo run -p gpui_media --example webdav -- \
+cargo run -p gpui_media_system --example webdav -- \
   'https://dav.example.com/remote.php/dav/files/user/video.mp4'
 ```
 
@@ -450,7 +394,7 @@ The returned frame owns or leases all resources required by its `SurfaceFrame`. 
 ## Extract a frame without changing playback
 
 ```rust
-let extractor = VideoFrameExtractor::new(source.clone())?;
+let extractor = VideoFrameExtractor::new(source.clone(), Arc::new(SystemBackend))?;
 let frame = extractor
     .frame_at(Duration::from_secs(30))
     .await?;
@@ -494,6 +438,6 @@ Requests beyond the video stream duration return the closest available frame bef
 
 ## DMA-BUF status
 
-Use `VideoPlayer::new_in_window` to pass the active renderer's `GpuSpecs` into the decoder setup. `gpui_media` advertises only native NV12 modifiers that GPUI reports as sampleable with two memory planes. It preserves the GStreamer DMA-BUF object identity and maps both NV12 image planes to the same object when appropriate.
+Use `VideoPlayer::new_in_window` to pass the active renderer's `GpuSpecs` into the decoder setup. `gpui_media_system` advertises only native NV12 modifiers that GPUI reports as sampleable with two memory planes. It preserves the GStreamer DMA-BUF object identity and maps both NV12 image planes to the same object when appropriate.
 
 If GPUI reports `DmaBufImportStatus::Failed` after presentation, the player automatically restricts the appsink to CPU frames and seeks to the current position to force renegotiation. Linear NV12/BGRA/RGBA DMA-BUF remains available when native import is not supported.

@@ -6,32 +6,14 @@ edition.workspace = true
 license = "MIT"
 
 [features]
-default = ["audio", "video", "backend-system"]
+default = ["audio", "video"]
 audio = ["dep:base64", "dep:cpal", "dep:symphonia", "dep:ureq"]
 video = []
-# Cargo features are target-independent, so this feature activates every
-# optional system dependency by name. The target dependency tables below
-# ensure that Cargo only resolves and builds the current OS's media stack.
-backend-system = [
-  "video",
-  "dep:gst",
-  "dep:gst-app",
-  "dep:gst-video",
-  "dep:gst-allocators",
-  "dep:core-foundation",
-  "dep:core-video",
-  "dep:windows",
-  "dep:windows-core",
-]
-backend-decv = ["video", "dep:base64", "dep:cpal", "dep:decv"]
 
 [dependencies]
 async-channel.workspace = true
 base64 = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
-decv = { git = "https://github.com/cradiy/decv", rev = "747b168ce9aa13950a17b8b16a947cddd30775ea", features = [
-  "network",
-], optional = true }
 gpui.workspace = true
 log.workspace = true
 symphonia = { version = "0.6.0", default-features = false, features = [
@@ -42,33 +24,6 @@ symphonia = { version = "0.6.0", default-features = false, features = [
 ureq = { workspace = true, optional = true }
 url.workspace = true
 
-[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-gst = { package = "gstreamer", version = "0.25", optional = true }
-gst-app = { package = "gstreamer-app", version = "0.25", features = [
-  "v1_24",
-], optional = true }
-gst-video = { package = "gstreamer-video", version = "0.25", features = [
-  "v1_24",
-], optional = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-gst-allocators = { package = "gstreamer-allocators", version = "0.25", optional = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = { workspace = true, optional = true }
-core-video = { workspace = true, optional = true }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { workspace = true, features = [
-  "Win32_Graphics_Dxgi_Common",
-  "Win32_Graphics_Imaging",
-  "Win32_Media_MediaFoundation",
-  "Win32_System_Com",
-  "Win32_System_Com_StructuredStorage",
-  "Win32_System_Variant",
-], optional = true }
-windows-core = { workspace = true, optional = true }
-
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
@@ -76,34 +31,6 @@ gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
 [[example]]
 name = "audio"
 required-features = ["audio"]
-
-[[example]]
-name = "borderless"
-required-features = ["video", "backend-system"]
-
-[[example]]
-name = "decv_play"
-required-features = ["video", "backend-decv"]
-
-[[example]]
-name = "frame_at"
-required-features = ["video", "backend-system"]
-
-[[example]]
-name = "overlay_controls"
-required-features = ["video", "backend-system"]
-
-[[example]]
-name = "play"
-required-features = ["video", "backend-system"]
-
-[[example]]
-name = "tracks_and_subtitles"
-required-features = ["video", "backend-system"]
-
-[[example]]
-name = "webdav"
-required-features = ["video", "backend-system"]
 
 [[test]]
 name = "custom_backend"

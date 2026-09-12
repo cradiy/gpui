@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use gst::prelude::*;
 
-use crate::NetworkSourceOptions;
+use gpui_media::NetworkSourceOptions;
 
 pub(crate) fn configure_playbin_network(playbin: &gst::Element, options: &NetworkSourceOptions) {
     if let Some(buffer_duration) = options.buffer_duration() {
@@ -153,11 +153,11 @@ mod tests {
         apply_network_source_options, configure_playbin_progressive_download,
         duration_seconds_ceil, extra_headers,
     };
-    use crate::NetworkSourceOptions;
+    use gpui_media::NetworkSourceOptions;
 
     #[test]
     fn header_structure_preserves_custom_request_headers() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let options = NetworkSourceOptions::default()
             .with_header("Authorization", "Bearer secret")
             .unwrap()
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn options_are_applied_to_soup_http_sources() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let source = gst::ElementFactory::make("souphttpsrc").build().unwrap();
         let options = NetworkSourceOptions::default()
             .with_header("X-Playback-Token", "secret")
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn http_playback_disables_progressive_download_by_default() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let playbin = gst::ElementFactory::make("playbin3").build().unwrap();
 
         configure_playbin_progressive_download(
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn progressive_download_can_be_enabled() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let playbin = gst::ElementFactory::make("playbin3").build().unwrap();
         let options = NetworkSourceOptions::default().with_progressive_download(true);
 

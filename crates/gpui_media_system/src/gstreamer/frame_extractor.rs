@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 use gpui::SurfaceHandle;
 use gst::prelude::*;
 
-use crate::{
+use gpui_media::{
     FrameExtractionSession, MediaError, MediaErrorKind, MediaRecovery, MediaResult, MediaSource,
     SeekMode, VideoFrame,
 };
@@ -32,10 +32,13 @@ impl GstreamerFrameExtractionSession {
         let appsink = gst_app::AppSink::builder()
             .caps(&caps)
             .max_buffers(1)
-            .drop(true)
             .wait_on_eos(false)
             .sync(false)
             .build();
+        #[cfg(feature = "v1_28")]
+        appsink.set_leaky_type(gst_app::AppLeakyType::Downstream);
+        #[cfg(not(feature = "v1_28"))]
+        appsink.set_drop(true);
         appsink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .propose_allocation(|_, query| {

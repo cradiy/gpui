@@ -369,11 +369,8 @@ fn split_blocks(source: &str) -> impl Iterator<Item = &str> {
         .filter(|block| !block.is_empty())
 }
 
-#[cfg(all(
-    feature = "backend-system",
-    any(target_os = "linux", target_os = "macos")
-))]
-pub(crate) fn normalize_subtitle_text(source: &str) -> String {
+/// Removes markup tags and decodes basic entities in an embedded subtitle cue.
+pub fn normalize_subtitle_text(source: &str) -> String {
     normalize_markup_text(source)
 }
 

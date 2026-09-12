@@ -1,0 +1,51 @@
+[package]
+name = "gpui_media_system"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "Platform-selected GStreamer and Media Foundation backend for gpui_media"
+
+[features]
+default = ["v1_24"]
+v1_24 = [
+  "dep:gst", "dep:gst-app", "dep:gst-video", "dep:gst-allocators",
+  "gst/v1_24", "gst-app/v1_24", "gst-video/v1_24", "gst-allocators/v1_24",
+]
+v1_26 = ["v1_24", "gst/v1_26", "gst-app/v1_26", "gst-video/v1_26", "gst-allocators/v1_26"]
+v1_28 = ["v1_26", "gst/v1_28", "gst-app/v1_28", "gst-video/v1_28", "gst-allocators/v1_28"]
+
+[dependencies]
+gpui.workspace = true
+gpui_media = { path = "../gpui_media", default-features = false, features = ["video"] }
+log.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+url.workspace = true
+gst = { package = "gstreamer", version = "0.25", optional = true }
+gst-app = { package = "gstreamer-app", version = "0.25", optional = true }
+gst-video = { package = "gstreamer-video", version = "0.25", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gst-allocators = { package = "gstreamer-allocators", version = "0.25", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation.workspace = true
+core-video.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Imaging",
+  "Win32_Media_MediaFoundation",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+] }
+windows-core.workspace = true
+
+[dev-dependencies]
+gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
+
+[lints]
+workspace = true

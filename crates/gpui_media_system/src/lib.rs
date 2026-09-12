@@ -1,32 +1,37 @@
 //! Platform-selected system media backend.
 
-use crate::{
+use gpui_media::{
     FrameExtractionSession, FrameExtractorBackendRequest, MediaBackend, MediaOutputSink,
     MediaPlaybackRequest, MediaPlaybackSession, MediaResult,
 };
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "v1_24")))]
+compile_error!("enable a GStreamer version feature: v1_24, v1_26, or v1_28");
+
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "v1_24"))]
 mod gstreamer;
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "v1_24"))]
+mod gstreamer_platform;
+#[cfg(not(any(
+    all(any(target_os = "linux", target_os = "macos"), feature = "v1_24"),
+    target_os = "windows"
+)))]
 mod unsupported;
 #[cfg(target_os = "windows")]
 mod windows;
 
-#[cfg(target_os = "linux")]
-use linux as platform;
-#[cfg(target_os = "macos")]
-use macos as platform;
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "v1_24"))]
+use gstreamer_platform as platform;
+#[cfg(not(any(
+    all(any(target_os = "linux", target_os = "macos"), feature = "v1_24"),
+    target_os = "windows"
+)))]
 use unsupported as platform;
 #[cfg(target_os = "windows")]
 use windows as platform;
 
-/// The default backend, implemented by the selected system media stack for the
-/// current operating system.
+/// A media backend implemented by the system media stack for the current
+/// operating system.
 ///
 /// Linux and macOS use the system GStreamer registry, while Windows uses Media
 /// Foundation.

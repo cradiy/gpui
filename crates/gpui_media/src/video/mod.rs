@@ -1,4 +1,3 @@
-mod backends;
 mod container;
 mod frame;
 mod frame_extractor;
@@ -9,10 +8,6 @@ mod stats;
 mod subtitles;
 mod window_sizing;
 
-#[cfg(feature = "backend-decv")]
-pub use backends::decv::{DecvBackend, DecvBackendOptions, DecvParallelism};
-#[cfg(feature = "backend-system")]
-pub use backends::system::SystemBackend;
 pub use container::{VideoContainer, video_container};
 pub use frame::{FrameTransport, VideoFrame};
 pub use frame_extractor::{
@@ -20,7 +15,7 @@ pub use frame_extractor::{
 };
 pub use media_backend::{
     FrameExtractionSession, FrameExtractorBackendRequest, FrameTransportPreference, MediaBackend,
-    MediaBackendEvent, MediaCapabilities, MediaOutputSink, MediaPlaybackRequest,
+    MediaBackendEvent, MediaCapabilities, MediaOutput, MediaOutputSink, MediaPlaybackRequest,
     MediaPlaybackSession, TransportChange,
 };
 pub use media_info::{
@@ -30,6 +25,6 @@ pub use player::{VideoPlayer, VideoPlayerBuilder, VideoPlayerEvent, VideoPlayerO
 pub use stats::VideoPlaybackStats;
 pub use subtitles::{
     ParsedSubtitles, SubtitleCue, SubtitleEvent, SubtitleFormat, detect_subtitle_format,
-    parse_subtitles,
+    normalize_subtitle_text, parse_subtitles,
 };
 pub use window_sizing::{fit_video_window_bounds, fit_video_window_size};

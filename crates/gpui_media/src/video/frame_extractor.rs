@@ -13,8 +13,6 @@ use crate::{
     MediaRecovery, MediaResult, MediaSource, SeekMode, VideoFrame,
 };
 
-use super::media_backend::default_media_backend;
-
 /// Indicates that a pending latest-only preview request was replaced by a
 /// newer request before decoding started.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,29 +87,11 @@ struct FrameRequest {
 }
 
 impl VideoFrameExtractor {
-    pub fn new(source: MediaSource) -> MediaResult<Self> {
-        Self::with_options_and_backend(
-            source,
-            VideoFrameExtractorOptions::default(),
-            default_media_backend()?,
-        )
-    }
-
-    pub fn new_with_backend(
-        source: MediaSource,
-        backend: Arc<dyn MediaBackend>,
-    ) -> MediaResult<Self> {
-        Self::with_options_and_backend(source, VideoFrameExtractorOptions::default(), backend)
+    pub fn new(source: MediaSource, backend: Arc<dyn MediaBackend>) -> MediaResult<Self> {
+        Self::with_options(source, VideoFrameExtractorOptions::default(), backend)
     }
 
     pub fn with_options(
-        source: MediaSource,
-        options: VideoFrameExtractorOptions,
-    ) -> MediaResult<Self> {
-        Self::with_options_and_backend(source, options, default_media_backend()?)
-    }
-
-    pub fn with_options_and_backend(
         source: MediaSource,
         options: VideoFrameExtractorOptions,
         backend: Arc<dyn MediaBackend>,

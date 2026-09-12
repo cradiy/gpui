@@ -30,20 +30,3 @@ pub use source::{MediaSource, NetworkSourceOptions};
 pub use timeline::{PlaybackTimeline, SeekMode};
 #[cfg(feature = "video")]
 pub use video::*;
-
-/// Initializes the default built-in backend, when it requires initialization.
-///
-/// Custom backends initialize themselves when opening a session, and this
-/// function is a no-op when no built-in backend requiring initialization is
-/// enabled.
-pub fn init() -> MediaResult<()> {
-    #[cfg(feature = "backend-system")]
-    {
-        return SystemBackend::initialize();
-    }
-
-    #[cfg(not(feature = "backend-system"))]
-    {
-        Ok(())
-    }
-}

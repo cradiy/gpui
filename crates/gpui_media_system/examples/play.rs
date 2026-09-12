@@ -1,15 +1,15 @@
 use gpui::{App, AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use gpui_media::{MediaSource, VideoPlayer, VideoPlayerEvent, VideoPlayerOptions};
+use gpui_media::{MediaSource, VideoPlayer, VideoPlayerEvent};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("Usage: cargo run -p gpui_media --example play -- <video file or URI>");
+        eprintln!("Usage: cargo run -p gpui_media_system --example play -- <video file or URI>");
         std::process::exit(2);
     });
     let source = MediaSource::parse(&input)?;
     let title = format!("gpui_media · {}", source.display_name());
 
-    gpui_media::init()?;
+    gpui_media_system::SystemBackend::initialize()?;
     gpui_platform::application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.0), px(680.0)), cx);
         let result = cx.open_window(
@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 let player = cx.new(|cx| {
-                    VideoPlayer::new_in_window(source, VideoPlayerOptions::default(), window, cx)
+                    VideoPlayer::builder(source, gpui_media_system::SystemBackend).build_in_window(window, cx)
                         .expect("failed to create video player")
                 });
 

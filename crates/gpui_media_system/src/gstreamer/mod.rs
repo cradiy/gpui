@@ -16,8 +16,8 @@ use gpui::{
 };
 use gst::prelude::*;
 
-use crate::video::subtitles::normalize_subtitle_text;
-use crate::{
+use gpui_media::normalize_subtitle_text;
+use gpui_media::{
     AudioStreamInfo, FrameExtractionSession, FrameExtractorBackendRequest,
     FrameTransportPreference, MediaBackend, MediaBackendEvent, MediaCapabilities, MediaError,
     MediaErrorKind, MediaInfo, MediaOutputSink, MediaPlaybackRequest, MediaPlaybackSession,
@@ -78,10 +78,13 @@ impl GstreamerPlayback {
         let appsink = gst_app::AppSink::builder()
             .caps(&caps)
             .max_buffers(2)
-            .drop(true)
             .wait_on_eos(false)
             .sync(true)
             .build();
+        #[cfg(feature = "v1_28")]
+        appsink.set_leaky_type(gst_app::AppLeakyType::Downstream);
+        #[cfg(not(feature = "v1_28"))]
+        appsink.set_drop(true);
 
         let output_for_preroll = output.clone();
         let output_for_samples = output.clone();
@@ -137,7 +140,6 @@ impl GstreamerPlayback {
 
         let subtitle_sink = gst_app::AppSink::builder()
             .max_buffers(16)
-            .drop(false)
             .wait_on_eos(false)
             .sync(true)
             .build();
@@ -1317,7 +1319,7 @@ mod tests {
 
     use gpui::{SurfaceFrameBacking, SurfaceHandle};
 
-    use crate::{MediaErrorKind, MediaRecovery, MediaSource, NetworkSourceOptions};
+    use gpui_media::{MediaErrorKind, MediaRecovery, MediaSource, NetworkSourceOptions};
 
     use super::{
         add_required_allocation_metas, appsink_caps, buffering_percent,
@@ -1432,7 +1434,7 @@ mod tests {
 
     #[test]
     fn video_geometry_preserves_crop_and_pixel_aspect_ratio() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let caps = "video/x-raw,format=BGRA,width=100,height=60,pixel-aspect-ratio=2/1"
             .parse::<gst::Caps>()
             .unwrap();
@@ -1455,7 +1457,7 @@ mod tests {
 
     #[test]
     fn appsink_allocation_supports_video_meta() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let mut query = gst::query::Allocation::new(None, false);
         add_required_allocation_metas(&mut query);
 
@@ -1468,7 +1470,7 @@ mod tests {
 
     #[test]
     fn appsink_caps_prioritize_linear_dma_buf() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let caps = appsink_caps(None).unwrap();
         let serialized = caps.to_string();
 
@@ -1484,7 +1486,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn appsink_caps_advertise_only_supported_native_nv12_layouts() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let modifier = 0x0200_0000_0840_1b04;
         let gpu_specs = gpui::GpuSpecs {
             supports_native_nv12_dma_buf_import: true,
@@ -1508,7 +1510,7 @@ mod tests {
 
     #[test]
     fn cpu_sample_uses_cpu_surface_backing() {
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let caps = "video/x-raw,format=BGRA,width=2,height=2,framerate=1/1"
             .parse::<gst::Caps>()
             .unwrap();
@@ -1531,7 +1533,7 @@ mod tests {
     fn dma_buf_sample_uses_dma_buf_surface_backing() {
         use gst_allocators::prelude::DmaBufAllocatorExtManual as _;
 
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let caps = "video/x-raw(memory:DMABuf),format=NV12,width=16,height=16,framerate=1/1"
             .parse::<gst::Caps>()
             .unwrap();
@@ -1554,7 +1556,7 @@ mod tests {
     fn native_nv12_sample_preserves_one_object_two_plane_layout() {
         use gst_allocators::prelude::DmaBufAllocatorExtManual as _;
 
-        crate::init().unwrap();
+        crate::SystemBackend::initialize().unwrap();
         let modifier = 0x0200_0000_0840_1b04;
         let fourcc = gst_video::dma_drm_fourcc_from_format(gst_video::VideoFormat::Nv12).unwrap();
         let drm_format = gst_video::dma_drm_fourcc_to_string(fourcc, modifier);

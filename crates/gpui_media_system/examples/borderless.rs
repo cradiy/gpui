@@ -6,8 +6,7 @@ use gpui::{
     prelude::*, px, size,
 };
 use gpui_media::{
-    MediaSource, VideoFrameExtractor, VideoPlayer, VideoPlayerOptions, fit_video_window_bounds,
-    fit_video_window_size,
+    MediaSource, VideoFrameExtractor, VideoPlayer, fit_video_window_bounds, fit_video_window_size,
 };
 
 actions!(borderless_video, [Quit]);
@@ -75,13 +74,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::env::args().nth(1).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "usage: cargo run -p gpui_media --example borderless -- <video file or URI>",
+            "usage: cargo run -p gpui_media_system --example borderless -- <video file or URI>",
         )
     })?;
     let source = MediaSource::parse(input)?;
 
-    gpui_media::init()?;
-    let initial_frame = VideoFrameExtractor::new(source.clone())?.initial_frame_blocking()?;
+    gpui_media_system::SystemBackend::initialize()?;
+    let initial_frame = VideoFrameExtractor::new(
+        source.clone(),
+        std::sync::Arc::new(gpui_media_system::SystemBackend),
+    )?
+    .initial_frame_blocking()?;
     let video_size = initial_frame.display_size();
     let title = format!("gpui_media · {}", source.display_name());
 
@@ -107,7 +110,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             move |window, cx| {
                 window.set_window_title(&title);
                 let player = cx.new(|cx| {
-                    VideoPlayer::new_in_window(source, VideoPlayerOptions::default(), window, cx)
+                    VideoPlayer::builder(source, gpui_media_system::SystemBackend)
+                        .build_in_window(window, cx)
                         .expect("failed to create video player")
                 });
                 cx.new(|cx| BorderlessVideo::new(player, video_size, window, cx))

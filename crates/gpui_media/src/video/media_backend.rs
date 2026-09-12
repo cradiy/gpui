@@ -92,14 +92,16 @@ pub struct MediaOutputSink {
     counters: Arc<PlaybackCounters>,
 }
 
-pub(crate) struct MediaOutput {
-    pub(crate) video_frames: async_channel::Receiver<Arc<VideoFrame>>,
-    pub(crate) events: async_channel::Receiver<MediaBackendEvent>,
+/// Receiving end of a media session's frame and event channels.
+pub struct MediaOutput {
+    pub video_frames: async_channel::Receiver<Arc<VideoFrame>>,
+    pub events: async_channel::Receiver<MediaBackendEvent>,
     pub(crate) counters: Arc<PlaybackCounters>,
 }
 
 impl MediaOutputSink {
-    pub(crate) fn channel() -> (Self, MediaOutput) {
+    /// Creates a bounded latest-frame queue and an independent event channel.
+    pub fn channel() -> (Self, MediaOutput) {
         let (frame_tx, frame_rx) = async_channel::bounded(VIDEO_FRAME_QUEUE_CAPACITY);
         let (event_tx, event_rx) = async_channel::unbounded();
         let counters = Arc::new(PlaybackCounters::default());
@@ -240,7 +242,7 @@ pub trait FrameExtractionSession: Send {
 /// Factory for unified media playback and video frame-extraction sessions.
 ///
 /// Applications may implement this trait in another crate and pass it to
-/// `VideoPlayer` or `VideoFrameExtractor` without enabling a built-in backend.
+/// `VideoPlayer` or `VideoFrameExtractor`.
 pub trait MediaBackend: Send + Sync + 'static {
     fn name(&self) -> &'static str;
 
@@ -261,25 +263,6 @@ pub trait MediaBackend: Send + Sync + 'static {
     }
 }
 
-pub(crate) fn default_media_backend() -> MediaResult<Arc<dyn MediaBackend>> {
-    #[cfg(feature = "backend-system")]
-    {
-        return Ok(Arc::new(super::backends::system::SystemBackend));
-    }
-
-    #[cfg(all(not(feature = "backend-system"), feature = "backend-decv"))]
-    {
-        return Ok(Arc::new(super::backends::decv::DecvBackend::default()));
-    }
-
-    #[cfg(not(any(feature = "backend-system", feature = "backend-decv")))]
-    {
-        Err(MediaError::backend(
-            "gpui_media has no built-in backend; enable `backend-system` or `backend-decv`, or pass a custom backend",
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -287,8 +270,6 @@ mod tests {
     use gpui::{DevicePixels, SurfaceFrame, SurfaceHandle, size};
 
     use super::MediaOutputSink;
-    #[cfg(any(feature = "backend-system", feature = "backend-decv"))]
-    use super::default_media_backend;
     use crate::VideoFrame;
 
     fn frame(sequence: u64) -> Arc<VideoFrame> {
@@ -322,17 +303,5 @@ mod tests {
         let stats = output.counters.snapshot(0);
         assert_eq!(stats.decoded_frames(), 3);
         assert_eq!(stats.dropped_frames(), 1);
-    }
-
-    #[cfg(feature = "backend-system")]
-    #[test]
-    fn system_is_the_default_backend() {
-        assert_eq!(default_media_backend().unwrap().name(), "system");
-    }
-
-    #[cfg(all(not(feature = "backend-system"), feature = "backend-decv"))]
-    #[test]
-    fn decv_is_the_fallback_default_backend() {
-        assert_eq!(default_media_backend().unwrap().name(), "decv");
     }
 }

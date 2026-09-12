@@ -43,7 +43,7 @@ use windows::{
     core::{BSTR, GUID, Interface, PWSTR, implement},
 };
 
-use crate::{
+use gpui_media::{
     AudioStreamInfo, FrameExtractionSession, FrameExtractorBackendRequest, MediaBackendEvent,
     MediaCapabilities, MediaError, MediaErrorKind, MediaInfo, MediaOutputSink,
     MediaPlaybackRequest, MediaPlaybackSession, MediaRecovery, MediaResult, MediaStreamId,
@@ -1053,7 +1053,7 @@ impl Drop for MediaFoundationWorker {
 
 struct WindowsFrameExtractor {
     playback: WindowsPlayback,
-    output: crate::video::media_backend::MediaOutput,
+    output: gpui_media::MediaOutput,
     timeout: Duration,
 }
 

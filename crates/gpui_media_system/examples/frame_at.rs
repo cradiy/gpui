@@ -7,7 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = arguments.next().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "usage: cargo run -p gpui_media --example frame_at -- <media> [seconds]",
+            "usage: cargo run -p gpui_media_system --example frame_at -- <media> [seconds]",
         )
     })?;
     let seconds = arguments
@@ -29,7 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let extractor = VideoFrameExtractor::new(MediaSource::parse(input)?)?;
+    let extractor = VideoFrameExtractor::new(
+        MediaSource::parse(input)?,
+        std::sync::Arc::new(gpui_media_system::SystemBackend),
+    )?;
     let frame = extractor.frame_at_blocking(Duration::from_secs_f64(seconds))?;
     let size = frame.coded_size();
 

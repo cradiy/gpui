@@ -23,7 +23,6 @@ members = [
   "crates/media",
   "crates/util_macros",
   "crates/util",
-  "crates/oauth_callback_server",
   "crates/refineable",
   "crates/refineable/derive_refineable",
   "crates/reqwest_client",
@@ -76,7 +75,6 @@ naga = { version = "29.0.4", features = ["wgsl-in", "msl-out", "hlsl-out"] }
 util_macros = { path = "crates/util_macros" }
 util = { path = "crates/util" }
 uic_macros = { package = "uic-macros", path = "uic/macros", version = "0.1.0" }
-oauth_callback_server = { path = "crates/oauth_callback_server" }
 refineable = { path = "crates/refineable" }
 reqwest_client = { path = "crates/reqwest_client" }
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", features = [
@@ -386,7 +384,6 @@ time = { version = "0.3", features = [
   "formatting",
   "local-offset",
 ] }
-tiny_http = "0.12"
 tokio = { version = "1" }
 tokio-socks = { version = "0.5.2", default-features = false, features = [
   "futures-io",

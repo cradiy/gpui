@@ -96,8 +96,11 @@ Scene data, CPU geometry/animation evaluation, and ordinary viewport APIs do not
 require the crate's `wgpu` feature. Enable it for native GPU deformation, custom
 material bindings, viewport ID/depth capture, and `HeadlessRenderer`.
 
-Embedded mesh rendering is implemented by the Linux WGPU backend and the macOS
-Metal compositor through WGPU's Metal backend. macOS shares GPU textures between
+Embedded mesh rendering is implemented by the Linux WGPU backend, the Windows
+WGPU DX12 backend, and the macOS Metal compositor through WGPU's Metal backend.
+Windows uses DirectComposition for transparent presentation and falls back to
+D3D11 without mesh rendering if WGPU initialization fails or
+`GPUI_DISABLE_DIRECT_COMPOSITION=1` (or `true`) is set. macOS shares GPU textures between
 the mesh renderer and native compositor, including the window's image atlas. Query
 `Window::scene3d_support()` for the current window rather than inferring support
 from the operating system or enabled Cargo features. Direct rendering has its

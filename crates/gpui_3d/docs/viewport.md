@@ -46,7 +46,7 @@ fn viewport_status(window: &Window) -> String {
 ```
 
 The capabilities include the renderer-selected color sample count, maximum
-physical texture dimension, and captured-UI texture limit. The Linux WGPU path
+physical texture dimension, and captured-UI texture limit. The WGPU mesh renderer
 uses four color samples when its linear-color and depth formats support them,
 otherwise one. UI raster density is uniformly reduced to fit both the 2048-pixel
 capture limit and the device limit without changing logical layout.
@@ -57,8 +57,9 @@ Unsupported viewports retain layout and outer styling but do not paint a mesh or
 capture UI; object callbacks do not report hits and pending UI routing is cleared
 on the next prepaint. The application chooses its fallback content.
 
-Linux X11 and Wayland query their current WGPU renderer. Other platform windows
-report `BackendUnsupported` unless their renderer implements this capability.
+Linux X11, Wayland, Windows DX12, and the macOS Metal compositor query their
+current WGPU mesh renderer. Windows D3D11 fallback reports `RendererUnavailable`.
+Other platform windows report `BackendUnsupported` unless their renderer implements this capability.
 Support is refreshed when the WGPU renderer is recreated; do not retain a
 support result across device replacement. Viewport support is independent of
 headless output-channel support and does not certify allocation success or

@@ -62,7 +62,7 @@ pub struct WindowsWindowState {
     pub hovered: Cell<bool>,
     pub direct_manipulation: DirectManipulationHandler,
 
-    pub renderer: RefCell<DirectXRenderer>,
+    pub renderer: RefCell<WindowsRenderer>,
     /// Set after a GPU device-lost recovery so the next `draw_window` call is
     /// treated as a forced render. This guarantees the next frame both
     /// re-enables drawing (via `mark_drawable`) and bypasses the GPUI view
@@ -107,6 +107,7 @@ impl WindowsWindowState {
     fn new(
         hwnd: HWND,
         directx_devices: &DirectXDevices,
+        gpu_context: gpui_wgpu::GpuContext,
         window_params: &CREATESTRUCTW,
         current_cursor: Option<HCURSOR>,
         cursor_visible: Arc<AtomicBool>,
@@ -134,8 +135,13 @@ impl WindowsWindowState {
         };
         let border_offset = WindowBorderOffset::default();
         let restore_from_minimized = None;
-        let renderer = DirectXRenderer::new(hwnd, directx_devices, disable_direct_composition)
-            .context("Creating DirectX renderer")?;
+        let renderer = WindowsRenderer::new(
+            hwnd,
+            directx_devices,
+            disable_direct_composition,
+            gpu_context,
+        )
+        .context("Creating Windows renderer")?;
         let callbacks = Callbacks::default();
         let input_handler = None;
         let pending_surrogate = None;
@@ -247,6 +253,7 @@ impl WindowsWindowInner {
         let state = WindowsWindowState::new(
             hwnd,
             &context.directx_devices,
+            context.gpu_context.clone(),
             cs,
             context.current_cursor,
             context.cursor_visible.clone(),
@@ -401,6 +408,7 @@ struct WindowCreateContext {
     appearance: WindowAppearance,
     disable_direct_composition: bool,
     directx_devices: DirectXDevices,
+    gpu_context: gpui_wgpu::GpuContext,
     invalidate_devices: Arc<AtomicBool>,
     parent_hwnd: Option<HWND>,
 }
@@ -428,6 +436,7 @@ impl WindowsWindow {
             platform_window_handle,
             disable_direct_composition,
             directx_devices,
+            gpu_context,
             invalidate_devices,
         } = creation_info;
         register_window_class(icon);
@@ -513,6 +522,7 @@ impl WindowsWindow {
             appearance,
             disable_direct_composition,
             directx_devices,
+            gpu_context,
             invalidate_devices,
             parent_hwnd,
         };
@@ -587,6 +597,7 @@ impl Drop for WindowsWindow {
             .executor
             .spawn(async move {
                 let handle = this.hwnd;
+                this.state.renderer.borrow_mut().destroy();
                 unsafe {
                     RevokeDragDrop(handle).log_err();
                     DestroyWindow(handle).log_err();
@@ -834,11 +845,54 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
-        true
+        self.state
+            .renderer
+            .borrow()
+            .wgpu()
+            .is_none_or(|renderer| renderer.supports_dual_source_blending())
     }
 
     fn supports_backdrop_blur(&self) -> bool {
-        true
+        self.state
+            .renderer
+            .borrow()
+            .wgpu()
+            .is_none_or(|renderer| renderer.supports_backdrop_blur())
+    }
+
+    fn supports_subtree_effects(&self) -> bool {
+        self.state
+            .renderer
+            .borrow()
+            .wgpu()
+            .is_some_and(|renderer| !renderer.device_lost())
+    }
+
+    fn scene3d_support(&self) -> Scene3dSupport {
+        self.state.renderer.borrow().wgpu().map_or(
+            Scene3dSupport::Unsupported(Scene3dUnsupportedReason::RendererUnavailable),
+            |renderer| renderer.scene3d_support(),
+        )
+    }
+
+    fn clear_scene3d_caches(&mut self) {
+        if let Some(renderer) = self.state.renderer.borrow_mut().wgpu_mut() {
+            renderer.clear_scene3d_caches();
+        }
+    }
+
+    fn scene3d_output_cache_stats(&self) -> Option<Scene3dOutputCacheStats> {
+        self.state
+            .renderer
+            .borrow()
+            .wgpu()
+            .map(|renderer| renderer.scene3d_output_cache_stats())
+    }
+
+    fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        if let Some(renderer) = self.state.renderer.borrow_mut().wgpu_mut() {
+            renderer.set_scene3d_output_cache_budget(bytes);
+        }
     }
 
     fn set_title(&mut self, title: &str) {

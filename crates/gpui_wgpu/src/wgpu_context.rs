@@ -46,6 +46,8 @@ impl WgpuContext {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: if cfg!(target_os = "macos") {
                 wgpu::Backends::METAL
+            } else if cfg!(target_os = "windows") {
+                wgpu::Backends::DX12
             } else {
                 wgpu::Backends::VULKAN | wgpu::Backends::GL
             },
@@ -282,10 +284,18 @@ impl WgpuContext {
 
     #[cfg(not(target_family = "wasm"))]
     pub fn instance(display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>) -> wgpu::Instance {
+        let mut backend_options = wgpu::BackendOptions::default();
+        if cfg!(target_os = "windows") {
+            backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        }
         wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            backends: if cfg!(target_os = "windows") {
+                wgpu::Backends::DX12
+            } else {
+                wgpu::Backends::VULKAN | wgpu::Backends::GL
+            },
             flags: wgpu::InstanceFlags::default(),
-            backend_options: wgpu::BackendOptions::default(),
+            backend_options,
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             display: Some(display),
         })

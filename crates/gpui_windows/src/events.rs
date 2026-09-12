@@ -1226,6 +1226,15 @@ impl WindowsWindowInner {
     #[inline]
     fn draw_window(&self, handle: HWND, force_render: bool) -> Option<isize> {
         let mut request_frame = self.state.callbacks.request_frame.take()?;
+        let renderer_redraw = match self.state.renderer.borrow_mut().prepare_frame() {
+            Ok(redraw) => redraw,
+            Err(error) => {
+                log::error!("Windows GPU recovery failed: {error:#}");
+                self.state.callbacks.request_frame.set(Some(request_frame));
+                return None;
+            }
+        };
+        let force_render = force_render || renderer_redraw;
 
         self.state.direct_manipulation.update();
 

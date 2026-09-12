@@ -225,12 +225,13 @@ group does not create a device or submit GPU work.
 
 ## Rendering and support
 
-Linux WGPU and the macOS Metal compositor support these viewports. macOS uses
+Linux WGPU, Windows WGPU DX12, and the macOS Metal compositor support these viewports. macOS uses
 WGPU's Metal backend for mesh rendering and shares the GPU device, command queue,
 and image atlas with native compositing. `WgpuContext::for_window` provides the
 window's context for custom materials, GPU geometry, and picking resources.
 Check `window.scene3d_support()` before displaying 3D content; unsupported
-backends draw no mesh scene. The DirectX backend does not implement the mesh pass.
+backends draw no mesh scene. Windows uses DirectComposition for transparency;
+its D3D11 fallback does not implement the mesh pass.
 
 The macOS compositor retains one window-sized texture per top-level captured
 layer. These compositing targets are separate from the mesh output-cache budget.

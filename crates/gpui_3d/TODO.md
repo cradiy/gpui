@@ -159,7 +159,7 @@ Checked items are implemented. Unchecked items are planned, grouped by implement
   - [x] **Selective readback admission**: Available-channel subsets, aligned staging and widened CPU payload budgets before allocation, retained request reports, and direct decoding with the shared pending/cancellation limit.
   - [x] **Regional readback**: Checked physical pixel rectangles, region-sized channel budgets, copy origins and extents, and shared completion/cancellation behavior with full-frame reads.
 - [x] **macOS rendering**: WGPU Metal mesh rendering with native compositing, shared device/queue/atlas, capability queries, picking, and output-cache controls.
-- [ ] **Windows rendering**: Add Windows 3D rendering support with consistent capability queries and unsupported-backend behavior.
+- [x] **Windows rendering**: WGPU DX12 rendering with DirectComposition presentation, shared window devices, capability queries, picking, output-cache controls, and D3D11 fallback.
 - [ ] **Cross-platform validation**: Cover depth, transparency, texture colors, nested composition, input mapping, and high DPI; distinguish automated checks from manual visual confirmation.
 
 ## Extensions Built on the Core

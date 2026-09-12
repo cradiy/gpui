@@ -70,6 +70,7 @@ pub(crate) struct WindowsPlatformState {
     /// Shared with each window so `WM_SETCURSOR` can read it directly.
     pub(crate) cursor_visible: Arc<AtomicBool>,
     directx_devices: RefCell<Option<DirectXDevices>>,
+    gpu_context: gpui_wgpu::GpuContext,
 }
 
 #[derive(Default)]
@@ -99,6 +100,7 @@ impl WindowsPlatformState {
             current_cursor: Cell::new(current_cursor),
             cursor_visible: Arc::new(AtomicBool::new(true)),
             directx_devices: RefCell::new(directx_devices),
+            gpu_context: Rc::new(RefCell::new(None)),
             menus: RefCell::new(Vec::new()),
         }
     }
@@ -238,6 +240,7 @@ impl WindowsPlatform {
             platform_window_handle: self.handle,
             disable_direct_composition: self.disable_direct_composition,
             directx_devices: self.inner.state.directx_devices.borrow().clone().unwrap(),
+            gpu_context: self.inner.state.gpu_context.clone(),
             invalidate_devices: self.invalidate_devices.clone(),
         }
     }
@@ -1193,6 +1196,7 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) platform_window_handle: HWND,
     pub(crate) disable_direct_composition: bool,
     pub(crate) directx_devices: DirectXDevices,
+    pub(crate) gpu_context: gpui_wgpu::GpuContext,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
     pub(crate) invalidate_devices: Arc<AtomicBool>,

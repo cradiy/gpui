@@ -3287,6 +3287,7 @@ dependencies = [
  "gpui-scap",
  "gpui_effects",
  "gpui_util",
+ "gpui_wgpu",
  "image",
  "itertools 0.14.0",
  "log",

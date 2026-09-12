@@ -77,7 +77,8 @@ pub struct MeshPassState3d {
     pub depth_bias: i32,
     /// Finite scale applied to the maximum depth slope.
     pub depth_slope_bias: f32,
-    /// Nonnegative finite maximum bias magnitude; zero means unclamped.
+    /// Finite signed bias bound: positive limits positive bias, negative limits
+    /// negative bias, and zero disables clamping. Opposite-sign bias is unchanged.
     pub depth_bias_clamp: f32,
     /// Composition into the linear HDR color attachment.
     pub blend: MeshPassBlend3d,
@@ -109,7 +110,6 @@ impl MeshPassState3d {
     pub fn is_valid(&self) -> bool {
         self.depth_slope_bias.is_finite()
             && self.depth_bias_clamp.is_finite()
-            && self.depth_bias_clamp >= 0.
             && self.alpha_cutoff.is_finite()
             && (0. ..=1.).contains(&self.alpha_cutoff)
     }

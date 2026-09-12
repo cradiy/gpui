@@ -1,10 +1,10 @@
 use anyhow::Result;
 use gpui_3d::{
     AlphaMode, Camera, DirectionalShadow, GpuDeformationLimits, GpuMorph, HeadlessRenderer, Light,
-    Material, Mesh, MorphTarget, MorphTargets, Object, Projection, PunctualLight, ReadFrame,
-    RenderedFrame, Scene, Scene3dChannels, Scene3dGpuDraw, Scene3dMaterialProgram,
-    Scene3dMaterialSource, Scene3dMaterialValue, Scene3dOutputConfig, Scene3dVertexAttribute,
-    Scene3dVertexStreamValue,
+    Material, Mesh, MeshPass, MeshPassExpansion, MeshPassSpace, MeshPassState, MorphTarget,
+    MorphTargets, Object, Projection, PunctualLight, ReadFrame, RenderedFrame, Scene,
+    Scene3dChannels, Scene3dGpuDraw, Scene3dMaterialProgram, Scene3dMaterialSource,
+    Scene3dMaterialValue, Scene3dOutputConfig, Scene3dVertexAttribute, Scene3dVertexStreamValue,
 };
 use gpui_wgpu::wgpu;
 use std::{
@@ -93,6 +93,12 @@ fn custom_shadow_coverage_matches_cropped_geometry_after_attribute_and_pose_upda
     let custom_receiver = receiver
         .clone()
         .program(receiver_source.bind([], Default::default())?);
+    let extra = MeshPass::new(receiver_source.bind([], Default::default())?)
+        .state(MeshPassState {
+            alpha_mode: AlphaMode::Opaque,
+            ..Default::default()
+        })
+        .expansion(MeshPassExpansion::new(MeshPassSpace::World, 0.125));
     let base = Mesh::plane();
     let morph = GpuMorph::new(
         context,
@@ -140,11 +146,14 @@ fn custom_shadow_coverage_matches_cropped_geometry_after_attribute_and_pose_upda
             )],
             1024,
         )?;
-        let material = Material::color(gpui::white()).alpha_mode(mode).program(
-            initial
-                .with_values(uniform(threshold), Default::default())?
-                .with_vertex_streams(streams)?,
-        );
+        let material = Material::color(gpui::white())
+            .alpha_mode(mode)
+            .mesh_passes([extra.clone()])
+            .program(
+                initial
+                    .with_values(uniform(threshold), Default::default())?
+                    .with_vertex_streams(streams)?,
+            );
         let caster = Object::new(base.clone(), material)
             .position([1.5, 0., 1.5])
             .scale([0.5, 0.5, 1.]);

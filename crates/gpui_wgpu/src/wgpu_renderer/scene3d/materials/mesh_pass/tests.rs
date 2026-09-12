@@ -40,9 +40,13 @@ fn scene3d_mesh_pass_variants_cover_all_raster_controls_but_share_stage_pipeline
             alpha_cutoff: 0.75,
             ..state
         },
+        MeshPassState3d {
+            depth_bias_clamp: -0.5,
+            ..state
+        },
     ];
     let keys: HashSet<_> = std::iter::once(state).chain(variants).map(key).collect();
-    assert_eq!(keys.len(), 10);
+    assert_eq!(keys.len(), 11);
     assert_eq!(
         key(state),
         key(MeshPassState3d {
@@ -95,13 +99,6 @@ fn scene3d_mesh_pass_variants_cover_all_raster_controls_but_share_stage_pipeline
             .is_valid()
         );
     }
-    assert!(
-        !MeshPassState3d {
-            depth_bias_clamp: -1.,
-            ..state
-        }
-        .is_valid()
-    );
     assert!(
         !MeshPassState3d {
             alpha_cutoff: 1.1,

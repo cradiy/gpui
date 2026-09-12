@@ -40,6 +40,9 @@ testing, no depth writes, zero depth bias, and both local faces visible.
 - `depth_compare`, `depth_write`, `depth_bias`, `depth_slope_bias`, and
   `depth_bias_clamp` control the shared camera depth attachment. Bias is a raster
   depth adjustment, not a vertex displacement or a world-space outline width.
+  The finite clamp is signed: a positive value caps positive bias, a negative value
+  bounds negative bias, and zero disables clamping. Bias with the opposite sign is
+  unchanged.
 - `blend` selects Replace, premultiplied SourceOver, or Additive. Additive sums
   RGB while accumulating alpha with source-over. Composition occurs in linear HDR
   before scene exposure, tone mapping and output encoding.

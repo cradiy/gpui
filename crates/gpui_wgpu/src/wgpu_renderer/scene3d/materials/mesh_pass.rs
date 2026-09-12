@@ -6,6 +6,9 @@ pub(super) use expansion::Expansion;
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests;
 
+#[cfg(all(test, not(target_family = "wasm")))]
+mod raster_tests;
+
 pub(super) fn constants(state: MeshPassState3d) -> Vec<(&'static str, f64)> {
     vec![
         ("mesh_pass_cull", state.cull as u32 as f64),

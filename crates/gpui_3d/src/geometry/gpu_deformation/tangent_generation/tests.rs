@@ -1,5 +1,7 @@
 use super::*;
 
+mod parity;
+
 #[test]
 fn combined_admission_covers_retained_sources_and_transient_stages() {
     for corners in [3, 6, 63, 66, 129, 4098] {

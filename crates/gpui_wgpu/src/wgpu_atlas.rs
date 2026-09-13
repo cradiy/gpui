@@ -455,7 +455,7 @@ mod tests {
 
     fn test_device_and_queue() -> anyhow::Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
         block_on(async {
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            let instance = crate::wgpu_context::create_instance(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::all(),
                 flags: wgpu::InstanceFlags::default(),
                 backend_options: wgpu::BackendOptions::default(),

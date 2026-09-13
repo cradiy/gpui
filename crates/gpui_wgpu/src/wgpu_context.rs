@@ -11,6 +11,20 @@ use wgpu::TextureFormat;
 mod resources;
 pub use resources::WgpuResource;
 
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn create_instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::Instance {
+    // Native loader discovery is process-global, even for independent contexts.
+    // Keep it outside concurrent instance construction; device work stays parallel.
+    #[cfg(target_os = "linux")]
+    let _initialization = {
+        static INITIALIZATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        INITIALIZATION
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    };
+    wgpu::Instance::new(descriptor)
+}
+
 #[derive(Clone)]
 pub struct WgpuContext {
     pub instance: wgpu::Instance,
@@ -43,7 +57,7 @@ impl WgpuContext {
     /// Creates a GPU context that is not tied to a native presentation surface.
     #[cfg(not(target_family = "wasm"))]
     pub fn new_headless() -> anyhow::Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = create_instance(wgpu::InstanceDescriptor {
             backends: if cfg!(target_os = "macos") {
                 wgpu::Backends::METAL
             } else if cfg!(target_os = "windows") {
@@ -288,7 +302,7 @@ impl WgpuContext {
         if cfg!(target_os = "windows") {
             backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
         }
-        wgpu::Instance::new(wgpu::InstanceDescriptor {
+        create_instance(wgpu::InstanceDescriptor {
             backends: if cfg!(target_os = "windows") {
                 wgpu::Backends::DX12
             } else {

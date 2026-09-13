@@ -25,5 +25,9 @@ gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 name = "floating"
 required-features = ["wgpu"]
 
+[[example]]
+name = "curve_light"
+required-features = ["wgpu"]
+
 [lints]
 workspace = true

@@ -92,7 +92,8 @@ pub use fluid::{Fluid, FluidOptions, FluidSplat, fluid};
 pub use glass::{FrostedGlass, FrostedGlassAppearance, FrostedGlassShape};
 pub use lens::{LensOptions, lens_shader, subtree_lens};
 pub use liquid_glass::{
-    LiquidGlass, LiquidGlassAppearance, liquid_glass_shader, paint_liquid_glass,
+    LiquidGlass, LiquidGlassAppearance, LiquidGlassDeformation, liquid_glass_shader,
+    paint_deformed_liquid_glass, paint_liquid_glass,
 };
 pub use masked_builtins::{spectrum_mask_shader, spectrum_svg, spectrum_text};
 pub use masked_effect::{MaskedEffect, effect_svg, effect_text, masked_effect};

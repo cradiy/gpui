@@ -10,6 +10,19 @@ const SURFACE_SLOT: usize = 2;
 const LIGHT_SLOT: usize = 3;
 const CORNERS_SLOT: usize = 4;
 const EDGE_TINT_SLOT: usize = 5;
+const SHAPE_SLOT: usize = 6;
+const DEFORMATION_SLOT: usize = 7;
+
+/// Localized silhouette displacement with optical normals following the contour.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LiquidGlassDeformation {
+    /// Influence location in normalized surface coordinates, clamped to `0..=1`.
+    pub focus: Point<f32>,
+    /// Displacement near the focus, in logical pixels; positive values expand outward.
+    pub bulge: Pixels,
+    /// Signed displacement of the secondary contour wave, in logical pixels.
+    pub ripple: Pixels,
+}
 
 /// Optical parameters for [`LiquidGlass`]. Layout and foreground styling use [`Styled`].
 #[derive(Clone, Copy, Debug, PartialEq, uic_macros::Chainable)]
@@ -254,6 +267,58 @@ pub fn paint_liquid_glass(
         )
         .uniforms(appearance.uniforms(corners, window.scale_factor()))
         .corner_radii(corners),
+    );
+}
+
+/// Paints glass with a localized bulge and a secondary contour wave.
+/// Bounds describe the undeformed surface; painting extends beyond them without
+/// changing layout or hit regions. Ancestor clipping still applies.
+pub fn paint_deformed_liquid_glass(
+    bounds: Bounds<Pixels>,
+    corners: Corners<Pixels>,
+    appearance: LiquidGlassAppearance,
+    deformation: LiquidGlassDeformation,
+    window: &mut Window,
+) {
+    if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
+        return;
+    }
+    let limit = bounds.size.width.min(bounds.size.height) * 0.3;
+    let bulge = deformation.bulge.clamp(-limit, limit);
+    let ripple = deformation.ripple.clamp(-limit, limit);
+    if bulge == px(0.) && ripple == px(0.) {
+        paint_liquid_glass(bounds, corners, appearance, window);
+        return;
+    }
+    let scale = window.scale_factor();
+    let padding = bulge.abs() + ripple.abs() + px(1. / scale);
+    let uniforms = appearance
+        .uniforms(corners.clamp_radii_for_quad_size(bounds.size), scale)
+        .with_slot(
+            SHAPE_SLOT,
+            [
+                bounds.size.width.as_f32() * scale,
+                bounds.size.height.as_f32() * scale,
+                1.,
+                0.,
+            ],
+        )
+        .with_slot(
+            DEFORMATION_SLOT,
+            [
+                deformation.focus.x.clamp(0., 1.),
+                deformation.focus.y.clamp(0., 1.),
+                bulge.as_f32() * scale,
+                ripple.as_f32() * scale,
+            ],
+        );
+    window.paint_backdrop_effect(
+        PaintBackdropEffect::new(
+            bounds.dilate(padding),
+            appearance.blur_radius.max(px(0.)),
+            liquid_glass_shader(),
+        )
+        .uniforms(uniforms),
     );
 }
 

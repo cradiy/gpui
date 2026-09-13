@@ -18,6 +18,26 @@ fn glass_sample(input: BackdropInput, offset: vec2<f32>, clarity: f32) -> vec3<f
     );
 }
 
+fn glass_contour(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>, deformation: vec4<f32>) -> f32 {
+    if (deformation.z == 0.0 && deformation.w == 0.0) {
+        return glass_distance(p, size, radii);
+    }
+    let q = p / max(size * 0.5, vec2<f32>(1.0));
+    let direction = q / max(length(q), 0.0001);
+    var focus = deformation.xy * 2.0 - vec2<f32>(1.0);
+    if (length(focus) < 0.15) {
+        focus = vec2<f32>(0.6, -0.8);
+    }
+    focus = normalize(focus);
+    let alignment = dot(direction, focus);
+    let facing = clamp(alignment * 0.5 + 0.5, 0.0, 1.0);
+    let local = facing * facing;
+    let tangent = direction.x * focus.y - direction.y * focus.x;
+    let wave = tangent * alignment;
+    return glass_distance(p, size, radii)
+        - deformation.z * (0.1 + local * 0.9) - deformation.w * wave;
+}
+
 fn glass_border_reflection(sampled: vec3<f32>, lift: f32) -> vec3<f32> {
     let rgb = clamp(sampled, vec3<f32>(0.0), vec3<f32>(1.0));
     let peak = max(max(rgb.r, rgb.g), rgb.b);
@@ -37,18 +57,21 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
     let radii = params.slots[4];
     let edge_tint = params.slots[5];
     let p = (input.uv - vec2<f32>(0.5)) * input.size;
-    let distance = glass_distance(p, input.size, radii);
+    let deformed = params.slots[6].z > 0.0;
+    let shape_size = select(input.size, params.slots[6].xy, deformed);
+    let deformation = select(vec4<f32>(0.0), params.slots[7], deformed);
+    let distance = glass_contour(p, shape_size, radii, deformation);
     let inside = max(-distance, 0.0);
 
     // The distance gradient follows straight edges and each individual corner.
     let gradient = vec2<f32>(
-        glass_distance(p + vec2<f32>(0.5, 0.0), input.size, radii)
-            - glass_distance(p - vec2<f32>(0.5, 0.0), input.size, radii),
-        glass_distance(p + vec2<f32>(0.0, 0.5), input.size, radii)
-            - glass_distance(p - vec2<f32>(0.0, 0.5), input.size, radii),
+        glass_contour(p + vec2<f32>(0.5, 0.0), shape_size, radii, deformation)
+            - glass_contour(p - vec2<f32>(0.5, 0.0), shape_size, radii, deformation),
+        glass_contour(p + vec2<f32>(0.0, 0.5), shape_size, radii, deformation)
+            - glass_contour(p - vec2<f32>(0.0, 0.5), shape_size, radii, deformation),
     );
     let normal = gradient / max(length(gradient), 0.0001);
-    let thickness = min(optics.w, min(input.size.x, input.size.y) * 0.45);
+    let thickness = min(optics.w, min(shape_size.x, shape_size.y) * 0.45);
     var curvature = 0.0;
     if (thickness > 0.0) {
         let edge = 1.0 - clamp(inside / thickness, 0.0, 1.0);
@@ -77,7 +100,7 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
     let opposite = pow(max(-facing, 0.0), 2.0);
     var tinted_stroke = 0.0;
     if (edge_tint.x > 0.0 && edge_tint.y > 0.0) {
-        let width = min(edge_tint.y, min(input.size.x, input.size.y) * 0.5);
+        let width = min(edge_tint.y, min(shape_size.x, shape_size.y) * 0.5);
         tinted_stroke = 1.0 - smoothstep(width - 0.5, width + 0.5, inside);
     }
     var rim = 0.0;
@@ -108,5 +131,6 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
         let reflection_color = glass_border_reflection(gathered, edge_tint.w * illumination);
         color = mix(color, reflection_color, edge_tint.x * tinted_stroke);
     }
-    return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    let coverage = select(1.0, 1.0 - smoothstep(-0.5, 0.5, distance), deformed);
+    return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), coverage);
 }

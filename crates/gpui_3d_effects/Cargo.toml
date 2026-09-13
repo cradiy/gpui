@@ -29,5 +29,9 @@ required-features = ["wgpu"]
 name = "curve_light"
 required-features = ["wgpu"]
 
+[[example]]
+name = "inertial_tilt"
+required-features = ["wgpu"]
+
 [lints]
 workspace = true

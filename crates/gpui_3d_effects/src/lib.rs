@@ -8,6 +8,8 @@ mod layer_stack;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 mod light_sweep;
 mod orbit_light;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+mod rim_light;
 
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use curve_light::CurveLight;
@@ -17,3 +19,5 @@ pub use layer_stack::LayerStack;
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use light_sweep::LightSweep;
 pub use orbit_light::OrbitLight;
+#[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
+pub use rim_light::RimLight;

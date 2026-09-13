@@ -33,5 +33,9 @@ required-features = ["wgpu"]
 name = "inertial_tilt"
 required-features = ["wgpu"]
 
+[[example]]
+name = "rim_light"
+required-features = ["wgpu"]
+
 [lints]
 workspace = true

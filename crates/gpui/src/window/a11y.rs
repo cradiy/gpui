@@ -126,6 +126,8 @@ pub(crate) struct A11y {
     ///
     /// [forcibly disabled]: crate::Application::new_inaccessible
     force_disabled: bool,
+    #[cfg(feature = "automation")]
+    pub(super) automation_enabled: bool,
     /// Whether a11y features have been requested by the system.
     ///
     /// Updated by AccessKit using callbacks provided to the adapter. Can change
@@ -160,6 +162,8 @@ impl A11y {
     ) -> Self {
         Self {
             force_disabled,
+            #[cfg(feature = "automation")]
+            automation_enabled: false,
             active_flag,
             active_this_frame: false,
             nodes: A11yNodeBuilder::new(),
@@ -174,12 +178,28 @@ impl A11y {
         self.window_title = Some(title.into());
     }
 
+    pub(super) fn window_title(&self) -> Option<&str> {
+        self.window_title.as_deref()
+    }
+
     /// Ensures that [`Self::is_active`] returns up to date information.
     ///
     /// See the docs for [`Self::active_flag`] and [`Self::active_this_frame`]
     /// for more commentary.
     pub(crate) fn sync_active_flag(&mut self) {
-        self.active_this_frame = !self.force_disabled && self.active_flag.load(Ordering::SeqCst);
+        let requested = self.active_flag.load(Ordering::SeqCst);
+        #[cfg(feature = "automation")]
+        let requested = requested || self.automation_enabled;
+        self.active_this_frame = !self.force_disabled && requested;
+    }
+
+    pub(super) fn platform_active(&self) -> bool {
+        !self.force_disabled && self.active_flag.load(Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "automation")]
+    pub(super) fn allow_automation(&self) -> bool {
+        !self.force_disabled
     }
 
     pub(crate) fn is_active(&self) -> bool {
@@ -558,6 +578,31 @@ mod tests {
         let mut a11y = A11y::new(Arc::new(AtomicBool::new(true)), false, None);
         a11y.begin_frame();
         a11y
+    }
+
+    #[cfg(feature = "automation")]
+    #[test]
+    fn automation_collection_does_not_activate_the_platform_adapter() {
+        use std::sync::atomic::Ordering;
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut a11y = A11y::new(flag.clone(), false, None);
+        a11y.automation_enabled = true;
+        a11y.sync_active_flag();
+        assert!(a11y.is_active());
+        assert!(!a11y.platform_active());
+        flag.store(true, Ordering::SeqCst);
+        a11y.automation_enabled = false;
+        a11y.sync_active_flag();
+        assert!(a11y.is_active() && a11y.platform_active());
+        flag.store(false, Ordering::SeqCst);
+        a11y.sync_active_flag();
+        assert!(!a11y.is_active());
+
+        let mut disabled = A11y::new(flag, true, None);
+        disabled.automation_enabled = true;
+        disabled.sync_active_flag();
+        assert!(!disabled.allow_automation());
+        assert!(!disabled.is_active());
     }
 
     #[test]

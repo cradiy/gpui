@@ -745,6 +745,23 @@ pub trait InteractiveElement: Sized {
         Stateful { element: self }
     }
 
+    /// Assigns an application-defined automation identifier. Creates a stable
+    /// element ID and a Group role when neither has been provided. Identifiers
+    /// need only be unique within the scope queried by the application.
+    #[cfg(feature = "automation")]
+    fn automation_id(mut self, id: impl Into<SharedString>) -> Stateful<Self> {
+        let id = id.into();
+        let interactivity = self.interactivity();
+        if interactivity.element_id.is_none() {
+            interactivity.element_id = Some(id.clone().into());
+        }
+        if interactivity.override_role.is_none() {
+            interactivity.override_role = Some(accesskit::Role::Group);
+        }
+        interactivity.automation_id = Some(id);
+        Stateful { element: self }
+    }
+
     /// Track the focus state of the given focus handle on this element.
     /// If the focus handle is focused by the application, this element will
     /// apply its focused styles.
@@ -1258,6 +1275,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// Set the accessible label for this element.
     fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
         self.interactivity().aria_label = Some(label.into());
+        self
+    }
+
+    /// Reports the disabled state to accessibility consumers. This does not
+    /// disable event handlers; the component remains responsible for its behavior.
+    fn aria_disabled(mut self, disabled: bool) -> Self {
+        self.interactivity().aria_disabled = disabled;
         self
     }
 
@@ -2034,6 +2058,9 @@ pub struct Interactivity {
     pub(crate) report_active_descendant_focus: bool,
     pub(crate) override_role: Option<accesskit::Role>,
     pub(crate) aria_label: Option<SharedString>,
+    pub(crate) aria_disabled: bool,
+    #[cfg(feature = "automation")]
+    pub(crate) automation_id: Option<SharedString>,
     pub(crate) aria_selected: Option<bool>,
     pub(crate) aria_expanded: Option<bool>,
     pub(crate) aria_toggled: Option<accesskit::Toggled>,
@@ -2402,6 +2429,18 @@ impl Interactivity {
                                                 window.insert_window_control_hitbox(
                                                     area,
                                                     hitbox.clone(),
+                                                );
+                                            }
+
+                                            #[cfg(feature = "automation")]
+                                            if window.is_automation_enabled()
+                                                && let Some(global_id) = global_id
+                                                && !self.click_listeners.is_empty()
+                                            {
+                                                window.register_automation_click(
+                                                    global_id.accesskit_node_id(),
+                                                    hitbox.bounds,
+                                                    &self.click_listeners,
                                                 );
                                             }
 
@@ -3327,6 +3366,13 @@ impl Interactivity {
     }
 
     pub(crate) fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        if self.aria_disabled {
+            node.set_disabled();
+        }
+        #[cfg(feature = "automation")]
+        if let Some(id) = &self.automation_id {
+            node.set_author_id(id.to_string());
+        }
         if let Some(label) = &self.aria_label {
             node.set_label(label.to_string());
         }

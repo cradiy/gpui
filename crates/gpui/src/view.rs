@@ -389,6 +389,7 @@ impl<V: View> Element for ViewElement<V> {
                             && element_state.cache_key.pointer_mapping == window.pointer_mapping
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
+                            && !window.a11y.is_active()
                         {
                             let prepaint_start = window.prepaint_index();
                             window.reuse_prepaint(element_state.prepaint_range.clone());

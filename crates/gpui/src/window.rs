@@ -64,6 +64,10 @@ pub(crate) mod a11y;
 mod prompts;
 
 pub use a11y::A11ySubtreeBuilder;
+#[cfg(feature = "automation")]
+mod automation;
+#[cfg(feature = "automation")]
+pub use automation::*;
 
 use self::a11y::A11y;
 #[cfg(not(target_family = "wasm"))]
@@ -1089,6 +1093,8 @@ pub struct Window {
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
     pub(crate) a11y: A11y,
+    #[cfg(feature = "automation")]
+    automation: automation::State,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1801,6 +1807,8 @@ impl Window {
                 accessibility_force_disabled,
                 initial_window_title,
             ),
+            #[cfg(feature = "automation")]
+            automation: automation::State::default(),
         })
     }
 
@@ -3062,6 +3070,8 @@ impl Window {
         self.a11y.sync_active_flag();
         if self.a11y.is_active() {
             self.a11y.begin_frame();
+            #[cfg(feature = "automation")]
+            self.automation.click_handlers.clear();
         }
 
         let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
@@ -3195,11 +3205,14 @@ impl Window {
         self.a11y.sync_active_flag();
         let a11y_active_end_of_frame = self.a11y.is_active();
 
-        let should_send_a11y_update = a11y_active_start_of_frame && a11y_active_end_of_frame;
+        let should_send_a11y_update =
+            a11y_active_start_of_frame && a11y_active_end_of_frame && self.a11y.platform_active();
 
         if a11y_active_start_of_frame {
             // clear the builder state regardless
             let tree_update = self.a11y.end_frame();
+            #[cfg(feature = "automation")]
+            self.publish_automation_snapshot(&tree_update);
 
             if should_send_a11y_update {
                 log::debug!(
@@ -6866,10 +6879,12 @@ impl Window {
         self.platform_window.titlebar_double_click();
     }
 
-    /// Gets the window's title at the platform level.
-    /// This is macOS specific.
+    /// Gets the title supplied to GPUI, falling back to the platform title.
     pub fn window_title(&self) -> String {
-        self.platform_window.get_title()
+        self.a11y
+            .window_title()
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.platform_window.get_title())
     }
 
     /// Returns a list of all tabbed windows and their titles.

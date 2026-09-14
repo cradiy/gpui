@@ -28,6 +28,7 @@ test-support = [
 ]
 bench = ["test-support", "dep:criterion", "dep:hdrhistogram"]
 inspector = ["gpui_macros/inspector"]
+automation = []
 leak-detection = ["backtrace"]
 wayland = ["scap?/wayland"]
 x11 = [

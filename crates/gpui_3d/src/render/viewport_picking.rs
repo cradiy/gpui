@@ -203,6 +203,10 @@ impl ViewportPickFrame {
     pub fn frame_id(&self) -> &crate::Scene3dFrameId {
         self.output.gpu().frame_id()
     }
+    /// Independent group depth/ID outputs from the same viewport submission.
+    pub fn occlusion_groups(&self) -> &[crate::Scene3dOcclusionOutput] {
+        self.output.gpu().occlusion_groups()
+    }
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.snapshot.layout.bounds
     }

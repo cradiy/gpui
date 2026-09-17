@@ -134,6 +134,8 @@ impl Scene3dSupport {
 }
 
 mod color;
+mod edit_overlay;
+pub use edit_overlay::{EditHiddenStyle3d, EditLine3d, EditPoint3d, EditStyle3d};
 mod environment;
 mod mesh_expansion;
 mod picking;
@@ -864,6 +866,9 @@ impl DepthBackground3d {
 /// Immutable input for a depth-tested 3D viewport.
 #[derive(Clone, Debug)]
 pub struct Scene3dFrame {
+    /// Independent grouped depth sources. WGPU ID/depth capture produces one
+    /// auxiliary output per group without modifying the primary scene channels.
+    pub occlusion_groups: Arc<[OcclusionGroup3d]>,
     /// Optional backend ID/depth publication for this viewport submission.
     /// Direct headless renders do not publish through this capture.
     pub pick_capture: Option<Scene3dPickCapture>,
@@ -903,6 +908,23 @@ pub struct Scene3dFrame {
     pub color_output: crate::ColorOutput3d,
     /// Meshes; opaque visibility is independent of submission order.
     pub objects: Arc<[MeshDraw3d]>,
+}
+
+/// Replaces selected final-surface draws only in one auxiliary occlusion output.
+#[derive(Clone, Debug)]
+pub struct OcclusionGroup3d {
+    /// Stable application group identity, unique within a frame.
+    pub id: u64,
+    /// Primary output IDs excluded from this group's depth and identity pass.
+    pub members: Arc<[u32]>,
+    /// Independent opaque geometry. Its output IDs must not collide with primary IDs.
+    pub occluders: Arc<[MeshDraw3d]>,
+    /// Points drawn after all lines, in insertion order.
+    pub points: Arc<[EditPoint3d]>,
+    /// Segments drawn in insertion order, independently of primary mesh depth.
+    pub lines: Arc<[EditLine3d]>,
+    /// Physical pixels per logical pixel. Direct outputs normally use one.
+    pub pixel_scale: f32,
 }
 
 impl Scene3dFrame {

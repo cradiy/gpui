@@ -526,7 +526,7 @@ impl Scene3dRenderer {
         }
     }
 
-    pub(super) fn retain_external_uploads(&self) {
+    pub(crate) fn retain_external_uploads(&self) {
         for geometry in self.geometry.resources() {
             geometry.upload.retain_external();
         }
@@ -967,6 +967,7 @@ impl Scene3dRenderer {
         layer: &SubtreeLayer,
         source: &wgpu::TextureView,
         destination: &wgpu::TextureView,
+        overlay: Option<&crate::scene3d_renderer::occlusion::OcclusionPasses>,
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let frame = layer.scene3d.as_ref().unwrap();
@@ -987,7 +988,7 @@ impl Scene3dRenderer {
             return;
         };
         let start = self.offsets[&(layer as *const _ as usize)];
-        self.encode_frame(
+        self.encode_frame_with_overlay(
             device,
             queue,
             atlas,
@@ -996,6 +997,7 @@ impl Scene3dRenderer {
             start,
             Some(source),
             Some(destination),
+            overlay,
             encoder,
         );
     }
@@ -1011,6 +1013,34 @@ impl Scene3dRenderer {
         start: usize,
         source: Option<&wgpu::TextureView>,
         destination: Option<&wgpu::TextureView>,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        self.encode_frame_with_overlay(
+            device,
+            queue,
+            atlas,
+            frame,
+            region,
+            start,
+            source,
+            destination,
+            None,
+            encoder,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_frame_with_overlay(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: &WgpuAtlas,
+        frame: &gpui::Scene3dFrame,
+        region: RenderRegion,
+        start: usize,
+        source: Option<&wgpu::TextureView>,
+        destination: Option<&wgpu::TextureView>,
+        overlay: Option<&crate::scene3d_renderer::occlusion::OcclusionPasses>,
         encoder: &mut wgpu::CommandEncoder,
     ) {
         let targets = &self.targets[&region.size];
@@ -1485,6 +1515,9 @@ impl Scene3dRenderer {
             }
         }
         drop(pass);
+        if let (Some(overlay), Some(hdr)) = (overlay, &hdr_view) {
+            overlay.encode_color(hdr, encoder);
+        }
         if let (Some(pipeline), Some(hdr), Some(destination)) =
             (&self.display_pipeline, &hdr_view, destination)
         {
@@ -1827,6 +1860,7 @@ pub(crate) mod tests {
     pub(crate) fn frame(objects: &[gpui::MeshDraw3d]) -> gpui::Scene3dFrame {
         gpui::Scene3dFrame {
             pick_capture: None,
+            occlusion_groups: Default::default(),
             depth_background: Default::default(),
             viewport_quality: Default::default(),
             ui_texture: None,

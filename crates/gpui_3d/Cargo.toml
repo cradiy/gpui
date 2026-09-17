@@ -28,6 +28,10 @@ uic = { path = "../../uic" }
 name = "headless"
 required-features = ["wgpu"]
 
+[[example]]
+name = "editing"
+required-features = ["wgpu"]
+
 [[bench]]
 name = "scene"
 harness = false

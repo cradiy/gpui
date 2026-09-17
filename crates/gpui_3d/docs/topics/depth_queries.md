@@ -2,6 +2,9 @@
 
 [Headless output](headless.md) · [Spatial queries](queries.md)
 
+For independent self-occlusion geometry and grouped depth sources, see
+[Grouped edit occlusion](edit_occlusion.md).
+
 With the `wgpu` feature, `ReadFrame::compare_depth(world, tolerance)` compares a
 world point with the linear-depth sample at its projected pixel. It uses the
 frame's retained camera, lens shift, projection aspect, and physical dimensions.

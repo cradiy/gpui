@@ -21,9 +21,11 @@ impl HeadlessRenderer {
         if draws.is_empty() {
             return self.render(scene, config);
         }
-        self.renderer.validate_target_memory(
+        self.renderer.validate_occlusion_target_memory(
             config,
             scene.directional_shadow.map(|shadow| shadow.resolution),
+            scene.occlusion_groups.len(),
+            scene.occlusion_element_group_count(),
         )?;
         let render_scene = with_bounds(
             scene,

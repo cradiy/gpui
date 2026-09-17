@@ -106,6 +106,7 @@ mod tests {
         ];
         Arc::new(Scene3dFrame {
             pick_capture: Some(capture.clone()),
+            occlusion_groups: Default::default(),
             depth_background: Default::default(),
             viewport_quality: Default::default(),
             ui_texture: None,

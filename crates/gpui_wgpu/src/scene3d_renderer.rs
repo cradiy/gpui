@@ -31,7 +31,10 @@ pub(crate) mod gpu_draws;
 pub use gpu_draws::Scene3dGpuDraw;
 mod readback;
 pub use readback::{Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dReadbackRegion};
+mod edit_overlay;
+pub(crate) mod occlusion;
 mod viewport_picking;
+pub use occlusion::Scene3dOcclusionOutput;
 pub use viewport_picking::WgpuScene3dPickFrame;
 mod validation;
 pub(crate) use validation::validate_frame_settings;
@@ -288,6 +291,8 @@ impl WgpuScene3dRenderer {
     }
 
     /// Releases renderer-owned mesh resources, targets, and pipelines.
+    ///
+    /// Grouped occlusion outputs retained by callers remain valid as well.
     /// Subsequent renders rebuild them lazily. Atlas allocations, returned
     /// outputs, and pending readbacks remain valid. Does not wait for the GPU.
     pub fn clear_caches(&mut self) {
@@ -295,6 +300,23 @@ impl WgpuScene3dRenderer {
         self.ids = None;
         self.depth = None;
         self.normals = None;
+    }
+
+    /// Includes independent ID/depth outputs and depth attachments for each group.
+    pub fn validate_occlusion_target_memory(
+        &self,
+        config: Scene3dOutputConfig,
+        shadow_resolution: Option<u32>,
+        group_count: usize,
+        element_group_count: usize,
+    ) -> Result<Scene3dTargetMemory> {
+        occlusion::target_memory(
+            self.validate_target_memory(config, shadow_resolution)?,
+            config.size,
+            group_count,
+            element_group_count,
+            self.target_byte_limit,
+        )
     }
 
     /// Maximum instances in one draw batch for this device's buffer limits.
@@ -342,6 +364,14 @@ impl WgpuScene3dRenderer {
             config,
             frame.directional_shadow.map(|shadow| shadow.resolution),
         )?;
+        let target_memory = occlusion::target_memory(
+            target_memory,
+            config.size,
+            frame.occlusion_groups.len(),
+            occlusion::element_output_count(frame),
+            self.target_byte_limit,
+        )?;
+        let frame_id = Scene3dFrameId::default();
         validate_frame_settings(
             frame,
             self.capabilities.max_dimension,
@@ -412,6 +442,23 @@ impl WgpuScene3dRenderer {
             label: Some("scene3d.direct"),
         });
         let region = RenderRegion::full(config.size);
+        let occlusion = occlusion::OcclusionPasses::prepare(
+            &self.context,
+            self.capabilities,
+            frame,
+            region,
+            if config.channels.shaded() {
+                config.color_samples
+            } else {
+                1
+            },
+            &frame_id,
+            self.target_byte_limit,
+            self.geometry_byte_limit
+                .map(|limit| limit.saturating_sub(geometry_memory.total_bytes)),
+            self.readback_busy.clone(),
+        )?;
+        occlusion.encode(&self.context, &self.atlas, region, None, &mut encoder);
         let mut draw_statistics = Scene3dDrawStatistics::default();
         let mut linear_color = None;
         let color = if config.channels.shaded() {
@@ -439,7 +486,7 @@ impl WgpuScene3dRenderer {
             let view = texture
                 .as_ref()
                 .map(|texture| texture.raw().create_view(&Default::default()));
-            renderer.encode_frame(
+            renderer.encode_frame_with_overlay(
                 device,
                 queue,
                 &self.atlas,
@@ -448,6 +495,7 @@ impl WgpuScene3dRenderer {
                 0,
                 None,
                 view.as_ref(),
+                Some(&occlusion),
                 &mut encoder,
             );
             if config.channels.contains(Scene3dChannels::LINEAR_COLOR) {
@@ -494,7 +542,9 @@ impl WgpuScene3dRenderer {
             *output = Some(texture);
             resource_source = Some(renderer);
         }
+        draw_statistics += occlusion.statistics(config.channels.shaded());
         self.context.queue.submit([encoder.finish()]);
+        occlusion.commit(true);
         for renderer in [
             self.color.as_ref().map(|(_, renderer)| renderer),
             self.ids.as_ref(),
@@ -507,7 +557,8 @@ impl WgpuScene3dRenderer {
             renderer.commit_uploads(true);
         }
         Ok(Scene3dGpuOutput {
-            frame_id: Scene3dFrameId::default(),
+            frame_id,
+            occlusion: occlusion.outputs(),
             geometry_memory,
             depth_background: frame.depth_background,
             context: self.context.clone(),
@@ -598,6 +649,7 @@ fn output_texture(
 /// An owned submitted frame. Textures remain valid across subsequent renders
 /// and resizes. GPU consumers must use the same device and queue ordering.
 pub struct Scene3dGpuOutput {
+    occlusion: Vec<Scene3dOcclusionOutput>,
     frame_id: Scene3dFrameId,
     depth_background: gpui::DepthBackground3d,
     context: WgpuContext,
@@ -613,6 +665,10 @@ pub struct Scene3dGpuOutput {
     geometry_memory: Scene3dGeometryMemory,
 }
 impl Scene3dGpuOutput {
+    /// Grouped occlusion outputs submitted with this exact primary frame.
+    pub fn occlusion_groups(&self) -> &[Scene3dOcclusionOutput] {
+        &self.occlusion
+    }
     /// Identity of this output allocation, distinct even for identical repeated renders.
     pub fn frame_id(&self) -> &Scene3dFrameId {
         &self.frame_id
@@ -625,7 +681,8 @@ impl Scene3dGpuOutput {
     pub fn target_memory(&self) -> Scene3dTargetMemory {
         self.target_memory
     }
-    /// Geometry payload of this frame, independent of cache hits and later renders.
+    /// Primary geometry payload, independent of cache hits and later renders.
+    /// Group geometry is reported by each occlusion output separately.
     pub fn geometry_memory(&self) -> Scene3dGeometryMemory {
         self.geometry_memory
     }

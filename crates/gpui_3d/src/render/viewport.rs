@@ -18,6 +18,7 @@ type ClickListener = Box<dyn Fn(&Hit, &mut Window, &mut App)>;
 
 #[derive(Default)]
 struct ViewportPreparation {
+    overlay_dpi: f32,
     cache: PreparationCache,
     output: Option<(Arc<PreparedScene>, Arc<gpui::Scene3dFrame>)>,
     #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
@@ -446,11 +447,15 @@ impl Element for Content {
                         binding_matches
                             && Arc::ptr_eq(previous, &prepared)
                             && frame.viewport_quality == self.0.quality
+                            && state.overlay_dpi == window.scale_factor()
                     })
                     .map(|(_, frame)| frame.clone())
                     .unwrap_or_else(|| {
                         let mut frame = prepared.frame().clone();
                         frame.viewport_quality = self.0.quality;
+                        for group in Arc::make_mut(&mut frame.occlusion_groups) {
+                            group.pixel_scale *= window.scale_factor();
+                        }
                         #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
                         {
                             frame.pick_capture = self
@@ -462,6 +467,7 @@ impl Element for Content {
                         Arc::new(frame)
                     });
                 state.output = Some((prepared.clone(), frame.clone()));
+                state.overlay_dpi = window.scale_factor();
                 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
                 {
                     if !binding_matches && let Some((old, _)) = &state.pick_binding {

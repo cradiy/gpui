@@ -6,6 +6,8 @@ use gpui::{
 use gpui_wgpu::WgpuOffscreenRenderer;
 use std::{rc::Rc, sync::Arc};
 
+#[path = "scene3d/occlusion.rs"]
+mod occlusion;
 #[path = "scene3d/submissions.rs"]
 mod submissions;
 
@@ -531,6 +533,7 @@ fn layer(
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
             pick_capture: None,
+            occlusion_groups: Default::default(),
             depth_background: Default::default(),
             viewport_quality: Default::default(),
             background: None,

@@ -1,4 +1,6 @@
 mod constraints;
+mod occlusion;
+pub use occlusion::{EditHiddenStyle, EditLine, EditOcclusionGroup, EditPoint, EditStyle};
 mod graph;
 mod update;
 pub use constraints::{ConstraintStatus, TransformConstraint};
@@ -101,6 +103,7 @@ impl Object {
 /// Camera, lighting and objects for one independent depth buffer.
 #[derive(Clone, Default)]
 pub struct Scene {
+    pub(crate) occlusion_groups: Arc<[EditOcclusionGroup]>,
     pub(crate) preparation_revision: Arc<()>,
     pub(crate) camera: Camera,
     pub(crate) light: Light,

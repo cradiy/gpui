@@ -30,9 +30,9 @@ use crate::{Camera, CameraError, PreparationCache, Scene};
 pub use gpui_wgpu::{
     IdRemapConfig, Scene3dCapabilities, Scene3dChannels, Scene3dDeviceCapabilities,
     Scene3dDrawStatistics, Scene3dFormatCapabilities, Scene3dFrameId, Scene3dGeometryMemory,
-    Scene3dGpuDraw, Scene3dGpuGeometry, Scene3dGpuGeometryMemory, Scene3dOutputConfig,
-    Scene3dPixels, Scene3dReadbackConfig, Scene3dReadbackMemory, Scene3dReadbackRegion,
-    Scene3dTargetMemory, WgpuContext, WgpuIdRemapper, WgpuScene3dGeometry,
+    Scene3dGpuDraw, Scene3dGpuGeometry, Scene3dGpuGeometryMemory, Scene3dOcclusionOutput,
+    Scene3dOutputConfig, Scene3dPixels, Scene3dReadbackConfig, Scene3dReadbackMemory,
+    Scene3dReadbackRegion, Scene3dTargetMemory, WgpuContext, WgpuIdRemapper, WgpuScene3dGeometry,
 };
 
 /// Window-free renderer for solid and decoded-image materials. Does not load
@@ -146,9 +146,11 @@ impl HeadlessRenderer {
     /// Renders the supplied scene without a native window or UI layout. Geometry,
     /// projection, lighting, and alpha modes share the viewport implementation.
     pub fn render(&mut self, scene: &Scene, config: Scene3dOutputConfig) -> Result<RenderedFrame> {
-        self.renderer.validate_target_memory(
+        self.renderer.validate_occlusion_target_memory(
             config,
             scene.directional_shadow.map(|shadow| shadow.resolution),
+            scene.occlusion_groups.len(),
+            scene.occlusion_element_group_count(),
         )?;
         let max_dimension = self.capabilities().max_dimension;
         let atlas = self.renderer.sprite_atlas();

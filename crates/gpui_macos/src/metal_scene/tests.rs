@@ -80,6 +80,7 @@ fn layer(
     SubtreeLayer {
         scene3d: Some(Arc::new(Scene3dFrame {
             pick_capture: None,
+            occlusion_groups: Default::default(),
             depth_background: Default::default(),
             viewport_quality: Default::default(),
             background: None,

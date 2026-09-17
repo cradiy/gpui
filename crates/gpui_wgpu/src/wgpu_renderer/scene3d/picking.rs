@@ -9,6 +9,7 @@ use std::{
 use gpui::{Scene, Scene3dFrame, Scene3dViewportCapabilities, SubtreeLayer};
 
 use super::{RenderRegion, Scene3dRenderer, WgpuAtlas, viewport::visit_scenes};
+use crate::scene3d_renderer::occlusion::{self, OcclusionPasses};
 use crate::{Scene3dCapabilities, Scene3dDeviceCapabilities, WgpuContext, WgpuScene3dPickFrame};
 
 pub(in crate::wgpu_renderer) fn fail_pick_captures(scene: &Scene, error: gpui::SharedString) {
@@ -24,6 +25,7 @@ pub(in crate::wgpu_renderer) fn fail_pick_captures(scene: &Scene, error: gpui::S
 }
 
 struct Entry {
+    occlusion: OcclusionPasses,
     frame: Arc<Scene3dFrame>,
     region: RenderRegion,
     start: [usize; 2],
@@ -59,14 +61,21 @@ impl PickRenderer {
         viewport: Scene3dViewportCapabilities,
     ) -> anyhow::Result<()> {
         self.entries.clear();
+        let mut failure = None;
         visit_scenes(scene, |scene| {
             for layer in &scene.subtree_layers {
                 let Some(frame) = &layer.scene3d else {
                     continue;
                 };
-                let Some(capture) = &frame.pick_capture else {
+                let capture = frame.pick_capture.as_ref();
+                if capture.is_none()
+                    && !frame
+                        .occlusion_groups
+                        .iter()
+                        .any(|g| !g.points.is_empty() || !g.lines.is_empty())
+                {
                     continue;
-                };
+                }
                 let allocate = (|| -> anyhow::Result<_> {
                     anyhow::ensure!(!self.context.device_lost(), "3D picking device is lost");
                     let capabilities = self
@@ -88,7 +97,7 @@ impl PickRenderer {
                     .ok_or_else(|| {
                         anyhow::anyhow!("3D picking viewport is outside the render surface")
                     })?;
-                    let output = WgpuScene3dPickFrame::allocate(
+                    let mut output = WgpuScene3dPickFrame::allocate(
                         self.context.clone(),
                         *capabilities,
                         frame,
@@ -97,7 +106,27 @@ impl PickRenderer {
                         region.source_rect,
                         self.busy.clone(),
                     )?;
+                    let memory = occlusion::target_memory(
+                        output.gpu().target_memory(),
+                        region.size,
+                        frame.occlusion_groups.len(),
+                        occlusion::element_output_count(frame),
+                        capture.map(|c| c.max_bytes()),
+                    )?;
+                    let occlusion = OcclusionPasses::prepare(
+                        &self.context,
+                        *capabilities,
+                        frame,
+                        region,
+                        viewport.color_samples_for(frame.viewport_quality),
+                        output.gpu().frame_id(),
+                        capture.map(|c| c.max_bytes()),
+                        None,
+                        self.busy.clone(),
+                    )?;
+                    output.set_occlusion(occlusion.outputs(), memory);
                     Ok(Entry {
+                        occlusion,
                         frame: frame.clone(),
                         region,
                         start: [0; 2],
@@ -109,11 +138,22 @@ impl PickRenderer {
                     Ok(entry) => {
                         self.entries.insert(layer as *const _ as usize, entry);
                     }
-                    Err(error) => capture
-                        .publish::<WgpuScene3dPickFrame>(frame, Err(format!("{error:#}").into())),
+                    Err(error) => {
+                        if let Some(capture) = capture {
+                            capture.publish::<WgpuScene3dPickFrame>(
+                                frame,
+                                Err(format!("{error:#}").into()),
+                            );
+                        } else {
+                            failure = Some(error);
+                        }
+                    }
                 }
             }
         });
+        if let Some(error) = failure {
+            return Err(error);
+        }
         if self.entries.is_empty() {
             self.renderers = None;
             return Ok(());
@@ -177,7 +217,16 @@ impl PickRenderer {
                 encoder,
             );
         }
+        entry
+            .occlusion
+            .encode(&self.context, atlas, entry.region, Some(source), encoder);
         entry.encoded.store(true, Ordering::Release);
+    }
+
+    pub(super) fn occlusion(&self, layer: &SubtreeLayer) -> Option<&OcclusionPasses> {
+        self.entries
+            .get(&(layer as *const _ as usize))
+            .map(|entry| &entry.occlusion)
     }
 
     pub(super) fn commit(&self, submitted: bool) {
@@ -185,18 +234,20 @@ impl PickRenderer {
             renderer.commit_uploads(submitted);
         }
         for entry in self.entries.values() {
-            if entry.encoded.swap(false, Ordering::AcqRel) && submitted {
-                entry
-                    .frame
-                    .pick_capture
-                    .as_ref()
-                    .unwrap()
-                    .publish(&entry.frame, Ok(entry.output.clone()));
+            entry.occlusion.commit(submitted);
+            if entry.encoded.swap(false, Ordering::AcqRel)
+                && submitted
+                && let Some(capture) = &entry.frame.pick_capture
+            {
+                capture.publish(&entry.frame, Ok(entry.output.clone()));
             }
         }
     }
 
     pub(super) fn retain_external_uploads(&self) {
+        for entry in self.entries.values() {
+            entry.occlusion.retain_external_uploads();
+        }
         for renderer in self.renderers.iter().flatten() {
             renderer.retain_external_uploads();
         }

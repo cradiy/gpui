@@ -91,7 +91,11 @@ impl ViewportRenderer {
         visit_scenes(scene, |scene| {
             for layer in &scene.subtree_layers {
                 if let Some(frame) = &layer.scene3d {
-                    pick_needed |= frame.pick_capture.is_some();
+                    pick_needed |= frame.pick_capture.is_some()
+                        || frame
+                            .occlusion_groups
+                            .iter()
+                            .any(|g| !g.points.is_empty() || !g.lines.is_empty());
                     let samples = self.capabilities.color_samples_for(frame.viewport_quality);
                     needed[usize::from(samples == 4)] = true;
                     let old = previous.next().flatten();
@@ -267,7 +271,18 @@ impl ViewportRenderer {
         self.renderers[usize::from(samples == 4)]
             .as_ref()
             .unwrap()
-            .encode(device, queue, atlas, layer, source, &view, encoder);
+            .encode(
+                device,
+                queue,
+                atlas,
+                layer,
+                source,
+                &view,
+                self.picking
+                    .as_ref()
+                    .and_then(|picking| picking.occlusion(layer)),
+                encoder,
+            );
         if let Some(output) = output {
             output.copy(destination, encoder, false);
             output.validity.encoded();

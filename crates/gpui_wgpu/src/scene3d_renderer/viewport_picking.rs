@@ -81,7 +81,10 @@ impl WgpuScene3dPickFrame {
         capabilities.validate(config)?;
         let target_memory = config.target_memory(None)?;
         ensure!(
-            target_memory.total_bytes <= frame.pick_capture.as_ref().unwrap().max_bytes(),
+            frame
+                .pick_capture
+                .as_ref()
+                .is_none_or(|capture| target_memory.total_bytes <= capture.max_bytes()),
             "3D viewport picking exceeds target payload budget"
         );
         let mut ids = std::collections::HashSet::new();
@@ -97,6 +100,7 @@ impl WgpuScene3dPickFrame {
         geometry_memory.validate(context.device.limits().max_buffer_size, None)?;
         Ok(Self {
             output: Scene3dGpuOutput {
+                occlusion: Vec::new(),
                 frame_id: Default::default(),
                 depth_background: frame.depth_background,
                 draw_statistics: Scene3dDrawStatistics::default(),
@@ -123,6 +127,38 @@ impl WgpuScene3dPickFrame {
 
     pub(crate) fn set_statistics(&mut self, statistics: Scene3dDrawStatistics) {
         self.output.draw_statistics = statistics;
+    }
+    pub(crate) fn set_edit_payload(&mut self, bytes: u64, instances: u64) {
+        self.output.target_memory.attachment_bytes = 0;
+        self.output.target_memory.total_bytes = self.output.target_memory.output_bytes;
+        self.output.geometry_memory = super::Scene3dGeometryMemory {
+            vertex_bytes: bytes,
+            total_bytes: bytes,
+            max_buffer_bytes: bytes,
+            ..Default::default()
+        };
+        self.output.draw_statistics = Scene3dDrawStatistics {
+            camera_draws: u64::from(instances > 0),
+            camera_instances: instances,
+            camera_triangles: instances * 2,
+            instance_upload_bytes: bytes,
+            uniform_upload_bytes: 16,
+            ..Default::default()
+        };
+    }
+    pub(crate) fn set_occlusion(
+        &mut self,
+        outputs: Vec<super::Scene3dOcclusionOutput>,
+        memory: super::Scene3dTargetMemory,
+    ) {
+        for output in &outputs {
+            self.output.draw_statistics += output.gpu().draw_statistics();
+            if let Some(elements) = output.elements() {
+                self.output.draw_statistics += elements.draw_statistics();
+            }
+        }
+        self.output.occlusion = outputs;
+        self.output.target_memory = memory;
     }
 }
 

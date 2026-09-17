@@ -74,9 +74,10 @@ pub use render::{
 #[cfg(all(feature = "wgpu", not(target_family = "wasm")))]
 pub use render::{ViewportPick, ViewportPickCapture, ViewportPickFrame, ViewportPickReadback};
 pub use scene::{
-    ConstraintStatus, EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ObjectUpdate,
-    ReparentMode, Scene, SceneError, SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode,
-    TransformConstraint, TransformOverride,
+    ConstraintStatus, EditHiddenStyle, EditLine, EditOcclusionGroup, EditPoint, EditStyle,
+    EvaluatedNode, EvaluatedScene, Node, NodeHandle, Object, ObjectUpdate, ReparentMode, Scene,
+    SceneError, SceneGraph, SceneSubtree, SubtreeInstance, SubtreeNode, TransformConstraint,
+    TransformOverride,
 };
 pub use spatial::{Hit, PickBehavior, QueryObject};
 

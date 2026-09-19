@@ -290,36 +290,15 @@ impl WaylandSurfaceState {
 
             let width = f32::from(params.bounds.size.width);
             let height = f32::from(params.bounds.size.height);
-            layer_surface.set_size(width as u32, height as u32);
-
-            layer_surface.set_anchor(super::layer_shell::wayland_anchor(options.anchor));
-            layer_surface.set_keyboard_interactivity(
-                super::layer_shell::wayland_keyboard_interactivity(options.keyboard_interactivity),
-            );
-
-            if let Some(margin) = options.margin {
-                layer_surface.set_margin(
-                    f32::from(margin.0) as i32,
-                    f32::from(margin.1) as i32,
-                    f32::from(margin.2) as i32,
-                    f32::from(margin.3) as i32,
-                )
-            }
-
-            if let Some(exclusive_zone) = options.exclusive_zone {
-                layer_surface.set_exclusive_zone(f32::from(exclusive_zone) as i32);
-            }
-
-            if let Some(exclusive_edge) = options.exclusive_edge {
-                layer_surface
-                    .set_exclusive_edge(super::layer_shell::wayland_anchor(exclusive_edge));
-            }
-
-            return Ok(WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState {
+            let layer = WaylandLayerSurfaceState {
                 layer_surface,
                 auto_width: width == 0.,
                 auto_height: height == 0.,
-            }));
+                options: options.clone(),
+                requested_size: Cell::new(params.bounds.size),
+            };
+            layer.apply_options();
+            return Ok(WaylandSurfaceState::LayerShell(layer));
         }
 
         if let WindowKind::AnchoredPopup(options) = &params.kind {
@@ -436,6 +415,52 @@ pub struct WaylandLayerSurfaceState {
     // Keep compositor-sized axes automatic across configure acknowledgements.
     auto_width: bool,
     auto_height: bool,
+    options: gpui::layer_shell::LayerShellOptions,
+    requested_size: Cell<Size<Pixels>>,
+}
+
+impl WaylandLayerSurfaceState {
+    // Layer-shell resets these properties when a surface is unmapped.
+    fn apply_options(&self) {
+        let layer = &self.layer_surface;
+        let options = &self.options;
+        let size = self.requested_size.get();
+        layer.set_size(
+            if self.auto_width {
+                0
+            } else {
+                f32::from(size.width).max(1.0) as u32
+            },
+            if self.auto_height {
+                0
+            } else {
+                f32::from(size.height).max(1.0) as u32
+            },
+        );
+        layer.set_anchor(super::layer_shell::wayland_anchor(options.anchor));
+        layer.set_keyboard_interactivity(super::layer_shell::wayland_keyboard_interactivity(
+            options.keyboard_interactivity,
+        ));
+        if let Some((top, right, bottom, left)) = options.margin {
+            layer.set_margin(
+                f32::from(top) as i32,
+                f32::from(right) as i32,
+                f32::from(bottom) as i32,
+                f32::from(left) as i32,
+            );
+        }
+        if let Some(zone) = options.exclusive_zone {
+            layer.set_exclusive_zone(f32::from(zone) as i32);
+        }
+        if let Some(edge) = options.exclusive_edge {
+            layer.set_exclusive_edge(super::layer_shell::wayland_anchor(edge));
+        }
+        // The compositor also resets the stacking layer on unmap. This request
+        // is available from layer-shell v2; older objects cannot receive it.
+        if layer.version() >= zwlr_layer_surface_v1::REQ_SET_LAYER_SINCE {
+            layer.set_layer(super::layer_shell::wayland_layer(options.layer));
+        }
+    }
 }
 
 pub struct WaylandPopupSurfaceState {
@@ -565,7 +590,10 @@ impl WaylandSurfaceState {
                 layer_surface,
                 auto_width,
                 auto_height,
+                requested_size,
+                ..
             }) => {
+                requested_size.set(size(px(width as f32), px(height as f32)));
                 // A configure reply is an allocated size, not a new fixed-size
                 // request. Preserve zero on axes sized by opposing anchors.
                 layer_surface.set_size(
@@ -1024,6 +1052,9 @@ impl WaylandWindowStatePtr {
 
     pub fn frame(&self) {
         let mut state = self.state.borrow_mut();
+        if !state.mapped {
+            return;
+        }
         state.surface.frame(&state.globals.qh, state.surface.id());
         state.resize_throttle = false;
         let force_render = state.force_render_after_recovery;
@@ -1684,14 +1715,34 @@ impl PlatformWindow for WaylandWindow {
 
         if mapped {
             state.mapped = true;
-            state.acknowledged_first_configure = false;
+            let external = matches!(state.surface_state, WaylandSurfaceState::External(_));
+            state.acknowledged_first_configure = external;
             state.renderer_presented = false;
             state.force_render_after_recovery = true;
+            if let WaylandSurfaceState::LayerShell(layer) = &state.surface_state {
+                layer.apply_options();
+            }
             state.surface.commit();
+            if external {
+                // External roles have no configure event to restart rendering.
+                // An unmapped surface also need not receive frame callbacks.
+                // Defer until the caller has finished updating the root view.
+                let window = self.0.clone();
+                state
+                    .globals
+                    .executor
+                    .spawn(async move {
+                        if window.state.borrow().mapped {
+                            window.frame();
+                        }
+                    })
+                    .detach();
+            }
         } else {
             state.surface.attach(None, 0, 0);
             state.surface.commit();
             state.mapped = false;
+            state.acknowledged_first_configure = false;
             state.renderer_presented = false;
         }
         Ok(())
@@ -2017,7 +2068,7 @@ impl PlatformWindow for WaylandWindow {
     fn draw(&self, scene: &Scene) {
         let mut state = self.borrow_mut();
 
-        if !state.mapped {
+        if !state.mapped || !state.acknowledged_first_configure {
             state.renderer_presented = false;
             return;
         }
@@ -2054,7 +2105,7 @@ impl PlatformWindow for WaylandWindow {
     fn completed_frame(&self) {
         let mut state = self.borrow_mut();
 
-        if !state.mapped {
+        if !state.mapped || !state.acknowledged_first_configure {
             state.renderer_presented = false;
             return;
         }
@@ -2134,7 +2185,11 @@ impl PlatformWindow for WaylandWindow {
         // Commit so the new input region applies immediately. Otherwise it
         // waits for the next frame, which could be the very click we want to
         // allow passing through.
-        state.surface.commit();
+        // While unmapped, leave it pending for the remap commit: layer-shell
+        // must have its role properties restored before another commit.
+        if state.mapped {
+            state.surface.commit();
+        }
     }
 
     fn window_decorations(&self) -> Decorations {

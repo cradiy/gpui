@@ -2,12 +2,14 @@ mod client;
 mod clipboard;
 mod cursor;
 mod display;
+mod external_surface;
 mod popup;
 mod serial;
 mod window;
 
 /// Contains Types for configuring layer_shell surfaces.
 pub mod layer_shell;
+pub use external_surface::ExternalWaylandSurfaceRoleFactory;
 
 pub(crate) use client::*;
 

@@ -28,6 +28,9 @@ pub(crate) use x11::*;
 
 use std::rc::Rc;
 
+#[cfg(feature = "wayland")]
+pub type WaylandSurfaceRoleFactory = wayland::ExternalWaylandSurfaceRoleFactory;
+
 /// Returns the default platform implementation for the current OS.
 pub fn current_platform(headless: bool) -> Rc<dyn gpui::Platform> {
     #[cfg(feature = "x11")]
@@ -59,6 +62,18 @@ pub fn current_platform(headless: bool) -> Rc<dyn gpui::Platform> {
             r#"At least one of the "wayland" or "x11" features must be enabled on gpui_linux or gpui_platform."#
         ),
     }
+}
+
+/// Returns a Wayland platform that reuses an existing client connection and
+/// assigns a caller-provided role to every window surface it creates.
+#[cfg(feature = "wayland")]
+pub fn wayland_platform_with_external_surface_role(
+    connection: wayland_client::Connection,
+    role: WaylandSurfaceRoleFactory,
+) -> Rc<dyn gpui::Platform> {
+    Rc::new(LinuxPlatform {
+        inner: WaylandClient::with_connection_and_external_surface_role(connection, role),
+    })
 }
 
 /// Returns a headless platform whose windows are supplied by an external host.

@@ -90,6 +90,7 @@ use crate::linux::{
     wayland::{
         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
         cursor::Cursor,
+        external_surface::ExternalWaylandSurfaceRoleFactory,
         serial::{SerialKind, SerialTracker},
         to_shape,
         window::WaylandWindow,
@@ -233,6 +234,7 @@ pub struct Output {
 pub(crate) struct WaylandClientState {
     serial_tracker: SerialTracker,
     globals: Globals,
+    external_surface_role: Option<ExternalWaylandSurfaceRoleFactory>,
     pub gpu_context: GpuContext,
     pub compositor_gpu: Option<CompositorGpuHint>,
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
@@ -781,7 +783,22 @@ impl WaylandClient {
     pub(crate) fn new() -> Self {
         let startup_activation_token = take_startup_activation_token_from_environment();
         let conn = Connection::connect_to_env().unwrap();
+        Self::with_connection(conn, startup_activation_token, None)
+    }
 
+    pub(crate) fn with_connection_and_external_surface_role(
+        conn: Connection,
+        role: ExternalWaylandSurfaceRoleFactory,
+    ) -> Self {
+        let startup_activation_token = take_startup_activation_token_from_environment();
+        Self::with_connection(conn, startup_activation_token, Some(role))
+    }
+
+    fn with_connection(
+        conn: Connection,
+        startup_activation_token: Option<String>,
+        external_surface_role: Option<ExternalWaylandSurfaceRoleFactory>,
+    ) -> Self {
         let (globals, event_queue) = registry_queue_init::<WaylandClientStatePtr>(&conn).unwrap();
         let qh = event_queue.handle();
 
@@ -930,6 +947,7 @@ impl WaylandClient {
         let state = Rc::new(RefCell::new(WaylandClientState {
             serial_tracker: SerialTracker::new(),
             globals,
+            external_surface_role,
             gpu_context,
             compositor_gpu,
             wl_seat: seat,
@@ -1122,6 +1140,7 @@ impl LinuxClient for WaylandClient {
             parent,
             popup_grab,
             target_output,
+            state.external_surface_role.as_ref(),
         )?;
 
         if window.0.toplevel().is_some() {

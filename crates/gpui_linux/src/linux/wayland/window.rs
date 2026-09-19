@@ -29,7 +29,10 @@ use wayland_protocols::{
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
-use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
+use crate::linux::wayland::{
+    display::WaylandDisplay, external_surface::ExternalWaylandSurfaceRoleFactory,
+    serial::SerialKind,
+};
 use crate::linux::{Globals, Output, WaylandClientStatePtr, get_window};
 use gpui::{
     AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, GpuSpecs, Modifiers, Pixels,
@@ -248,6 +251,11 @@ pub enum WaylandSurfaceState {
     Xdg(WaylandXdgSurfaceState),
     LayerShell(WaylandLayerSurfaceState),
     Popup(WaylandPopupSurfaceState),
+    External(WaylandExternalSurfaceState),
+}
+
+pub struct WaylandExternalSurfaceState {
+    role: Option<Box<dyn std::any::Any>>,
 }
 
 impl WaylandSurfaceState {
@@ -258,7 +266,13 @@ impl WaylandSurfaceState {
         parent: Option<WaylandWindowStatePtr>,
         popup_grab: Option<(u32, wl_seat::WlSeat)>,
         target_output: Option<wl_output::WlOutput>,
+        external_role: Option<&ExternalWaylandSurfaceRoleFactory>,
     ) -> anyhow::Result<Self> {
+        if let Some(role) = external_role {
+            return Ok(WaylandSurfaceState::External(WaylandExternalSurfaceState {
+                role: Some(role.assign(surface)?),
+            }));
+        }
         // For layer_shell windows, create a layer surface instead of an xdg surface
         if let WindowKind::LayerShell(options) = &params.kind {
             let Some(layer_shell) = globals.layer_shell.as_ref() else {
@@ -499,6 +513,7 @@ impl WaylandSurfaceState {
             WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
                 xdg_surface.ack_configure(serial);
             }
+            WaylandSurfaceState::External(_) => {}
         }
     }
 
@@ -527,6 +542,7 @@ impl WaylandSurfaceState {
                 Some(xdg_surface)
             }
             WaylandSurfaceState::LayerShell(_) => None,
+            WaylandSurfaceState::External(_) => None,
         }
     }
 
@@ -560,6 +576,7 @@ impl WaylandSurfaceState {
             WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
                 xdg_surface.set_window_geometry(x, y, width, height);
             }
+            WaylandSurfaceState::External(_) => {}
         }
     }
 
@@ -617,6 +634,9 @@ impl WaylandSurfaceState {
                 // Role object before its xdg_surface, as with the toplevel above.
                 xdg_popup.destroy();
                 xdg_surface.destroy();
+            }
+            WaylandSurfaceState::External(external) => {
+                external.role.take();
             }
         }
     }
@@ -839,6 +859,7 @@ impl WaylandWindow {
         parent: Option<WaylandWindowStatePtr>,
         popup_grab: Option<(u32, wl_seat::WlSeat)>,
         target_output: Option<wl_output::WlOutput>,
+        external_role: Option<&ExternalWaylandSurfaceRoleFactory>,
     ) -> anyhow::Result<(Self, ObjectId)> {
         let surface = globals.compositor.create_surface(&globals.qh, ());
         let surface_state = WaylandSurfaceState::new(
@@ -848,7 +869,9 @@ impl WaylandWindow {
             parent.clone(),
             popup_grab,
             target_output,
+            external_role,
         )?;
+        let externally_configured = matches!(surface_state, WaylandSurfaceState::External(_));
 
         if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
             fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
@@ -876,8 +899,18 @@ impl WaylandWindow {
             callbacks: Rc::new(RefCell::new(Callbacks::default())),
         });
 
+        // External roles do not receive an xdg/layer configure event. Ask the
+        // compositor for the first frame now; the callback is delivered only
+        // after GPUI has finished installing its request-frame handler.
+        if externally_configured {
+            surface.frame(&this.borrow().globals.qh, surface.id());
+        }
+
         // Kick things off
         surface.commit();
+        if externally_configured {
+            this.0.state.borrow_mut().acknowledged_first_configure = true;
+        }
 
         Ok((this, surface.id()))
     }

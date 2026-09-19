@@ -17,6 +17,7 @@ mod assets;
 mod backdrop;
 mod bounds_tree;
 mod color;
+mod color3d;
 /// The default colors used by GPUI.
 pub mod colors;
 mod effect;
@@ -27,10 +28,9 @@ mod fluid;
 mod image_loading;
 mod particle_transition;
 mod particles;
+mod pbr3d;
 mod platform_scheduler;
 mod scene3d;
-mod color3d;
-mod pbr3d;
 mod texture_sampling3d;
 pub(crate) use platform_scheduler::PlatformScheduler;
 mod geometry;
@@ -108,6 +108,7 @@ pub use asset_cache::*;
 pub use assets::*;
 pub use backdrop::*;
 pub use color::*;
+pub use color3d::*;
 pub use ctor::ctor;
 pub use effect::*;
 pub use element::*;
@@ -123,9 +124,8 @@ pub use gpui_macros::{
 pub use image_loading::{ImageAnimation, ImageAnimationOptions, ImageLoadLimits};
 pub use particle_transition::*;
 pub use particles::*;
-pub use scene3d::*;
-pub use color3d::*;
 pub use pbr3d::*;
+pub use scene3d::*;
 pub use texture_sampling3d::*;
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].

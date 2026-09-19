@@ -2,6 +2,10 @@
 //! `current_platform` constructor so consumers don't need `#[cfg]` gating.
 
 pub use gpui::Platform;
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "wayland"))]
+pub use gpui_linux::{
+    WaylandConnection, WaylandSurfaceRoleFactory, wayland_platform_with_external_surface_role,
+};
 
 use std::rc::Rc;
 

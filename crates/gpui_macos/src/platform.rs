@@ -330,6 +330,7 @@ impl MacPlatform {
                     os_action,
                     checked,
                     disabled,
+                    ..
                 } => {
                     // Note that this is intentionally using earlier bindings, whereas typically
                     // later ones take display precedence. See the discussion on

@@ -219,6 +219,9 @@ pub struct WaylandWindowState {
     blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
     viewport: Option<wp_viewport::WpViewport>,
     outputs: HashMap<ObjectId, Output>,
+    // The destination belongs to the last presented buffer, not the next layout.
+    presented_destination: Size<i32>,
+    pending_resize: Option<Size<Pixels>>,
     display: Option<(ObjectId, Output)>,
     globals: Globals,
     renderer: WgpuRenderer,
@@ -741,6 +744,8 @@ impl WaylandWindowState {
             viewport,
             globals,
             outputs: HashMap::default(),
+            presented_destination: size(-1, -1),
+            pending_resize: None,
             display: None,
             renderer,
             bounds: options.bounds,
@@ -1498,18 +1503,9 @@ impl WaylandWindowStatePtr {
             self.callbacks.borrow_mut().resize = Some(fun);
         }
 
-        {
-            let state = self.state.borrow();
-            if let Some(viewport) = &state.viewport
-                && size.width > px(0.)
-                && size.height > px(0.)
-            {
-                // Fractional scale can arrive before the first layer configure.
-                // Zero is valid in a layer size request, but not a viewport destination.
-                viewport
-                    .set_destination(f32::from(size.width) as i32, f32::from(size.height) as i32);
-            }
-        }
+        // Set the viewport destination only alongside the matching new buffer.
+        // An input-region or frame-callback commit in between must not stretch
+        // the previous buffer to this new logical size.
     }
 
     pub fn resize(&self, size: Size<Pixels>) {
@@ -1786,7 +1782,7 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn resize(&mut self, size: Size<Pixels>) {
-        let state = self.borrow();
+        let mut state = self.borrow_mut();
         let state_ptr = self.0.clone();
 
         // A popup's placement is the compositor's, so a resize re-runs the positioner and the
@@ -1805,6 +1801,13 @@ impl PlatformWindow for WaylandWindow {
             }
             return;
         }
+
+        if state.pending_resize == Some(size)
+            || (state.pending_resize.is_none() && state.bounds.size == size)
+        {
+            return;
+        }
+        state.pending_resize = Some(size);
 
         if !state.is_resizable
             && let Some(toplevel) = state.surface_state.toplevel()
@@ -1838,7 +1841,21 @@ impl PlatformWindow for WaylandWindow {
         state
             .globals
             .executor
-            .spawn(async move { state_ptr.resize(size) })
+            .spawn(async move {
+                {
+                    let mut state = state_ptr.state.borrow_mut();
+                    if state.pending_resize != Some(size) {
+                        return;
+                    }
+                    state.pending_resize = None;
+                }
+                state_ptr.resize(size);
+                // A burst can return to the current size, so resize itself may
+                // not fire a bounds callback. Redraw even in that case: a frame
+                // may have been withheld while the request was pending.
+                state_ptr.state.borrow_mut().force_render_after_recovery = true;
+                state_ptr.frame();
+            })
             .detach();
     }
 
@@ -2068,7 +2085,7 @@ impl PlatformWindow for WaylandWindow {
     fn draw(&self, scene: &Scene) {
         let mut state = self.borrow_mut();
 
-        if !state.mapped || !state.acknowledged_first_configure {
+        if !state.mapped || !state.acknowledged_first_configure || state.pending_resize.is_some() {
             state.renderer_presented = false;
             return;
         }
@@ -2095,7 +2112,24 @@ impl PlatformWindow for WaylandWindow {
             return;
         }
 
+        let destination = size(
+            (f32::from(state.bounds.size.width) as i32).max(1),
+            (f32::from(state.bounds.size.height) as i32).max(1),
+        );
+        if let Some(viewport) = &state.viewport {
+            viewport.set_destination(destination.width, destination.height);
+        }
         state.renderer_presented = state.renderer.draw(scene);
+        if state.renderer_presented {
+            state.presented_destination = destination;
+        } else if let Some(viewport) = &state.viewport {
+            // Texture acquisition can fail without presenting. Cancel the
+            // pending destination before any unrelated surface commit.
+            viewport.set_destination(
+                state.presented_destination.width,
+                state.presented_destination.height,
+            );
+        }
 
         if state.renderer.needs_redraw() {
             state.force_render_after_recovery = true;

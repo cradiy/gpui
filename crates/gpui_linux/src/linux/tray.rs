@@ -36,7 +36,10 @@ impl GpuiTray {
     }
 
     pub(crate) fn spawn(self) -> anyhow::Result<ksni::Handle<Self>> {
-        smol::block_on(<Self as ksni::TrayMethods>::spawn(self))
+        // A desktop's watcher may appear after application autostart. Keep the
+        // item alive so ksni can register on watcher arrival and re-register
+        // after host restarts, retaining the same handle and latest options.
+        smol::block_on(<Self as ksni::TrayMethods>::assume_sni_available(self, true).spawn())
             .map_err(|error| anyhow::anyhow!(error))
     }
 }
@@ -146,17 +149,18 @@ fn convert_menu(
                 name,
                 action,
                 checked,
+                checkable,
                 disabled,
                 ..
             } => {
                 let sender = sender.clone();
                 let action = action.boxed_clone();
-                if *checked {
+                if *checkable {
                     Some(
                         menu::CheckmarkItem {
                             label: escape_label(name),
                             enabled: !disabled,
-                            checked: true,
+                            checked: *checked,
                             activate: Box::new(move |_| {
                                 sender
                                     .send(LinuxTrayMessage::Action(action.boxed_clone()))
@@ -202,4 +206,111 @@ fn convert_menu(
 
 fn escape_label(label: &str) -> String {
     label.replace('_', "__")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(any(feature = "wayland", feature = "x11"))]
+    #[test]
+    #[ignore = "requires a private bus: dbus-run-session -- cargo test -p gpui_linux --lib watcher_lifecycle -- --ignored"]
+    fn watcher_lifecycle() {
+        use ashpd::zbus;
+        use std::time::Duration;
+
+        struct Watcher(smol::channel::Sender<String>);
+
+        #[zbus::interface(name = "org.kde.StatusNotifierWatcher", crate = "ashpd::zbus")]
+        impl Watcher {
+            fn register_status_notifier_item(&self, service: String) {
+                self.0.try_send(service).unwrap();
+            }
+        }
+
+        async fn start_watcher(sender: smol::channel::Sender<String>) -> zbus::Connection {
+            zbus::connection::Builder::session()
+                .unwrap()
+                .serve_at("/StatusNotifierWatcher", Watcher(sender))
+                .unwrap()
+                .name("org.kde.StatusNotifierWatcher")
+                .unwrap()
+                .build()
+                .await
+                .unwrap()
+        }
+
+        smol::block_on(async {
+            let bus = zbus::Connection::session().await.unwrap();
+            let dbus = zbus::fdo::DBusProxy::new(&bus).await.unwrap();
+            assert!(
+                !dbus
+                    .name_has_owner("org.kde.StatusNotifierWatcher".try_into().unwrap())
+                    .await
+                    .unwrap(),
+                "run this test on a private D-Bus session without a desktop watcher"
+            );
+            let (sender, _receiver) = calloop::channel::channel();
+            let options = TrayOptions::new(
+                gpui::TrayIcon::from_images(
+                    [gpui::TrayIconImage::new(vec![255; 4], 1, 1).unwrap()],
+                )
+                .unwrap(),
+            );
+            let handle = GpuiTray::new(TrayId::from_u32(1), options, sender)
+                .spawn()
+                .unwrap();
+            assert!(
+                handle
+                    .update(|tray| tray.options.tooltip = Some("Updated offline".into()))
+                    .await
+                    .is_some()
+            );
+
+            let (registered, registrations) = smol::channel::unbounded();
+            let mut previous_service = None;
+            for _ in 0..2 {
+                let watcher = start_watcher(registered.clone()).await;
+                let service =
+                    smol::future::or(async { registrations.recv().await.unwrap() }, async {
+                        smol::Timer::after(Duration::from_secs(5)).await;
+                        panic!("tray did not register after watcher arrival");
+                    })
+                    .await;
+                if let Some(previous) = &previous_service {
+                    assert_eq!(&service, previous, "host restart must retain the tray item");
+                }
+                let item = zbus::Proxy::new(
+                    &bus,
+                    service.as_str(),
+                    "/StatusNotifierItem",
+                    "org.kde.StatusNotifierItem",
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    item.get_property::<String>("Title").await.unwrap(),
+                    "Updated offline"
+                );
+                previous_service = Some(service.clone());
+                watcher.close().await.unwrap();
+            }
+            // Removing the item must also work while its host is offline.
+            handle.shutdown().await;
+        });
+    }
+
+    #[test]
+    fn unchecked_actions_remain_checkboxes_in_native_tray_menu() {
+        let (sender, _receiver) = calloop::channel::channel();
+        let items = [
+            MenuItem::action("Selected", gpui::NoAction).checked(true),
+            MenuItem::action("Unselected", gpui::NoAction).checked(false),
+            MenuItem::action("Command", gpui::NoAction),
+        ];
+        let native = convert_menu(&items, &sender);
+        assert!(matches!(&native[0], ksni::MenuItem::Checkmark(item) if item.checked));
+        assert!(matches!(&native[1], ksni::MenuItem::Checkmark(item) if !item.checked));
+        assert!(matches!(&native[2], ksni::MenuItem::Standard(_)));
+    }
 }

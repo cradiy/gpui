@@ -103,6 +103,9 @@ pub enum MenuItem {
         /// Whether this action is checked
         checked: bool,
 
+        /// Whether to show a checkbox even when the action is unchecked.
+        checkable: bool,
+
         /// Whether this action is disabled
         disabled: bool,
     },
@@ -139,6 +142,7 @@ impl MenuItem {
             action: Box::new(action),
             os_action: None,
             checked: false,
+            checkable: false,
             disabled: false,
         }
     }
@@ -154,6 +158,7 @@ impl MenuItem {
             action: Box::new(action),
             os_action: Some(os_action),
             checked: false,
+            checkable: false,
             disabled: false,
         }
     }
@@ -169,25 +174,32 @@ impl MenuItem {
                 action,
                 os_action,
                 checked,
+                checkable,
                 disabled,
             } => OwnedMenuItem::Action {
                 name: name.into(),
                 action,
                 os_action,
                 checked,
+                checkable,
                 disabled,
             },
             MenuItem::SystemMenu(os_menu) => OwnedMenuItem::SystemMenu(os_menu.owned()),
         }
     }
 
-    /// Set whether this menu item is checked
+    /// Make this a checkbox item and set its checked state.
     ///
     /// Only for [`MenuItem::Action`], otherwise, will be ignored
     pub fn checked(mut self, checked: bool) -> Self {
         match &mut self {
-            MenuItem::Action { checked: old, .. } => {
+            MenuItem::Action {
+                checked: old,
+                checkable,
+                ..
+            } => {
                 *old = checked;
+                *checkable = true;
             }
             _ => {}
         }
@@ -288,6 +300,9 @@ pub enum OwnedMenuItem {
         /// Whether this action is checked
         checked: bool,
 
+        /// Whether to show a checkbox even when the action is unchecked.
+        checkable: bool,
+
         /// Whether this action is disabled
         disabled: bool,
     },
@@ -304,12 +319,14 @@ impl Clone for OwnedMenuItem {
                 action,
                 os_action,
                 checked,
+                checkable,
                 disabled,
             } => OwnedMenuItem::Action {
                 name: name.clone(),
                 action: action.boxed_clone(),
                 os_action: *os_action,
                 checked: *checked,
+                checkable: *checkable,
                 disabled: *disabled,
             },
             OwnedMenuItem::SystemMenu(os_menu) => OwnedMenuItem::SystemMenu(os_menu.clone()),
@@ -439,5 +456,28 @@ mod tests {
         );
         assert!(!submenu.is_checked());
         assert!(submenu.is_disabled());
+    }
+
+    #[test]
+    fn unchecked_menu_item_preserves_checkbox_state_when_owned_and_cloned() {
+        let owned = super::MenuItem::action("Choice", gpui::NoAction)
+            .checked(false)
+            .owned();
+        assert!(matches!(
+            owned.clone(),
+            super::OwnedMenuItem::Action {
+                checked: false,
+                checkable: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            super::MenuItem::action("Command", gpui::NoAction).owned(),
+            super::OwnedMenuItem::Action {
+                checked: false,
+                checkable: false,
+                ..
+            }
+        ));
     }
 }

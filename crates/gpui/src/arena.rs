@@ -75,6 +75,9 @@ pub struct Arena {
     valid: Rc<Cell<bool>>,
     current_chunk_index: usize,
     chunk_size: NonZeroUsize,
+    recent_peak_chunks: usize,
+    recent_peak_elements: usize,
+    clears_since_trim: u16,
 }
 
 impl Drop for Arena {
@@ -92,6 +95,9 @@ impl Arena {
             valid: Rc::new(Cell::new(true)),
             current_chunk_index: 0,
             chunk_size,
+            recent_peak_chunks: 1,
+            recent_peak_elements: 0,
+            clears_since_trim: 0,
         }
     }
 
@@ -100,6 +106,8 @@ impl Arena {
     }
 
     pub fn clear(&mut self) {
+        self.recent_peak_chunks = self.recent_peak_chunks.max(self.current_chunk_index + 1);
+        self.recent_peak_elements = self.recent_peak_elements.max(self.elements.len());
         self.valid.set(false);
         self.valid = Rc::new(Cell::new(true));
         self.elements.clear();
@@ -107,6 +115,20 @@ impl Arena {
             self.chunks[chunk_index].reset();
         }
         self.current_chunk_index = 0;
+        self.clears_since_trim += 1;
+        if self.clears_since_trim == 120 {
+            // Keep headroom for normal frame-to-frame variation. All values have
+            // been dropped before releasing chunks, including their destructors.
+            self.chunks
+                .truncate(self.recent_peak_chunks.saturating_mul(2));
+            let elements = self.recent_peak_elements.saturating_mul(2);
+            if self.elements.capacity() > elements.saturating_mul(2) {
+                self.elements.shrink_to(elements);
+            }
+            self.recent_peak_chunks = 1;
+            self.recent_peak_elements = 0;
+            self.clears_since_trim = 0;
+        }
     }
 
     #[inline(always)]
@@ -208,6 +230,39 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
+
+    #[test]
+    fn arena_releases_past_peak_after_sustained_small_frames() {
+        let mut arena = Arena::new(64);
+        let dropped = Rc::new(Cell::new(0));
+        struct Item(Rc<Cell<usize>>, [u8; 48]);
+        impl Drop for Item {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        for _ in 0..32 {
+            let item = arena.alloc(|| Item(dropped.clone(), [7; 48]));
+            assert_eq!(item.1[0], 7);
+        }
+        let peak = arena.capacity();
+        arena.clear();
+        assert_eq!(dropped.get(), 32);
+        assert_eq!(arena.capacity(), peak, "retain a recent burst for reuse");
+        for _ in 0..240 {
+            assert_eq!(*arena.alloc(|| 42u64), 42);
+            arena.clear();
+        }
+        assert!(arena.capacity() < peak);
+        assert!(arena.capacity() >= 64);
+        for index in 0..32u8 {
+            assert_eq!(arena.alloc(|| [index; 64])[0], index);
+        }
+        assert!(
+            arena.capacity() >= peak,
+            "the arena can grow again after trimming"
+        );
+    }
 
     #[test]
     fn test_arena() {

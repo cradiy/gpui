@@ -26,8 +26,8 @@ pub use wgpu;
 pub use wgpu_atlas::*;
 pub use wgpu_context::*;
 pub use wgpu_renderer::{
-    GpuContext, WgpuExternalRenderTarget, WgpuExternalRendererConfig, WgpuRenderer,
-    WgpuSurfaceConfig,
+    GpuContext, WgpuExternalRenderTarget, WgpuExternalRendererConfig, WgpuMemoryStats,
+    WgpuRenderer, WgpuSurfaceConfig,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use wgpu_renderer::{TextureEffectConfig, WgpuTextureEffect};

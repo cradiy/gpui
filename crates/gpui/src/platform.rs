@@ -1,4 +1,7 @@
 mod app_menu;
+mod atlas_memory;
+#[doc(hidden)]
+pub use atlas_memory::AtlasImageLifetimes;
 mod keyboard;
 mod keystroke;
 mod tray;
@@ -1247,6 +1250,9 @@ pub enum AtlasKey {
     Svg(RenderSvgParams),
     ColorSvg(RenderColorSvgParams),
     Image(RenderImageParams),
+    /// Image residency managed by decoded-frame and recorded-scene ownership.
+    #[doc(hidden)]
+    TransientImage(RenderImageParams),
 }
 
 impl AtlasKey {
@@ -1271,7 +1277,7 @@ impl AtlasKey {
             }
             AtlasKey::Svg(_) => AtlasTextureKind::Monochrome,
             AtlasKey::ColorSvg(_) => AtlasTextureKind::Polychrome,
-            AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
+            AtlasKey::Image(_) | AtlasKey::TransientImage(_) => AtlasTextureKind::Polychrome,
         }
     }
 }
@@ -1313,6 +1319,15 @@ pub trait PlatformAtlas {
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
+
+    /// Pins an `AtlasKey::TransientImage` while its decoded frame or a recorded scene is alive.
+    /// Multiple lifetimes can refer to the same immutable image key.
+    #[doc(hidden)]
+    fn retain_image(&self, _key: &RenderImageParams, _lifetime: std::sync::Weak<()>) {}
+
+    /// Removes transient images whose decoded frames and recorded scenes have expired.
+    #[doc(hidden)]
+    fn collect_unused_images(&self) {}
 }
 
 #[doc(hidden)]

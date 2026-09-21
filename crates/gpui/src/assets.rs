@@ -57,6 +57,7 @@ pub struct RenderImage {
     pub(crate) scale_factor: f32,
     data: Arc<SmallVec<[Frame; 1]>>,
     animation: Option<Arc<crate::ImageAnimation>>,
+    pub(crate) atlas_lifetime: Option<Arc<()>>,
 }
 
 impl PartialEq for RenderImage {
@@ -75,6 +76,7 @@ impl RenderImage {
             scale_factor: 1.0,
             data: Arc::new(data.into()),
             animation: None,
+            atlas_lifetime: None,
         }
     }
 
@@ -89,6 +91,7 @@ impl RenderImage {
             scale_factor: self.scale_factor,
             data: self.data.clone(),
             animation: Some(animation),
+            atlas_lifetime: self.atlas_lifetime.clone(),
         }
     }
 

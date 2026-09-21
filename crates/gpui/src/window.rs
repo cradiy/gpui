@@ -2965,6 +2965,7 @@ impl Window {
         let previous_window_active = self.rendered_frame.window_active;
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
+        self.sprite_atlas.collect_unused_images();
         let current_focus_path = self.rendered_frame.focus_path();
         let current_window_active = self.rendered_frame.window_active;
 
@@ -5292,9 +5293,18 @@ impl Window {
             frame_index,
         };
 
+        let key = if let Some(lifetime) = &data.atlas_lifetime {
+            self.sprite_atlas
+                .retain_image(&params, Arc::downgrade(lifetime));
+            self.next_frame.scene.retain_image(lifetime.clone());
+            crate::AtlasKey::TransientImage(params)
+        } else {
+            params.into()
+        };
+
         let tile = self
             .sprite_atlas
-            .get_or_insert_with(&params.into(), &mut || {
+            .get_or_insert_with(&key, &mut || {
                 Ok(Some((
                     data.size(frame_index),
                     Cow::Borrowed(
@@ -5357,13 +5367,13 @@ impl Window {
     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
         if let Some(animation) = data.animation() {
             for image_id in animation.frame_ids() {
-                self.sprite_atlas.remove(
-                    &RenderImageParams {
-                        image_id: *image_id,
-                        frame_index: 0,
-                    }
-                    .into(),
-                );
+                let params = RenderImageParams {
+                    image_id: *image_id,
+                    frame_index: 0,
+                };
+                self.sprite_atlas.remove(&params.clone().into());
+                self.sprite_atlas
+                    .remove(&crate::AtlasKey::TransientImage(params));
             }
             return Ok(());
         }
@@ -5374,6 +5384,8 @@ impl Window {
             };
 
             self.sprite_atlas.remove(&params.clone().into());
+            self.sprite_atlas
+                .remove(&crate::AtlasKey::TransientImage(params));
         }
 
         Ok(())

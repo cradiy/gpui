@@ -34,6 +34,7 @@ pub struct WgpuContext {
     dual_source_blending: bool,
     color_texture_format: wgpu::TextureFormat,
     device_lost: Arc<AtomicBool>,
+    pub(crate) pipeline_cache: Arc<std::sync::Mutex<crate::wgpu_renderer::PipelineCache>>,
 }
 
 #[derive(Clone, Copy)]
@@ -101,6 +102,7 @@ impl WgpuContext {
             dual_source_blending,
             color_texture_format,
             device_lost,
+            pipeline_cache: Default::default(),
         })
     }
 
@@ -122,6 +124,7 @@ impl WgpuContext {
             dual_source_blending,
             color_texture_format,
             device_lost: Arc::new(AtomicBool::new(false)),
+            pipeline_cache: Default::default(),
         })
     }
 
@@ -198,6 +201,7 @@ impl WgpuContext {
             dual_source_blending,
             color_texture_format,
             device_lost,
+            pipeline_cache: Default::default(),
         })
     }
 
@@ -239,6 +243,7 @@ impl WgpuContext {
             dual_source_blending,
             color_texture_format,
             device_lost,
+            pipeline_cache: Default::default(),
         })
     }
 

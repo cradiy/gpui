@@ -17,6 +17,11 @@ pub struct WgpuOffscreenRenderer {
 }
 
 impl WgpuOffscreenRenderer {
+    /// Renderer-owned 2D payload; excludes this wrapper's output and readback targets.
+    pub fn memory_stats(&self) -> crate::WgpuMemoryStats {
+        self.renderer.memory_stats()
+    }
+
     /// Creates an offscreen renderer with the requested device-pixel size.
     pub fn new(size: Size<DevicePixels>) -> anyhow::Result<Self> {
         let context = WgpuContext::new_headless()?;

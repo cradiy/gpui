@@ -21,7 +21,7 @@ fn etagere_point_to_device(point: etagere::Point) -> Point<DevicePixels> {
     }
 }
 
-pub struct WgpuAtlas(Mutex<WgpuAtlasState>);
+pub struct WgpuAtlas(Mutex<WgpuAtlasState>, gpui::AtlasImageLifetimes);
 
 struct PendingUpload {
     id: AtlasTextureId,
@@ -46,25 +46,63 @@ pub struct WgpuTextureInfo {
     pub view: wgpu::TextureView,
 }
 
+/// Atlas payload currently retained by GPUI, excluding driver allocation overhead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WgpuAtlasMemoryStats {
+    pub texture_bytes: u64,
+    pub textures: usize,
+    pub tiles: usize,
+    pub pending_upload_bytes: u64,
+}
+
 impl WgpuAtlas {
+    pub fn memory_stats(&self) -> WgpuAtlasMemoryStats {
+        let state = self.0.lock();
+        let mut stats = WgpuAtlasMemoryStats {
+            tiles: state.tiles_by_key.len(),
+            pending_upload_bytes: state
+                .pending_uploads
+                .iter()
+                .map(|upload| upload.data.len() as u64)
+                .sum(),
+            ..Default::default()
+        };
+        for list in [
+            &state.storage.monochrome_textures,
+            &state.storage.subpixel_textures,
+            &state.storage.polychrome_textures,
+        ] {
+            for texture in list.textures.iter().flatten() {
+                stats.textures += 1;
+                stats.texture_bytes += u64::from(texture.texture.width())
+                    * u64::from(texture.texture.height())
+                    * texture.bytes_per_pixel() as u64;
+            }
+        }
+        stats
+    }
+
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         color_texture_format: wgpu::TextureFormat,
     ) -> Self {
         let max_texture_size = device.limits().max_texture_dimension_2d;
-        WgpuAtlas(Mutex::new(WgpuAtlasState {
-            context: None,
-            device,
-            queue,
-            max_texture_size,
-            color_texture_format,
-            storage: WgpuAtlasStorage::default(),
-            tiles_by_key: Default::default(),
-            pending_uploads: Vec::new(),
-            tile_generations: FxHashMap::default(),
-            next_generation: 0,
-        }))
+        WgpuAtlas(
+            Mutex::new(WgpuAtlasState {
+                context: None,
+                device,
+                queue,
+                max_texture_size,
+                color_texture_format,
+                storage: WgpuAtlasStorage::default(),
+                tiles_by_key: Default::default(),
+                pending_uploads: Vec::new(),
+                tile_generations: FxHashMap::default(),
+                next_generation: 0,
+            }),
+            Default::default(),
+        )
     }
 
     pub fn from_context(context: &WgpuContext) -> Self {
@@ -78,6 +116,7 @@ impl WgpuAtlas {
     }
 
     pub fn before_frame(&self) {
+        self.collect_unused_images();
         let mut lock = self.0.lock();
         lock.flush_uploads();
     }
@@ -138,6 +177,14 @@ impl WgpuAtlas {
 }
 
 impl PlatformAtlas for WgpuAtlas {
+    fn retain_image(&self, key: &gpui::RenderImageParams, lifetime: std::sync::Weak<()>) {
+        self.1.retain(key, lifetime);
+    }
+
+    fn collect_unused_images(&self) {
+        self.1.collect(self);
+    }
+
     #[cfg(not(target_family = "wasm"))]
     fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
         self.0.lock().context.clone().map(|context| context as _)

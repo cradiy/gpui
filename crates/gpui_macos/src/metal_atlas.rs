@@ -13,6 +13,7 @@ use std::{borrow::Cow, sync::Arc};
 pub(crate) struct MetalAtlas {
     native: Mutex<MetalAtlasState>,
     shared: Option<Arc<gpui_wgpu::WgpuAtlas>>,
+    image_lifetimes: gpui::AtlasImageLifetimes,
 }
 
 impl MetalAtlas {
@@ -26,6 +27,7 @@ impl MetalAtlas {
                 tiles_by_key: Default::default(),
             }),
             shared: None,
+            image_lifetimes: Default::default(),
         }
     }
 
@@ -57,6 +59,22 @@ struct MetalAtlasState {
 }
 
 impl PlatformAtlas for MetalAtlas {
+    fn retain_image(&self, key: &gpui::RenderImageParams, lifetime: std::sync::Weak<()>) {
+        if let Some(atlas) = &self.shared {
+            atlas.retain_image(key, lifetime);
+        } else {
+            self.image_lifetimes.retain(key, lifetime);
+        }
+    }
+
+    fn collect_unused_images(&self) {
+        if let Some(atlas) = &self.shared {
+            atlas.collect_unused_images();
+        } else {
+            self.image_lifetimes.collect(self);
+        }
+    }
+
     fn renderer_context(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
         self.shared.as_ref()?.renderer_context()
     }

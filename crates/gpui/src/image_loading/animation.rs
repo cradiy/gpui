@@ -26,6 +26,8 @@ impl Global for ImageAnimationOptions {}
 /// Cached frames are immutable snapshots. Holding returned frames keeps them
 /// alive beyond cache eviction. Seeking behind the decoder restarts decoding
 /// from the beginning; sequential playback reuses the decoder state.
+/// Built-in image painting retains frame tiles while decoded frames or recorded
+/// scenes need them. Explicit effect-image tiles keep caller-managed residency.
 pub struct ImageAnimation {
     bytes: Arc<[u8]>,
     format: ImageFormat,
@@ -103,6 +105,7 @@ impl ImageAnimation {
             convert_to_bgra(&mut frame);
             let mut image = RenderImage::new(vec![frame]);
             image.id = self.ids[current];
+            image.atlas_lifetime = Some(Arc::new(()));
             let image = Arc::new(image);
             while state.cache.len() >= self.capacity {
                 // The poster stays resident for non-animated consumers.

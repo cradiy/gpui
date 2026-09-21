@@ -14,7 +14,7 @@ use gpui::{
     PlatformAtlas, Point, Size,
 };
 
-pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>);
+pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>, gpui::AtlasImageLifetimes);
 
 struct DirectXAtlasState {
     device: ID3D11Device,
@@ -36,14 +36,17 @@ struct DirectXAtlasTexture {
 
 impl DirectXAtlas {
     pub(crate) fn new(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Self {
-        DirectXAtlas(Mutex::new(DirectXAtlasState {
-            device: device.clone(),
-            device_context: device_context.clone(),
-            monochrome_textures: Default::default(),
-            polychrome_textures: Default::default(),
-            subpixel_textures: Default::default(),
-            tiles_by_key: Default::default(),
-        }))
+        DirectXAtlas(
+            Mutex::new(DirectXAtlasState {
+                device: device.clone(),
+                device_context: device_context.clone(),
+                monochrome_textures: Default::default(),
+                polychrome_textures: Default::default(),
+                subpixel_textures: Default::default(),
+                tiles_by_key: Default::default(),
+            }),
+            Default::default(),
+        )
     }
 
     pub(crate) fn get_texture_view(
@@ -71,6 +74,14 @@ impl DirectXAtlas {
 }
 
 impl PlatformAtlas for DirectXAtlas {
+    fn retain_image(&self, key: &gpui::RenderImageParams, lifetime: std::sync::Weak<()>) {
+        self.1.retain(key, lifetime);
+    }
+
+    fn collect_unused_images(&self) {
+        self.1.collect(self);
+    }
+
     fn get_or_insert_with<'a>(
         &self,
         key: &AtlasKey,

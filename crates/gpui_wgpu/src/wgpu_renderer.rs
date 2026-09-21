@@ -28,8 +28,12 @@ use std::time::Duration;
 mod core_video;
 mod distance_field;
 mod fluid;
+mod memory;
+pub use memory::WgpuMemoryStats;
 mod particle_transition;
 mod particles;
+mod pipeline_cache;
+pub(crate) use pipeline_cache::PipelineCache;
 pub(crate) mod scene3d;
 mod scene_snapshot;
 mod subtree_output;
@@ -440,7 +444,7 @@ struct WgpuResources {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface: Option<wgpu::Surface<'static>>,
-    pipelines: WgpuPipelines,
+    pipelines: Arc<WgpuPipelines>,
     effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     subtree_effect_pipelines: HashMap<(u64, wgpu::TextureFormat), Option<wgpu::RenderPipeline>>,
     subtree_image_effect_pipelines:
@@ -458,7 +462,7 @@ struct WgpuResources {
     failed_effect_pipelines: HashSet<u64>,
     backdrop_effect_pipelines: HashMap<u64, wgpu::RenderPipeline>,
     failed_backdrop_effect_pipelines: HashSet<u64>,
-    bind_group_layouts: WgpuBindGroupLayouts,
+    bind_group_layouts: Arc<WgpuBindGroupLayouts>,
     atlas_sampler: wgpu::Sampler,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
@@ -542,6 +546,10 @@ pub struct WgpuRenderer {
     device_lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
     surface_configured: bool,
     needs_redraw: bool,
+    unused_path_frames: u16,
+    unused_backdrop_frames: u16,
+    recent_instance_peak: Cell<u64>,
+    frames_since_instance_trim: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -881,10 +889,8 @@ impl WgpuRenderer {
         let dma_buf_import = context.supports_dma_buf_import();
 
         let rendering_params = RenderingParameters::new(&context.adapter, surface_format);
-        let bind_group_layouts = Self::create_bind_group_layouts(&device);
-        let pipelines = Self::create_pipelines(
-            &device,
-            &bind_group_layouts,
+        let (bind_group_layouts, pipelines) = Self::shared_pipelines(
+            context,
             surface_format,
             alpha_mode,
             rendering_params.path_sample_count,
@@ -1058,6 +1064,10 @@ impl WgpuRenderer {
             device_lost: context.device_lost_flag(),
             surface_configured: true,
             needs_redraw: false,
+            unused_path_frames: 0,
+            unused_backdrop_frames: 0,
+            recent_instance_peak: Cell::new(0),
+            frames_since_instance_trim: 0,
         })
     }
 
@@ -2051,8 +2061,43 @@ impl WgpuRenderer {
         }
     }
 
-    fn ensure_intermediate_textures(&mut self, needs_backdrop: bool) {
-        let needs_path_texture = self.resources().path_intermediate_texture.is_none();
+    fn ensure_intermediate_textures(&mut self, scene: &Scene) {
+        self.trim_instance_buffer();
+        let mut needs_paths = false;
+        let mut needs_backdrop = false;
+        scene.visit(&mut |scene| {
+            needs_paths |= !scene.paths.is_empty();
+            needs_backdrop |= !scene.backdrop_blurs.is_empty();
+        });
+        // Keep briefly idle targets warm without retaining a past workload forever.
+        self.unused_path_frames = if needs_paths {
+            0
+        } else {
+            self.unused_path_frames.saturating_add(1)
+        };
+        self.unused_backdrop_frames = if needs_backdrop {
+            0
+        } else {
+            self.unused_backdrop_frames.saturating_add(1)
+        };
+        if self.unused_path_frames >= 120 {
+            let resources = self.resources_mut();
+            resources.path_intermediate_texture = None;
+            resources.path_intermediate_view = None;
+            resources.path_msaa_texture = None;
+            resources.path_msaa_view = None;
+        }
+        if self.unused_backdrop_frames >= 120 {
+            let resources = self.resources_mut();
+            resources.backdrop_source_texture = None;
+            resources.backdrop_source_view = None;
+            resources.backdrop_horizontal_texture = None;
+            resources.backdrop_horizontal_view = None;
+            resources.backdrop_result_texture = None;
+            resources.backdrop_result_view = None;
+        }
+        let needs_path_texture =
+            needs_paths && self.resources().path_intermediate_texture.is_none();
         let needs_backdrop_textures = needs_backdrop
             && self.backdrop_blur_supported
             && self.resources().backdrop_source_texture.is_none();
@@ -2151,14 +2196,14 @@ impl WgpuRenderer {
             if let Some(surface) = &resources.surface {
                 surface.configure(&resources.device, &surface_config);
             }
-            resources.pipelines = Self::create_pipelines(
-                &resources.device,
-                &resources.bind_group_layouts,
+            let (_, pipelines) = Self::shared_pipelines(
+                &resources.capture_context,
                 surface_config.format,
                 surface_config.alpha_mode,
                 path_sample_count,
                 dual_source_blending,
             );
+            resources.pipelines = pipelines;
             resources.effect_pipelines.clear();
             resources.subtree_effect_pipelines.clear();
             resources.subtree_image_effect_pipelines.clear();
@@ -2342,9 +2387,7 @@ impl WgpuRenderer {
         };
 
         // Now that we know the surface is healthy, ensure intermediate textures exist
-        let mut needs_backdrop = false;
-        scene.visit(&mut |scene| needs_backdrop |= !scene.backdrop_blurs.is_empty());
-        self.ensure_intermediate_textures(needs_backdrop);
+        self.ensure_intermediate_textures(scene);
         self.ensure_subtree_textures(scene.subtree_target_count());
         self.ensure_bloom_textures(scene);
         self.ensure_distance_field(scene);
@@ -2503,9 +2546,7 @@ impl WgpuRenderer {
         self.atlas.before_frame();
         self.ensure_effect_pipelines(scene);
         self.ensure_backdrop_effect_pipelines(scene);
-        let mut needs_backdrop = false;
-        scene.visit(&mut |scene| needs_backdrop |= !scene.backdrop_blurs.is_empty());
-        self.ensure_intermediate_textures(needs_backdrop);
+        self.ensure_intermediate_textures(scene);
         self.ensure_subtree_textures(scene.subtree_target_count());
         self.ensure_bloom_textures(scene);
         self.ensure_distance_field(scene);
@@ -5454,6 +5495,26 @@ impl WgpuRenderer {
         self.instance_buffer_capacity = new_capacity;
     }
 
+    fn trim_instance_buffer(&mut self) {
+        self.frames_since_instance_trim += 1;
+        if self.frames_since_instance_trim < 120 {
+            return;
+        }
+        self.frames_since_instance_trim = 0;
+        let peak = self.recent_instance_peak.replace(0);
+        let capacity = peak.saturating_mul(2).max(2 * 1024 * 1024);
+        if capacity <= self.instance_buffer_capacity / 2 {
+            let resources = self.resources_mut();
+            resources.instance_buffer = resources.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("instance_buffer"),
+                size: capacity,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.instance_buffer_capacity = capacity;
+        }
+    }
+
     fn write_to_instance_buffer(
         &self,
         instance_offset: &mut u64,
@@ -5461,6 +5522,8 @@ impl WgpuRenderer {
     ) -> Option<(u64, NonZeroU64)> {
         let offset = (*instance_offset).next_multiple_of(self.storage_buffer_alignment);
         let size = (data.len() as u64).max(16);
+        self.recent_instance_peak
+            .set(self.recent_instance_peak.get().max(offset + size));
         if offset + size > self.instance_buffer_capacity {
             return None;
         }

@@ -185,6 +185,7 @@ pub(crate) struct MetalRenderer {
     path_intermediate_texture: Option<metal::Texture>,
     path_intermediate_msaa_texture: Option<metal::Texture>,
     path_sample_count: u32,
+    unused_path_frames: u16,
     backdrop_source_texture: Option<metal::Texture>,
     backdrop_blurred_texture: Option<metal::Texture>,
     /// Offscreen render target reused across `render_scene` calls when
@@ -575,6 +576,7 @@ impl MetalRenderer {
             path_intermediate_texture: None,
             path_intermediate_msaa_texture: None,
             path_sample_count: PATH_SAMPLE_COUNT,
+            unused_path_frames: 0,
             backdrop_source_texture: None,
             backdrop_blurred_texture: None,
             #[cfg(any(test, feature = "test-support"))]
@@ -656,7 +658,17 @@ impl MetalRenderer {
                 ];
             }
         }
-        self.update_path_intermediate_textures(size);
+        if self
+            .path_intermediate_texture
+            .as_ref()
+            .is_some_and(|texture| {
+                texture.width() != size.width.0.max(0) as u64
+                    || texture.height() != size.height.0.max(0) as u64
+            })
+        {
+            self.path_intermediate_texture = None;
+            self.path_intermediate_msaa_texture = None;
+        }
     }
 
     fn update_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
@@ -666,6 +678,16 @@ impl MetalRenderer {
         if size.width.0 <= 0 || size.height.0 <= 0 {
             self.path_intermediate_texture = None;
             self.path_intermediate_msaa_texture = None;
+            return;
+        }
+
+        if self
+            .path_intermediate_texture
+            .as_ref()
+            .is_some_and(|texture| {
+                texture.width() == size.width.0 as u64 && texture.height() == size.height.0 as u64
+            })
+        {
             return;
         }
 
@@ -898,9 +920,6 @@ impl MetalRenderer {
             anyhow::bail!("Invalid size for render_scene_to_image: {:?}", size);
         }
 
-        // Update path intermediate textures for this size
-        self.update_path_intermediate_textures(size);
-
         // Create an offscreen texture as render target
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
@@ -1012,8 +1031,6 @@ impl MetalRenderer {
             anyhow::bail!("Invalid size for render_scene: {:?}", size);
         }
 
-        self.update_path_intermediate_textures(size);
-
         let needs_new_target = self.headless_render_target.as_ref().is_none_or(|texture| {
             texture.width() != size.width.0 as u64 || texture.height() != size.height.0 as u64
         });
@@ -1096,6 +1113,16 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
+        if scene.paths.is_empty() {
+            self.unused_path_frames = self.unused_path_frames.saturating_add(1);
+            if self.unused_path_frames >= 120 {
+                self.path_intermediate_texture = None;
+                self.path_intermediate_msaa_texture = None;
+            }
+        } else {
+            self.unused_path_frames = 0;
+            self.update_path_intermediate_textures(viewport_size);
+        }
         let subtree_textures = if let Some(renderer) = &mut self.scene_renderer {
             renderer.prepare(scene, viewport_size)?
         } else {

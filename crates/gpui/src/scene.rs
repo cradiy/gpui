@@ -211,8 +211,17 @@ impl Scene {
                 PaintOperation::EndSubtree => self.end_subtree(),
                 PaintOperation::NextSubtreeInput => self.next_subtree_input(),
                 PaintOperation::SetScene3d(frame) => self.set_subtree_scene3d(frame.clone()),
+                PaintOperation::RetainImage(lifetime) => self.retain_image(lifetime.clone()),
             }
         }
+    }
+
+    pub(crate) fn retain_image(&mut self, lifetime: Arc<()>) {
+        if let Some(pending) = self.pending_subtrees.last_mut() {
+            pending.scene.retain_image(lifetime.clone());
+        }
+        self.paint_operations
+            .push(PaintOperation::RetainImage(lifetime));
     }
 
     pub fn finish(&mut self) {
@@ -438,6 +447,7 @@ pub(crate) enum PaintOperation {
     EndSubtree,
     NextSubtreeInput,
     SetScene3d(Arc<crate::Scene3dFrame>),
+    RetainImage(Arc<()>),
 }
 
 #[derive(Clone)]
@@ -1428,6 +1438,37 @@ mod tests {
             },
             ..Default::default()
         });
+    }
+
+    #[test]
+    fn image_residency_survives_nested_capture_and_partial_replay() {
+        let lifetime = Arc::new(());
+        let weak = Arc::downgrade(&lifetime);
+        let mut original = Scene::default();
+        original.start_subtree(subtree_composite());
+        original.retain_image(lifetime.clone());
+        insert_test_quad(&mut original);
+        original.end_subtree();
+        let retained_range = 0..original.len();
+        insert_test_quad(&mut original);
+        let unrelated_range = retained_range.end..original.len();
+        let captured = original.subtree_layers[0].scene.clone();
+        let mut replayed = Scene::default();
+        replayed.replay(retained_range, &original);
+        let mut unrelated = Scene::default();
+        unrelated.replay(unrelated_range, &original);
+        drop(lifetime);
+        original.clear();
+        replayed.clear();
+        assert!(
+            weak.upgrade().is_some(),
+            "a separately retained capture pins its image"
+        );
+        drop(captured);
+        assert!(
+            weak.upgrade().is_none(),
+            "unrelated replay must not retain discarded images"
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@ use super::{SceneEncoding, WgpuExternalRenderTarget, WgpuRenderer};
 use gpui::{Scene, SubtreeLayer, UiTexture3d};
 
 pub(super) struct UiCapture {
-    renderer: WgpuRenderer,
+    pub(super) renderer: WgpuRenderer,
     pub(super) texture: wgpu::Texture,
     snapshot: Option<SceneSnapshot>,
     validity: OutputValidity,

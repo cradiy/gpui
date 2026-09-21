@@ -371,6 +371,39 @@ async fn incremental_frames_match_eager_decode_and_release_evicted_frames(
     }
 }
 
+#[crate::test]
+async fn evicted_animation_frame_stays_resident_through_scene_replay(executor: BackgroundExecutor) {
+    let bytes = gif(4);
+    let poster = load_image(
+        &bytes,
+        Some(ImageFormat::Gif),
+        &renderer(),
+        ImageLoadLimits::default(),
+        ImageAnimationOptions { cache_frames: 2 },
+    )
+    .unwrap();
+    let source = poster.animation().unwrap();
+    let frame = source.frame(1, &executor).await.unwrap();
+    let lifetime = frame.atlas_lifetime.as_ref().unwrap();
+    let weak = Arc::downgrade(lifetime);
+    let mut original = crate::Scene::default();
+    original.retain_image(lifetime.clone());
+    let mut replayed = crate::Scene::default();
+    replayed.replay(0..original.len(), &original);
+    drop(frame);
+    source.frame(2, &executor).await.unwrap();
+    original.clear();
+    assert!(
+        weak.upgrade().is_some(),
+        "replayed pixels still need their atlas entry"
+    );
+    replayed.clear();
+    assert!(
+        weak.upgrade().is_none(),
+        "decoded eviction and scene release permit collection"
+    );
+}
+
 fn composited_gif() -> Vec<u8> {
     let mut bytes = Vec::new();
     {

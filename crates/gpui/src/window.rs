@@ -1515,9 +1515,11 @@ impl Window {
                 // Throttle frame rate based on conditions:
                 // - Thermal pressure (Serious/Critical): cap to ~60fps
                 // - Inactive window (not focused): cap to ~30fps to save energy
-                let min_frame_interval = if !request_frame_options.force_render
-                    && !request_frame_options.require_presentation
-                    && next_frame_callbacks.borrow().is_empty()
+                // Remap and recovery frames must submit a buffer immediately:
+                // an unmapped surface may not receive another compositor callback.
+                let min_frame_interval = if request_frame_options.force_render
+                    || (!request_frame_options.require_presentation
+                        && next_frame_callbacks.borrow().is_empty())
                 {
                     None
                 } else if !active.get() {

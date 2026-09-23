@@ -1549,7 +1549,7 @@ delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
 impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
     fn event(
         state: &mut WaylandClientStatePtr,
-        _: &wl_callback::WlCallback,
+        callback: &wl_callback::WlCallback,
         event: wl_callback::Event,
         surface_id: &ObjectId,
         _: &Connection,
@@ -1563,7 +1563,7 @@ impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
         drop(state);
 
         if let wl_callback::Event::Done { .. } = event {
-            window.frame();
+            window.frame_done(&callback.id());
         }
     }
 }

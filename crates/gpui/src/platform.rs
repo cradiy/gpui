@@ -1792,6 +1792,18 @@ pub trait InputHandler: 'static {
     }
 }
 
+/// Controls animation throttling for a window that does not have keyboard focus.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnimationFramePolicy {
+    /// Limit unfocused animations to approximately 30 FPS to save energy.
+    #[default]
+    Default,
+    /// Follow platform display callbacks even without keyboard focus.
+    ///
+    /// This does not schedule frames, make hidden windows draw, or bypass thermal limits.
+    FollowDisplay,
+}
+
 /// The variables that can be configured when creating a new window
 #[derive(Debug)]
 pub struct WindowOptions {
@@ -1808,6 +1820,9 @@ pub struct WindowOptions {
 
     /// Whether the window should be shown when created
     pub show: bool,
+
+    /// How animations are throttled when this window does not have keyboard focus.
+    pub animation_frame_policy: AnimationFramePolicy,
 
     /// The kind of window to create
     pub kind: WindowKind,
@@ -1971,6 +1986,7 @@ impl Default for WindowOptions {
             }),
             focus: true,
             show: true,
+            animation_frame_policy: AnimationFramePolicy::Default,
             kind: WindowKind::Normal,
             is_movable: true,
             app_owns_titlebar_drag: false,

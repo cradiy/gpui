@@ -23,6 +23,7 @@ use crate::{
     WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size,
     transparent_black,
 };
+use crate::{AnimationFramePolicy, RequestFrameOptions};
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
@@ -1317,6 +1318,29 @@ fn default_bounds(display_id: Option<DisplayId>, cx: &mut App) -> WindowBounds {
     window_bounds_ctor(Bounds::new(final_origin, base_size))
 }
 
+fn animation_frame_interval(
+    policy: AnimationFramePolicy,
+    active: bool,
+    thermal_state: Option<ThermalState>,
+    options: RequestFrameOptions,
+    has_frame_callbacks: bool,
+) -> Option<Duration> {
+    // Remap/recovery must submit immediately: an unmapped surface may not
+    // receive another compositor callback. Event-driven draws are not throttled.
+    if options.force_render || (!options.require_presentation && !has_frame_callbacks) {
+        None
+    } else if !active && policy == AnimationFramePolicy::Default {
+        Some(Duration::from_micros(33333))
+    } else if matches!(
+        thermal_state,
+        Some(ThermalState::Critical | ThermalState::Serious)
+    ) {
+        Some(Duration::from_micros(16667))
+    } else {
+        None
+    }
+}
+
 impl Window {
     pub(crate) fn new(
         handle: AnyWindowHandle,
@@ -1328,6 +1352,7 @@ impl Window {
             titlebar,
             focus,
             show,
+            animation_frame_policy,
             kind,
             is_movable,
             app_owns_titlebar_drag,
@@ -1512,23 +1537,13 @@ impl Window {
                     .update(&mut cx, |_, _, cx| cx.thermal_state())
                     .log_err();
 
-                // Throttle frame rate based on conditions:
-                // - Thermal pressure (Serious/Critical): cap to ~60fps
-                // - Inactive window (not focused): cap to ~30fps to save energy
-                // Remap and recovery frames must submit a buffer immediately:
-                // an unmapped surface may not receive another compositor callback.
-                let min_frame_interval = if request_frame_options.force_render
-                    || (!request_frame_options.require_presentation
-                        && next_frame_callbacks.borrow().is_empty())
-                {
-                    None
-                } else if !active.get() {
-                    Some(Duration::from_micros(33333))
-                } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
-                    Some(Duration::from_micros(16667))
-                } else {
-                    None
-                };
+                let min_frame_interval = animation_frame_interval(
+                    animation_frame_policy,
+                    active.get(),
+                    thermal_state,
+                    request_frame_options,
+                    !next_frame_callbacks.borrow().is_empty(),
+                );
 
                 let now = Instant::now();
                 if let Some(min_interval) = min_frame_interval {
@@ -7813,11 +7828,98 @@ pub fn outline(
 
 #[cfg(test)]
 mod tests {
+    use super::animation_frame_interval;
+    use crate::{AnimationFramePolicy, RequestFrameOptions, ThermalState};
     use crate::{
         AppContext as _, Bounds, Context, IntoElement, ParentElement as _, Pixels, Render,
         Styled as _, TestAppContext, Window, canvas, div, px, size,
     };
     use std::{cell::Cell, rc::Rc};
+
+    #[test]
+    fn animation_frame_policy_only_relaxes_unfocused_throttling() {
+        for active in [false, true] {
+            for (options, callbacks) in [
+                (RequestFrameOptions::default(), true),
+                (
+                    RequestFrameOptions {
+                        require_presentation: true,
+                        force_render: false,
+                    },
+                    false,
+                ),
+            ] {
+                assert_eq!(
+                    animation_frame_interval(
+                        AnimationFramePolicy::Default,
+                        active,
+                        None,
+                        options,
+                        callbacks
+                    ),
+                    (!active).then_some(std::time::Duration::from_micros(33333)),
+                );
+                assert_eq!(
+                    animation_frame_interval(
+                        AnimationFramePolicy::FollowDisplay,
+                        active,
+                        None,
+                        options,
+                        callbacks
+                    ),
+                    None,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn animation_frame_policy_preserves_thermal_limits() {
+        for active in [false, true] {
+            for thermal in [ThermalState::Serious, ThermalState::Critical] {
+                assert_eq!(
+                    animation_frame_interval(
+                        AnimationFramePolicy::FollowDisplay,
+                        active,
+                        Some(thermal),
+                        RequestFrameOptions::default(),
+                        true
+                    ),
+                    Some(std::time::Duration::from_micros(16667)),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn animation_frame_policy_never_delays_recovery_or_event_driven_draws() {
+        for policy in [
+            AnimationFramePolicy::Default,
+            AnimationFramePolicy::FollowDisplay,
+        ] {
+            for (options, callbacks) in [
+                (
+                    RequestFrameOptions {
+                        force_render: true,
+                        require_presentation: true,
+                    },
+                    true,
+                ),
+                (RequestFrameOptions::default(), false),
+            ] {
+                assert_eq!(
+                    animation_frame_interval(
+                        policy,
+                        false,
+                        Some(ThermalState::Critical),
+                        options,
+                        callbacks
+                    ),
+                    None,
+                );
+            }
+        }
+    }
 
     struct PointerProbe {
         events:

@@ -31,7 +31,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::linux::wayland::{
     display::WaylandDisplay, external_surface::ExternalWaylandSurfaceRoleFactory,
-    serial::SerialKind,
+    frame_callback::PendingFrameCallback, serial::SerialKind,
 };
 use crate::linux::{Globals, Output, WaylandClientStatePtr, get_window};
 use gpui::{
@@ -223,6 +223,7 @@ pub struct WaylandWindowState {
     // The destination belongs to the last presented buffer, not the next layout.
     presented_destination: Size<i32>,
     pending_resize: Option<Size<Pixels>>,
+    frame_callback: PendingFrameCallback<ObjectId>,
     display: Option<(ObjectId, Output)>,
     globals: Globals,
     renderer: WgpuRenderer,
@@ -681,6 +682,13 @@ pub struct WaylandWindowStatePtr {
 }
 
 impl WaylandWindowState {
+    fn request_frame_callback(&mut self) {
+        let surface = &self.surface;
+        let qh = &self.globals.qh;
+        self.frame_callback
+            .request(|| surface.frame(qh, surface.id()).id());
+    }
+
     pub(crate) fn new(
         handle: AnyWindowHandle,
         surface: wl_surface::WlSurface,
@@ -747,6 +755,7 @@ impl WaylandWindowState {
             outputs: HashMap::default(),
             presented_destination: size(-1, -1),
             pending_resize: None,
+            frame_callback: PendingFrameCallback::default(),
             display: None,
             renderer,
             bounds: options.bounds,
@@ -926,7 +935,7 @@ impl WaylandWindow {
         // compositor for the first frame now; the callback is delivered only
         // after GPUI has finished installing its request-frame handler.
         if externally_configured {
-            surface.frame(&this.borrow().globals.qh, surface.id());
+            this.borrow_mut().request_frame_callback();
         }
 
         // Kick things off
@@ -1045,12 +1054,19 @@ impl WaylandWindowStatePtr {
         state.children.values().any(|&blocking| blocking)
     }
 
+    pub fn frame_done(&self, callback: &ObjectId) {
+        if !self.state.borrow_mut().frame_callback.complete(callback) {
+            return;
+        }
+        self.frame();
+    }
+
     pub fn frame(&self) {
         let mut state = self.state.borrow_mut();
         if !state.mapped {
             return;
         }
-        state.surface.frame(&state.globals.qh, state.surface.id());
+        state.request_frame_callback();
         state.resize_throttle = false;
         let force_render = state.force_render_after_recovery;
         state.force_render_after_recovery = false;
@@ -1756,6 +1772,9 @@ impl PlatformWindow for WaylandWindow {
         } else {
             state.surface.attach(None, 0, 0);
             state.surface.commit();
+            // A callback requested before unmap may arrive after remapping.
+            // Ignore it instead of starting a second animation callback chain.
+            state.frame_callback.clear();
             state.mapped = false;
             state.acknowledged_first_configure = false;
             state.renderer_presented = false;

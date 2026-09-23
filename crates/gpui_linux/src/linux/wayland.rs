@@ -3,6 +3,7 @@ mod clipboard;
 mod cursor;
 mod display;
 mod external_surface;
+mod frame_callback;
 mod popup;
 mod serial;
 mod window;

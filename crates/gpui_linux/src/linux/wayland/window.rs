@@ -218,7 +218,8 @@ pub struct WaylandWindowState {
     appearance: WindowAppearance,
     blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
     viewport: Option<wp_viewport::WpViewport>,
-    outputs: HashMap<ObjectId, Output>,
+    // An Enter can arrive before that output's first complete property batch.
+    outputs: HashMap<ObjectId, Option<Output>>,
     // The destination belongs to the last presented buffer, not the next layout.
     presented_destination: Size<i32>,
     pending_resize: Option<Size<Pixels>>,
@@ -791,20 +792,9 @@ impl WaylandWindowState {
     }
 
     pub fn primary_output_scale(&mut self) -> i32 {
-        let mut scale = 1;
-        let mut current_output = self.display.take();
-        for (id, output) in self.outputs.iter() {
-            if let Some((_, output_data)) = &current_output {
-                if output.scale > output_data.scale {
-                    current_output = Some((id.clone(), output.clone()));
-                }
-            } else {
-                current_output = Some((id.clone(), output.clone()));
-            }
-            scale = scale.max(output.scale);
-        }
-        self.display = current_output;
-        scale
+        self.display =
+            select_primary_output(&self.outputs, self.display.as_ref().map(|(id, _)| id));
+        self.display.as_ref().map_or(1, |(_, output)| output.scale)
     }
 
     pub fn inset(&self) -> Pixels {
@@ -1398,35 +1388,14 @@ impl WaylandWindowStatePtr {
         match event {
             wl_surface::Event::Enter { output } => {
                 let id = output.id();
-
-                let Some(output) = outputs.get(&id) else {
-                    return;
-                };
-
-                state.outputs.insert(id, output.clone());
-
-                let scale = state.primary_output_scale();
-                state.update_subpixel_layout();
-
-                // We use `PreferredBufferScale` instead to set the scale if it's available
-                if state.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE {
-                    state.surface.set_buffer_scale(scale);
-                    drop(state);
-                    self.rescale(scale as f32);
-                }
+                let output = outputs.get(&id).cloned();
+                state.outputs.insert(id, output);
+                drop(state);
+                self.outputs_changed();
             }
             wl_surface::Event::Leave { output } => {
-                state.outputs.remove(&output.id());
-
-                let scale = state.primary_output_scale();
-                state.update_subpixel_layout();
-
-                // We use `PreferredBufferScale` instead to set the scale if it's available
-                if state.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE {
-                    state.surface.set_buffer_scale(scale);
-                    drop(state);
-                    self.rescale(scale as f32);
-                }
+                drop(state);
+                self.remove_output(&output.id());
             }
             wl_surface::Event::PreferredBufferScale { factor } => {
                 // We use `WpFractionalScale` instead to set the scale if it's available
@@ -1437,6 +1406,50 @@ impl WaylandWindowStatePtr {
                 }
             }
             _ => {}
+        }
+    }
+
+    pub fn update_output(&self, id: &ObjectId, output: &Output) {
+        let mut state = self.state.borrow_mut();
+        let Some(current) = state.outputs.get_mut(id) else {
+            return;
+        };
+        if current.as_ref() == Some(output) {
+            return;
+        }
+        *current = Some(output.clone());
+        drop(state);
+        self.outputs_changed();
+    }
+
+    pub fn remove_output(&self, id: &ObjectId) {
+        if self.state.borrow_mut().outputs.remove(id).is_some() {
+            self.outputs_changed();
+        }
+    }
+
+    fn outputs_changed(&self) {
+        let mut state = self.state.borrow_mut();
+        let scale = state.primary_output_scale();
+        state.update_subpixel_layout();
+        // Fractional scale and preferred-buffer-scale events remain authoritative.
+        let output_scale = state.globals.fractional_scale_manager.is_none()
+            && state.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE;
+        let rescale = output_scale && state.scale != scale as f32;
+        if output_scale {
+            state.surface.set_buffer_scale(scale);
+        }
+        let redraw = state.mapped && state.acknowledged_first_configure;
+        drop(state);
+        if rescale {
+            self.rescale(scale as f32);
+        } else {
+            // A display's bounds or identity can change without resizing the window.
+            self.notify_resize();
+        }
+        if redraw {
+            self.state.borrow_mut().force_render_after_recovery = true;
+            self.frame();
         }
     }
 
@@ -1479,7 +1492,7 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn set_size_and_scale(&self, size: Option<Size<Pixels>>, scale: Option<f32>) {
-        let (size, scale) = {
+        {
             let mut state = self.state.borrow_mut();
             if size.is_none_or(|size| size == state.bounds.size)
                 && scale.is_none_or(|scale| scale == state.scale)
@@ -1494,18 +1507,24 @@ impl WaylandWindowStatePtr {
             }
             let device_bounds = state.bounds.to_device_pixels(state.scale);
             state.renderer.update_drawable_size(device_bounds.size);
+        }
+        self.notify_resize();
+
+        // Set the viewport destination only alongside the matching new buffer.
+        // An input-region or frame-callback commit in between must not stretch
+        // the previous buffer to this new logical size.
+    }
+
+    fn notify_resize(&self) {
+        let (size, scale) = {
+            let state = self.state.borrow();
             (state.bounds.size, state.scale)
         };
-
         let callback = self.callbacks.borrow_mut().resize.take();
         if let Some(mut fun) = callback {
             fun(size, scale);
             self.callbacks.borrow_mut().resize = Some(fun);
         }
-
-        // Set the viewport destination only alongside the matching new buffer.
-        // An input-region or frame-callback commit in between must not stretch
-        // the previous buffer to this new logical size.
     }
 
     pub fn resize(&self, size: Size<Pixels>) {
@@ -2471,11 +2490,74 @@ fn inset_by_tiling(mut bounds: Bounds<Pixels>, inset: Pixels, tiling: Tiling) ->
     bounds
 }
 
+// Re-select from current membership and fresh properties. An old display clone
+// must not survive a scale decrease, Leave, or registry removal.
+#[allow(clippy::mutable_key_type)]
+fn select_primary_output(
+    outputs: &HashMap<ObjectId, Option<Output>>,
+    preferred: Option<&ObjectId>,
+) -> Option<(ObjectId, Output)> {
+    outputs
+        .iter()
+        .filter_map(|(id, output)| output.as_ref().map(|output| (id, output)))
+        .max_by_key(|(id, output)| (output.scale, Some(*id) == preferred))
+        .map(|(id, output)| (id.clone(), output.clone()))
+}
+
 #[cfg(test)]
 mod tests {
-    use gpui::{px, size};
+    use collections::HashMap;
+    use gpui::{Bounds, DevicePixels, px, size};
+    use wayland_backend::client::ObjectId;
 
-    use super::{drag_icon_hotspot_delta, xdg_toplevel_size};
+    use super::{Output, drag_icon_hotspot_delta, select_primary_output, xdg_toplevel_size};
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn output_selection_refreshes_properties_even_when_scale_decreases() {
+        let id = ObjectId::null();
+        let mut output = Output {
+            name: Some("eDP-1".into()),
+            scale: 2,
+            bounds: Bounds::new(
+                Default::default(),
+                size(DevicePixels(2560), DevicePixels(1600)),
+            ),
+            subpixel: None,
+        };
+        let mut outputs = HashMap::default();
+        outputs.insert(id.clone(), Some(output.clone()));
+        let previous = select_primary_output(&outputs, None).unwrap();
+        output.scale = 1;
+        output.bounds.size = size(DevicePixels(1920), DevicePixels(1200));
+        outputs.insert(id.clone(), Some(output.clone()));
+        let updated = select_primary_output(&outputs, Some(&previous.0)).unwrap();
+        assert_eq!(updated.1, output);
+        assert_ne!(updated.1, previous.1);
+        // A cached preferred display cannot survive leaving its output.
+        outputs.remove(&id);
+        assert!(select_primary_output(&outputs, Some(&previous.0)).is_none());
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn output_selection_waits_for_entered_output_properties() {
+        let id = ObjectId::null();
+        let mut outputs = HashMap::default();
+        outputs.insert(id.clone(), None);
+        assert!(select_primary_output(&outputs, None).is_none());
+        let output = Output {
+            name: Some("DP-1".into()),
+            scale: 1,
+            bounds: Bounds::new(
+                Default::default(),
+                size(DevicePixels(1920), DevicePixels(1080)),
+            ),
+            subpixel: None,
+        };
+        outputs.insert(id.clone(), Some(output.clone()));
+        assert_eq!(select_primary_output(&outputs, None), Some((id, output)));
+    }
 
     #[test]
     fn drag_icon_hotspot_offset_is_incremental() {

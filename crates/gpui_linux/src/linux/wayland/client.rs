@@ -205,11 +205,60 @@ pub struct InProgressOutput {
     position: Option<Point<DevicePixels>>,
     size: Option<Size<DevicePixels>>,
     subpixel: Option<wl_output::Subpixel>,
+    transform: Option<wl_output::Transform>,
 }
 
 impl InProgressOutput {
+    // Keep the last values between Done events: subsequent batches contain
+    // only the properties that changed.
+    fn apply(&mut self, event: wl_output::Event) -> Option<Output> {
+        match event {
+            wl_output::Event::Name { name } => self.name = Some(name),
+            wl_output::Event::Scale { factor } if factor > 0 => self.scale = Some(factor),
+            wl_output::Event::Geometry {
+                x,
+                y,
+                subpixel,
+                transform,
+                ..
+            } => {
+                self.position = Some(point(DevicePixels(x), DevicePixels(y)));
+                self.subpixel = match subpixel {
+                    WEnum::Value(value) => Some(value),
+                    _ => None,
+                };
+                self.transform = match transform {
+                    WEnum::Value(value) => Some(value),
+                    _ => None,
+                };
+            }
+            wl_output::Event::Mode {
+                flags: WEnum::Value(flags),
+                width,
+                height,
+                ..
+            } if flags.contains(wl_output::Mode::Current) && width > 0 && height > 0 => {
+                self.size = Some(size(DevicePixels(width), DevicePixels(height)));
+            }
+            wl_output::Event::Done => return self.complete(),
+            _ => {}
+        }
+        None
+    }
+
     fn complete(&self) -> Option<Output> {
-        if let Some((position, size)) = self.position.zip(self.size) {
+        if let Some((position, mut size)) = self.position.zip(self.size) {
+            if matches!(
+                self.transform,
+                Some(
+                    wl_output::Transform::_90
+                        | wl_output::Transform::_270
+                        | wl_output::Transform::Flipped90
+                        | wl_output::Transform::Flipped270
+                )
+            ) {
+                std::mem::swap(&mut size.width, &mut size.height);
+            }
             let scale = self.scale.unwrap_or(1);
             Some(Output {
                 name: self.name.clone(),
@@ -258,6 +307,7 @@ pub(crate) struct WaylandClientState {
     outputs: HashMap<ObjectId, Output>,
     in_progress_outputs: HashMap<ObjectId, InProgressOutput>,
     wl_outputs: HashMap<ObjectId, wl_output::WlOutput>,
+    output_globals: HashMap<u32, ObjectId>,
     keyboard_layout: LinuxKeyboardLayout,
     keymap_state: Option<xkb::State>,
     compose_state: Option<xkb::compose::State>,
@@ -807,6 +857,7 @@ impl WaylandClient {
         let mut in_progress_outputs = HashMap::default();
         #[allow(clippy::mutable_key_type)]
         let mut wl_outputs: HashMap<ObjectId, wl_output::WlOutput> = HashMap::default();
+        let mut output_globals = HashMap::default();
         globals.contents().with_list(|list| {
             for global in list {
                 match &global.interface[..] {
@@ -826,6 +877,7 @@ impl WaylandClient {
                             (),
                         );
                         in_progress_outputs.insert(output.id(), InProgressOutput::default());
+                        output_globals.insert(global.name, output.id());
                         wl_outputs.insert(output.id(), output);
                     }
                     _ => {}
@@ -971,6 +1023,7 @@ impl WaylandClient {
             outputs: HashMap::default(),
             in_progress_outputs,
             wl_outputs,
+            output_globals,
             windows: HashMap::default(),
             common,
             keyboard_layout: LinuxKeyboardLayout::new(UNKNOWN_KEYBOARD_LAYOUT_NAME),
@@ -1444,12 +1497,28 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                     state
                         .in_progress_outputs
                         .insert(output.id(), InProgressOutput::default());
+                    state.output_globals.insert(name, output.id());
                     state.wl_outputs.insert(output.id(), output);
                 }
                 _ => {}
             },
-            wl_registry::Event::GlobalRemove { name: _ } => {
-                // TODO: handle global removal
+            wl_registry::Event::GlobalRemove { name } => {
+                let Some(id) = state.output_globals.remove(&name) else {
+                    return;
+                };
+                state.in_progress_outputs.remove(&id);
+                state.outputs.remove(&id);
+                if let Some(output) = state.wl_outputs.remove(&id)
+                    && output.version() >= wl_output::REQ_RELEASE_SINCE
+                {
+                    output.release();
+                }
+                let windows = state.windows.values().cloned().collect::<Vec<_>>();
+                // Window callbacks can re-enter the client to query displays.
+                drop(state);
+                for window in windows {
+                    window.remove_output(&id);
+                }
             }
             _ => {}
         }
@@ -1544,30 +1613,17 @@ impl Dispatch<wl_output::WlOutput, ()> for WaylandClientStatePtr {
         let Some(in_progress_output) = state.in_progress_outputs.get_mut(&output.id()) else {
             return;
         };
-
-        match event {
-            wl_output::Event::Name { name } => {
-                in_progress_output.name = Some(name);
-            }
-            wl_output::Event::Scale { factor } => {
-                in_progress_output.scale = Some(factor);
-            }
-            wl_output::Event::Geometry { x, y, subpixel, .. } => {
-                in_progress_output.position = Some(point(DevicePixels(x), DevicePixels(y)));
-                if let WEnum::Value(subpixel) = subpixel {
-                    in_progress_output.subpixel = Some(subpixel);
-                }
-            }
-            wl_output::Event::Mode { width, height, .. } => {
-                in_progress_output.size = Some(size(DevicePixels(width), DevicePixels(height)))
-            }
-            wl_output::Event::Done => {
-                if let Some(complete) = in_progress_output.complete() {
-                    state.outputs.insert(output.id(), complete);
-                }
-                state.in_progress_outputs.remove(&output.id());
-            }
-            _ => {}
+        let Some(complete) = in_progress_output.apply(event) else {
+            return;
+        };
+        if state.outputs.get(&output.id()) == Some(&complete) {
+            return;
+        }
+        state.outputs.insert(output.id(), complete.clone());
+        let windows = state.windows.values().cloned().collect::<Vec<_>>();
+        drop(state);
+        for window in windows {
+            window.update_output(&output.id(), &complete);
         }
     }
 }
@@ -3054,6 +3110,100 @@ impl Dispatch<XdgDialogV1, ()> for WaylandClientStatePtr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn output_geometry(x: i32, y: i32, transform: wl_output::Transform) -> wl_output::Event {
+        wl_output::Event::Geometry {
+            x,
+            y,
+            physical_width: 300,
+            physical_height: 190,
+            subpixel: WEnum::Value(wl_output::Subpixel::HorizontalRgb),
+            make: "Test".into(),
+            model: "Display".into(),
+            transform: WEnum::Value(transform),
+        }
+    }
+
+    fn output_mode(flags: wl_output::Mode, width: i32, height: i32) -> wl_output::Event {
+        wl_output::Event::Mode {
+            flags: WEnum::Value(flags),
+            width,
+            height,
+            refresh: 60000,
+        }
+    }
+
+    #[test]
+    fn output_updates_are_batched_and_preserve_unchanged_properties() {
+        let mut pending = InProgressOutput::default();
+        assert!(
+            pending
+                .apply(output_geometry(0, 0, wl_output::Transform::Normal))
+                .is_none()
+        );
+        assert!(
+            pending
+                .apply(output_mode(wl_output::Mode::Current, 2560, 1600))
+                .is_none()
+        );
+        assert!(
+            pending
+                .apply(wl_output::Event::Name {
+                    name: "eDP-1".into()
+                })
+                .is_none()
+        );
+        assert!(
+            pending
+                .apply(wl_output::Event::Scale { factor: 2 })
+                .is_none()
+        );
+        let first = pending.apply(wl_output::Event::Done).unwrap();
+        assert_eq!(
+            first.bounds.size,
+            size(DevicePixels(2560), DevicePixels(1600))
+        );
+        // A later resume/configuration batch need not repeat the name or mode.
+        assert!(
+            pending
+                .apply(output_geometry(1920, 0, wl_output::Transform::Normal))
+                .is_none()
+        );
+        assert!(
+            pending
+                .apply(wl_output::Event::Scale { factor: 1 })
+                .is_none()
+        );
+        let updated = pending.apply(wl_output::Event::Done).unwrap();
+        assert_eq!(updated.scale, 1);
+        assert_eq!(updated.name.as_deref(), Some("eDP-1"));
+        assert_eq!(
+            updated.bounds.origin,
+            point(DevicePixels(1920), DevicePixels(0))
+        );
+        assert_eq!(updated.bounds.size, first.bounds.size);
+        assert_eq!(first.scale, 2);
+        assert_eq!(first.bounds.origin, Point::default());
+    }
+
+    #[test]
+    fn output_modes_use_current_not_last_advertised_and_handle_rotation() {
+        let mut pending = InProgressOutput::default();
+        pending.apply(output_geometry(0, 0, wl_output::Transform::_90));
+        // Preferred and current are independent flags.
+        pending.apply(output_mode(wl_output::Mode::Current, 2560, 1600));
+        pending.apply(output_mode(wl_output::Mode::Preferred, 1920, 1080));
+        let output = pending.apply(wl_output::Event::Done).unwrap();
+        assert_eq!(
+            output.bounds.size,
+            size(DevicePixels(1600), DevicePixels(2560))
+        );
+        pending.apply(output_mode(wl_output::Mode::Current, 1920, 1200));
+        assert_eq!(
+            pending.apply(wl_output::Event::Done).unwrap().bounds.size,
+            size(DevicePixels(1200), DevicePixels(1920))
+        );
+    }
 
     #[test]
     fn data_offer_finish_requires_acceptance_and_selected_action() {

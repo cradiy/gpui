@@ -14,10 +14,10 @@ use calloop::{
     EventLoop, LoopHandle,
     timer::{TimeoutAction, Timer},
 };
-use calloop_wayland_source::WaylandSource;
 use collections::HashMap;
 use filedescriptor::Pipe;
 use gpui_util::ResultExt as _;
+use gpui_wayland_source::insert_wayland_source;
 use http_client::Url;
 use smallvec::SmallVec;
 use wayland_backend::client::ObjectId;
@@ -1079,9 +1079,7 @@ impl WaylandClient {
             ime_enabled: None,
         }));
 
-        WaylandSource::new(conn, event_queue)
-            .insert(handle)
-            .unwrap();
+        insert_wayland_source(conn, event_queue, handle).unwrap();
 
         Self(state)
     }

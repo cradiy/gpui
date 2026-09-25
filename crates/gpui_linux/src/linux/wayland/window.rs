@@ -218,6 +218,7 @@ pub struct WaylandWindowState {
     appearance: WindowAppearance,
     blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
     viewport: Option<wp_viewport::WpViewport>,
+    fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
     // An Enter can arrive before that output's first complete property batch.
     outputs: HashMap<ObjectId, Option<Output>>,
     // The destination belongs to the last presented buffer, not the next layout.
@@ -751,6 +752,7 @@ impl WaylandWindowState {
             app_id: options.app_id,
             blur: None,
             viewport,
+            fractional_scale: None,
             globals,
             outputs: HashMap::default(),
             presented_destination: size(-1, -1),
@@ -855,6 +857,10 @@ impl Drop for WaylandWindow {
             viewport.destroy();
         }
 
+        if let Some(fractional_scale) = state.fractional_scale.take() {
+            fractional_scale.destroy();
+        }
+
         // The wl_surface itself should always be destroyed last.
         state.surface.destroy();
 
@@ -905,10 +911,6 @@ impl WaylandWindow {
         )?;
         let externally_configured = matches!(surface_state, WaylandSurfaceState::External(_));
 
-        if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
-            fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
-        }
-
         let viewport = globals
             .viewporter
             .as_ref()
@@ -930,6 +932,16 @@ impl WaylandWindow {
             )?)),
             callbacks: Rc::new(RefCell::new(Callbacks::default())),
         });
+
+        {
+            let mut state = this.borrow_mut();
+            let globals = &state.globals;
+            let fractional_scale = globals
+                .fractional_scale_manager
+                .as_ref()
+                .map(|manager| manager.get_fractional_scale(&surface, &globals.qh, surface.id()));
+            state.fractional_scale = fractional_scale;
+        }
 
         // External roles do not receive an xdg/layer configure event. Ask the
         // compositor for the first frame now; the callback is delivered only

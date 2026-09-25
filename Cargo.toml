@@ -9,6 +9,7 @@ members = [
   "crates/gpui_media_backend",
   "crates/gpui_shared_string",
   "crates/gpui_linux",
+  "crates/gpui_wayland_source",
   "crates/gpui_macos",
   "crates/gpui_macros",
   "crates/gpui_platform",
@@ -53,6 +54,7 @@ gpui_media_core = { path = "crates/gpui_media_core" }
 gpui_media_backend = { path = "crates/gpui_media_backend" }
 gpui_shared_string = { path = "crates/gpui_shared_string" }
 gpui_linux = { path = "crates/gpui_linux", default-features = false }
+gpui_wayland_source = { path = "crates/gpui_wayland_source" }
 gpui_macos = { path = "crates/gpui_macos", default-features = false }
 gpui_macros = { path = "crates/gpui_macros" }
 gpui_effects = { path = "crates/gpui_effects" }

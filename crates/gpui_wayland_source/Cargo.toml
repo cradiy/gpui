@@ -1,0 +1,16 @@
+[package]
+name = "gpui_wayland_source"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+
+[dependencies]
+calloop = "0.14"
+wayland-client = "0.31.15"
+
+[dev-dependencies]
+wayland-backend = { version = "0.3.17", features = ["client_system", "dlopen"] }
+
+[lints]
+workspace = true

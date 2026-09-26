@@ -16,6 +16,7 @@ pub struct ColorPicker {
     appearance: ColorPickerAppearance,
     sv_label: Option<SharedString>,
     hue_label: Option<SharedString>,
+    horizontal_hue: bool,
     style: StyleRefinement,
 }
 
@@ -26,6 +27,7 @@ impl ColorPicker {
             appearance: ColorPickerAppearance::default(),
             sv_label: None,
             hue_label: None,
+            horizontal_hue: false,
             style: StyleRefinement::default()
                 .w_full()
                 .gap(px(14.))
@@ -39,6 +41,12 @@ impl ColorPicker {
 
     pub fn appearance(mut self, appearance: ColorPickerAppearance) -> Self {
         self.appearance = appearance;
+        self
+    }
+
+    /// Place the hue slider below the color area.
+    pub fn horizontal_hue(mut self, horizontal: bool) -> Self {
+        self.horizontal_hue = horizontal;
         self
     }
 
@@ -127,6 +135,7 @@ impl ColorPicker {
     }
 
     fn hue_track(&self, hsva: Hsva, capture: CaptureToken, focus: FocusHandle) -> impl IntoElement {
+        let horizontal = self.horizontal_hue;
         let appearance = self.appearance;
         let state = self.state.clone();
         let keyboard_state = self.state.clone();
@@ -154,7 +163,11 @@ impl ColorPicker {
             .aria_numeric_value_step(1.0)
             .aria_min_numeric_value(0.0)
             .aria_max_numeric_value(360.0)
-            .aria_orientation(Orientation::Vertical)
+            .aria_orientation(if horizontal {
+                Orientation::Horizontal
+            } else {
+                Orientation::Vertical
+            })
             .focus_visible(move |style| style.border_2().border_color(appearance.accent))
             .on_key_down(move |event, _, cx| {
                 adjust_hue_from_key(&keyboard_state, event, cx);
@@ -172,16 +185,24 @@ impl ColorPicker {
             .overflow_hidden()
             .rounded_lg()
             .cursor(CursorStyle::ResizeUpDown);
+        if horizontal {
+            track = track
+                .w_full()
+                .h(appearance.hue_width)
+                .flex_row()
+                .cursor(CursorStyle::ResizeLeftRight);
+        }
         for pair in colors.windows(2) {
-            track = track.child(
-                div()
-                    .flex_1()
-                    .bg(two_stop_gradient(180.0, pair[0], pair[1])),
-            );
+            track = track.child(div().flex_1().bg(two_stop_gradient(
+                if horizontal { 90.0 } else { 180.0 },
+                pair[0],
+                pair[1],
+            )));
         }
         track
             .child(
                 div()
+                    .when(horizontal, |el| el.hidden())
                     .absolute()
                     .left_0()
                     .right_0()
@@ -192,10 +213,35 @@ impl ColorPicker {
                     .border_color(black())
                     .bg(appearance.marker),
             )
+            .when(horizontal, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .left(appearance.hue_width / 2.)
+                        .right(appearance.hue_width / 2.)
+                        .top_0()
+                        .bottom_0()
+                        .child(
+                            div()
+                                .absolute()
+                                .left(relative(hsva.h))
+                                .ml(-appearance.hue_width / 2.)
+                                .size(appearance.hue_width)
+                                .rounded(appearance.hue_width / 2.)
+                                .border_2()
+                                .border_color(appearance.marker)
+                                .bg(hsla(hsva.h, 1., 0.5, 1.)),
+                        ),
+                )
+            })
             .child(
                 ColorInteraction::new(capture, focus, move |point, phase, _, cx| {
                     state.update(cx, |state, cx| {
-                        state.update_hue(point.y, phase == InteractionPhase::Commit, cx)
+                        state.update_hue(
+                            if horizontal { point.x } else { point.y },
+                            phase == InteractionPhase::Commit,
+                            cx,
+                        )
                     });
                 })
                 .absolute()
@@ -219,6 +265,7 @@ impl RenderOnce for ColorPicker {
 
         let mut element = div()
             .flex()
+            .when(self.horizontal_hue, |el| el.flex_col())
             .child(self.color_area(hsva, sv_capture, sv_focus))
             .child(self.hue_track(hsva, hue_capture, hue_focus));
         element.style().refine(&self.style);

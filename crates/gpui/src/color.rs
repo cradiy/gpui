@@ -747,6 +747,23 @@ pub(crate) enum BackgroundTag {
     LinearGradient = 1,
     PatternSlash = 2,
     Checkerboard = 3,
+    RadialGradient = 4,
+    AngularGradient = 5,
+    DiamondGradient = 6,
+}
+
+/// Geometry of a color-stop gradient, centered in its painted bounds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GradientKind {
+    /// Parallel color bands along the gradient angle.
+    #[default]
+    Linear,
+    /// Elliptical distance from the center to the edges.
+    Radial,
+    /// Color stops swept clockwise around the center.
+    Angular,
+    /// Manhattan distance in axes rotated by the gradient angle.
+    Diamond,
 }
 
 /// A color space for color interpolation.
@@ -894,9 +911,13 @@ impl std::fmt::Debug for Background {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.tag {
             BackgroundTag::Solid => write!(f, "Solid({:?})", self.solid),
-            BackgroundTag::LinearGradient => write!(
+            BackgroundTag::LinearGradient
+            | BackgroundTag::RadialGradient
+            | BackgroundTag::AngularGradient
+            | BackgroundTag::DiamondGradient => write!(
                 f,
-                "LinearGradient({}, {:?}, phase: {}, repeating: {})",
+                "{:?}({}, {:?}, phase: {}, repeating: {})",
+                self.tag,
                 self.gradient_angle_or_pattern_height,
                 &self.colors[..self.stop_count as usize],
                 self.gradient_phase,
@@ -1116,6 +1137,25 @@ impl LinearColorStop {
 }
 
 impl Background {
+    /// Select gradient geometry without changing stops, interpolation, angle or phase.
+    /// Non-gradient backgrounds are returned unchanged.
+    pub fn gradient_kind(mut self, kind: GradientKind) -> Self {
+        if matches!(
+            self.tag,
+            BackgroundTag::LinearGradient
+                | BackgroundTag::RadialGradient
+                | BackgroundTag::AngularGradient
+                | BackgroundTag::DiamondGradient
+        ) {
+            self.tag = match kind {
+                GradientKind::Linear => BackgroundTag::LinearGradient,
+                GradientKind::Radial => BackgroundTag::RadialGradient,
+                GradientKind::Angular => BackgroundTag::AngularGradient,
+                GradientKind::Diamond => BackgroundTag::DiamondGradient,
+            };
+        }
+        self
+    }
     /// Returns the solid color if this is a solid background, None otherwise.
     pub fn as_solid(&self) -> Option<Hsla> {
         if self.tag == BackgroundTag::Solid {
@@ -1158,7 +1198,10 @@ impl Background {
     pub fn is_transparent(&self) -> bool {
         match self.tag {
             BackgroundTag::Solid => self.solid.is_transparent(),
-            BackgroundTag::LinearGradient => self.colors[..self.stop_count as usize]
+            BackgroundTag::LinearGradient
+            | BackgroundTag::RadialGradient
+            | BackgroundTag::AngularGradient
+            | BackgroundTag::DiamondGradient => self.colors[..self.stop_count as usize]
                 .iter()
                 .all(|c| c.color.is_transparent()),
             BackgroundTag::PatternSlash => self.solid.is_transparent(),

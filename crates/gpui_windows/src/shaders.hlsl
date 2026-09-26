@@ -335,7 +335,7 @@ GradientColor prepare_gradient_color(uint tag, uint color_space, Hsla solid, Lin
     GradientColor output = (GradientColor)0;
     if (tag == 0 || tag == 2 || tag == 3) {
         output.solid = hsla_to_rgba(solid);
-    } else if (tag == 1) {
+    } else if (tag == 1 || (tag >= 4 && tag <= 6)) {
         for (uint ix = 0; ix < 4; ix++) {
             float4 color = hsla_to_rgba(colors[ix].color);
             output.colors[ix] = color_space == 1 ? srgb_to_oklab(color) : color;
@@ -456,7 +456,7 @@ float4 gradient_color(Background background,
         case 0:
             color = solid_color;
             break;
-        case 1: {
+        case 1: case 4: case 5: case 6: {
             // -90 degrees to match the CSS gradient angle.
             float gradient_angle = background.gradient_angle_or_pattern_height;
             float radians = (fmod(gradient_angle, 360.0) - 90.0) * (M_PI_F / 180.0);
@@ -481,6 +481,14 @@ float4 gradient_color(Background background,
                 t = (t + half_size.y) / bounds.size.y;
             }
 
+            if (background.tag != 1) {
+                float2 q = center_to_point / max(half_size, float2(0.0001, 0.0001));
+                float c = cos(radians), s = sin(radians);
+                float2 r = float2(q.x * c + q.y * s, -q.x * s + q.y * c);
+                if (background.tag == 4) t = length(q);
+                else if (background.tag == 5) t = frac((atan2(q.y, q.x) - radians) / (2.0 * M_PI_F) + 1.0);
+                else t = abs(r.x) + abs(r.y);
+            }
             color = sample_linear_gradient(
                 background, t, color0, color1, color2, color3);
 

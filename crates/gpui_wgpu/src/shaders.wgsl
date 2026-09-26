@@ -429,7 +429,7 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
 
     if (tag == 0u || tag == 2u || tag == 3u) {
         result.solid = hsla_to_rgba(solid);
-    } else if (tag == 1u) {
+    } else if (tag == 1u || (tag >= 4u && tag <= 6u)) {
         for (var ix = 0u; ix < 4u; ix += 1u) {
             // hsla_to_rgba returns a linear sRGB color.
             let color = hsla_to_rgba(colors[ix].color);
@@ -537,7 +537,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
         default: {
             return solid_color;
         }
-        case 1u: {
+        case 1u, 4u, 5u, 6u: {
             // Linear gradient background.
             // -90 degrees to match the CSS gradient angle.
             let angle = background.gradient_angle_or_pattern_height;
@@ -562,6 +562,19 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
                 t = (t + half_size.y) / bounds.size.y;
             }
 
+            if (background.tag != 1u) {
+                let q = (position - center) / max(half_size, vec2<f32>(0.0001));
+                let c = cos(radians);
+                let s = sin(radians);
+                let r = vec2<f32>(q.x * c + q.y * s, -q.x * s + q.y * c);
+                if (background.tag == 4u) {
+                    t = length(q);
+                } else if (background.tag == 5u) {
+                    t = fract((atan2(q.y, q.x) - radians) / (2.0 * M_PI_F) + 1.0);
+                } else {
+                    t = abs(r.x) + abs(r.y);
+                }
+            }
             background_color = sample_linear_gradient(background, t, colors);
 
             // Dither to reduce visible 8-bit color banding on large gradients.

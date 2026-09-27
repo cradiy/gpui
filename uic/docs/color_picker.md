@@ -139,6 +139,12 @@ picker.update(cx, |picker, cx| {
 });
 ```
 
+### Screen sampling
+
+Compose a [`ScreenColorPicker`](screen_color_picker.md) with the same color state
+to invoke the platform screen-color sampler. Handle its `Picked` event with
+`ColorPickerState::set_value`; preserve the current alpha if desired.
+
 ### Text inputs
 
 Parse the input into `Rgba`, then update the same state:

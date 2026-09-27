@@ -149,6 +149,16 @@ pub trait Platform: 'static {
         false
     }
 
+    /// Opens the platform screen-color sampler. `None` means the user cancelled.
+    /// Successful samples are opaque sRGB colors. Unsupported platforms return an error.
+    fn pick_screen_color(&self) -> oneshot::Receiver<Result<Option<crate::Rgba>>> {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(Err(anyhow::anyhow!(
+            "System screen color picking is not supported on this platform"
+        )));
+        rx
+    }
+
     fn screen_capture_sources(
         &self,
     ) -> oneshot::Receiver<anyhow::Result<Vec<Rc<dyn ScreenCaptureSource>>>> {

@@ -1295,6 +1295,14 @@ impl App {
         self.platform.is_screen_capture_supported()
     }
 
+    /// Opens the platform screen-color sampler and returns an opaque sRGB color.
+    /// `Ok(None)` means cancellation; unavailable system services return an error.
+    /// Supported Wayland compositors use a desktop magnifier; other backends use
+    /// the system sampler. No screen-capture feature is required.
+    pub fn pick_screen_color(&self) -> oneshot::Receiver<Result<Option<crate::Rgba>>> {
+        self.platform.pick_screen_color()
+    }
+
     /// Returns a list of available screen capture sources.
     pub fn screen_capture_sources(
         &self,

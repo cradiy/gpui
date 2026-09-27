@@ -86,7 +86,7 @@ calloop = "0.14.3"
 raw-window-handle = "0.6"
 
 # Used in both windowing options
-ashpd = { workspace = true, optional = true }
+ashpd = { workspace = true, optional = true, features = ["screenshot"] }
 swash = { version = "0.2.6" }
 bitflags = { workspace = true, optional = true }
 filedescriptor = { version = "0.8.2", optional = true }

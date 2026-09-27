@@ -807,6 +807,70 @@ impl Platform for MacPlatform {
         self.0.lock().open_urls = Some(callback);
     }
 
+    fn pick_screen_color(&self) -> oneshot::Receiver<Result<Option<gpui::Rgba>>> {
+        let (tx, rx) = oneshot::channel();
+        self.foreground_executor()
+            .spawn(async move {
+                let Some(class) = Class::get("NSColorSampler") else {
+                    let _ = tx.send(Err(anyhow!(
+                        "NSColorSampler is unavailable on this macOS version"
+                    )));
+                    return;
+                };
+                // Keep the sampler alive until its main-thread completion handler fires.
+                let sampler: id = unsafe { msg_send![class, new] };
+                if sampler == nil {
+                    let _ = tx.send(Err(anyhow!("Could not create NSColorSampler")));
+                    return;
+                }
+                let (selection_tx, selection_rx) = oneshot::channel();
+                let selection_tx = Cell::new(Some(selection_tx));
+                let block = ConcreteBlock::new(move |color: id| {
+                    let result = unsafe {
+                        if color == nil {
+                            Ok(None)
+                        } else {
+                            let space: id = msg_send![class!(NSColorSpace), sRGBColorSpace];
+                            let color: id = msg_send![color, colorUsingColorSpace: space];
+                            if color == nil {
+                                Err(anyhow!("Could not convert sampled color to sRGB"))
+                            } else {
+                                let r: f64 = msg_send![color, redComponent];
+                                let g: f64 = msg_send![color, greenComponent];
+                                let b: f64 = msg_send![color, blueComponent];
+                                if [r, g, b].iter().all(|v| v.is_finite()) {
+                                    Ok(Some(gpui::Rgba {
+                                        r: r.clamp(0., 1.) as f32,
+                                        g: g.clamp(0., 1.) as f32,
+                                        b: b.clamp(0., 1.) as f32,
+                                        a: 1.,
+                                    }))
+                                } else {
+                                    Err(anyhow!("System sampler returned an invalid color"))
+                                }
+                            }
+                        }
+                    };
+                    if let Some(tx) = selection_tx.take() {
+                        let _ = tx.send(result);
+                    }
+                })
+                .copy();
+                unsafe {
+                    let _: () = msg_send![sampler, showSamplerWithSelectionHandler: &*block];
+                }
+                let result = selection_rx.await.unwrap_or_else(|_| {
+                    Err(anyhow!("System color sampler closed without a result"))
+                });
+                unsafe {
+                    let _: () = msg_send![sampler, release];
+                }
+                let _ = tx.send(result);
+            })
+            .detach();
+        rx
+    }
+
     fn prompt_for_paths(
         &self,
         options: PathPromptOptions,

@@ -398,6 +398,80 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
         self.inner.active_window()
     }
 
+    #[cfg(any(feature = "wayland", feature = "x11"))]
+    fn pick_screen_color(&self) -> oneshot::Receiver<Result<Option<gpui::Rgba>>> {
+        let (mut tx, rx) = oneshot::channel();
+        let identifier = self.inner.window_identifier();
+        #[cfg(feature = "wayland")]
+        let wayland = self.inner.compositor_name() == "Wayland";
+        #[cfg(feature = "wayland")]
+        let sampler_text = self.text_system();
+        self.foreground_executor()
+            .spawn(async move {
+                #[cfg(feature = "wayland")]
+                if wayland {
+                    use crate::linux::wayland::color_picker::{self, Outcome};
+                    let result = match futures::future::select(
+                        color_picker::pick(sampler_text),
+                        tx.cancellation(),
+                    )
+                    .await
+                    {
+                        futures::future::Either::Left((result, _)) => result,
+                        futures::future::Either::Right(_) => return,
+                    };
+                    match result {
+                        Ok(Ok(Outcome::Unsupported)) => {}
+                        result => {
+                            let result = match result {
+                                Ok(Ok(Outcome::Complete(color))) => Ok(color),
+                                Ok(Err(error)) => Err(error),
+                                Err(error) => Err(anyhow!(error)),
+                                Ok(Ok(Outcome::Unsupported)) => unreachable!(),
+                            };
+                            let _ = tx.send(result);
+                            return;
+                        }
+                    }
+                }
+                let result = async {
+                    ashpd::desktop::Color::pick()
+                        .identifier(identifier.await)
+                        .send()
+                        .await?
+                        .response()
+                }
+                .await;
+                let result = match result {
+                    Ok(color) => {
+                        let channels = [color.red(), color.green(), color.blue()];
+                        if channels
+                            .iter()
+                            .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+                        {
+                            Ok(Some(gpui::Rgba {
+                                r: channels[0] as f32,
+                                g: channels[1] as f32,
+                                b: channels[2] as f32,
+                                a: 1.0,
+                            }))
+                        } else {
+                            Err(anyhow!(
+                                "Screen color portal returned an invalid sRGB color"
+                            ))
+                        }
+                    }
+                    Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => {
+                        Ok(None)
+                    }
+                    Err(error) => Err(anyhow!(error).context("System screen color picker failed")),
+                };
+                let _ = tx.send(result);
+            })
+            .detach();
+        rx
+    }
+
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
         self.inner.window_stack()
     }

@@ -1,5 +1,6 @@
 mod client;
 mod clipboard;
+pub(crate) mod color_picker;
 mod cursor;
 mod display;
 mod external_surface;

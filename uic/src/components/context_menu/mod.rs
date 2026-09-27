@@ -6,8 +6,8 @@ use std::{cell::Cell, fmt, rc::Rc, time::Duration};
 use gpui::{
     Anchor, AnchoredPositionMode, AnyElement, App, Bounds, Context, Entity, FocusHandle, Global,
     InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point,
-    Render, Subscription, Task, Window, WindowId, anchored, canvas, deferred, div, point,
-    prelude::*,
+    Render, RenderOnce, Subscription, Task, Window, WindowId, anchored, canvas, deferred, div,
+    point, prelude::*,
 };
 
 pub use appearance::ContextMenuAppearance;
@@ -19,6 +19,78 @@ const CONTEXT_MENU_PRIORITY: usize = 1_100;
 const SUBMENU_OPEN_DELAY: Duration = Duration::from_millis(150);
 
 type BoundsTracker = Rc<Cell<Option<Bounds<Pixels>>>>;
+type MenuBuilder = Rc<dyn Fn(&mut Window, &mut App) -> ContextMenu>;
+
+/// Horizontal alignment used when a menu is anchored below a trigger element.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ContextMenuAlignment {
+    /// Align the menu's left edge with the trigger's left edge.
+    #[default]
+    Start,
+    /// Align the menu's horizontal center with the trigger's center.
+    Center,
+    /// Align the menu's right edge with the trigger's right edge.
+    End,
+}
+
+/// A left-click trigger that measures its child and opens a menu below it.
+///
+/// Use this for toolbar and overflow menus. Pointer-positioned right-click menus
+/// should continue to use [`ContextMenuExt::context_menu`] or [`show`].
+#[derive(IntoElement)]
+pub struct ContextMenuTrigger {
+    trigger: AnyElement,
+    build: MenuBuilder,
+    alignment: ContextMenuAlignment,
+    gap: Pixels,
+}
+
+impl ContextMenuTrigger {
+    pub fn new(
+        trigger: impl IntoElement,
+        build: impl Fn(&mut Window, &mut App) -> ContextMenu + 'static,
+    ) -> Self {
+        Self {
+            trigger: trigger.into_any_element(),
+            build: Rc::new(build),
+            alignment: ContextMenuAlignment::default(),
+            gap: gpui::px(6.),
+        }
+    }
+
+    pub fn alignment(mut self, alignment: ContextMenuAlignment) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    pub fn gap(mut self, gap: Pixels) -> Self {
+        self.gap = gap.max(Pixels::ZERO);
+        self
+    }
+}
+
+impl RenderOnce for ContextMenuTrigger {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let trigger_bounds: BoundsTracker = Rc::new(Cell::new(None));
+        let bounds_for_click = trigger_bounds.clone();
+        let build = self.build;
+        let alignment = self.alignment;
+        let gap = self.gap;
+
+        div()
+            .relative()
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                let Some(bounds) = bounds_for_click.get() else {
+                    return;
+                };
+                let result = show_below((build)(window, cx), bounds, alignment, gap, window, cx);
+                debug_assert!(result.is_ok(), "{result:?}");
+                cx.stop_propagation();
+            })
+            .child(self.trigger)
+            .child(bounds_tracker(trigger_bounds))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContextMenuPlacement {
@@ -169,6 +241,7 @@ impl ContextMenuLayer {
         &mut self,
         menu: ContextMenu,
         position: Point<Pixels>,
+        anchor: Anchor,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -179,7 +252,6 @@ impl ContextMenuLayer {
         let viewport_width = window.viewport_size().width;
         let appearance = menu.appearance.unwrap_or(self.appearance);
         let style = menu.style.clone();
-        let anchor = root_menu_anchor();
         let surfaces = menu.surfaces.clone();
         let viewport_margin = menu.viewport_margin;
         let submenu_gap = menu.submenu_gap;
@@ -694,8 +766,44 @@ pub fn show(
 ) -> Result<(), ContextMenuDepthError> {
     menu.validate_depth(0)
         .map_err(|depth| ContextMenuDepthError { depth })?;
-    layer(cx).update(cx, |layer, cx| layer.show(menu, position, window, cx));
+    layer(cx).update(cx, |layer, cx| {
+        layer.show(menu, position, root_menu_anchor(), window, cx)
+    });
     Ok(())
+}
+
+/// Shows a menu below a measured trigger element instead of at the pointer.
+///
+/// This is useful for toolbar, overflow, and dropdown menus. Viewport margins
+/// configured on the menu are still honored by the context-menu layer.
+pub fn show_below(
+    menu: ContextMenu,
+    trigger_bounds: Bounds<Pixels>,
+    alignment: ContextMenuAlignment,
+    gap: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) -> Result<(), ContextMenuDepthError> {
+    menu.validate_depth(0)
+        .map_err(|depth| ContextMenuDepthError { depth })?;
+    let (position, anchor) = below_menu_anchor(trigger_bounds, alignment, gap);
+    layer(cx).update(cx, |layer, cx| {
+        layer.show(menu, position, anchor, window, cx)
+    });
+    Ok(())
+}
+
+fn below_menu_anchor(
+    trigger_bounds: Bounds<Pixels>,
+    alignment: ContextMenuAlignment,
+    gap: Pixels,
+) -> (Point<Pixels>, Anchor) {
+    let y = trigger_bounds.bottom() + gap.max(Pixels::ZERO);
+    match alignment {
+        ContextMenuAlignment::Start => (point(trigger_bounds.left(), y), Anchor::TopLeft),
+        ContextMenuAlignment::Center => (point(trigger_bounds.center().x, y), Anchor::TopCenter),
+        ContextMenuAlignment::End => (point(trigger_bounds.right(), y), Anchor::TopRight),
+    }
 }
 
 pub fn dismiss(window: &mut Window, cx: &mut App) {
@@ -728,5 +836,26 @@ mod tests {
     #[test]
     fn root_menu_starts_at_the_pointer_without_a_midpoint_flip() {
         assert_eq!(root_menu_anchor(), Anchor::TopLeft);
+    }
+
+    #[test]
+    fn menu_below_trigger_uses_element_edges_instead_of_pointer_position() {
+        let bounds = Bounds {
+            origin: point(gpui::px(40.), gpui::px(20.)),
+            size: gpui::size(gpui::px(80.), gpui::px(32.)),
+        };
+
+        assert_eq!(
+            below_menu_anchor(bounds, ContextMenuAlignment::Start, gpui::px(6.)),
+            (point(gpui::px(40.), gpui::px(58.)), Anchor::TopLeft)
+        );
+        assert_eq!(
+            below_menu_anchor(bounds, ContextMenuAlignment::Center, gpui::px(6.)),
+            (point(gpui::px(80.), gpui::px(58.)), Anchor::TopCenter)
+        );
+        assert_eq!(
+            below_menu_anchor(bounds, ContextMenuAlignment::End, gpui::px(6.)),
+            (point(gpui::px(120.), gpui::px(58.)), Anchor::TopRight)
+        );
     }
 }

@@ -24,12 +24,23 @@ pub struct LiquidGlassDeformation {
     pub ripple: Pixels,
 }
 
+impl LiquidGlassDeformation {
+    pub(crate) fn clamped(self, size: gpui::Size<Pixels>) -> Self {
+        let limit = size.width.min(size.height).max(px(0.)) * 0.3;
+        Self {
+            focus: point(self.focus.x.clamp(0., 1.), self.focus.y.clamp(0., 1.)),
+            bulge: self.bulge.clamp(-limit, limit),
+            ripple: self.ripple.clamp(-limit, limit),
+        }
+    }
+}
+
 /// Optical parameters for [`LiquidGlass`]. Layout and foreground styling use [`Styled`].
 #[derive(Clone, Copy, Debug, PartialEq, uic_macros::Chainable)]
 pub struct LiquidGlassAppearance {
     /// Blur radius of the background, in logical pixels.
     pub blur_radius: Pixels,
-    /// Sharp background contribution in `0..=1`; `1` is clear glass.
+    /// Sharp background contribution at the center in `0..=1`; edges retain more detail.
     pub clarity: f32,
     /// Maximum inward background displacement, in logical pixels.
     pub refraction: Pixels,
@@ -67,7 +78,7 @@ impl LiquidGlassAppearance {
         Self {
             blur_radius: px(8.0),
             clarity: 0.22,
-            refraction: px(7.0),
+            refraction: px(18.0),
             thickness: px(16.0),
             dispersion: 0.015,
             tint: hsla(0.0, 0.0, 1.0, 0.12),
@@ -91,7 +102,7 @@ impl LiquidGlassAppearance {
             clarity: 0.78,
             tint: hsla(0.0, 0.0, 1.0, 0.045),
             thickness: px(12.0),
-            refraction: px(6.0),
+            refraction: px(10.0),
             ..Self::regular()
         }
     }
@@ -255,18 +266,12 @@ pub fn paint_liquid_glass(
     appearance: LiquidGlassAppearance,
     window: &mut Window,
 ) {
-    if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
-        return;
-    }
-    let corners = corners.clamp_radii_for_quad_size(bounds.size);
-    window.paint_backdrop_effect(
-        PaintBackdropEffect::new(
-            bounds,
-            appearance.blur_radius.max(px(0.0)),
-            liquid_glass_shader(),
-        )
-        .uniforms(appearance.uniforms(corners, window.scale_factor()))
-        .corner_radii(corners),
+    paint_deformed_liquid_glass(
+        bounds,
+        corners,
+        appearance,
+        LiquidGlassDeformation::default(),
+        window,
     );
 }
 
@@ -283,24 +288,26 @@ pub fn paint_deformed_liquid_glass(
     if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
         return;
     }
-    let limit = bounds.size.width.min(bounds.size.height) * 0.3;
-    let bulge = deformation.bulge.clamp(-limit, limit);
-    let ripple = deformation.ripple.clamp(-limit, limit);
-    if bulge == px(0.) && ripple == px(0.) {
-        paint_liquid_glass(bounds, corners, appearance, window);
-        return;
-    }
+    let deformation = deformation.clamped(bounds.size);
+    let bulge = deformation.bulge;
+    let ripple = deformation.ripple;
     let scale = window.scale_factor();
     let padding = bulge.abs() + ripple.abs() + px(1. / scale);
-    let uniforms = appearance
-        .uniforms(corners.clamp_radii_for_quad_size(bounds.size), scale)
+    let uniforms = appearance.uniforms(corners.clamp_radii_for_quad_size(bounds.size), scale);
+    let light = uniforms.slots()[LIGHT_SLOT];
+    let center = bounds.center();
+    let uniforms = uniforms
+        .with_slot(
+            LIGHT_SLOT,
+            [light[0], light[1], light[2], center.x.as_f32() * scale],
+        )
         .with_slot(
             SHAPE_SLOT,
             [
                 bounds.size.width.as_f32() * scale,
                 bounds.size.height.as_f32() * scale,
                 1.,
-                0.,
+                center.y.as_f32() * scale,
             ],
         )
         .with_slot(
@@ -324,7 +331,11 @@ pub fn paint_deformed_liquid_glass(
 
 /// Portable backdrop shader used by [`LiquidGlass`].
 pub fn liquid_glass_shader() -> BackdropShader {
-    BackdropShader::wgsl(include_str!("shaders/liquid_glass.wgsl"))
+    BackdropShader::wgsl(concat!(
+        include_str!("shaders/liquid_glass_shape.wgsl"),
+        "\n",
+        include_str!("shaders/liquid_glass.wgsl")
+    ))
 }
 
 #[cfg(test)]
@@ -408,9 +419,9 @@ mod tests {
     #[test]
     fn tinted_border_preserves_preset_refraction() {
         for (preset, refraction, thickness) in [
-            (LiquidGlassAppearance::regular(), px(7.0), px(16.0)),
-            (LiquidGlassAppearance::clear(), px(6.0), px(12.0)),
-            (LiquidGlassAppearance::dark(), px(7.0), px(16.0)),
+            (LiquidGlassAppearance::regular(), px(18.0), px(16.0)),
+            (LiquidGlassAppearance::clear(), px(10.0), px(12.0)),
+            (LiquidGlassAppearance::dark(), px(18.0), px(16.0)),
         ] {
             let configured = preset.edge_tint_strength(0.75).edge_tint_lift(0.5);
             assert_eq!(configured.refraction, refraction);

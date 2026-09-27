@@ -25,6 +25,7 @@ struct GlassStudy {
     drag_offset: Option<(GlassTarget, Point<Pixels>)>,
     grid: bool,
     dark_background: bool,
+    contrast_shapes: bool,
     edge_tint_on_strength: f32,
 }
 
@@ -38,6 +39,7 @@ impl GlassStudy {
             drag_offset: None,
             grid: true,
             dark_background: false,
+            contrast_shapes: false,
             edge_tint_on_strength: 1.0,
         }
     }
@@ -78,6 +80,19 @@ impl GlassStudy {
                             .child("LIQUID GLASS / MATERIAL STUDY"),
                     )
                     .child("Drag the glass across the background.")
+                    .child(
+                        button(
+                            "contrast-shapes",
+                            format!(
+                                "Contrast shapes: {}",
+                                if self.contrast_shapes { "on" } else { "off" }
+                            ),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.contrast_shapes = !this.contrast_shapes;
+                            cx.notify();
+                        })),
+                    )
                     .child(div().flex().gap_2().children(
                         ["Regular", "Clear", "Dark"].into_iter().map(|preset| {
                             button(preset, preset.into()).on_click(cx.listener(
@@ -243,7 +258,7 @@ impl Knob {
             Self::Clarity | Self::Highlight | Self::EdgeTint | Self::EdgeLift => (0.1, 1.0),
             Self::EdgeWidth => (1.0, 24.0),
             Self::EdgeSampling => (2.0, 48.0),
-            Self::Refraction => (0.5, 24.0),
+            Self::Refraction => (1.0, 64.0),
             Self::Thickness => (2.0, 64.0),
             Self::Dispersion => (0.01, 0.1),
             Self::Radius => (8.0, GLASS_HEIGHT * 0.5),
@@ -257,7 +272,7 @@ impl Knob {
             Self::Highlight => study.appearance.highlight = value,
             Self::Dispersion => study.appearance.dispersion = value,
             Self::EdgeTint => study.appearance.edge_tint_strength = value,
-            Self::EdgeWidth => study.appearance.edge_tint_width = px(2.),
+            Self::EdgeWidth => study.appearance.edge_tint_width = px(value),
             Self::EdgeSampling => study.appearance.edge_sample_distance = px(value),
             Self::EdgeLift => study.appearance.edge_tint_lift = value,
             Self::Radius => study.radius = value,
@@ -274,9 +289,9 @@ impl Render for GlassStudy {
             [rgb(0xe9d4c7), rgb(0xb7d7e0), rgb(0xa6bbdc)]
         };
         let ink = if self.dark_background {
-            rgba(0xffffff20)
+            rgba(0xffffff48)
         } else {
-            rgba(0x29425c25)
+            rgba(0x29425c50)
         };
         div()
             .id("glass-study")
@@ -389,6 +404,33 @@ impl Render for GlassStudy {
                     .text_color(ink)
                     .child("REFRACTION"),
             )
+            .child(div().when(self.contrast_shapes, |layer| {
+                layer.child(
+                    div()
+                        .absolute()
+                        .left(px(620.0))
+                        .top(px(185.0))
+                        .w(px(360.0))
+                        .h(px(420.0))
+                        .bg(rgb(0x202227))
+                        .child(
+                            div()
+                                .absolute()
+                                .top(px(100.0))
+                                .w_full()
+                                .h(px(135.0))
+                                .bg(rgb(0xf3f3f3)),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom(px(30.0))
+                                .w_full()
+                                .h(px(8.0))
+                                .bg(rgb(0xe58659)),
+                        ),
+                )
+            }))
             .child(
                 LiquidGlass::with_appearance(self.appearance)
                     .id("test-glass")

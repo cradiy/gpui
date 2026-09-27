@@ -39,6 +39,7 @@ mod fluid;
 mod glass;
 mod lens;
 mod liquid_glass;
+mod liquid_glass_content;
 mod masked_builtins;
 mod masked_effect;
 mod masked_fill;
@@ -94,6 +95,9 @@ pub use lens::{LensOptions, lens_shader, subtree_lens};
 pub use liquid_glass::{
     LiquidGlass, LiquidGlassAppearance, LiquidGlassDeformation, liquid_glass_shader,
     paint_deformed_liquid_glass, paint_liquid_glass,
+};
+pub use liquid_glass_content::{
+    LiquidGlassRegion, liquid_glass_content, liquid_glass_content_shader,
 };
 pub use masked_builtins::{spectrum_mask_shader, spectrum_svg, spectrum_text};
 pub use masked_effect::{MaskedEffect, effect_svg, effect_text, masked_effect};

@@ -18,7 +18,7 @@ use gpui_effects::LiquidGlassAppearance;
 let material = LiquidGlassAppearance::regular()
     .blur_radius(px(8.0))
     .clarity(0.22)
-    .refraction(px(7.0))
+    .refraction(px(18.0))
     .thickness(px(16.0))
     .highlight(0.34)
     .dispersion(0.015)
@@ -32,8 +32,8 @@ starting configurations, not automatic adaptations to the background.
 | Field | Regular default | Meaning |
 | --- | --- | --- |
 | `blur_radius` | `8 px` | Nonnegative background blur radius |
-| `clarity` | `0.22` | Sharp background contribution, `0..=1`; `1` is fully sharp |
-| `refraction` | `7 px` | Inward sampling displacement at the rim; `0` disables bending |
+| `clarity` | `0.22` | Sharp background contribution at the center, `0..=1`; compressed edges still use filtering |
+| `refraction` | `18 px` | Maximum inward sampling displacement at the rim; `0` disables bending |
 | `thickness` | `16 px` | Width of the curved edge region; `0` disables curvature |
 | `dispersion` | `0.015` | Relative red/blue displacement, `0..=0.1`; `0` disables separation |
 | `tint` | White, alpha `0.12` | Color wash mixed into the sampled background |
@@ -49,11 +49,26 @@ starting configurations, not automatic adaptations to the background.
 | `light_direction` | `(-0.6, -0.8)` | Direction toward the light; zero uses the default direction |
 
 Lengths use logical pixels and follow the window scale factor. Edge thickness
-is limited to 45% of the smaller surface dimension. Refraction is limited to
-45% of that effective thickness to limit edge distortion. Keep dispersion low for
-a neutral material; it affects only the refracted edge, not the entire surface.
+is limited to 45% of the smaller surface dimension. Refraction is independent of
+that thickness and limited to `0.45 / (1 + dispersion)` times the smaller surface
+dimension. Strong refraction can compress and fold the background image within
+the edge region. Keep dispersion low for a neutral material; it affects only
+the refracted edge, not the entire surface.
 
-`clarity` controls optical sharpness, not element opacity. Use `tint` for a
+The curved band retains more sharp background detail toward the silhouette.
+Sampling follows the contour and converges toward the lens center, bending
+background lines even where they cross a straight side. The displacement eases
+to zero at the flat center. `refraction` controls the amount of background
+distortion; `thickness` controls how far it extends into the surface.
+`rim_width` controls only the thin outer reflection.
+
+Optical coordinates retain subpixel movement independently of the pixel-aligned
+capture rectangle. Where refraction compresses background detail, the sampling
+footprint reduces the raw contribution in favor of the configured blurred
+backdrop. This filtering uses the existing backdrop samples; it is effective
+when `blur_radius` is nonzero.
+
+`clarity` controls center optical sharpness, not element opacity. Use `tint` for a
 material color wash and normal GPUI opacity for the entire element, including
 its foreground. Foreground color and readability remain the caller's choice.
 
@@ -123,6 +138,42 @@ let surface = div()
 The painter clamps corner radii to the supplied bounds. It owns no element
 state, input handling, clipping of children, or foreground styling.
 
+## Content coloring through glass
+
+`liquid_glass_content(content, color, region)` colors only the portions of text
+and monochrome SVGs covered by a `LiquidGlassRegion`. The region uses logical
+window coordinates and the same corner radii and deformation as the glass
+painter. Its resolver runs during painting, after ancestor paint hooks, so it
+can read the current animated region. Return `None` to render content normally.
+
+```rust
+use std::{cell::Cell, rc::Rc};
+use gpui::{div, prelude::*, px, rgb};
+use gpui_effects::{LiquidGlassAppearance, LiquidGlassRegion, liquid_glass_content, paint_liquid_glass};
+
+let region = Rc::new(Cell::new(None::<LiquidGlassRegion>));
+let painted_region = region.clone();
+let surface = div()
+    .rounded(px(20.0))
+    .p_4()
+    .text_color(rgb(0x344a60))
+    .on_paint_before_children(move |bounds, style, window, _| {
+        let corners = style.corner_radii.to_pixels(window.rem_size());
+        painted_region.set(Some(LiquidGlassRegion::new(bounds, corners)));
+        paint_liquid_glass(bounds, corners, LiquidGlassAppearance::clear(), window);
+    })
+    .child(liquid_glass_content("Overview", rgb(0x005cce).into(), move |_, _| region.get()));
+```
+
+Uncovered pixels retain each glyph or SVG's original color. Inside the region,
+the supplied RGB replaces that color and its alpha multiplies the original
+alpha. Element opacity applies once afterward. Emoji and colored images are
+unaffected. This path reuses glyph/SVG atlas masks without capturing a content
+texture. The mask itself changes color only. To refract the recolored content as well,
+paint that content before a later `paint_liquid_glass` call. That glass then
+samples the background and content together. Content painted after the glass
+remains in the foreground.
+
 ## Styled surface wrapper
 
 `LiquidGlass` supplies the same material with a Div-backed surface:
@@ -154,7 +205,9 @@ cargo run -p gpui_effects --example liquid_glass --features gpui_platform/runtim
 ```
 
 The study contains two independently draggable glass surfaces over a gradient
-and optional grid: a 460 × 280 surface and a smaller 128 × 80 surface. They share
+and optional grid: a 460 × 280 surface and a smaller 128 × 80 surface.
+Enable Contrast shapes to place crisp black, white, and colored geometry behind
+the glass for inspecting edge distortion on both surface sizes. The surfaces share
 the material configuration and requested corner radius; each surface clamps
 its corners to its own bounds. Controls change presets, blur, clarity,
 refraction, thickness, highlight,

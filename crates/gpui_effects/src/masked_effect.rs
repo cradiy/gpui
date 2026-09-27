@@ -22,11 +22,14 @@ pub fn effect_svg(path: impl Into<SharedString>, shader: EffectShader) -> Masked
     masked_effect(svg().path(path).text_color(gpui::white()), shader)
 }
 
+type UniformResolver = Box<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) -> Option<EffectUniforms>>;
+
 /// An element wrapper that evaluates a fragment shader through alpha masks.
 pub struct MaskedEffect<E: Element> {
     element: E,
     shader: EffectShader,
     uniforms: EffectUniforms,
+    uniform_resolver: Option<UniformResolver>,
     time: f32,
     opacity: f32,
 }
@@ -42,6 +45,7 @@ impl<E: Element> MaskedEffect<E> {
             element,
             shader,
             uniforms: EffectUniforms::default(),
+            uniform_resolver: None,
             time: 0.0,
             opacity: 1.0,
         }
@@ -50,6 +54,17 @@ impl<E: Element> MaskedEffect<E> {
     /// Replaces all shader uniform slots.
     pub fn uniforms(mut self, uniforms: EffectUniforms) -> Self {
         self.uniforms = uniforms;
+        self
+    }
+
+    /// Resolves parameters during painting, after ancestor paint hooks have run.
+    /// Returning `None` paints the content normally without the mask effect.
+    /// When present, this resolver takes precedence over static uniform slots.
+    pub fn uniforms_with(
+        mut self,
+        resolve: impl Fn(Bounds<Pixels>, &mut Window, &mut App) -> Option<EffectUniforms> + 'static,
+    ) -> Self {
+        self.uniform_resolver = Some(Box::new(resolve));
         self
     }
 
@@ -160,7 +175,23 @@ impl<E: Element> Element for MaskedEffect<E> {
         cx: &mut App,
     ) {
         let shader = self.shader.clone();
-        let uniforms = self.uniforms;
+        let uniforms = if let Some(resolve) = &self.uniform_resolver {
+            let Some(uniforms) = resolve(bounds, window, cx) else {
+                self.element.paint(
+                    id,
+                    inspector_id,
+                    bounds,
+                    request_layout,
+                    prepaint,
+                    window,
+                    cx,
+                );
+                return;
+            };
+            uniforms
+        } else {
+            self.uniforms
+        };
         let time = self.time;
         let opacity = self.opacity;
         window.with_masked_effect(bounds, shader, uniforms, time, opacity, |window| {

@@ -250,6 +250,7 @@ struct EffectShaderInner {
     hlsl: Option<HlslEffectSource>,
     image_count: u8,
     is_mask: bool,
+    source_color_slot: Option<usize>,
 }
 
 /// Portable fragment-effect source with optional native backend overrides.
@@ -262,7 +263,7 @@ pub struct EffectShader(Arc<EffectShaderInner>);
 impl EffectShader {
     /// Creates an effect shader from its canonical WGSL `effect` function.
     pub fn wgsl(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 0, false)
+        Self::from_sources(source.into(), None, None, 0, false, None)
     }
 
     /// Creates an image-sampling effect from its canonical WGSL `effect` function.
@@ -270,7 +271,7 @@ impl EffectShader {
     /// Image effects may call `sample_effect_image` or
     /// `sample_effect_image_cover` from their WGSL implementation.
     pub fn wgsl_image(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 1, false)
+        Self::from_sources(source.into(), None, None, 1, false, None)
     }
 
     /// Creates an effect whose output is clipped through a monochrome atlas mask.
@@ -279,7 +280,7 @@ impl EffectShader {
     /// function receives coordinates relative to the shared masked element,
     /// while GPUI samples and applies each glyph or SVG mask automatically.
     pub fn wgsl_mask(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 1, true)
+        Self::from_sources(source.into(), None, None, 1, true, None)
     }
 
     /// Creates an effect that samples separate front and back images.
@@ -287,12 +288,12 @@ impl EffectShader {
     /// Two-image effects may additionally call `sample_effect_second_image`
     /// or `sample_effect_second_image_cover` from WGSL.
     pub fn wgsl_two_images(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 2, false)
+        Self::from_sources(source.into(), None, None, 2, false, None)
     }
 
     /// Creates an effect that samples four independent image textures.
     pub fn wgsl_four_images(source: impl Into<Arc<str>>) -> Self {
-        Self::from_sources(source.into(), None, None, 4, false)
+        Self::from_sources(source.into(), None, None, 4, false, None)
     }
 
     /// Adds a complete manually implemented Metal pipeline override.
@@ -306,6 +307,7 @@ impl EffectShader {
             self.0.hlsl.clone(),
             self.0.image_count,
             self.0.is_mask,
+            self.0.source_color_slot,
         )
     }
 
@@ -317,7 +319,42 @@ impl EffectShader {
             Some(source),
             self.0.image_count,
             self.0.is_mask,
+            self.0.source_color_slot,
         )
+    }
+
+    /// Supplies each glyph or monochrome SVG's original straight RGBA color in
+    /// the given uniform slot. The slot is overwritten when painting the mask.
+    /// Element opacity remains separate and is applied once by the renderer.
+    ///
+    /// Only mask shaders support this option. `slot` must be below
+    /// [`EFFECT_UNIFORM_SLOTS`].
+    pub fn with_source_color_slot(self, slot: usize) -> Self {
+        assert!(self.is_mask(), "source colors require a mask shader");
+        assert!(
+            slot < EFFECT_UNIFORM_SLOTS,
+            "source color slot out of range"
+        );
+        Self::from_sources(
+            self.0.wgsl.clone(),
+            self.0.msl.clone(),
+            self.0.hlsl.clone(),
+            self.0.image_count,
+            self.0.is_mask,
+            Some(slot),
+        )
+    }
+
+    pub(crate) fn mask_uniforms(
+        &self,
+        mut uniforms: EffectUniforms,
+        color: crate::Hsla,
+    ) -> EffectUniforms {
+        if let Some(slot) = self.0.source_color_slot {
+            let color: crate::Rgba = color.into();
+            uniforms.set_slot(slot, [color.r, color.g, color.b, color.a]);
+        }
+        uniforms
     }
 
     /// Returns the stable shader identifier used by renderer pipeline caches.
@@ -361,6 +398,7 @@ impl EffectShader {
         hlsl: Option<HlslEffectSource>,
         image_count: u8,
         is_mask: bool,
+        source_color_slot: Option<usize>,
     ) -> Self {
         let mut hasher = DefaultHasher::new();
         wgsl.hash(&mut hasher);
@@ -368,6 +406,7 @@ impl EffectShader {
         hlsl.hash(&mut hasher);
         image_count.hash(&mut hasher);
         is_mask.hash(&mut hasher);
+        source_color_slot.hash(&mut hasher);
         let id = EffectShaderId(hasher.finish());
         Self(Arc::new(EffectShaderInner {
             id,
@@ -376,6 +415,7 @@ impl EffectShader {
             hlsl,
             image_count,
             is_mask,
+            source_color_slot,
         }))
     }
 }
@@ -515,6 +555,27 @@ impl PaintEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masked_source_colors_preserve_alpha_and_other_uniforms_with_native_overrides() {
+        let shader = EffectShader::wgsl_mask("fn effect() {}")
+            .with_source_color_slot(4)
+            .with_msl("metal override")
+            .with_hlsl(HlslEffectSource::new("hlsl override"));
+        let uniforms = EffectUniforms::new().with_slot(0, [1., 2., 3., 4.]);
+        for color in [crate::rgba(0xe0306080), crate::rgba(0x2040e000)] {
+            let actual = shader.mask_uniforms(uniforms, color.into());
+            assert!(
+                actual.slots()[4]
+                    .iter()
+                    .zip([color.r, color.g, color.b, color.a])
+                    .all(|(actual, expected)| (*actual - expected).abs() < 0.000001)
+            );
+            assert_eq!(actual.slots()[0], uniforms.slots()[0]);
+        }
+        let ordinary = EffectShader::wgsl_mask("fn effect() {}");
+        assert_eq!(ordinary.mask_uniforms(uniforms, crate::white()), uniforms);
+    }
 
     #[test]
     fn source_variants_change_shader_identity() {

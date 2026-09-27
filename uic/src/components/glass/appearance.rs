@@ -7,8 +7,9 @@ use gpui_effects::LiquidGlassAppearance;
 pub struct GlassSegmentedAppearance {
     pub surface: LiquidGlassAppearance,
     pub selection: LiquidGlassAppearance,
+    /// Color of monochrome content covered by the animated selection lens.
+    /// Alpha multiplies the content's original alpha; uncovered pixels keep their color.
     pub selected_text: Hsla,
-    pub focus_ring: Hsla,
     pub disabled_opacity: f32,
 }
 
@@ -16,22 +17,21 @@ impl GlassSegmentedAppearance {
     pub fn light() -> Self {
         Self {
             surface: LiquidGlassAppearance::regular()
-                .blur_radius(px(5.))
-                .clarity(0.5)
+                .blur_radius(px(3.))
+                .clarity(0.8)
                 .refraction(px(1.5))
                 .thickness(px(10.))
                 .highlight(0.2)
-                .tint(hsla(0., 0., 1., 0.16)),
+                .tint(hsla(0., 0., 1., 0.12)),
             selection: LiquidGlassAppearance::clear()
-                .blur_radius(px(0.))
+                .blur_radius(px(0.8))
                 .clarity(1.)
-                .refraction(px(4.))
-                .thickness(px(10.))
-                .highlight(0.65)
-                .dispersion(0.005)
-                .tint(hsla(0., 0., 1., 0.28)),
-            selected_text: rgb(0x172c40).into(),
-            focus_ring: rgb(0x4a82bf).into(),
+                .refraction(px(3.))
+                .thickness(px(6.))
+                .highlight(0.4)
+                .dispersion(0.025)
+                .tint(hsla(0., 0., 1., 0.10)),
+            selected_text: rgb(0x007aff).into(),
             disabled_opacity: 0.45,
         }
     }
@@ -40,21 +40,20 @@ impl GlassSegmentedAppearance {
     pub fn dark() -> Self {
         Self {
             surface: LiquidGlassAppearance::dark()
-                .blur_radius(px(5.))
-                .clarity(0.5)
+                .blur_radius(px(3.))
+                .clarity(0.8)
                 .refraction(px(1.5))
                 .thickness(px(10.))
                 .highlight(0.18),
             selection: LiquidGlassAppearance::clear()
-                .blur_radius(px(0.))
+                .blur_radius(px(0.8))
                 .clarity(1.)
-                .refraction(px(4.))
-                .thickness(px(10.))
-                .highlight(0.5)
-                .dispersion(0.005)
-                .tint(hsla(0.6, 0.15, 0.85, 0.16)),
-            selected_text: rgb(0xffffff).into(),
-            focus_ring: rgb(0x9bc8f5).into(),
+                .refraction(px(3.))
+                .thickness(px(6.))
+                .highlight(0.4)
+                .dispersion(0.025)
+                .tint(hsla(0.61, 0.06, 0.92, 0.10)),
+            selected_text: rgb(0x64b5ff).into(),
             ..Self::light()
         }
     }

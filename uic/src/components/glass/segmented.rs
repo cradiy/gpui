@@ -1,15 +1,17 @@
 use std::{cell::Cell, rc::Rc, time::Instant};
 
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, ElementId, IntoElement, MouseButton, Pixels, RenderOnce,
-    Role, SharedString, StyleRefinement, Styled, Window, canvas, div, fill, hsla, point,
-    prelude::*, px, rgb,
+    AnyElement, App, Axis, Bounds, BoxShadow, ElementId, FlexDirection, IntoElement, Pixels,
+    RenderOnce, Role, SharedString, StyleRefinement, Styled, Window, canvas, div, fill, hsla,
+    point, prelude::*, px, rgb,
 };
-use gpui_effects::{paint_deformed_liquid_glass, paint_liquid_glass};
+use gpui_effects::{LiquidGlassRegion, liquid_glass_content, paint_liquid_glass};
 
-use super::{GlassSegmentedAppearance, motion::Motion};
-
-type ChangeCallback<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
+use super::{
+    GlassSegmentedAppearance,
+    interaction::{ChangeCallback, OptionGeometry, State, interaction},
+    motion::{PressScales, scale_about_center},
+};
 
 struct OptionItem<T> {
     value: T,
@@ -18,9 +20,9 @@ struct OptionItem<T> {
 }
 
 /// A controlled, single-selection glass control with an interruptible indicator.
-/// Option content stays in layout while the glass moves underneath it. Give each
+/// Option layout stays fixed while the moving glass refracts its painted content. Give each
 /// control a stable ID and update the selected value in `on_change`.
-/// Arrow keys wrap over enabled options; Home/End select the first/last.
+/// Selection and keyboard policy are owned by the caller; this control handles pointers.
 #[derive(IntoElement)]
 pub struct GlassSegmentedControl<T: Clone + PartialEq + 'static> {
     id: ElementId,
@@ -30,6 +32,7 @@ pub struct GlassSegmentedControl<T: Clone + PartialEq + 'static> {
     label: Option<SharedString>,
     disabled: bool,
     animated: bool,
+    press_scales: PressScales,
     reduced_transparency: bool,
     appearance: GlassSegmentedAppearance,
     style: StyleRefinement,
@@ -45,6 +48,7 @@ impl<T: Clone + PartialEq + 'static> GlassSegmentedControl<T> {
             label: None,
             disabled: false,
             animated: true,
+            press_scales: PressScales::default(),
             reduced_transparency: false,
             appearance: GlassSegmentedAppearance::default(),
             style: StyleRefinement::default()
@@ -103,6 +107,30 @@ impl<T: Clone + PartialEq + 'static> GlassSegmentedControl<T> {
         self
     }
 
+    /// Sets the selected lens's held scale (default `1.35`).
+    /// Accepts `1.0..=2.0`; `1.0` disables its press scaling. Layout is unchanged.
+    #[track_caller]
+    pub fn selection_press_scale(mut self, scale: f32) -> Self {
+        assert!(
+            (1.0..=2.0).contains(&scale),
+            "selection press scale must be in 1.0..=2.0"
+        );
+        self.press_scales.selection = scale;
+        self
+    }
+
+    /// Sets the outer glass's held scale (default `1.05`).
+    /// Accepts `1.0..=2.0`; `1.0` disables its press scaling. Layout is unchanged.
+    #[track_caller]
+    pub fn surface_press_scale(mut self, scale: f32) -> Self {
+        assert!(
+            (1.0..=2.0).contains(&scale),
+            "surface press scale must be in 1.0..=2.0"
+        );
+        self.press_scales.surface = scale;
+        self
+    }
+
     /// Uses opaque surfaces instead of backdrop sampling.
     pub fn reduced_transparency(mut self, reduced: bool) -> Self {
         self.reduced_transparency = reduced;
@@ -123,17 +151,28 @@ impl<T: Clone + PartialEq + 'static> Styled for GlassSegmentedControl<T> {
 
 impl<T: Clone + PartialEq + 'static> RenderOnce for GlassSegmentedControl<T> {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let motion = window.use_keyed_state(self.id.clone(), cx, |_, _| Motion::default());
+        let motion = window.use_keyed_state(self.id.clone(), cx, |_, _| State::new());
+        let geometries = Rc::new(
+            self.options
+                .iter()
+                .map(|o| OptionGeometry {
+                    value: o.value.clone(),
+                    disabled: o.disabled,
+                    bounds: Cell::new(None),
+                })
+                .collect::<Vec<_>>(),
+        );
+        let root_bounds = Rc::new(Cell::new(None));
+        let pointer_interaction = interaction(
+            motion.clone(),
+            geometries.clone(),
+            self.selected.clone(),
+            root_bounds.clone(),
+            self.on_change.clone(),
+            !self.disabled,
+        );
         let selected_bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
-        let enabled: Vec<T> = self
-            .options
-            .iter()
-            .filter(|o| !o.disabled)
-            .map(|o| o.value.clone())
-            .collect();
-        let interactive = !self.disabled && !enabled.is_empty();
-        let key_selected = self.selected.clone();
-        let key_callback = self.on_change.clone();
+        let content_region = Rc::new(Cell::new(None::<LiquidGlassRegion>));
         let appearance = self.appearance;
         let options = self
             .options
@@ -143,10 +182,8 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for GlassSegmentedControl<T> {
                 let selected = option.value == self.selected;
                 let disabled = self.disabled || option.disabled;
                 let target = selected_bounds.clone();
-                let callback = self.on_change.clone();
-                let press = motion.clone();
-                let option_bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
-                let pressed_bounds = option_bounds.clone();
+                let geometry = geometries.clone();
+                let region = content_region.clone();
                 div()
                     .id(("glass-segment", index))
                     .debug_selector(move || format!("uic-glass-segment-{index}"))
@@ -160,43 +197,15 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for GlassSegmentedControl<T> {
                     .rounded_full()
                     .role(Role::RadioButton)
                     .aria_toggled(selected.into())
-                    .when(selected, |element| {
-                        element
-                            .aria_active_descendant()
-                            .text_color(appearance.selected_text)
-                    })
+                    .when(selected, |element| element.aria_active_descendant())
                     .when(disabled && !self.disabled, |element| {
                         element.opacity(appearance.disabled_opacity)
                     })
-                    .when(!disabled, |element| {
-                        element
-                            .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, move |event, _, cx| {
-                                press.update(cx, |state, cx| {
-                                    state.press_focus =
-                                        pressed_bounds.get().map_or(point(0.5, 0.5), |bounds| {
-                                            let local = event.position - bounds.origin;
-                                            point(
-                                                (local.x / bounds.size.width.max(px(1.)))
-                                                    .clamp(0., 1.),
-                                                (local.y / bounds.size.height.max(px(1.)))
-                                                    .clamp(0., 1.),
-                                            )
-                                        });
-                                    state.begin_press(Instant::now());
-                                    cx.notify();
-                                });
-                            })
-                            .when_some(callback.filter(|_| !selected), |element, callback| {
-                                element.on_click(move |_, window, cx| {
-                                    callback(option.value.clone(), window, cx)
-                                })
-                            })
-                    })
+                    .when(!disabled, |element| element.cursor_pointer())
                     .child(
                         canvas(
                             move |bounds, _, _| {
-                                option_bounds.set(Some(bounds));
+                                geometry[index].bounds.set(Some(bounds));
                                 if selected {
                                     target.set(Some(bounds));
                                 }
@@ -207,32 +216,41 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for GlassSegmentedControl<T> {
                         .inset_0()
                         .size_full(),
                     )
-                    .child(option.content)
+                    .child(liquid_glass_content(
+                        option.content,
+                        appearance.selected_text,
+                        move |_, _| region.get(),
+                    ))
             })
             .collect::<Vec<_>>();
-        let release = motion.clone();
-        let release_out = motion.clone();
-        let hover = motion.clone();
-        let pointer = motion.clone();
         let reduced = self.reduced_transparency || !window.supports_backdrop_blur();
         let animated = self.animated;
+        let press_scales = self.press_scales;
         let disabled = self.disabled;
+        let lens = Rc::new(Cell::new(None));
+        let lens_to_paint = lens.clone();
         let painted = div().on_paint_before_children(move |bounds, style, window, cx| {
+            lens.set(None);
+            root_bounds.set(Some(bounds));
+            content_region.set(None);
             let corners = style
                 .corner_radii
                 .to_pixels(window.rem_size())
                 .clamp_radii_for_quad_size(bounds.size);
             let mut fallback = appearance.surface.tint;
             fallback.a = 1.;
-            if reduced {
-                window.paint_quad(fill(bounds, fallback).corner_radii(corners));
-            } else {
-                paint_liquid_glass(bounds, corners, appearance.surface, window);
-            }
             let (visual, pointer) = motion.update(cx, |state, _| {
+                state.motion.press_scales = press_scales;
+                let axis = match style.flex_direction {
+                    FlexDirection::Column | FlexDirection::ColumnReverse => Axis::Vertical,
+                    FlexDirection::Row | FlexDirection::RowReverse => Axis::Horizontal,
+                };
+                if state.axis != axis {
+                    state.cancel(window);
+                    state.axis = axis;
+                }
                 if disabled || !window.is_window_active() {
-                    state.cancel_press();
-                    state.pointer = None;
+                    state.cancel(window);
                 }
                 let target = selected_bounds
                     .get()
@@ -241,10 +259,23 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for GlassSegmentedControl<T> {
                     })
                     .map(|selected| Bounds::new(selected.origin - bounds.origin, selected.size));
                 (
-                    state.sample(target, Instant::now(), animated),
-                    state.pointer,
+                    state.motion.sample(target, Instant::now(), animated),
+                    state.motion.pointer,
                 )
             });
+            let surface_scale = visual.as_ref().map_or(1., |visual| visual.surface_scale);
+            let surface_bounds = scale_about_center(bounds, surface_scale);
+            let surface_corners = corners
+                .map(|radius| *radius * surface_scale)
+                .clamp_radii_for_quad_size(surface_bounds.size);
+            if reduced {
+                window.paint_quad(fill(surface_bounds, fallback).corner_radii(surface_corners));
+            } else {
+                let mut surface = appearance.surface;
+                surface.thickness *= surface_scale;
+                surface.refraction *= surface_scale;
+                paint_liquid_glass(surface_bounds, surface_corners, surface, window);
+            }
             let Some(visual) = visual else {
                 return;
             };
@@ -254,22 +285,40 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for GlassSegmentedControl<T> {
             let mut selected = visual.bounds;
             selected.origin += bounds.origin;
             let selected_corners = corners
-                .map(|radius| (*radius - px(4.)).max(px(0.)))
+                .map(|radius| (*radius - px(4.)).max(px(0.)) * visual.scale)
                 .clamp_radii_for_quad_size(selected.size);
+            content_region.set(Some(LiquidGlassRegion {
+                bounds: if reduced {
+                    Bounds::from_corners(
+                        window.pixel_snap_point(selected.origin),
+                        window.pixel_snap_point(selected.bottom_right()),
+                    )
+                } else {
+                    selected
+                },
+                corner_radii: selected_corners,
+                deformation: Default::default(),
+            }));
             window.paint_drop_shadows(
                 selected,
                 selected_corners,
                 &[BoxShadow::new(
                     px(0.),
-                    px(2.5 - visual.pressure),
-                    hsla(0.6, 0.2, 0.05, 0.1 * (1. - visual.pressure).powi(2)),
+                    px(2.5 + visual.pressure * 3.5),
+                    hsla(0.6, 0.2, 0.05, 0.1 + visual.pressure * 0.06),
                 )
-                .blur_radius(px(7. + visual.pressure * 5.))],
+                .blur_radius(px(7. + visual.pressure * 9.))],
             );
             let mut optics = appearance.selection;
-            optics.highlight *= 1. - visual.pressure * 0.15;
-            optics.refraction *= 1. + visual.pressure * 0.15;
-            optics.thickness *= 1. + visual.pressure * 0.1;
+            optics.highlight *= 1. + visual.pressure * 0.12;
+            optics.thickness = (optics.thickness.max(px(0.)) * visual.scale)
+                .min(selected.size.width.min(selected.size.height) * 0.1);
+            // Smoothstep's maximum slope is 1.5 / thickness. Keep every color
+            // channel below that fold threshold so edge sampling cannot repeat
+            // interior strokes. The flat center retains zero displacement.
+            let dispersion = optics.dispersion.clamp(0., 0.1);
+            optics.refraction = (optics.refraction.max(px(0.)) * visual.scale)
+                .min(optics.thickness * 0.5 / (1. + dispersion));
             optics.tint.a *= 1. - visual.pressure * 0.15;
             if let Some(pointer) = pointer {
                 let local = pointer - selected.center();
@@ -284,88 +333,33 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for GlassSegmentedControl<T> {
                     fill(selected, fallback.blend(optics.tint)).corner_radii(selected_corners),
                 );
             } else {
-                paint_deformed_liquid_glass(
-                    selected,
-                    selected_corners,
-                    optics,
-                    visual.deformation,
-                    window,
-                );
+                lens.set(Some((selected, selected_corners, optics)));
             }
         });
         let mut root = painted
             .id(self.id)
+            .relative()
             .debug_selector(|| "uic-glass-segmented".into())
-            .focusable()
-            .tab_stop(interactive)
             .role(Role::RadioGroup)
             .when_some(self.label, |element, label| element.aria_label(label))
-            .on_key_down(move |event, window, cx| {
-                if !interactive {
-                    return;
-                }
-                if let Some(value) = next_value(&enabled, &key_selected, &event.keystroke.key) {
-                    if value != &key_selected
-                        && let Some(callback) = &key_callback
-                    {
-                        callback(value.clone(), window, cx);
-                    }
-                    cx.stop_propagation();
-                }
-            })
-            .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-                release.update(cx, |state, cx| {
-                    state.pressed = false;
-                    cx.notify();
-                });
-            })
-            .on_mouse_up_out(MouseButton::Left, move |_, _, cx| {
-                release_out.update(cx, |state, cx| {
-                    state.pressed = false;
-                    cx.notify();
-                });
-            })
-            .on_hover(move |hovered, _, cx| {
-                if !hovered {
-                    hover.update(cx, |state, cx| {
-                        state.cancel_press();
-                        state.pointer = None;
-                        cx.notify();
-                    });
-                }
-            })
-            .when(interactive, |element| {
-                element.on_mouse_move(move |event, _, cx| {
-                    pointer.update(cx, |state, cx| {
-                        state.pointer = Some(event.position);
-                        cx.notify();
-                    });
-                })
-            })
-            .children(options);
+            .children(options)
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |_, _, window, _| {
+                        if let Some((bounds, corners, optics)) = lens_to_paint.get() {
+                            paint_liquid_glass(bounds, corners, optics, window);
+                        }
+                    },
+                )
+                .absolute()
+                .inset_0()
+                .size_full(),
+            )
+            .child(pointer_interaction);
         root.style().refine(&self.style);
         root.when(self.disabled, |element| {
             element.opacity(appearance.disabled_opacity)
         })
-        .focus_visible(move |style| style.border_color(appearance.focus_ring))
     }
-}
-
-pub(super) fn next_value<'a, T: PartialEq>(
-    values: &'a [T],
-    selected: &T,
-    key: &str,
-) -> Option<&'a T> {
-    if values.is_empty() {
-        return None;
-    }
-    let index = values.iter().position(|value| value == selected);
-    let index = match key {
-        "left" | "up" => index.map_or(values.len() - 1, |i| (i + values.len() - 1) % values.len()),
-        "right" | "down" => index.map_or(0, |i| (i + 1) % values.len()),
-        "home" => 0,
-        "end" => values.len() - 1,
-        _ => return None,
-    };
-    values.get(index)
 }

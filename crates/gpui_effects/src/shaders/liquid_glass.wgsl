@@ -1,41 +1,12 @@
-fn glass_distance(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>) -> f32 {
-    var radius = select(radii.w, radii.x, p.y < 0.0);
-    if (p.x >= 0.0) {
-        radius = select(radii.z, radii.y, p.y < 0.0);
-    }
-    let half_size = size * 0.5;
-    radius = clamp(radius, 0.0, min(half_size.x, half_size.y));
-    let corner = abs(p) - half_size + radius;
-    return length(max(corner, vec2<f32>(0.0)))
-        + min(max(corner.x, corner.y), 0.0) - radius;
-}
-
 fn glass_sample(input: BackdropInput, offset: vec2<f32>, clarity: f32) -> vec3<f32> {
+    let dx = vec2<f32>(1.0, 0.0) + dpdx(offset);
+    let dy = vec2<f32>(0.0, 1.0) + dpdy(offset);
+    let footprint = max(length(dx), length(dy));
     return mix(
         sample_blurred_backdrop(input, offset).rgb,
         sample_raw_backdrop(input, offset).rgb,
-        clarity,
+        clarity / max(footprint, 1.0),
     );
-}
-
-fn glass_contour(p: vec2<f32>, size: vec2<f32>, radii: vec4<f32>, deformation: vec4<f32>) -> f32 {
-    if (deformation.z == 0.0 && deformation.w == 0.0) {
-        return glass_distance(p, size, radii);
-    }
-    let q = p / max(size * 0.5, vec2<f32>(1.0));
-    let direction = q / max(length(q), 0.0001);
-    var focus = deformation.xy * 2.0 - vec2<f32>(1.0);
-    if (length(focus) < 0.15) {
-        focus = vec2<f32>(0.6, -0.8);
-    }
-    focus = normalize(focus);
-    let alignment = dot(direction, focus);
-    let facing = clamp(alignment * 0.5 + 0.5, 0.0, 1.0);
-    let local = facing * facing;
-    let tangent = direction.x * focus.y - direction.y * focus.x;
-    let wave = tangent * alignment;
-    return glass_distance(p, size, radii)
-        - deformation.z * (0.1 + local * 0.9) - deformation.w * wave;
 }
 
 fn glass_border_reflection(sampled: vec3<f32>, lift: f32) -> vec3<f32> {
@@ -56,8 +27,11 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
     let light = params.slots[3];
     let radii = params.slots[4];
     let edge_tint = params.slots[5];
-    let p = (input.uv - vec2<f32>(0.5)) * input.size;
     let deformed = params.slots[6].z > 0.0;
+    // Optical coordinates retain subpixel motion even when the capture rectangle
+    // snaps to device pixels. Slot 3.w / 6.w carry the unsnapped lens center.
+    let p = select((input.uv - vec2<f32>(0.5)) * input.size,
+        input.position - vec2<f32>(light.w, params.slots[6].w), deformed);
     let shape_size = select(input.size, params.slots[6].xy, deformed);
     let deformation = select(vec4<f32>(0.0), params.slots[7], deformed);
     let distance = glass_contour(p, shape_size, radii, deformation);
@@ -74,17 +48,25 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
     let thickness = min(optics.w, min(shape_size.x, shape_size.y) * 0.45);
     var curvature = 0.0;
     if (thickness > 0.0) {
-        let edge = 1.0 - clamp(inside / thickness, 0.0, 1.0);
-        curvature = edge * edge;
+        curvature = 1.0 - smoothstep(0.0, thickness, inside);
     }
-    // The quadratic profile has slope 2 / thickness at the rim. Keeping
-    // displacement below half the thickness preserves ordering on straight edges,
-    // including the extra red-channel displacement from dispersion.
-    let displacement = -normal * min(optics.z, thickness * 0.45) * curvature;
-    var color = glass_sample(input, displacement, surface.w);
+    // Converge toward the lens center as well as following the silhouette.
+    // The tangential component bends lines crossing straight edges, while the
+    // contour normal keeps the displacement continuous around rounded corners.
+    let radial = p / max(shape_size * 0.5, vec2<f32>(1.0));
+    let lens_gradient = normal + radial * 0.75;
+    let lens_direction = lens_gradient / max(length(lens_gradient), 0.0001);
+    // Refraction strength is independent of the band width. Strong settings can
+    // compress and fold the sampled image inside the lens edge. Bound the reach
+    // by the surface size, including dispersion, rather than flattening the lens.
+    let refraction = min(optics.z, min(shape_size.x, shape_size.y) * 0.45 / (1.0 + surface.z));
+    let displacement = -lens_direction * refraction * curvature;
+    // Preserve detail in the lens edge while retaining the configured center blur.
+    let clarity = mix(surface.w, 1.0, curvature * 0.9);
+    var color = glass_sample(input, displacement, clarity);
     if (surface.z > 0.0) {
-        color.r = glass_sample(input, displacement * (1.0 + surface.z), surface.w).r;
-        color.b = glass_sample(input, displacement * (1.0 - surface.z), surface.w).b;
+        color.r = glass_sample(input, displacement * (1.0 + surface.z), clarity).r;
+        color.b = glass_sample(input, displacement * (1.0 - surface.z), clarity).b;
     }
 
     let luminance = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));

@@ -1,4 +1,5 @@
 mod appearance;
+mod interaction;
 mod motion;
 mod segmented;
 

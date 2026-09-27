@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use gpui::{Bounds, Pixels, Point, point, px, size};
-use gpui_effects::LiquidGlassDeformation;
 
 #[derive(Clone, Copy, Default)]
 struct Spring {
@@ -32,28 +31,63 @@ impl Spring {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct PressScales {
+    pub selection: f32,
+    pub surface: f32,
+}
+
+impl Default for PressScales {
+    fn default() -> Self {
+        Self {
+            selection: 1.35,
+            surface: 1.05,
+        }
+    }
+}
+
+pub(super) fn scale_about_center(bounds: Bounds<Pixels>, scale: f32) -> Bounds<Pixels> {
+    let extra = size(
+        bounds.size.width * (scale - 1.),
+        bounds.size.height * (scale - 1.),
+    );
+    Bounds::new(
+        bounds.origin - point(extra.width / 2., extra.height / 2.),
+        size(bounds.size.width * scale, bounds.size.height * scale),
+    )
+}
+
 #[derive(Default)]
 pub(super) struct Motion {
+    pub press_scales: PressScales,
     axes: Option<[Spring; 4]>,
     target: Option<[f64; 4]>,
     last: Option<Instant>,
     press: Spring,
-    vertical_press: Spring,
     press_target: f64,
     pub pressed: bool,
     press_until: Option<Instant>,
-    pub press_focus: Point<f32>,
     pub pointer: Option<Point<Pixels>>,
+    pub drag_bounds: Option<Bounds<Pixels>>,
 }
 
 pub(super) struct Visual {
     pub bounds: Bounds<Pixels>,
     pub pressure: f32,
-    pub deformation: LiquidGlassDeformation,
+    pub scale: f32,
+    pub surface_scale: f32,
     pub moving: bool,
 }
 
 impl Motion {
+    pub fn current_bounds(&self) -> Option<Bounds<Pixels>> {
+        let axes = self.axes?;
+        Some(Bounds::new(
+            point(px(axes[0].value as f32), px(axes[1].value as f32)),
+            size(px(axes[2].value as f32), px(axes[3].value as f32)),
+        ))
+    }
+
     pub fn begin_press(&mut self, now: Instant) {
         self.pressed = true;
         self.press_until = Some(now + Duration::from_millis(90));
@@ -62,6 +96,7 @@ impl Motion {
     pub fn cancel_press(&mut self) {
         self.pressed = false;
         self.press_until = None;
+        self.drag_bounds = None;
     }
 
     pub fn sample(
@@ -74,7 +109,7 @@ impl Motion {
             .last
             .map_or(0., |last| now.saturating_duration_since(last).as_secs_f64());
         self.last = Some(now);
-        let Some(target) = target else {
+        let Some(target) = self.drag_bounds.or(target) else {
             self.axes = None;
             self.target = None;
             return None;
@@ -94,7 +129,7 @@ impl Motion {
         self.target = Some(values);
         let mut moving = false;
         for ((axis, target), previous) in axes.iter_mut().zip(values).zip(previous) {
-            if !animated {
+            if !animated || self.drag_bounds.is_some() {
                 *axis = Spring {
                     value: target,
                     velocity: 0.,
@@ -113,43 +148,33 @@ impl Motion {
                 (26., 0.72)
             };
             moving |= self.press.step(self.press_target, dt, frequency, damping);
-            moving |= self.vertical_press.step(self.press_target, dt, 28., 0.78);
             moving |= self.press.value != pressure;
-            moving |= self.vertical_press.value != pressure;
             moving |= holding;
         } else {
             self.press = Spring {
                 value: pressure,
                 velocity: 0.,
             };
-            self.vertical_press = self.press;
         }
         self.press_target = pressure;
         let width = axes[2].value.max(1.);
-        let stretch = (axes[0].velocity.abs() * 0.008).min(width * 0.09);
+        let height = axes[3].value.max(1.);
         let spread = self.press.value.clamp(-0.18, 1.12);
         let pressure = spread.clamp(0., 1.) as f32;
-        let bulge = spread * (axes[3].value * 0.12).min(5.);
-        let ripple = (self.press.value - self.vertical_press.value).clamp(-0.6, 0.6)
-            * (axes[3].value * 0.05).min(2.);
-        let bounds = Bounds::new(
-            point(
-                px((axes[0].value - stretch * 0.5) as f32),
-                px(axes[1].value as f32),
+        let scale = 1. + spread as f32 * (self.press_scales.selection - 1.);
+        let surface_scale = 1. + spread as f32 * (self.press_scales.surface - 1.);
+        let bounds = scale_about_center(
+            Bounds::new(
+                point(px(axes[0].value as f32), px(axes[1].value as f32)),
+                size(px(width as f32), px(height as f32)),
             ),
-            size(
-                px((width + stretch).max(1.) as f32),
-                px(axes[3].value.max(1.) as f32),
-            ),
+            scale,
         );
         Some(Visual {
             bounds,
             pressure,
-            deformation: LiquidGlassDeformation {
-                focus: self.press_focus,
-                bulge: px(bulge as f32),
-                ripple: px(ripple as f32),
-            },
+            scale,
+            surface_scale,
             moving,
         })
     }
@@ -161,7 +186,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn short_press_spreads_recovers_and_stops() {
+    fn short_press_scales_uniformly_beyond_track_recovers_and_stops() {
         let mut motion = Motion::default();
         let start = Instant::now();
         let bounds = Bounds::new(point(px(4.), px(4.)), size(px(100.), px(40.)));
@@ -176,9 +201,11 @@ mod tests {
             let sample = motion
                 .sample(Some(bounds), start + Duration::from_millis(frame * 8), true)
                 .unwrap();
-            expanded |= sample.deformation.bulge > px(3.);
-            rebounded |= sample.deformation.bulge < px(0.);
-            assert_eq!(sample.bounds, bounds);
+            expanded |= sample.bounds.size.height > bounds.size.height + px(8.);
+            rebounded |= sample.scale < 1.;
+            let width_scale = sample.bounds.size.width / bounds.size.width;
+            let height_scale = sample.bounds.size.height / bounds.size.height;
+            assert!((width_scale - height_scale).abs() < 0.00001);
             assert!(f32::from(sample.bounds.center().x - bounds.center().x).abs() < 0.001);
             assert!(f32::from(sample.bounds.center().y - bounds.center().y).abs() < 0.001);
             visual = Some(sample);
@@ -187,8 +214,7 @@ mod tests {
         assert!(rebounded);
         let visual = visual.unwrap();
         assert_eq!(visual.bounds, bounds);
-        assert_eq!(visual.deformation.bulge, px(0.));
-        assert_eq!(visual.deformation.ripple, px(0.));
+        assert_eq!(visual.scale, 1.);
         assert!(!visual.moving);
 
         motion.begin_press(start + Duration::from_secs(2));
@@ -207,6 +233,93 @@ mod tests {
             .unwrap();
         assert_eq!(visual.bounds, bounds);
         assert!(!visual.moving);
+    }
+
+    #[test]
+    fn press_scales_are_independent_centered_and_recover_together() {
+        let start = Instant::now();
+        let lens = Bounds::new(point(px(42.), px(8.)), size(px(100.), px(48.)));
+        let track = Bounds::new(point(px(12.), px(20.)), size(px(440.), px(64.)));
+        for (selection, surface) in [(1., 1.08), (1.6, 1.), (1.2, 1.1)] {
+            let mut motion = Motion {
+                press_scales: PressScales { selection, surface },
+                ..Default::default()
+            };
+            motion.sample(Some(lens), start, true);
+            motion.begin_press(start);
+            for frame in 0..100 {
+                let visual = motion
+                    .sample(Some(lens), start + Duration::from_millis(frame * 16), true)
+                    .unwrap();
+                let outer = scale_about_center(track, visual.surface_scale);
+                assert!(f32::from(outer.center().x - track.center().x).abs() < 0.001);
+                assert!(f32::from(outer.center().y - track.center().y).abs() < 0.001);
+                assert!(
+                    (outer.size.width / track.size.width - outer.size.height / track.size.height)
+                        .abs()
+                        < 0.00001
+                );
+                if selection == 1. {
+                    assert_eq!(visual.bounds, lens);
+                }
+                if surface == 1. {
+                    assert_eq!(outer, track);
+                }
+            }
+            let held = motion
+                .sample(Some(lens), start + Duration::from_secs(2), true)
+                .unwrap();
+            assert!((held.scale - selection).abs() < 0.00001);
+            assert!((held.surface_scale - surface).abs() < 0.00001);
+            assert!(!held.moving);
+            motion.cancel_press();
+            for frame in 0..100 {
+                motion.sample(
+                    Some(lens),
+                    start + Duration::from_millis(2000 + frame * 16),
+                    true,
+                );
+            }
+            let released = motion
+                .sample(Some(lens), start + Duration::from_secs(4), true)
+                .unwrap();
+            assert_eq!(released.bounds, lens);
+            assert_eq!(scale_about_center(track, released.surface_scale), track);
+            assert!(!released.moving);
+            motion.begin_press(start + Duration::from_secs(5));
+            let immediate = motion
+                .sample(Some(lens), start + Duration::from_secs(5), false)
+                .unwrap();
+            assert_eq!(immediate.scale, selection);
+            assert_eq!(immediate.surface_scale, surface);
+        }
+    }
+
+    #[test]
+    fn drag_tracks_fractional_positions_then_springs_to_selection() {
+        let mut motion = Motion::default();
+        let start = Instant::now();
+        let selected = Bounds::new(point(px(4.), px(4.)), size(px(100.), px(40.)));
+        motion.sample(Some(selected), start, true);
+        let dragged = Bounds::new(point(px(63.25), px(4.)), selected.size);
+        motion.drag_bounds = Some(dragged);
+        let now = start + Duration::from_millis(16);
+        let visual = motion.sample(Some(selected), now, true).unwrap();
+        assert_eq!(visual.bounds, dragged);
+        assert!(!visual.moving);
+        motion.drag_bounds = None;
+        let target = Bounds::new(point(px(120.), px(4.)), size(px(150.), px(40.)));
+        let released = motion.sample(Some(target), now, true).unwrap();
+        assert_eq!(released.bounds, dragged);
+        assert!(released.moving);
+        for frame in 2..160 {
+            motion.sample(
+                Some(target),
+                start + Duration::from_millis(frame * 16),
+                true,
+            );
+        }
+        assert_eq!(motion.current_bounds(), Some(target));
     }
 
     #[test]

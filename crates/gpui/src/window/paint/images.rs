@@ -1,9 +1,9 @@
 use super::super::{MaskedPaint, Window, color_svg};
 use crate::util::round_half_toward_zero;
 use crate::{
-    App, Background, Bounds, Corners, DevicePixels, EffectQuad, Hsla, MonochromeSprite, Pixels,
-    Point, PolychromeSprite, RenderColorSvgParams, RenderImage, RenderImageParams, RenderSvgParams,
-    SMOOTH_SVG_SCALE_FACTOR, ScaledPixels, SharedString, TransformationMatrix,
+    App, Background, Bounds, Corners, DevicePixels, EffectQuad, Hsla, MonochromeSprite, ObjectFit,
+    Pixels, Point, PolychromeSprite, RenderColorSvgParams, RenderImage, RenderImageParams,
+    RenderSvgParams, SMOOTH_SVG_SCALE_FACTOR, ScaledPixels, SharedString, TransformationMatrix,
 };
 use anyhow::Result;
 use std::{borrow::Cow, sync::Arc};
@@ -115,7 +115,7 @@ impl Window {
         Ok(())
     }
 
-    /// Paints a colored SVG into the scene for the next frame.
+    /// Paints a colored SVG using [`ObjectFit::Contain`] into the scene for the next frame.
     /// Uncached images with supplied bytes, and large asset images, rasterize on
     /// the background executor and request a redraw when ready. Their first paint
     /// may be empty; failures are logged.
@@ -132,15 +132,51 @@ impl Window {
         text_color: Option<Hsla>,
         cx: &App,
     ) -> Result<()> {
+        self.paint_color_svg_with_fit(
+            bounds,
+            path,
+            data,
+            transformation,
+            corner_radii,
+            current_color,
+            fill_color,
+            text_color,
+            ObjectFit::Contain,
+            cx,
+        )
+    }
+
+    /// Paints a colored SVG fitted and centered within the element's rounded bounds.
+    /// Rasterization and caching follow [`Self::paint_color_svg`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_color_svg_with_fit(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        path: SharedString,
+        data: Option<&[u8]>,
+        transformation: TransformationMatrix,
+        corner_radii: Corners<Pixels>,
+        current_color: Option<Hsla>,
+        fill_color: Option<Hsla>,
+        text_color: Option<Hsla>,
+        object_fit: ObjectFit,
+        cx: &App,
+    ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
         let element_opacity = self.element_opacity();
+        let logical_size = bounds.size;
+        if logical_size.width <= crate::px(0.) || logical_size.height <= crate::px(0.) {
+            return Ok(());
+        }
         let bounds = self.snap_bounds(bounds);
         let params = RenderColorSvgParams {
             path,
             size: bounds.size.map(|pixels| {
                 DevicePixels::from((pixels.0 * SMOOTH_SVG_SCALE_FACTOR).ceil() as i32)
             }),
+            logical_size,
+            object_fit,
             current_color,
             fill_color,
             text_color,
@@ -166,27 +202,12 @@ impl Window {
             return Ok(());
         };
 
-        let svg_bounds = Bounds {
-            origin: bounds.center()
-                - Point::new(
-                    ScaledPixels(tile.bounds.size.width.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
-                    ScaledPixels(tile.bounds.size.height.0 as f32 / SMOOTH_SVG_SCALE_FACTOR / 2.),
-                ),
-            size: tile
-                .bounds
-                .size
-                .map(|value| ScaledPixels(value.0 as f32 / SMOOTH_SVG_SCALE_FACTOR)),
-        };
-        let final_bounds = svg_bounds
-            .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
-            .map_size(|size| size.ceil());
-
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
             pad: 0,
             grayscale: false.into(),
-            bounds: final_bounds,
-            clip_bounds: final_bounds,
+            bounds,
+            clip_bounds: bounds,
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(self.scale_factor()),
             tile,

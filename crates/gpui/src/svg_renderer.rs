@@ -1,6 +1,6 @@
 use crate::{
-    AssetSource, DevicePixels, Hsla, ImageCacheError, ImageLoadLimits, IsZero, RenderImage, Result,
-    Rgba, SharedString, Size, swap_rgba_pa_to_bgra,
+    AssetSource, Bounds, DevicePixels, Hsla, ImageCacheError, ImageLoadLimits, IsZero, ObjectFit,
+    Pixels, RenderImage, Result, Rgba, SharedString, Size, point, px, swap_rgba_pa_to_bgra,
 };
 use image::Frame;
 use resvg::tiny_skia::Pixmap;
@@ -94,6 +94,10 @@ pub struct RenderColorSvgParams {
     pub path: SharedString,
     /// The target raster size.
     pub size: Size<DevicePixels>,
+    /// The target element size in logical pixels, before display scaling and smoothing.
+    pub logical_size: Size<Pixels>,
+    /// How the SVG's intrinsic dimensions fit within the target element.
+    pub object_fit: ObjectFit,
     /// The CSS `currentColor` value.
     pub current_color: Option<Hsla>,
     /// An optional override for shape fills.
@@ -264,11 +268,9 @@ impl SvgRenderer {
         anyhow::ensure!(!params.size.is_zero(), "can't render at a zero size");
         let style_sheet = color_svg_style_sheet(params);
         let render_pixmap = |bytes| {
-            let pixmap = self.render_pixmap(
-                bytes,
-                SvgSize::Size(params.size),
-                (!style_sheet.is_empty()).then(|| style_sheet.clone()),
-            )?;
+            let options = self.options((!style_sheet.is_empty()).then(|| style_sheet.clone()));
+            let tree = usvg::Tree::from_data(bytes, &options)?;
+            let pixmap = render_fitted_color_svg(&tree, params)?;
             let size = Size::new(
                 DevicePixels(pixmap.width() as i32),
                 DevicePixels(pixmap.height() as i32),
@@ -343,6 +345,48 @@ impl SvgRenderer {
 
         Ok(pixmap)
     }
+}
+
+// Rasterize into the element's viewport so fitting and clipping happen on the same
+// worker as parsing. No intrinsic-size lookup or additional cache is needed on paint.
+fn render_fitted_color_svg(
+    tree: &usvg::Tree,
+    params: &RenderColorSvgParams,
+) -> Result<Pixmap, usvg::Error> {
+    let logical_size = params.logical_size;
+    if params.size.width.0 <= 0
+        || params.size.height.0 <= 0
+        || !logical_size.width.0.is_finite()
+        || !logical_size.height.0.is_finite()
+        || logical_size.width <= px(0.)
+        || logical_size.height <= px(0.)
+    {
+        return Err(usvg::Error::InvalidSize);
+    }
+    let source = tree.size();
+    let fitted = params.object_fit.get_bounds_for_size(
+        Bounds::new(point(px(0.), px(0.)), logical_size),
+        Size::new(px(source.width()), px(source.height())),
+    );
+    // Keep the existing texture limit without changing the displayed logical size.
+    let reduction = (8192. / params.size.width.0 as f32)
+        .min(8192. / params.size.height.0 as f32)
+        .min(1.);
+    let width = ((params.size.width.0 as f32 * reduction).round() as u32).max(1);
+    let height = ((params.size.height.0 as f32 * reduction).round() as u32).max(1);
+    let raster_x = width as f32 / logical_size.width.0;
+    let raster_y = height as f32 / logical_size.height.0;
+    let transform = resvg::tiny_skia::Transform::from_row(
+        fitted.size.width.0 / source.width() * raster_x,
+        0.,
+        0.,
+        fitted.size.height.0 / source.height() * raster_y,
+        (logical_size.width.0 - fitted.size.width.0) / 2. * raster_x,
+        (logical_size.height.0 - fitted.size.height.0) / 2. * raster_y,
+    );
+    let mut pixmap = Pixmap::new(width, height).ok_or(usvg::Error::InvalidSize)?;
+    resvg::render(tree, transform, &mut pixmap.as_mut());
+    Ok(pixmap)
 }
 
 fn pixmap_to_image(pixmap: Pixmap) -> Arc<RenderImage> {
@@ -577,6 +621,8 @@ mod tests {
         RenderColorSvgParams {
             path: "test.svg".into(),
             size: Size::new(DevicePixels(20), DevicePixels(10)),
+            logical_size: Size::new(px(20.), px(10.)),
+            object_fit: ObjectFit::Contain,
             current_color: None,
             fill_color: None,
             text_color: None,
@@ -585,6 +631,112 @@ mod tests {
 
     fn pixel_at(bytes: &[u8], width: usize, x: usize, y: usize) -> [u8; 4] {
         bytes[(y * width + x) * 4..][..4].try_into().unwrap()
+    }
+
+    fn opaque_bounds(bytes: &[u8], width: usize) -> (usize, usize, usize, usize) {
+        let mut left = usize::MAX;
+        let mut top = usize::MAX;
+        let mut right = 0;
+        let mut bottom = 0;
+        for (index, pixel) in bytes.chunks_exact(4).enumerate() {
+            if pixel[3] > 127 {
+                left = left.min(index % width);
+                top = top.min(index / width);
+                right = right.max(index % width + 1);
+                bottom = bottom.max(index / width + 1);
+            }
+        }
+        (left, top, right - left, bottom - top)
+    }
+
+    #[test]
+    fn color_svg_object_fit_rasterizes_centered_at_all_aspect_ratios() {
+        for (source_w, source_h, fit, expected) in [
+            (24, 24, ObjectFit::Contain, (150, 0, 600, 600)),
+            (200, 100, ObjectFit::Contain, (0, 75, 900, 450)),
+            (100, 200, ObjectFit::Contain, (300, 0, 300, 600)),
+            (200, 100, ObjectFit::Cover, (0, 0, 900, 600)),
+            (200, 100, ObjectFit::Fill, (0, 0, 900, 600)),
+            (200, 100, ObjectFit::ScaleDown, (350, 250, 200, 100)),
+            (200, 100, ObjectFit::None, (350, 250, 200, 100)),
+            (1800, 900, ObjectFit::ScaleDown, (0, 75, 900, 450)),
+            (1800, 900, ObjectFit::None, (0, 0, 900, 600)),
+        ] {
+            // A viewBox-only source exercises usvg's intrinsic-size resolution too.
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {source_w} {source_h}"><rect width="{source_w}" height="{source_h}" fill="red"/></svg>"#
+            );
+            let params = RenderColorSvgParams {
+                size: Size::new(DevicePixels(900), DevicePixels(600)),
+                logical_size: Size::new(px(900.), px(600.)),
+                object_fit: fit,
+                ..color_svg_params()
+            };
+            let (size, bytes) = SvgRenderer::new(Arc::new(()))
+                .render_color_image(&params, Some(svg.as_bytes()))
+                .unwrap()
+                .unwrap();
+            assert_eq!(size, params.size);
+            assert_eq!(
+                opaque_bounds(&bytes, 900),
+                expected,
+                "{fit:?}, {source_w}x{source_h}"
+            );
+        }
+    }
+
+    #[test]
+    fn color_svg_cover_crops_both_sides_and_fill_stretches() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+            <rect width="200" height="100" fill="lime"/>
+            <rect width="25" height="100" fill="red"/>
+            <rect x="175" width="25" height="100" fill="blue"/>
+        </svg>"#;
+        let renderer = SvgRenderer::new(Arc::new(()));
+        for fit in [ObjectFit::Cover, ObjectFit::Fill, ObjectFit::Contain] {
+            let params = RenderColorSvgParams {
+                size: Size::new(DevicePixels(900), DevicePixels(600)),
+                logical_size: Size::new(px(900.), px(600.)),
+                object_fit: fit,
+                ..color_svg_params()
+            };
+            let (_, bytes) = renderer
+                .render_color_image(&params, Some(svg))
+                .unwrap()
+                .unwrap();
+            // Cover scales to 1200x600 and removes 150 px on each side, exactly
+            // cropping the red and blue 25-unit source stripes.
+            if fit == ObjectFit::Cover {
+                assert_eq!(pixel_at(&bytes, 900, 1, 300), [0, 255, 0, 255]);
+                assert_eq!(pixel_at(&bytes, 900, 898, 300), [0, 255, 0, 255]);
+            } else {
+                assert_eq!(pixel_at(&bytes, 900, 1, 300), [0, 0, 255, 255]);
+                assert_eq!(pixel_at(&bytes, 900, 898, 300), [255, 0, 0, 255]);
+            }
+            assert_eq!(
+                pixel_at(&bytes, 900, 450, 1)[3],
+                if fit == ObjectFit::Contain { 0 } else { 255 }
+            );
+        }
+    }
+
+    #[test]
+    fn color_svg_intrinsic_size_respects_fractional_dimensions_and_raster_scale() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="20.5" height="10.5"><rect width="20.5" height="10.5"/></svg>"#;
+        for fit in [ObjectFit::None, ObjectFit::ScaleDown] {
+            // 2x display scale and 2x smoothing: intrinsic size stays 20.5x10.5 logical px.
+            let params = RenderColorSvgParams {
+                size: Size::new(DevicePixels(362), DevicePixels(242)),
+                logical_size: Size::new(px(90.5), px(60.5)),
+                object_fit: fit,
+                ..color_svg_params()
+            };
+            let (_, bytes) = SvgRenderer::new(Arc::new(()))
+                .render_color_image(&params, Some(svg))
+                .unwrap()
+                .unwrap();
+            assert_eq!(opaque_bounds(&bytes, 362), (140, 100, 82, 42));
+        }
     }
 
     #[test]

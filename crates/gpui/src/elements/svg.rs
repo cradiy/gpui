@@ -2,8 +2,9 @@ use std::{fs, path::Path, sync::Arc};
 
 use crate::{
     App, Asset, Bounds, Element, GlobalElementId, Hitbox, Hsla, InspectorElementId,
-    InteractiveElement, Interactivity, IntoElement, LayoutId, Pixels, Point, Radians, SharedString,
-    Size, StyleRefinement, Styled, TransformationMatrix, Window, point, px, radians, size,
+    InteractiveElement, Interactivity, IntoElement, LayoutId, ObjectFit, Pixels, Point, Radians,
+    SharedString, Size, StyleRefinement, Styled, TransformationMatrix, Window, point, px, radians,
+    size,
 };
 use gpui_util::ResultExt;
 
@@ -34,6 +35,7 @@ pub struct ColorSvg {
     external_path: Option<SharedString>,
     current_color: Option<Hsla>,
     fill_color: Option<Hsla>,
+    object_fit: ObjectFit,
 }
 
 /// Creates an SVG element that preserves and optionally overrides source colors.
@@ -50,6 +52,7 @@ pub fn color_svg() -> ColorSvg {
         external_path: None,
         current_color: None,
         fill_color: None,
+        object_fit: ObjectFit::Contain,
     }
 }
 
@@ -75,6 +78,16 @@ impl ColorSvg {
     /// Overrides fills on SVG shape elements while leaving other paints intact.
     pub fn fill_color(mut self, color: impl Into<Hsla>) -> Self {
         self.fill_color = Some(color.into());
+        self
+    }
+
+    /// Sets how the SVG fits within the element bounds. Defaults to [`ObjectFit::Contain`].
+    ///
+    /// The SVG is centered, with any overflow clipped to the element's rounded bounds.
+    /// [`ObjectFit::None`] and [`ObjectFit::ScaleDown`] use the SVG's intrinsic size
+    /// in logical pixels, independently of the display scale factor.
+    pub fn object_fit(mut self, object_fit: ObjectFit) -> Self {
+        self.object_fit = object_fit;
         self
     }
 
@@ -165,7 +178,7 @@ impl Element for ColorSvg {
 
                 if let Some(path) = self.path.as_ref() {
                     window
-                        .paint_color_svg(
+                        .paint_color_svg_with_fit(
                             bounds,
                             path.clone(),
                             None,
@@ -174,6 +187,7 @@ impl Element for ColorSvg {
                             self.current_color,
                             self.fill_color,
                             style.text.color,
+                            self.object_fit,
                             cx,
                         )
                         .log_err();
@@ -185,7 +199,7 @@ impl Element for ColorSvg {
                         return;
                     };
                     window
-                        .paint_color_svg(
+                        .paint_color_svg_with_fit(
                             bounds,
                             path.clone(),
                             Some(&bytes),
@@ -194,6 +208,7 @@ impl Element for ColorSvg {
                             self.current_color,
                             self.fill_color,
                             style.text.color,
+                            self.object_fit,
                             cx,
                         )
                         .log_err();

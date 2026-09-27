@@ -937,9 +937,8 @@ pub(crate) struct LeakDetector {
 
 /// A snapshot of the set of alive entities at a point in time.
 ///
-/// Created by [`LeakDetector::snapshot`]. Can later be passed to
-/// [`LeakDetector::assert_no_new_leaks`] to verify that no new entity
-/// handles remain between the snapshot and the current state.
+/// Used as a baseline for verifying that no handles to newly created entities
+/// remain alive after an operation.
 #[cfg(any(test, feature = "leak-detection"))]
 pub struct LeakDetectorSnapshot {
     entity_ids: collections::HashSet<EntityId>,

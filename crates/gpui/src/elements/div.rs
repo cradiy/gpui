@@ -855,18 +855,16 @@ pub trait InteractiveElement: Sized {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    /// Set a key that can be used to look up this element's bounds
-    /// in the [`crate::VisualTestContext::debug_bounds`] map
-    /// This is a noop in release builds
+    /// Sets a key for looking up this element's bounds with
+    /// [`crate::VisualTestContext::debug_bounds`].
     fn debug_selector(mut self, f: impl FnOnce() -> String) -> Self {
         self.interactivity().debug_selector = Some(f());
         self
     }
 
     #[cfg(not(any(test, feature = "test-support")))]
-    /// Set a key that can be used to look up this element's bounds
-    /// in the [`crate::VisualTestContext::debug_bounds`] map
-    /// This is a noop in release builds
+    /// Sets a test selector when built with `test-support`.
+    /// Has no effect without test support.
     #[inline]
     fn debug_selector(self, _: impl FnOnce() -> String) -> Self {
         self
@@ -3962,7 +3960,7 @@ where
 }
 
 /// Represents an element that can be scrolled *to* in its parent element.
-/// Contrary to [ScrollHandle::scroll_to_active_item], an anchored element does not have to be an immediate child of the parent.
+/// Contrary to [ScrollHandle::scroll_to_item], an anchored element does not have to be an immediate child of the parent.
 #[derive(Clone)]
 pub struct ScrollAnchor {
     handle: ScrollHandle,
@@ -4089,7 +4087,7 @@ impl ScrollHandle {
         self.0.borrow().child_bounds.get(ix).cloned()
     }
 
-    /// Update [ScrollHandleState]'s active item for scrolling to in prepaint
+    /// Schedules the child at `ix` to be scrolled into view during prepaint.
     pub fn scroll_to_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
         state.active_item = Some(ScrollActiveItem {
@@ -4098,8 +4096,7 @@ impl ScrollHandle {
         });
     }
 
-    /// Update [ScrollHandleState]'s active item for scrolling to in prepaint
-    /// This scrolls the minimal amount to ensure that the child is the first visible element
+    /// Schedules the child at `ix` to become the first visible element during prepaint.
     pub fn scroll_to_top_of_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
         state.active_item = Some(ScrollActiveItem {

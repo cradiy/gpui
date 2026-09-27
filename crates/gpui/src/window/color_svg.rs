@@ -1,4 +1,8 @@
-use super::*;
+use super::Window;
+use crate::{App, RenderColorSvgParams, Task};
+use collections::FxHashMap;
+use scheduler::Instant;
+use std::{borrow::Cow, time::Duration};
 
 const MAX_CONCURRENT_RASTERS: usize = 2;
 const MAX_SYNC_PIXELS: i64 = 256 * 256;
@@ -80,8 +84,15 @@ impl Window {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AssetSource, Context, Render, SvgRenderer, TestAppContext, canvas, div, rgb};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::{
+        AssetSource, AtlasTile, Context, Corners, DevicePixels, IntoElement, Render, Result,
+        SMOOTH_SVG_SCALE_FACTOR, SharedString, Styled, SvgRenderer, TestAppContext,
+        TransformationMatrix, canvas, div, point, px, rgb, size,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     struct Assets(Arc<AtomicUsize>);
     impl AssetSource for Assets {

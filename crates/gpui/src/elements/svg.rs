@@ -37,6 +37,10 @@ pub struct ColorSvg {
 }
 
 /// Creates an SVG element that preserves and optionally overrides source colors.
+///
+/// External SVGs and large asset SVGs rasterize in the background at full smoothing
+/// resolution. The element keeps its layout while loading, paints when ready, and
+/// reuses the atlas image on subsequent frames.
 #[track_caller]
 pub fn color_svg() -> ColorSvg {
     ColorSvg {

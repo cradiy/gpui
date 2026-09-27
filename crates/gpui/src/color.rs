@@ -25,7 +25,7 @@ pub fn rgba(hex: u32) -> Rgba {
 /// Swap from RGBA with premultiplied alpha to BGRA
 pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
     color.swap(0, 2);
-    if color[3] > 0 {
+    if color[3] > 0 && color[3] < 255 {
         let a = color[3] as f32 / 255.;
         color[0] = (color[0] as f32 / a) as u8;
         color[1] = (color[1] as f32 / a) as u8;
@@ -1232,6 +1232,26 @@ impl From<Rgba> for Background {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rgba_conversion_preserves_all_alpha_channel_pairs() {
+        for alpha in 0..=255u8 {
+            for channel in 0..=255u8 {
+                let source = [channel, channel / 2, 255 - channel, alpha];
+                let mut expected = source;
+                expected.swap(0, 2);
+                if alpha > 0 {
+                    let a = alpha as f32 / 255.;
+                    for c in &mut expected[..3] {
+                        *c = (*c as f32 / a) as u8;
+                    }
+                }
+                let mut actual = source;
+                super::swap_rgba_pa_to_bgra(&mut actual);
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
     use serde_json::json;
 
     use super::*;

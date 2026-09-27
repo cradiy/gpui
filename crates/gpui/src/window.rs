@@ -62,6 +62,7 @@ use std::{
 use uuid::Uuid;
 
 pub(crate) mod a11y;
+mod color_svg;
 mod prompts;
 
 pub use a11y::A11ySubtreeBuilder;
@@ -1026,6 +1027,7 @@ pub struct Window {
     pub(crate) platform_window: Box<dyn PlatformWindow>,
     display_id: Option<DisplayId>,
     sprite_atlas: Arc<dyn PlatformAtlas>,
+    color_svg_renders: color_svg::ColorSvgRenders,
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
     rem_size: Pixels,
@@ -1762,6 +1764,7 @@ impl Window {
             platform_window,
             display_id,
             sprite_atlas,
+            color_svg_renders: Default::default(),
             text_system,
             text_rendering_mode: cx.text_rendering_mode.clone(),
             rem_size: px(16.),
@@ -5199,12 +5202,15 @@ impl Window {
     }
 
     /// Paints a colored SVG into the scene for the next frame.
+    /// Uncached images with supplied bytes, and large asset images, rasterize on
+    /// the background executor and request a redraw when ready. Their first paint
+    /// may be empty; failures are logged.
     #[allow(clippy::too_many_arguments)]
     pub fn paint_color_svg(
         &mut self,
         bounds: Bounds<Pixels>,
         path: SharedString,
-        mut data: Option<&[u8]>,
+        data: Option<&[u8]>,
         transformation: TransformationMatrix,
         corner_radii: Corners<Pixels>,
         current_color: Option<Hsla>,
@@ -5225,9 +5231,14 @@ impl Window {
             fill_color,
             text_color,
         };
+        // External files can contain expensive patterns or filters even at icon sizes.
+        let asynchronous = data.is_some() || color_svg::rasterize_in_background(&params);
         let Some(tile) =
             self.sprite_atlas
                 .get_or_insert_with(&params.clone().into(), &mut || {
+                    if asynchronous {
+                        return Ok(None);
+                    }
                     let Some((size, bytes)) = cx.svg_renderer.render_color_image(&params, data)?
                     else {
                         return Ok(None);
@@ -5235,6 +5246,9 @@ impl Window {
                     Ok(Some((size, Cow::Owned(bytes))))
                 })?
         else {
+            if asynchronous {
+                self.request_color_svg_raster(params, data, cx);
+            }
             return Ok(());
         };
 

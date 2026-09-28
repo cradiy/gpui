@@ -5,6 +5,7 @@ use collections::{HashMap, HashSet};
 use gpui::Scene3dFrame;
 
 use super::{Scene3dChannels, Scene3dGeometryMemory, Scene3dGpuGeometry};
+#[cfg(not(target_family = "wasm"))]
 use crate::WgpuContext;
 
 pub(crate) type GpuGeometryMap = HashMap<u32, Arc<Scene3dGpuGeometry>>;
@@ -18,6 +19,7 @@ pub struct Scene3dGpuDraw {
     pub bounds: [[f32; 3]; 2],
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(super) fn prepare(
     context: &WgpuContext,
     frame: &Scene3dFrame,
@@ -52,6 +54,19 @@ pub(crate) fn validate_frame(
     Ok(geometry)
 }
 
+#[cfg(target_family = "wasm")]
+pub(super) fn frame_geometry(frame: &Scene3dFrame) -> Result<GpuGeometryMap> {
+    ensure!(
+        frame
+            .objects
+            .iter()
+            .all(|object| object.gpu_geometry.is_none()),
+        "device-local geometry payloads are not supported on Web"
+    );
+    Ok(HashMap::default())
+}
+
+#[cfg(not(target_family = "wasm"))]
 pub(super) fn frame_geometry(frame: &Scene3dFrame) -> Result<GpuGeometryMap> {
     let mut geometry = HashMap::default();
     if !frame
@@ -96,6 +111,7 @@ pub(super) fn frame_geometry(frame: &Scene3dFrame) -> Result<GpuGeometryMap> {
     Ok(geometry)
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn with_bounds(
     frame: &Scene3dFrame,
     bounds: impl IntoIterator<Item = (u32, [[f32; 3]; 2])>,

@@ -72,7 +72,7 @@ scheduler = { path = "crates/scheduler" }
 sum_tree = { path = "crates/sum_tree" }
 http_client_tls = { path = "crates/http_client_tls" }
 media = { path = "crates/media" }
-naga = { version = "29.0.4", features = ["wgsl-in", "msl-out", "hlsl-out"] }
+naga = { version = "30.0.0", features = ["wgsl-in", "msl-out", "hlsl-out"] }
 util_macros = { path = "crates/util_macros" }
 uic_macros = { package = "uic-macros", path = "uic/macros", version = "0.1.0" }
 refineable = { path = "crates/refineable" }

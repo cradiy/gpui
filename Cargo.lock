@@ -707,15 +707,6 @@ dependencies = [
 
 [[package]]
 name = "bit-set"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34ddef2995421ab6a5c779542c81ee77c115206f4ad9d5a8e05f4ff49716a3dd"
-dependencies = [
- "bit-vec 0.9.1",
-]
-
-[[package]]
-name = "bit-set"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2f926cc3060f09db9ebc5b52823d85268d24bb917e472c0c4bea35780a7d"
@@ -2753,7 +2744,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
- "naga 29.0.4",
+ "naga",
  "pollster 0.4.0",
  "refineable",
  "smallvec",
@@ -2846,7 +2837,7 @@ dependencies = [
  "mach2",
  "media",
  "metal",
- "naga 29.0.4",
+ "naga",
  "objc",
  "objc2 0.6.3",
  "objc2-app-kit 0.3.2",
@@ -2970,7 +2961,6 @@ name = "gpui_web"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "console_error_panic_hook",
  "futures",
  "gpui",
  "gpui_wgpu",
@@ -3011,7 +3001,7 @@ dependencies = [
  "js-sys",
  "log",
  "metal",
- "naga 29.0.4",
+ "naga",
  "objc2 0.6.3",
  "objc2-metal 0.3.2",
  "parking_lot",
@@ -3047,7 +3037,7 @@ dependencies = [
  "image",
  "itertools 0.14.0",
  "log",
- "naga 29.0.4",
+ "naga",
  "parking_lot",
  "rand 0.9.4",
  "raw-window-handle",
@@ -3348,12 +3338,6 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-
-[[package]]
-name = "hexf-parse"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hkdf"
@@ -4409,31 +4393,6 @@ name = "muldiv"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "956787520e75e9bd233246045d19f42fb73242759cc57fba9611d940ae96d4b0"
-
-[[package]]
-name = "naga"
-version = "29.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2bf919621e7975acb27d881bae2fb993e0d45c8e0446e85e6272971e00dc8df"
-dependencies = [
- "arrayvec",
- "bit-set 0.9.1",
- "bitflags 2.10.0",
- "cfg-if",
- "cfg_aliases",
- "codespan-reporting",
- "half",
- "hashbrown 0.16.1",
- "hexf-parse",
- "indexmap",
- "libm",
- "log",
- "num-traits",
- "once_cell",
- "rustc-hash 1.1.0",
- "thiserror 2.0.17",
- "unicode-ident",
-]
 
 [[package]]
 name = "naga"
@@ -8306,7 +8265,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
- "naga 30.0.0",
+ "naga",
  "parking_lot",
  "portable-atomic",
  "profiling",
@@ -8337,7 +8296,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "indexmap",
  "log",
- "naga 30.0.0",
+ "naga",
  "naga-types",
  "once_cell",
  "parking_lot",
@@ -8406,7 +8365,7 @@ dependencies = [
  "libc",
  "libloading",
  "log",
- "naga 30.0.0",
+ "naga",
  "naga-types",
  "ndk-sys",
  "objc2 0.6.3",
@@ -8444,7 +8403,7 @@ version = "30.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9eaac644e5008925c78567d272b9d66ef83da55a53cc17fc7daade7bb6e66e5"
 dependencies = [
- "naga 30.0.0",
+ "naga",
  "wgpu-types",
 ]
 

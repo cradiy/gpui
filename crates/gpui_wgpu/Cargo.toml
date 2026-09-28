@@ -33,7 +33,7 @@ swash = "0.2.6"
 unicode-segmentation.workspace = true
 gpui_util.workspace = true
 half = "2.7.1"
-wgpu.workspace = true
+wgpu = { workspace = true, features = ["naga-ir"] }
 
 # Optional: only needed on platforms with multiple font sources (e.g. Linux)
 # WARNING: If you change this, you must also publish a new version of zed-font-kit to crates.io
@@ -54,6 +54,8 @@ objc2.workspace = true
 objc2-metal = "0.3.2"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
+# Match wgpu's Naga version and enable runtime WGSL validation on WebGPU.
+naga.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }

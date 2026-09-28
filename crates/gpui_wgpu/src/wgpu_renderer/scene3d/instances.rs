@@ -105,6 +105,7 @@ impl BatchPlanCache {
 
 pub(super) struct BatchPlan {
     color: bool,
+    #[cfg(not(target_family = "wasm"))]
     pub extra_batches: Vec<usize>,
     pub order: Vec<usize>,
     pub batches: Vec<Range<usize>>,
@@ -200,6 +201,7 @@ impl BatchPlan {
                 batches.push(position..position + 1);
             }
         }
+        #[cfg(not(target_family = "wasm"))]
         let mut extra_batches: Vec<_> = batches
             .iter()
             .enumerate()
@@ -210,9 +212,11 @@ impl BatchPlan {
                 .then_some(index)
             })
             .collect();
+        #[cfg(not(target_family = "wasm"))]
         extra_batches.sort_by_key(|&index| order[batches[index].start]);
         Self {
             color,
+            #[cfg(not(target_family = "wasm"))]
             extra_batches,
             order,
             batches,

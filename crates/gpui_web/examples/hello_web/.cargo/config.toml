@@ -1,9 +1,11 @@
 [target.wasm32-unknown-unknown]
 rustflags = [
-    "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
+    "-Z", "llvm-target-feature=+atomics",
+    "-C", "target-feature=+bulk-memory,+mutable-globals",
     "-C", "link-arg=--shared-memory",
     "-C", "link-arg=--max-memory=1073741824",
     "-C", "link-arg=--import-memory",
+    "-C", "link-arg=--export=__heap_base",
     "-C", "link-arg=--export=__wasm_init_tls",
     "-C", "link-arg=--export=__tls_size",
     "-C", "link-arg=--export=__tls_align",
@@ -11,4 +13,4 @@ rustflags = [
 ]
 
 [unstable]
-build-std = ["std,panic_abort"]
+build-std = ["std", "panic_abort"]

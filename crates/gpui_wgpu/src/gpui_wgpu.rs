@@ -1,6 +1,7 @@
 mod cosmic_text_system;
 #[cfg(not(target_family = "wasm"))]
 mod id_remap;
+#[cfg(not(target_family = "wasm"))]
 mod offscreen_renderer;
 mod scene3d_material;
 mod scene3d_renderer;
@@ -11,6 +12,7 @@ mod wgpu_renderer;
 pub use cosmic_text_system::*;
 #[cfg(not(target_family = "wasm"))]
 pub use id_remap::{IdRemapConfig, WgpuIdRemapper};
+#[cfg(not(target_family = "wasm"))]
 pub use offscreen_renderer::*;
 pub use scene3d_material::{
     MaterialProgram as Scene3dMaterialProgram, Scene3dMaterialLimits, Scene3dMaterialResource,

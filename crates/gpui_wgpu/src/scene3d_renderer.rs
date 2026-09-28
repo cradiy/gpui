@@ -341,6 +341,7 @@ impl WgpuScene3dRenderer {
     /// CPU mesh data and queries remain unchanged. GPU-invalid draws count as submissions
     /// in statistics even when their indirect instance count is zero.
     /// An empty override list preserves the frame's existing geometry.
+    #[cfg(not(target_family = "wasm"))]
     pub fn render_with_geometry(
         &mut self,
         frame: &Scene3dFrame,

@@ -12,13 +12,29 @@ use super::{RenderRegion, Scene3dRenderer, WgpuAtlas, viewport::visit_scenes};
 use crate::scene3d_renderer::occlusion::{self, OcclusionPasses};
 use crate::{Scene3dCapabilities, Scene3dDeviceCapabilities, WgpuContext, WgpuScene3dPickFrame};
 
+fn publish_capture(
+    capture: &gpui::Scene3dPickCapture,
+    frame: &Arc<Scene3dFrame>,
+    result: Result<Arc<WgpuScene3dPickFrame>, gpui::SharedString>,
+) {
+    #[cfg(not(target_family = "wasm"))]
+    capture.publish(frame, result);
+    #[cfg(target_family = "wasm")]
+    capture.publish::<()>(
+        frame,
+        Err(result
+            .err()
+            .unwrap_or_else(|| "viewport GPU pick publication is not supported on Web".into())),
+    );
+}
+
 pub(in crate::wgpu_renderer) fn fail_pick_captures(scene: &Scene, error: gpui::SharedString) {
     scene.visit(&mut |scene| {
         for layer in &scene.subtree_layers {
             if let Some(frame) = &layer.scene3d
                 && let Some(capture) = &frame.pick_capture
             {
-                capture.publish::<WgpuScene3dPickFrame>(frame, Err(error.clone()));
+                publish_capture(capture, frame, Err(error.clone()));
             }
         }
     });
@@ -68,6 +84,17 @@ impl PickRenderer {
                     continue;
                 };
                 let capture = frame.pick_capture.as_ref();
+                #[cfg(target_family = "wasm")]
+                let capture = {
+                    if let Some(capture) = capture {
+                        publish_capture(
+                            capture,
+                            frame,
+                            Err("viewport GPU pick publication is not supported on Web".into()),
+                        );
+                    }
+                    None::<&gpui::Scene3dPickCapture>
+                };
                 if capture.is_none()
                     && !frame
                         .occlusion_groups
@@ -140,10 +167,7 @@ impl PickRenderer {
                     }
                     Err(error) => {
                         if let Some(capture) = capture {
-                            capture.publish::<WgpuScene3dPickFrame>(
-                                frame,
-                                Err(format!("{error:#}").into()),
-                            );
+                            publish_capture(capture, frame, Err(format!("{error:#}").into()));
                         } else {
                             failure = Some(error);
                         }
@@ -239,7 +263,7 @@ impl PickRenderer {
                 && submitted
                 && let Some(capture) = &entry.frame.pick_capture
             {
-                capture.publish(&entry.frame, Ok(entry.output.clone()));
+                publish_capture(capture, &entry.frame, Ok(entry.output.clone()));
             }
         }
     }

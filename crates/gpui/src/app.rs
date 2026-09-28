@@ -235,6 +235,10 @@ impl Application {
             let cx = &mut *this.borrow_mut();
             on_finish_launching(cx);
         }));
+        // The browser owns the event loop. Retain the app and its callbacks for
+        // the page lifetime; embedders with explicit teardown use run_embedded.
+        #[cfg(target_family = "wasm")]
+        std::mem::forget(self);
     }
 
     /// Start the application for an embedder that drives the run loop itself.

@@ -1,6 +1,9 @@
+#[cfg(not(target_family = "wasm"))]
 use super::*;
 use gpui::{MeshPassBlend3d, MeshPassDepth3d, MeshPassState3d};
+#[cfg(not(target_family = "wasm"))]
 mod expansion;
+#[cfg(not(target_family = "wasm"))]
 pub(super) use expansion::Expansion;
 
 #[cfg(all(test, not(target_family = "wasm")))]

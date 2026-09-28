@@ -102,6 +102,7 @@ pub(super) enum Pass {
     Opaque,
     Blend,
     Shadow,
+    #[cfg(not(target_family = "wasm"))]
     Additional(gpui::MeshPassState3d, mesh_pass::Expansion),
 }
 
@@ -116,10 +117,14 @@ pub(super) fn create_pipeline(
 ) -> wgpu::RenderPipeline {
     let shadow = matches!(pass, Pass::Shadow);
     let blend = matches!(pass, Pass::Blend);
+    #[cfg(not(target_family = "wasm"))]
     let (extra, vertex_constants) = match pass {
         Pass::Additional(state, expansion) => (Some(state), Some(expansion.constants())),
         _ => (None, None),
     };
+    #[cfg(target_family = "wasm")]
+    let (extra, vertex_constants): (Option<gpui::MeshPassState3d>, Option<[(&str, f64); 4]>) =
+        (None, None);
     let fragment = match format {
         wgpu::TextureFormat::R32Uint => "object_id",
         wgpu::TextureFormat::R32Float => "linear_depth",

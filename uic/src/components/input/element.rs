@@ -17,6 +17,9 @@ pub(super) struct PrepaintState {
     cursor: Option<PaintQuad>,
     cursor_bounds: Option<Bounds<Pixels>>,
     selection: Vec<PaintQuad>,
+    text_bounds: Bounds<Pixels>,
+    viewport_bounds: Bounds<Pixels>,
+    horizontal_offset: Pixels,
 }
 
 impl IntoElement for TextElement {
@@ -79,6 +82,9 @@ impl Element for TextElement {
         let cursor_offset = input.cursor_offset();
         let appearance = input.appearance;
         let multiline = input.mode == InputMode::Multiline;
+        let focus_handle = input.focus_handle.clone();
+        let scroll_cursor_pending = input.scroll_cursor_pending;
+        let current_scroll_offset = input.single_line_scroll_offset;
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
@@ -144,18 +150,47 @@ impl Element for TextElement {
         let layout = TextLayout::new(lines, line_starts, window.line_height());
 
         let cursor_position = layout.position_for_offset(cursor_offset);
+        let mut horizontal_offset = px(0.);
+        let mut text_bounds = bounds;
+        if !multiline {
+            let content_width = layout
+                .lines
+                .first()
+                .map(|line| line.width())
+                .unwrap_or_default()
+                + appearance.caret_width
+                + px(1.);
+            let max_scroll = (content_width - bounds.size.width).max(px(0.));
+            horizontal_offset = current_scroll_offset.clamp(-max_scroll, px(0.));
+
+            if focus_handle.is_focused(window) && scroll_cursor_pending {
+                let cursor_left = cursor_position.x + horizontal_offset;
+                let cursor_right = cursor_left + appearance.caret_width + px(1.);
+                if cursor_left < px(0.) {
+                    horizontal_offset -= cursor_left;
+                } else if cursor_right > bounds.size.width {
+                    horizontal_offset -= cursor_right - bounds.size.width;
+                }
+                horizontal_offset = horizontal_offset.clamp(-max_scroll, px(0.));
+            }
+
+            text_bounds = Bounds::new(
+                point(bounds.left() + horizontal_offset, bounds.top()),
+                size(content_width.max(bounds.size.width), bounds.size.height),
+            );
+        }
         let indicator_top = if multiline {
             bounds.top() + cursor_position.y + (layout.line_height - appearance.caret_height) / 2.
         } else {
             bounds.top() + (bounds.size.height - appearance.caret_height) / 2.
         };
         let cursor_bounds = Bounds::new(
-            point(bounds.left() + cursor_position.x, indicator_top),
+            point(text_bounds.left() + cursor_position.x, indicator_top),
             size(appearance.caret_width, appearance.caret_height),
         );
         let cursor_row_bounds = Bounds::new(
             point(
-                bounds.left() + cursor_position.x,
+                text_bounds.left() + cursor_position.x,
                 bounds.top() + cursor_position.y,
             ),
             size(appearance.caret_width, layout.line_height),
@@ -166,7 +201,7 @@ impl Element for TextElement {
             (Vec::new(), Some(fill(cursor_bounds, appearance.caret)))
         } else {
             (
-                selection_quads(&layout, selected_range, bounds, appearance.selection),
+                selection_quads(&layout, selected_range, text_bounds, appearance.selection),
                 None,
             )
         };
@@ -176,6 +211,9 @@ impl Element for TextElement {
             cursor,
             cursor_bounds: Some(cursor_row_bounds),
             selection,
+            text_bounds,
+            viewport_bounds: bounds,
+            horizontal_offset,
         }
     }
 
@@ -214,14 +252,14 @@ impl Element for TextElement {
         let mut rows_before = 0;
         for line in &layout.lines {
             let origin = point(
-                bounds.left(),
+                prepaint.text_bounds.left(),
                 bounds.top() + layout.line_height * rows_before as f32,
             );
             line.paint(
                 origin,
                 layout.line_height,
                 gpui::TextAlign::Left,
-                Some(bounds),
+                Some(prepaint.viewport_bounds),
                 window,
                 cx,
             )
@@ -246,7 +284,14 @@ impl Element for TextElement {
         let rows_changed = old_rows != Some(new_rows);
         self.input.update(cx, |input, cx| {
             input.last_layout = Some(layout);
-            input.last_bounds = Some(bounds);
+            input.last_bounds = Some(prepaint.text_bounds);
+            input.last_viewport_bounds = Some(prepaint.viewport_bounds);
+            if !multiline {
+                input.single_line_scroll_offset = prepaint.horizontal_offset;
+                if focus_handle.is_focused(window) && scroll_cursor_pending {
+                    input.scroll_cursor_pending = false;
+                }
+            }
             if rows_changed {
                 cx.notify();
             }

@@ -1,9 +1,10 @@
-use std::{borrow::Cow, ops::Range};
+use std::{borrow::Cow, ops::Range, time::Duration};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, EntityInputHandler, FocusHandle, Focusable,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollHandle,
-    SharedString, UTF16Selection, Window, WrappedLine, div, point, prelude::*, px,
+    App, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, EntityInputHandler,
+    FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Render, ScrollHandle, SharedString, Task, UTF16Selection, Window, WrappedLine, div,
+    point, prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -105,7 +106,10 @@ pub struct TextInput {
     pub(super) marked_range: Option<Range<usize>>,
     pub(super) last_layout: Option<TextLayout>,
     pub(super) last_bounds: Option<Bounds<Pixels>>,
+    pub(super) last_viewport_bounds: Option<Bounds<Pixels>>,
     pub(super) is_selecting: bool,
+    selection_pointer: Option<Point<Pixels>>,
+    selection_scroll_task: Option<Task<()>>,
     pub(super) disabled: bool,
     pub(super) mode: InputMode,
     pub(super) appearance: InputAppearance,
@@ -113,6 +117,7 @@ pub struct TextInput {
     pub(super) scroll_handle: ScrollHandle,
     pub(super) scrollbar_state: ScrollbarState,
     pub(super) scroll_cursor_pending: bool,
+    pub(super) single_line_scroll_offset: Pixels,
 }
 
 impl gpui::EventEmitter<InputEvent> for TextInput {}
@@ -129,7 +134,10 @@ impl TextInput {
             marked_range: None,
             last_layout: None,
             last_bounds: None,
+            last_viewport_bounds: None,
             is_selecting: false,
+            selection_pointer: None,
+            selection_scroll_task: None,
             disabled: false,
             mode: InputMode::Text,
             appearance: InputAppearance::default(),
@@ -137,6 +145,7 @@ impl TextInput {
             scroll_handle: ScrollHandle::new(),
             scrollbar_state: ScrollbarState::new(),
             scroll_cursor_pending: true,
+            single_line_scroll_offset: px(0.),
         }
     }
 
@@ -168,7 +177,7 @@ impl TextInput {
 
     pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
         self.disabled = disabled;
-        self.is_selecting = false;
+        self.stop_selection();
         self.marked_range = None;
         cx.notify();
     }
@@ -178,9 +187,11 @@ impl TextInput {
     }
 
     pub fn set_mode(&mut self, mode: InputMode) {
+        self.stop_selection();
         self.mode = mode;
         self.preferred_x = None;
         self.scroll_cursor_pending = true;
+        self.single_line_scroll_offset = px(0.);
     }
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
@@ -374,6 +385,7 @@ impl TextInput {
             return;
         }
         window.focus(&self.focus_handle, cx);
+        self.stop_selection();
         self.is_selecting = true;
 
         if event.modifiers.shift {
@@ -384,18 +396,109 @@ impl TextInput {
         }
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
+    fn stop_selection(&mut self) {
         self.is_selecting = false;
+        self.selection_pointer = None;
+        self.selection_scroll_task = None;
     }
 
-    fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.disabled {
+    fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.disabled || !event.dragging() || !self.focus_handle.is_focused(window) {
+            self.stop_selection();
             return;
         }
-        if self.is_selecting {
-            self.preferred_x = None;
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+        if !self.is_selecting {
+            return;
         }
+        self.preferred_x = None;
+        self.selection_pointer = Some(event.position);
+        self.select_at_drag_pointer(cx);
+        if self.selection_scroll_delta() == px(0.) {
+            self.selection_scroll_task = None;
+        } else if self.selection_scroll_task.is_none() {
+            self.selection_scroll_task = Some(cx.spawn_in(window, async move |input, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(16))
+                        .await;
+                    let keep_scrolling = input
+                        .update_in(cx, |input, window, cx| {
+                            if input.disabled
+                                || !input.is_selecting
+                                || !input.focus_handle.is_focused(window)
+                            {
+                                input.stop_selection();
+                                return false;
+                            }
+                            if !input.scroll_selection(cx) {
+                                input.selection_scroll_task = None;
+                                return false;
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !keep_scrolling {
+                        break;
+                    }
+                }
+            }));
+        }
+    }
+
+    fn select_at_drag_pointer(&mut self, cx: &mut Context<Self>) {
+        let Some(mut position) = self.selection_pointer else {
+            return;
+        };
+        if self.mode != InputMode::Multiline
+            && let Some(viewport) = self.last_viewport_bounds
+        {
+            position.x = position.x.clamp(viewport.left(), viewport.right());
+        }
+        self.select_to(self.index_for_mouse_position(position), cx);
+    }
+
+    fn selection_scroll_delta(&self) -> Pixels {
+        if self.mode == InputMode::Multiline {
+            return px(0.);
+        }
+        let (Some(position), Some(viewport)) = (self.selection_pointer, self.last_viewport_bounds)
+        else {
+            return px(0.);
+        };
+        // A small edge zone also scrolls when the pointer is held just inside the field.
+        let edge = px(8.).min(viewport.size.width / 2.);
+        let distance = if position.x < viewport.left() + edge {
+            viewport.left() + edge - position.x
+        } else if position.x > viewport.right() - edge {
+            viewport.right() - edge - position.x
+        } else {
+            return px(0.);
+        };
+        (distance * 0.35).clamp(px(-24.), px(24.))
+    }
+
+    fn scroll_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let (Some(bounds), Some(viewport)) = (self.last_bounds, self.last_viewport_bounds) else {
+            return false;
+        };
+        let max_scroll = (bounds.size.width - viewport.size.width).max(px(0.));
+        let offset = (self.single_line_scroll_offset + self.selection_scroll_delta())
+            .clamp(-max_scroll, px(0.));
+        let change = offset - self.single_line_scroll_offset;
+        if change == px(0.) {
+            return false;
+        }
+        self.single_line_scroll_offset = offset;
+        // Keep hit testing synchronized even if multiple timer ticks precede paint.
+        self.last_bounds.as_mut().unwrap().origin.x += change;
+        self.select_at_drag_pointer(cx);
+        self.scroll_cursor_pending = false;
+        true
     }
 
     fn show_character_palette(
@@ -489,6 +592,9 @@ impl TextInput {
         else {
             return 0;
         };
+        if self.mode != InputMode::Multiline {
+            return line.offset_for_position(point(position.x - bounds.left(), px(0.)));
+        }
         if position.y < bounds.top() {
             return 0;
         }
@@ -593,9 +699,11 @@ impl TextInput {
         self.marked_range = None;
         self.last_layout = None;
         self.last_bounds = None;
-        self.is_selecting = false;
+        self.last_viewport_bounds = None;
+        self.stop_selection();
         self.preferred_x = None;
         self.scroll_cursor_pending = true;
+        self.single_line_scroll_offset = px(0.);
         cx.emit(InputEvent::Change(self.content.clone()));
         cx.notify();
     }
@@ -718,6 +826,11 @@ impl EntityInputHandler for TextInput {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let last_layout = self.last_layout.as_ref()?;
+        let bounds = if self.mode == InputMode::Multiline {
+            bounds
+        } else {
+            self.last_bounds.unwrap_or(bounds)
+        };
         let range = self.range_from_utf16(&range_utf16);
         let start = last_layout.position_for_offset(range.start);
         let end = last_layout.position_for_offset(range.end);
@@ -759,7 +872,30 @@ impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let multiline = self.mode == InputMode::Multiline;
         let scroll_handle = self.scroll_handle.clone();
+        let input = cx.weak_entity();
         div()
+            .on_paint_before_children(move |_, _, window, _| {
+                let moving_input = input.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture
+                        && let Some(input) = moving_input.upgrade()
+                        && input.read(cx).is_selecting
+                    {
+                        input.update(cx, |input, cx| input.on_mouse_move(event, window, cx));
+                        cx.stop_propagation();
+                    }
+                });
+                let input = input.clone();
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture
+                        && event.button == MouseButton::Left
+                        && let Some(input) = input.upgrade()
+                        && input.read(cx).is_selecting
+                    {
+                        input.update(cx, |input, _| input.stop_selection());
+                    }
+                });
+            })
             .id(("uic-text-input", cx.entity_id()))
             .flex()
             .w_full()
@@ -770,6 +906,7 @@ impl Render for TextInput {
                     .overflow_scroll()
                     .track_scroll(&scroll_handle)
             })
+            .when(!multiline, |this| this.overflow_hidden())
             .key_context(if multiline {
                 "TextInput multiline"
             } else {
@@ -801,9 +938,6 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::insert_newline))
             .on_action(cx.listener(Self::submit))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_move(cx.listener(Self::on_mouse_move))
             .child(
                 div()
                     .w_full()
@@ -1008,6 +1142,202 @@ mod tests {
         window
             .update(&mut visual.cx, |view, _, cx| {
                 assert_eq!(view.state.read(cx).scroll_handle.offset().y, px(0.));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn single_line_keeps_a_long_value_and_its_cursor_visible(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| {
+            TextInput::new(cx)
+                .initial_value("A deliberately long single-line value that exceeds the input width")
+        });
+        let mut visual = draw_and_focus(&window, cx);
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert!(input.single_line_scroll_offset < px(0.));
+
+                let layout = input.last_layout.as_ref().unwrap();
+                let bounds = input.last_bounds.unwrap();
+                let viewport = input.last_viewport_bounds.unwrap();
+                let cursor = layout.position_for_offset(input.cursor_offset());
+                let cursor_right = bounds.left() + cursor.x + input.appearance.caret_width;
+                assert!(
+                    cursor_right <= viewport.right(),
+                    "cursor_right={cursor_right:?}, viewport={viewport:?}, offset={:?}, bounds={bounds:?}, cursor={cursor:?}",
+                    input.single_line_scroll_offset,
+                );
+                assert!(
+                    input.index_for_mouse_position(point(
+                        viewport.left() + px(1.),
+                        viewport.top() + viewport.size.height / 2.,
+                    )) > 0,
+                    "mouse hit testing must account for the shifted text origin",
+                );
+            })
+            .unwrap();
+
+        visual.simulate_keystrokes("home");
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert_eq!(input.cursor_offset(), 0);
+                assert_eq!(input.single_line_scroll_offset, px(0.));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn single_line_drag_selection_scrolls_outside_both_edges_and_stops_on_release(
+        cx: &mut TestAppContext,
+    ) {
+        let window = open_input(cx, |cx| {
+            TextInput::new(cx)
+            .initial_value("长文本 Unicode selection stays anchored while dragging beyond either edge of this narrow input")
+        });
+        let mut visual = draw_and_focus(&window, cx);
+        let snapshot = |visual: &mut VisualTestContext| {
+            window
+                .update(&mut visual.cx, |view, _, cx| {
+                    let input = view.state.read(cx);
+                    (
+                        input.single_line_scroll_offset,
+                        input.selected_range.clone(),
+                    )
+                })
+                .unwrap()
+        };
+        for left in [true, false] {
+            visual.simulate_keystrokes(if left { "end" } else { "home" });
+            visual.update(|window, cx| window.draw(cx).clear());
+            let viewport = window
+                .update(&mut visual.cx, |view, _, cx| {
+                    view.state.read(cx).last_viewport_bounds.unwrap()
+                })
+                .unwrap();
+            let down = viewport.center();
+            visual.simulate_mouse_down(down, MouseButton::Left, gpui::Modifiers::default());
+            let anchor = snapshot(&mut visual).1.start;
+            let outside = point(
+                if left {
+                    viewport.left() - px(30.)
+                } else {
+                    viewport.right() + px(30.)
+                },
+                viewport.top() - px(12.),
+            );
+            visual.simulate_mouse_move(outside, MouseButton::Left, gpui::Modifiers::default());
+            visual.update(|window, cx| window.draw(cx).clear());
+            let before = snapshot(&mut visual);
+            // No further mouse events: holding at the edge must keep extending the selection.
+            for _ in 0..4 {
+                visual
+                    .cx
+                    .executor()
+                    .advance_clock(Duration::from_millis(16));
+                visual.run_until_parked();
+                visual.update(|window, cx| window.draw(cx).clear());
+            }
+            let after = snapshot(&mut visual);
+            if left {
+                assert!(after.0 > before.0, "left drag must reveal earlier text");
+                assert!(after.1.start < before.1.start);
+                assert_eq!(after.1.end, anchor);
+            } else {
+                assert!(after.0 < before.0, "right drag must reveal later text");
+                assert!(after.1.end > before.1.end);
+                assert_eq!(after.1.start, anchor);
+            }
+            visual.simulate_mouse_up(outside, MouseButton::Left, gpui::Modifiers::default());
+            visual
+                .cx
+                .executor()
+                .advance_clock(Duration::from_millis(100));
+            visual.run_until_parked();
+            visual.update(|window, cx| window.draw(cx).clear());
+            assert_eq!(snapshot(&mut visual), after);
+            window
+                .update(&mut visual.cx, |view, _, cx| {
+                    let input = view.state.read(cx);
+                    assert!(!input.is_selecting);
+                    assert!(input.selection_scroll_task.is_none());
+                    assert!(input.content.is_char_boundary(input.selected_range.start));
+                    assert!(input.content.is_char_boundary(input.selected_range.end));
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn single_line_drag_scroll_stops_inside_at_content_start_and_when_disabled(
+        cx: &mut TestAppContext,
+    ) {
+        let window = open_input(cx, |cx| {
+            TextInput::new(cx)
+            .initial_value("A long single line which must scroll left until its very first character is selected")
+        });
+        let mut visual = draw_and_focus(&window, cx);
+        visual.update(|window, cx| window.draw(cx).clear());
+        let viewport = window
+            .update(&mut visual.cx, |view, _, cx| {
+                view.state.read(cx).last_viewport_bounds.unwrap()
+            })
+            .unwrap();
+        let outside = point(viewport.left() - px(60.), viewport.center().y);
+        visual.simulate_mouse_down(
+            viewport.center(),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        visual.simulate_mouse_move(outside, MouseButton::Left, gpui::Modifiers::default());
+        visual.simulate_mouse_move(
+            viewport.center(),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                assert!(view.state.read(cx).selection_scroll_task.is_none());
+            })
+            .unwrap();
+        visual.simulate_mouse_move(outside, MouseButton::Left, gpui::Modifiers::default());
+        for _ in 0..100 {
+            visual
+                .cx
+                .executor()
+                .advance_clock(Duration::from_millis(16));
+            visual.run_until_parked();
+            visual.update(|window, cx| window.draw(cx).clear());
+        }
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert_eq!(input.single_line_scroll_offset, px(0.));
+                assert_eq!(input.selected_range.start, 0);
+                assert!(input.selection_scroll_task.is_none());
+            })
+            .unwrap();
+        visual.simulate_mouse_move(
+            point(viewport.right() + px(30.), viewport.center().y),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                view.state.update(cx, |input, cx| {
+                    assert!(input.selection_scroll_task.is_some());
+                    input.set_disabled(true, cx);
+                    assert!(input.selection_scroll_task.is_none());
+                    assert!(!input.is_selecting);
+                });
             })
             .unwrap();
     }

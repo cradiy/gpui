@@ -473,8 +473,10 @@ accepted formats. Audio playback may require a user gesture; rejected play
 requests appear as player errors and can be retried from a click handler.
 
 Video supports play/pause, approximate seeking, volume, mute, playback rate and
-reload. Independent frame extraction, exact frame stepping and stream selection
-are unavailable. Consult `backend_capabilities()` before enabling such controls.
+reload, plus asynchronous frame extraction for thumbnails and previews. Blocking
+extraction, explicit decoder policies, exact frame stepping and stream selection
+are unavailable. Browser seeking does not guarantee frame-exact results.
+Consult `backend_capabilities()` before enabling playback controls.
 Frames use `FrameTransport::Browser`, with immutable browser frame ownership and
 GPU texture copies on the window thread. Cross-origin video requires CORS access.
 

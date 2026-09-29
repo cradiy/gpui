@@ -19,3 +19,4 @@ workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 gpui_util.workspace = true
+wasm-bindgen-futures = "0.4"

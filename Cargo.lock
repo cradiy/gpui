@@ -2915,6 +2915,7 @@ dependencies = [
  "gpui_util",
  "log",
  "url",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -2977,6 +2978,7 @@ dependencies = [
  "anyhow",
  "futures",
  "gpui",
+ "gpui_util",
  "gpui_wgpu",
  "http_client",
  "js-sys",

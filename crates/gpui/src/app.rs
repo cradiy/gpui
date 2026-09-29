@@ -1358,6 +1358,16 @@ impl App {
         self.platform.read_from_clipboard()
     }
 
+    /// Reads the system clipboard asynchronously. Call from a user gesture on web.
+    pub fn read_from_clipboard_async(&self) -> Task<Result<Option<ClipboardItem>>> {
+        self.platform.read_from_clipboard_async()
+    }
+
+    /// Writes the system clipboard asynchronously and reports permission errors.
+    pub fn write_to_clipboard_async(&self, item: ClipboardItem) -> Task<Result<()>> {
+        self.platform.write_to_clipboard_async(item)
+    }
+
     /// Sets the text rendering mode for the application.
     pub fn set_text_rendering_mode(&mut self, mode: TextRenderingMode) {
         self.text_rendering_mode.set(mode);
@@ -1471,6 +1481,15 @@ impl App {
         options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
         self.platform.prompt_for_paths(options)
+    }
+
+    /// Selects files with lazy readable handles. Call from a user gesture on web.
+    /// Cancellation returns `None`; browser files do not have native filesystem paths.
+    pub fn prompt_for_files(
+        &self,
+        options: crate::FilePromptOptions,
+    ) -> oneshot::Receiver<Result<Option<Vec<crate::SelectedFile>>>> {
+        self.platform.prompt_for_files(options)
     }
 
     /// Displays a platform modal for selecting a new path where a file can be saved.

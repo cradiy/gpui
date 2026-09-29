@@ -74,6 +74,33 @@ impl WebWindowInner {
         ];
         closures.extend(self.register_visibility_change());
         closures.extend(self.register_appearance_change());
+        for (name, key) in [("copy", "c"), ("cut", "x"), ("paste", "v")] {
+            let this = Rc::clone(self);
+            closures.push(self.listen_input(name, move |event| {
+                let event: web_sys::ClipboardEvent = event.unchecked_into();
+                let Some(data) = event.clipboard_data() else {
+                    return;
+                };
+                event.prevent_default();
+                crate::clipboard::with_event(data, name == "paste", || {
+                    let shift = name == "paste" && this.state.borrow().modifiers.shift;
+                    this.dispatch_input(PlatformInput::KeyDown(KeyDownEvent {
+                        keystroke: Keystroke {
+                            key: key.into(),
+                            key_char: None,
+                            modifiers: Modifiers {
+                                control: !this.is_mac,
+                                platform: this.is_mac,
+                                shift,
+                                ..Default::default()
+                            },
+                        },
+                        is_held: false,
+                        prefer_character_input: false,
+                    }));
+                });
+            }));
+        }
 
         WebEventListeners { closures }
     }
@@ -348,6 +375,16 @@ impl WebWindowInner {
             let key = dom_key_to_gpui_key(&event);
 
             if is_modifier_only_key(&key) {
+                return;
+            }
+
+            // Clipboard events supply the real data before GPUI's synchronous
+            // copy/cut/paste handlers run. Let the browser generate those events.
+            if ((this.is_mac && modifiers.platform) || (!this.is_mac && modifiers.control))
+                && !modifiers.alt
+                && (!modifiers.shift || key == "v")
+                && matches!(key.as_str(), "c" | "x" | "v")
+            {
                 return;
             }
 

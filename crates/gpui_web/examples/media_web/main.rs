@@ -1,14 +1,14 @@
-use gpui::{App, Context, Entity, Subscription, Window, WindowOptions, div, prelude::*, px, rgb};
+use gpui::{
+    App, ClipboardItem, Context, Entity, FilePromptOptions, SelectedFile, Subscription, Window,
+    WindowOptions, div, prelude::*, px, rgb,
+};
 use gpui_3d::{Camera, Material, Mesh, Object, Scene, viewport3d};
 use gpui_media::{
-    AudioPlayer, AudioPlayerOptions, AudioSource, MediaSource, SeekMode, VideoPlayer,
-    VideoPlayerOptions,
+    AudioPlayer, AudioPlayerOptions, AudioSource, MediaSource, SeekMode, VideoFrameExtractor,
+    VideoPlayer, VideoPlayerOptions, VideoSurface,
 };
 use gpui_media_backend::SystemBackend;
-use std::{rc::Rc, time::Duration};
-
-mod file_picker;
-use file_picker::{FilePicker, ObjectUrl};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 #[derive(Clone, Copy)]
 enum MediaKind {
@@ -34,14 +34,15 @@ struct LoadedMedia<T: 'static> {
     player: Entity<T>,
     name: String,
     _subscription: Subscription,
-    _object_url: Option<ObjectUrl>,
+    _file: Option<SelectedFile>,
 }
 
 struct Demo {
     video: Option<LoadedMedia<VideoPlayer>>,
     audio: Option<LoadedMedia<AudioPlayer>>,
-    video_picker: Option<FilePicker>,
-    audio_picker: Option<FilePicker>,
+    poster: Option<Arc<gpui::SurfaceFrame>>,
+    poster_generation: u64,
+    clipboard_status: String,
     yaw: f32,
     error: Option<String>,
 }
@@ -50,33 +51,12 @@ impl Demo {
         let mut this = Self {
             video: None,
             audio: None,
-            video_picker: None,
-            audio_picker: None,
+            poster: None,
+            poster_generation: 0,
+            clipboard_status: "Copy or paste text with the buttons below.".into(),
             yaw: 0.6,
             error: None,
         };
-        for kind in [MediaKind::Video, MediaKind::Audio] {
-            let entity = cx.entity().downgrade();
-            let mut app = cx.to_async();
-            match FilePicker::new(kind.key(), move |file| {
-                let _ = entity.update(&mut app, |this, cx| {
-                    match ObjectUrl::new(&file) {
-                        Ok(url) => {
-                            let source = url.as_str().to_owned();
-                            this.load(kind, source, file.name(), Some(url), cx);
-                        }
-                        Err(error) => this.error = Some(format!("Cannot open file: {error:?}")),
-                    }
-                    cx.notify();
-                });
-            }) {
-                Ok(picker) => match kind {
-                    MediaKind::Video => this.video_picker = Some(picker),
-                    MediaKind::Audio => this.audio_picker = Some(picker),
-                },
-                Err(error) => this.error = Some(format!("Cannot create file picker: {error:?}")),
-            }
-        }
         let location = web_sys::window().unwrap().location();
         let params =
             web_sys::UrlSearchParams::new_with_str(&location.search().unwrap_or_default()).unwrap();
@@ -92,12 +72,41 @@ impl Demo {
         this
     }
 
+    fn select(&mut self, kind: MediaKind, cx: &mut Context<Self>) {
+        let selection = cx.prompt_for_files(FilePromptOptions::default());
+        cx.spawn(async move |this, cx| {
+            let result = selection.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(Some(files))) => {
+                        if let Some(file) = files.into_iter().next() {
+                            if let Some(url) = file.url() {
+                                this.load(
+                                    kind,
+                                    url.to_owned(),
+                                    file.name().to_owned(),
+                                    Some(file),
+                                    cx,
+                                );
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => this.error = Some(error.to_string()),
+                    Err(error) => this.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn load(
         &mut self,
         kind: MediaKind,
         uri: String,
         name: String,
-        object_url: Option<ObjectUrl>,
+        file: Option<SelectedFile>,
         cx: &mut Context<Self>,
     ) {
         let source = match MediaSource::from_uri(uri) {
@@ -109,6 +118,32 @@ impl Demo {
         };
         match kind {
             MediaKind::Video => {
+                self.poster = None;
+                self.poster_generation += 1;
+                let generation = self.poster_generation;
+                let extractor = VideoFrameExtractor::new(source.clone(), Arc::new(SystemBackend));
+                let retained_file = file.clone();
+                cx.spawn(async move |this, cx| {
+                    let result = match extractor {
+                        Ok(extractor) => extractor
+                            .initial_frame()
+                            .await
+                            .and_then(|frame| VideoSurface::new().set_frame(&frame)),
+                        Err(error) => Err(error),
+                    };
+                    let _ = this.update(cx, |this, cx| {
+                        if generation != this.poster_generation {
+                            return;
+                        }
+                        match result {
+                            Ok(poster) => this.poster = Some(poster),
+                            Err(error) => this.error = Some(format!("Poster: {error}")),
+                        }
+                        cx.notify();
+                    });
+                    drop(retained_file);
+                })
+                .detach();
                 let player = cx.new(|cx| {
                     VideoPlayer::builder(source, SystemBackend)
                         .options(VideoPlayerOptions {
@@ -126,7 +161,7 @@ impl Demo {
                     player,
                     name,
                     _subscription: subscription,
-                    _object_url: object_url,
+                    _file: file,
                 });
             }
             MediaKind::Audio => {
@@ -147,7 +182,7 @@ impl Demo {
                     player,
                     name,
                     _subscription: subscription,
-                    _object_url: object_url,
+                    _file: file,
                 });
             }
         }
@@ -185,14 +220,8 @@ impl Render for Demo {
                                 .bg(rgb(0x36485f))
                                 .cursor_pointer()
                                 .child(kind.label())
-                                .on_click(cx.listener(move |this, _, _, _| {
-                                    let picker = match kind {
-                                        MediaKind::Video => &this.video_picker,
-                                        MediaKind::Audio => &this.audio_picker,
-                                    };
-                                    if let Some(picker) = picker {
-                                        picker.open();
-                                    }
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.select(kind, cx);
                                 }))
                         }),
                 ),
@@ -220,6 +249,66 @@ impl Render for Demo {
                     .h(px(240.))
                     .flex_shrink_0(),
             );
+        if let Some(poster) = &self.poster {
+            root = root.child("Extracted first frame").child(
+                gpui::surface(poster.clone())
+                    .w(px(220.))
+                    .h(px(124.))
+                    .object_fit(gpui::ObjectFit::Contain),
+            );
+        }
+        root = root
+            .child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .id("copy-text")
+                            .p_2()
+                            .bg(rgb(0x36485f))
+                            .child("Copy text")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                let task = cx.write_to_clipboard_async(ClipboardItem::new_string(
+                                    "GPUI clipboard".into(),
+                                ));
+                                cx.spawn(async move |this, cx| {
+                                    let result = task.await;
+                                    let _ = this.update(cx, |this, cx| {
+                                        this.clipboard_status = result
+                                            .map(|_| "Copied GPUI clipboard".into())
+                                            .unwrap_or_else(|e| e.to_string());
+                                        cx.notify();
+                                    });
+                                })
+                                .detach();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("paste-text")
+                            .p_2()
+                            .bg(rgb(0x36485f))
+                            .child("Paste text")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                let task = cx.read_from_clipboard_async();
+                                cx.spawn(async move |this, cx| {
+                                    let result = task.await;
+                                    let _ = this.update(cx, |this, cx| {
+                                        this.clipboard_status = result
+                                            .map(|item| {
+                                                item.and_then(|item| item.text())
+                                                    .unwrap_or_default()
+                                            })
+                                            .unwrap_or_else(|e| e.to_string());
+                                        cx.notify();
+                                    });
+                                })
+                                .detach();
+                            })),
+                    ),
+            )
+            .child(self.clipboard_status.clone());
         if let Some(loaded) = &self.video {
             let video = &loaded.player;
             root = root

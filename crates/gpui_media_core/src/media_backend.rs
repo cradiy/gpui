@@ -233,11 +233,26 @@ pub trait MediaPlaybackSession: Send {
     }
 }
 
-/// Blocking frame extraction primitive owned by the generic extractor worker.
+/// Backend extraction primitives owned by the independent extractor.
+/// Desktop workers use blocking methods; browser workers await `frame_at_async`.
 pub trait FrameExtractionSession: Send {
     fn initial_frame(&mut self) -> MediaResult<Arc<VideoFrame>>;
     fn frame_at(&mut self, position: Duration, seek_mode: SeekMode)
     -> MediaResult<Arc<VideoFrame>>;
+
+    /// Nonblocking extraction on the browser thread. Callers serialize requests.
+    #[cfg(target_family = "wasm")]
+    fn frame_at_async(
+        &mut self,
+        _position: Duration,
+        _mode: SeekMode,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = MediaResult<Arc<VideoFrame>>>>> {
+        Box::pin(async {
+            Err(MediaError::unsupported(
+                "this backend has no asynchronous frame extractor",
+            ))
+        })
+    }
 }
 
 /// Factory for unified media playback and video frame-extraction sessions.

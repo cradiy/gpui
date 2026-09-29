@@ -193,6 +193,35 @@ pub trait Platform: 'static {
         &self,
         options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>>;
+    /// Select files with readable handles on both desktop and web platforms.
+    fn prompt_for_files(
+        &self,
+        options: crate::FilePromptOptions,
+    ) -> oneshot::Receiver<Result<Option<Vec<crate::SelectedFile>>>> {
+        let paths = self.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: options.multiple,
+            prompt: None,
+        });
+        let executor = self.background_executor();
+        let (tx, rx) = oneshot::channel();
+        self.foreground_executor()
+            .spawn(async move {
+                let result = async {
+                    Ok(paths.await??.map(|paths| {
+                        paths
+                            .into_iter()
+                            .map(|path| crate::SelectedFile::from_path(path, executor.clone()))
+                            .collect()
+                    }))
+                }
+                .await;
+                let _ = tx.send(result);
+            })
+            .detach();
+        rx
+    }
     fn prompt_for_new_path(
         &self,
         directory: &Path,
@@ -283,6 +312,15 @@ pub trait Platform: 'static {
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
     fn write_to_clipboard(&self, item: ClipboardItem);
+    /// Reads the system clipboard, allowing asynchronous platform permission prompts.
+    fn read_from_clipboard_async(&self) -> Task<Result<Option<ClipboardItem>>> {
+        Task::ready(Ok(self.read_from_clipboard()))
+    }
+    /// Writes the system clipboard and reports platform errors.
+    fn write_to_clipboard_async(&self, item: ClipboardItem) -> Task<Result<()>> {
+        self.write_to_clipboard(item);
+        Task::ready(Ok(()))
+    }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn read_from_primary(&self) -> Option<ClipboardItem>;

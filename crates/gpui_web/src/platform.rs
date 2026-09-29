@@ -219,10 +219,17 @@ impl Platform for WebPlatform {
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
         let (tx, rx) = oneshot::channel();
         tx.send(Err(anyhow::anyhow!(
-            "prompt_for_paths is not supported on the web"
+            "browsers do not expose native paths; use prompt_for_files for readable file handles"
         )))
         .ok();
         rx
+    }
+
+    fn prompt_for_files(
+        &self,
+        options: gpui::FilePromptOptions,
+    ) -> oneshot::Receiver<Result<Option<Vec<gpui::SelectedFile>>>> {
+        crate::file_dialog::prompt(options)
     }
 
     fn prompt_for_new_path(
@@ -342,10 +349,20 @@ impl Platform for WebPlatform {
     }
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        None
+        crate::clipboard::read()
     }
 
-    fn write_to_clipboard(&self, _item: ClipboardItem) {}
+    fn write_to_clipboard(&self, item: ClipboardItem) {
+        crate::clipboard::write(item, &self.foreground_executor);
+    }
+
+    fn read_from_clipboard_async(&self) -> Task<Result<Option<ClipboardItem>>> {
+        crate::clipboard::read_async(&self.foreground_executor)
+    }
+
+    fn write_to_clipboard_async(&self, item: ClipboardItem) -> Task<Result<()>> {
+        crate::clipboard::write_async(item, &self.foreground_executor)
+    }
 
     fn write_credentials(&self, _url: &str, _username: &str, _password: &[u8]) -> Task<Result<()>> {
         Task::ready(Err(anyhow::anyhow!(

@@ -1124,6 +1124,34 @@ mod tests {
     use std::path::PathBuf;
 
     #[gpui::test]
+    async fn selected_file_handles_read_lazily_and_preserve_cancellation(cx: &mut TestAppContext) {
+        let directory =
+            std::env::temp_dir().join(format!("gpui-selected-file-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("selected file.txt");
+        let selection =
+            cx.update(|cx| cx.prompt_for_files(crate::FilePromptOptions { multiple: true }));
+        cx.simulate_path_prompt_response(|options| {
+            assert!(options.files && options.multiple && !options.directories);
+            Some(vec![path.clone()])
+        });
+        let files = selection.await.unwrap().unwrap().unwrap();
+        assert_eq!(files[0].path(), Some(path.as_path()));
+        assert_eq!(files[0].name(), "selected file.txt");
+        assert!(files[0].url().is_none());
+        // Selection succeeds without reading; contents can become available later.
+        std::fs::write(&path, b"selected contents").unwrap();
+        assert_eq!(files[0].read().await.unwrap(), b"selected contents");
+        std::fs::remove_file(&path).unwrap();
+        assert!(files[0].read().await.is_err());
+        std::fs::remove_dir(directory).unwrap();
+
+        let selection = cx.update(|cx| cx.prompt_for_files(Default::default()));
+        cx.simulate_path_prompt_response(|_| None);
+        assert!(selection.await.unwrap().unwrap().is_none());
+    }
+
+    #[gpui::test]
     async fn test_simulate_path_prompt_response(cx: &mut TestAppContext) {
         assert!(!cx.did_prompt_for_paths());
 

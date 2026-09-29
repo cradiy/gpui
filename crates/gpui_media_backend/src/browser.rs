@@ -9,6 +9,8 @@ use std::{
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::HtmlVideoElement;
 
+mod frame_extractor;
+
 #[wasm_bindgen::prelude::wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(extends = HtmlVideoElement)]
@@ -40,11 +42,9 @@ pub(super) fn open_playback(
 }
 
 pub(super) fn open_frame_extractor(
-    _request: FrameExtractorBackendRequest,
+    request: FrameExtractorBackendRequest,
 ) -> MediaResult<Box<dyn FrameExtractionSession>> {
-    Err(MediaError::unsupported(
-        "browser media does not support independent frame extraction",
-    ))
+    frame_extractor::open(request)
 }
 
 struct State {
@@ -341,6 +341,7 @@ impl MediaPlaybackSession for BrowserSession {
                 audio: true,
                 seeking: state.timeline().is_seekable(),
                 playback_rate: true,
+                frame_extraction: true,
                 ..Default::default()
             })
         })

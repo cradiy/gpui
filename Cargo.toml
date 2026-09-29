@@ -22,7 +22,6 @@ members = [
   "crates/gpui_windows",
   "crates/http_client",
   "crates/http_client_tls",
-  "crates/media",
   "crates/util_macros",
   "crates/refineable",
   "crates/refineable/derive_refineable",
@@ -71,7 +70,6 @@ http_client = { path = "crates/http_client" }
 scheduler = { path = "crates/scheduler" }
 sum_tree = { path = "crates/sum_tree" }
 http_client_tls = { path = "crates/http_client_tls" }
-media = { path = "crates/media" }
 naga = { version = "30.0.0", features = ["wgsl-in", "msl-out", "hlsl-out"] }
 util_macros = { path = "crates/util_macros" }
 uic_macros = { package = "uic-macros", path = "uic/macros", version = "0.1.0" }
@@ -213,7 +211,7 @@ rustc-hash = "2.1.0"
 rustls = { version = "0.23.26" }
 rustls-platform-verifier = "0.5.0"
 # WARNING: If you change this, you must also publish a new version of gpui-scap to crates.io
-scap = { git = "https://github.com/cradiy/scap.git", rev = "2a9b6529dd45b861a263ee34af047c8ae495d6ec", default-features = false, package = "gpui-scap", version = "0.0.9-gpui" }
+scap = { git = "https://github.com/cradiy/scap.git", rev = "3b96a5a74114a5327143542998b16a43289c9c0f", default-features = false, package = "gpui-scap", version = "0.0.9-gpui" }
 schemars = { version = "1.0", features = ["indexmap2"] }
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1.0.221", features = ["derive", "rc"] }

@@ -337,6 +337,7 @@ mod example {
         Err("screen capture preview is unsupported on this platform".to_string())
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     fn frame_size(width: i32, height: i32) -> Result<gpui::Size<DevicePixels>, String> {
         if width <= 0 || height <= 0 {
             return Err(format!("invalid frame size {width} × {height}"));
@@ -344,10 +345,12 @@ mod example {
         Ok(size(DevicePixels(width), DevicePixels(height)))
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     fn positive_stride(stride: i32) -> Result<u32, String> {
         u32::try_from(stride).map_err(|_| format!("invalid frame stride {stride}"))
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     fn packed_stride(width: i32, bytes_per_pixel: u32) -> Result<u32, String> {
         u32::try_from(width)
             .ok()

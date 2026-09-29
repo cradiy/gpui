@@ -11,9 +11,6 @@ mod events;
 mod keyboard;
 mod pasteboard;
 
-#[cfg(feature = "screen-capture")]
-mod screen_capture;
-
 mod metal_atlas;
 pub mod metal_renderer;
 mod metal_scene;

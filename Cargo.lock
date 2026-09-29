@@ -2605,7 +2605,6 @@ dependencies = [
  "log",
  "lyon",
  "mach2",
- "media",
  "metal",
  "num_cpus",
  "objc",
@@ -2654,11 +2653,13 @@ dependencies = [
 [[package]]
 name = "gpui-scap"
 version = "0.0.9-gpui"
-source = "git+https://github.com/cradiy/scap.git?rev=2a9b6529dd45b861a263ee34af047c8ae495d6ec#2a9b6529dd45b861a263ee34af047c8ae495d6ec"
+source = "git+https://github.com/cradiy/scap.git?rev=3b96a5a74114a5327143542998b16a43289c9c0f#3b96a5a74114a5327143542998b16a43289c9c0f"
 dependencies = [
  "anyhow",
  "cocoa 0.25.0",
+ "core-foundation 0.10.0",
  "core-graphics-helmer-fork",
+ "core-video",
  "dbus",
  "glow 0.18.0",
  "khronos-egl",
@@ -2835,7 +2836,6 @@ dependencies = [
  "libc",
  "log",
  "mach2",
- "media",
  "metal",
  "naga",
  "objc",
@@ -4296,20 +4296,6 @@ checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
 dependencies = [
  "cfg-if",
  "digest",
-]
-
-[[package]]
-name = "media"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bindgen 0.71.1",
- "core-foundation 0.10.0",
- "core-video",
- "ctor",
- "foreign-types",
- "metal",
- "objc",
 ]
 
 [[package]]

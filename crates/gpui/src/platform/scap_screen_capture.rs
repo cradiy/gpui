@@ -1,4 +1,4 @@
-//! Screen capture for Linux and Windows
+//! Screen capture through scap, with native CoreVideo frames on macOS.
 use crate::{
     DevicePixels, ForegroundExecutor, ScreenCaptureFrame, ScreenCaptureSource, ScreenCaptureStream,
     Size, SourceMetadata, size,
@@ -58,10 +58,7 @@ fn get_screen_targets(sources_tx: oneshot::Sender<Result<Vec<ScapCaptureSource>>
             .into_iter()
             .filter_map(|target| match target {
                 scap::Target::Display(display) => {
-                    let size = Size {
-                        width: DevicePixels(display.width as i32),
-                        height: DevicePixels(display.height as i32),
-                    };
+                    let size = display_size(&display);
                     Some(ScapCaptureSource {
                         target: display,
                         size,
@@ -76,12 +73,10 @@ fn get_screen_targets(sources_tx: oneshot::Sender<Result<Vec<ScapCaptureSource>>
 
 impl ScreenCaptureSource for ScapCaptureSource {
     fn metadata(&self) -> Result<SourceMetadata> {
-        Ok(SourceMetadata {
-            resolution: self.size,
-            label: Some(self.target.title.clone().into()),
-            is_main: None,
-            id: self.target.id as u64,
-        })
+        Ok(metadata_for_target(
+            Some(&Target::Display(self.target.clone())),
+            self.size,
+        ))
     }
 
     fn stream(
@@ -97,10 +92,7 @@ impl ScreenCaptureSource for ScapCaptureSource {
             match new_scap_capturer(Some(scap::Target::Display(target.clone()))) {
                 Ok(mut capturer) => {
                     capturer.start_capture();
-                    let resolution = size(
-                        DevicePixels(target.width as i32),
-                        DevicePixels(target.height as i32),
-                    );
+                    let resolution = display_size(&target);
                     let metadata = metadata_for_target(Some(&Target::Display(target)), resolution);
                     run_capture(capturer, metadata, frame_callback, stream_tx);
                 }
@@ -134,16 +126,25 @@ fn start_default_target_screen_capture(
         let start_result = gpui_util::maybe!({
             let mut capturer = new_scap_capturer(None)?;
             capturer.start_capture();
-            let first_frame = capturer
-                .get_next_frame()
-                .context("Failed to get first frame of screenshare to get the size.")?;
+            let first_frame = loop {
+                match next_capture_frame(&capturer)
+                    .context("Failed to get first frame of screenshare to get the size.")
+                {
+                    Ok(Some(frame)) => break frame,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        capturer.stop_capture();
+                        return Err(error);
+                    }
+                }
+            };
             let size = frame_size(&first_frame);
             let metadata = metadata_for_target(capturer.target(), size);
             Ok((capturer, metadata))
         });
 
         match start_result {
-            Ok((capturer, metadata)) => {
+            Ok((mut capturer, metadata)) => {
                 let (stream_call_tx, stream_rx) = std::sync::mpsc::sync_channel(1);
                 sources_tx
                     .send(Ok(vec![ScapDefaultTargetCaptureSource {
@@ -152,6 +153,7 @@ fn start_default_target_screen_capture(
                     }]))
                     .ok();
                 let Ok((stream_tx, frame_callback)) = stream_rx.recv() else {
+                    capturer.stop_capture();
                     return;
                 };
                 run_capture(capturer, metadata, frame_callback, stream_tx);
@@ -194,7 +196,10 @@ fn new_scap_capturer(target: Option<scap::Target>) -> Result<scap::capturer::Cap
         fps: 60,
         show_cursor: true,
         show_highlight: true,
+        #[cfg(target_os = "macos")]
+        output_type: scap::frame::FrameType::BGRAFrame,
         // Note that the actual frame output type may differ.
+        #[cfg(not(target_os = "macos"))]
         output_type: scap::frame::FrameType::YUVFrame,
         output_resolution: scap::capturer::Resolution::Captured,
         crop_area: None,
@@ -215,11 +220,13 @@ fn run_capture(
         metadata,
     }));
     if stream_send_result.is_err() {
+        capturer.stop_capture();
         return;
     }
     while !cancel_stream.load(std::sync::atomic::Ordering::SeqCst) {
-        match capturer.get_next_frame() {
-            Ok(frame) => frame_callback(ScreenCaptureFrame(frame)),
+        match next_capture_frame(&capturer) {
+            Ok(Some(frame)) => frame_callback(frame),
+            Ok(None) => continue,
             Err(err) => {
                 log::error!("Halting screen capture due to error: {err}");
                 break;
@@ -246,8 +253,53 @@ impl Drop for ScapStream {
     }
 }
 
-fn frame_size(frame: &scap::frame::Frame) -> Size<DevicePixels> {
-    let (width, height) = match frame {
+#[cfg(target_os = "macos")]
+fn next_capture_frame(capturer: &scap::capturer::Capturer) -> Result<Option<ScreenCaptureFrame>> {
+    Ok(capturer
+        .raw()
+        .get_next_pixel_buffer_timeout(std::time::Duration::from_millis(100))?
+        .map(|frame| ScreenCaptureFrame(frame.as_core_video())))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn next_capture_frame(capturer: &scap::capturer::Capturer) -> Result<Option<ScreenCaptureFrame>> {
+    capturer
+        .get_next_frame()
+        .map(|frame| Some(ScreenCaptureFrame(frame)))
+}
+
+#[cfg(target_os = "macos")]
+fn display_size(display: &scap::Display) -> Size<DevicePixels> {
+    display
+        .raw_handle
+        .display_mode()
+        .map_or_else(Size::default, |mode| {
+            size(
+                DevicePixels(mode.pixel_width() as i32),
+                DevicePixels(mode.pixel_height() as i32),
+            )
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn display_size(display: &scap::Display) -> Size<DevicePixels> {
+    size(
+        DevicePixels(display.width as i32),
+        DevicePixels(display.height as i32),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn frame_size(frame: &ScreenCaptureFrame) -> Size<DevicePixels> {
+    size(
+        DevicePixels(frame.0.get_width() as i32),
+        DevicePixels(frame.0.get_height() as i32),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn frame_size(frame: &ScreenCaptureFrame) -> Size<DevicePixels> {
+    let (width, height) = match &frame.0 {
         scap::frame::Frame::YUVFrame(frame) => (frame.width, frame.height),
         scap::frame::Frame::RGB(frame) => (frame.width, frame.height),
         scap::frame::Frame::RGBx(frame) => (frame.width, frame.height),
@@ -269,6 +321,12 @@ fn metadata_for_target(target: Option<&Target>, resolution: Size<DevicePixels>) 
     SourceMetadata {
         id,
         label,
+        #[cfg(target_os = "macos")]
+        is_main: match target {
+            Some(Target::Display(display)) => Some(display.raw_handle.is_main()),
+            _ => None,
+        },
+        #[cfg(not(target_os = "macos"))]
         is_main: None,
         resolution,
     }

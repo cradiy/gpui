@@ -13,6 +13,22 @@ use gpui::{
 use gpui_wgpu::{WgpuContext, WgpuRenderer, WgpuSurfaceConfig};
 use wasm_bindgen::prelude::*;
 
+#[wasm_bindgen(module = "/src/ime.js")]
+extern "C" {
+    #[wasm_bindgen(js_name = configureImeInput)]
+    fn configure_ime_input(input: &web_sys::HtmlInputElement);
+    #[wasm_bindgen(js_name = positionImeInput)]
+    fn position_ime_input(
+        canvas: &web_sys::HtmlCanvasElement,
+        input: &web_sys::HtmlInputElement,
+        x: f32,
+        y: f32,
+        height: f32,
+        logical_width: f32,
+        logical_height: f32,
+    );
+}
+
 #[derive(Default)]
 pub(crate) struct WebWindowCallbacks {
     pub(crate) request_frame: Option<Box<dyn FnMut(RequestFrameOptions)>>,
@@ -55,6 +71,7 @@ pub(crate) struct WebWindowInner {
     pub(crate) last_physical_size: Cell<(u32, u32)>,
     pub(crate) notify_scale: Cell<bool>,
     pub(crate) is_composing: Cell<bool>,
+    ime_bounds: Cell<Option<Bounds<Pixels>>>,
     mql_handle: RefCell<Option<MqlHandle>>,
     pending_physical_size: Cell<Option<(u32, u32)>>,
 }
@@ -121,16 +138,12 @@ impl WebWindow {
             .map_err(|e| anyhow::anyhow!("Failed to create input element: {e:?}"))?
             .dyn_into()
             .map_err(|e| anyhow::anyhow!("Created element is not an input: {e:?}"))?;
-        let input_style = input_element.style();
-        input_style.set_property("position", "fixed").ok();
-        input_style.set_property("top", "0").ok();
-        input_style.set_property("left", "0").ok();
-        input_style.set_property("width", "1px").ok();
-        input_style.set_property("height", "1px").ok();
-        input_style.set_property("opacity", "0").ok();
+        configure_ime_input(&input_element);
         body.append_child(&input_element)
             .map_err(|e| anyhow::anyhow!("Failed to append input to body: {e:?}"))?;
-        input_element.focus().ok();
+        let focus_options = web_sys::FocusOptions::new();
+        focus_options.set_prevent_scroll(true);
+        input_element.focus_with_options(&focus_options).ok();
 
         let device_size = Size {
             width: DevicePixels(0),
@@ -182,6 +195,7 @@ impl WebWindow {
             last_physical_size: Cell::new((0, 0)),
             notify_scale: Cell::new(false),
             is_composing: Cell::new(false),
+            ime_bounds: Cell::new(None),
             mql_handle: RefCell::new(None),
             pending_physical_size: Cell::new(None),
         });
@@ -300,6 +314,22 @@ impl WebWindow {
 }
 
 impl WebWindowInner {
+    pub(crate) fn refresh_ime_position(&self) {
+        let Some(bounds) = self.ime_bounds.get() else {
+            return;
+        };
+        let size = self.state.borrow().bounds.size;
+        position_ime_input(
+            &self.canvas,
+            &self.input_element,
+            bounds.origin.x.into(),
+            bounds.origin.y.into(),
+            bounds.size.height.into(),
+            size.width.into(),
+            size.height.into(),
+        );
+    }
+
     fn create_raf_closure(self: &Rc<Self>) -> Closure<dyn FnMut()> {
         let raf_handle: Rc<RefCell<Option<js_sys::Function>>> = Rc::new(RefCell::new(None));
         let raf_handle_inner = Rc::clone(&raf_handle);
@@ -327,6 +357,15 @@ impl WebWindowInner {
                     });
                 }
             }
+
+            // Controls need not explicitly invalidate character coordinates.
+            // Pull after GPUI has painted and registered the current handler;
+            // querying from set_input_handler would re-enter the borrowed App.
+            let bounds = this
+                .with_input_handler(|handler| handler.ime_candidate_bounds())
+                .flatten();
+            this.ime_bounds.set(bounds);
+            this.refresh_ime_position();
 
             // Re-schedule for the next frame
             if let Some(ref func) = *raf_handle_inner.borrow() {
@@ -755,7 +794,10 @@ impl PlatformWindow for WebWindow {
         Some(self.inner.state.borrow().renderer.gpu_specs())
     }
 
-    fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}
+    fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+        self.inner.ime_bounds.set(Some(bounds));
+        self.inner.refresh_ime_position();
+    }
 
     fn request_decorations(&self, _decorations: WindowDecorations) {}
 

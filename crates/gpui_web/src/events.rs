@@ -161,7 +161,10 @@ impl WebWindowInner {
         self.listen("pointerdown", move |event: JsValue| {
             let event: web_sys::PointerEvent = event.unchecked_into();
             event.prevent_default();
-            this.input_element.focus().ok();
+            this.refresh_ime_position();
+            let focus_options = web_sys::FocusOptions::new();
+            focus_options.set_prevent_scroll(true);
+            this.input_element.focus_with_options(&focus_options).ok();
 
             let button = dom_mouse_button_to_gpui(event.button());
             let position = pointer_position_in_element(&event);

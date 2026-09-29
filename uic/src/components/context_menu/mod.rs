@@ -210,6 +210,7 @@ struct ActiveContextMenu {
     submenu_gap: Pixels,
     surfaces: ContextMenuSurfaces,
     viewport_width: Pixels,
+    initial_pointer_position: Option<Point<Pixels>>,
 }
 
 pub struct ContextMenuLayer {
@@ -269,6 +270,7 @@ impl ContextMenuLayer {
             submenu_gap,
             surfaces,
             viewport_width,
+            initial_pointer_position: None,
         });
         self.window_subscriptions.clear();
         self.window_subscriptions.push(cx.observe_window_activation(
@@ -334,6 +336,12 @@ impl ContextMenuLayer {
         let Some(active) = self.active.as_mut() else {
             return;
         };
+        if let Some(position) = active.initial_pointer_position {
+            if window.mouse_position() == position {
+                return;
+            }
+            active.initial_pointer_position = None;
+        }
         let Some(level) = active.levels.get_mut(depth) else {
             return;
         };
@@ -596,6 +604,16 @@ impl ContextMenuLayer {
                                     layer.hover_item(depth, index, window, cx);
                                 }
                             }))
+                            .on_mouse_move(cx.listener(move |layer, _, window, cx| {
+                                let selected = layer
+                                    .active
+                                    .as_ref()
+                                    .and_then(|active| active.levels.get(depth))
+                                    .and_then(|level| level.selected_index);
+                                if selected != Some(index) {
+                                    layer.hover_item(depth, index, window, cx);
+                                }
+                            }))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |layer, _, window, cx| {
@@ -767,7 +785,12 @@ pub fn show(
     menu.validate_depth(0)
         .map_err(|depth| ContextMenuDepthError { depth })?;
     layer(cx).update(cx, |layer, cx| {
-        layer.show(menu, position, root_menu_anchor(), window, cx)
+        let offset = point(gpui::px(4.), gpui::px(4.));
+        layer.show(menu, position + offset, root_menu_anchor(), window, cx);
+        if let Some(active) = layer.active.as_mut() {
+            active.levels[0].selected_index = None;
+            active.initial_pointer_position = Some(window.mouse_position());
+        }
     });
     Ok(())
 }
@@ -832,6 +855,55 @@ impl<T: InteractiveElement> ContextMenuExt for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn pointer_menu_waits_for_movement_and_keeps_keyboard_navigation(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) =
+            cx.add_window_view(|_, cx| ContextMenuLayer::new(ContextMenuAppearance::default(), cx));
+        cx.update(|_, cx| cx.set_global(GlobalContextMenu(view.clone())));
+        let open = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                show(
+                    ContextMenu::new()
+                        .action("Rename", |_, _| {})
+                        .action("Remove", |_, _| {}),
+                    point(gpui::px(50.), gpui::px(50.)),
+                    window,
+                    cx,
+                )
+                .unwrap();
+                window.draw(cx).clear();
+            });
+        };
+        let selected = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| view.read(cx).active.as_ref().unwrap().levels[0].selected_index)
+        };
+        open(cx);
+        assert_eq!(selected(cx), None);
+        cx.simulate_keystrokes("down");
+        assert_eq!(selected(cx), Some(0));
+        cx.simulate_keystrokes("up");
+        assert_eq!(selected(cx), Some(1));
+        let inside = cx.update(|_, cx| {
+            view.read(cx).active.as_ref().unwrap().levels[0].item_bounds[0]
+                .get()
+                .unwrap()
+                .center()
+        });
+        cx.simulate_mouse_move(inside, None, gpui::Modifiers::default());
+        open(cx);
+        assert_eq!(selected(cx), None);
+        cx.simulate_mouse_move(inside, None, gpui::Modifiers::default());
+        assert_eq!(selected(cx), None);
+        cx.simulate_mouse_move(
+            inside + point(gpui::px(1.), gpui::px(0.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        assert_eq!(selected(cx), Some(0));
+    }
 
     #[test]
     fn root_menu_starts_at_the_pointer_without_a_midpoint_flip() {

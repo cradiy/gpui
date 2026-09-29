@@ -2870,6 +2870,7 @@ impl Interactivity {
                                     pending_outcome: None,
                                     on_end,
                                     system_options: None,
+                                    file_export: false,
                                     icon_created: false,
                                     source_was_unmapped: false,
                                 }),
@@ -4232,6 +4233,7 @@ mod tests {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let end_events = self.events.clone();
             let drop_events = self.events.clone();
+            let external_drop_events = self.events.clone();
             div()
                 .size_full()
                 .flex()
@@ -4246,6 +4248,8 @@ mod tests {
                                 DragEnd::Dropped { .. } => "end:dropped",
                                 DragEnd::Unaccepted => "end:unaccepted",
                                 DragEnd::Cancelled => "end:cancelled",
+                                DragEnd::ExternalDropped { .. } => "end:external",
+                                DragEnd::Failed(_) => "end:failed",
                             });
                         }),
                 )
@@ -4258,8 +4262,10 @@ mod tests {
                             let accept_drop = self.accept_drop;
                             move |_, _, _| accept_drop
                         })
-                        .on_drop::<u32>(move |_, _, _| {
-                            drop_events.borrow_mut().push("target:drop")
+                        .on_drop::<u32>(move |_, _, _| drop_events.borrow_mut().push("target:drop"))
+                        .on_drop::<crate::ExternalPaths>(move |paths, _, _| {
+                            assert_eq!(paths.paths(), &[std::path::PathBuf::from("/tmp/a b.txt")]);
+                            external_drop_events.borrow_mut().push("target:external")
                         }),
                 )
         }
@@ -4315,6 +4321,45 @@ mod tests {
             }
         })
         .unwrap()
+    }
+
+    #[test]
+    fn external_file_drop_reports_acceptance_only_when_handled() {
+        for accept_drop in [true, false] {
+            let (mut cx, window, events) = setup_drag_session_test(accept_drop);
+            cx.update_window(window, |_, window, cx| {
+                let position = point(px(75.), px(10.));
+                let entered = window.dispatch_event(
+                    crate::PlatformInput::FileDrop(crate::FileDropEvent::Entered {
+                        position,
+                        paths: crate::ExternalPaths(smallvec::smallvec![std::path::PathBuf::from(
+                            "/tmp/a b.txt"
+                        )]),
+                    }),
+                    cx,
+                );
+                assert!(!entered.drag_drop_accepted);
+                window.draw(cx).clear();
+                let result = window.dispatch_event(
+                    crate::PlatformInput::FileDrop(crate::FileDropEvent::Submit { position }),
+                    cx,
+                );
+                assert_eq!(result.drag_drop_accepted, accept_drop);
+                assert!(!cx.has_active_drag());
+                let repeated = window.dispatch_event(
+                    crate::PlatformInput::FileDrop(crate::FileDropEvent::Submit { position }),
+                    cx,
+                );
+                assert!(!repeated.drag_drop_accepted);
+            })
+            .unwrap();
+            let expected = if accept_drop {
+                vec!["target:external"]
+            } else {
+                vec![]
+            };
+            assert_eq!(*events.borrow(), expected);
+        }
     }
 
     #[test]
@@ -4412,6 +4457,7 @@ mod tests {
             window.dispatch_event(
                 crate::PlatformInput::InternalDrag(InternalDragEvent::SourceFinished {
                     session_id,
+                    action: Some(crate::DragAction::Move),
                 }),
                 cx,
             );
@@ -4420,6 +4466,65 @@ mod tests {
         .unwrap();
 
         assert_eq!(&*events.borrow(), &["target:drop", "end:dropped"]);
+    }
+
+    #[test]
+    fn external_native_drag_waits_for_completion_and_ignores_late_events() {
+        let (mut cx, window, events) = setup_drag_session_test(false);
+        let session_id = start_test_drag(&mut cx, window);
+        cx.update_window(window, |_, window, cx| {
+            let DragOrigin::Internal(session) = &mut cx.active_drag.as_mut().unwrap().origin else {
+                unreachable!()
+            };
+            session.phase = DragPhase::Native;
+            session.file_export = true;
+            window.dispatch_event(
+                crate::PlatformInput::InternalDrag(InternalDragEvent::SourceDropPerformed {
+                    session_id,
+                }),
+                cx,
+            );
+            assert!(cx.has_active_drag());
+            assert!(events.borrow().is_empty());
+            window.dispatch_event(
+                crate::PlatformInput::InternalDrag(InternalDragEvent::SourceFinished {
+                    session_id,
+                    action: Some(crate::DragAction::Move),
+                }),
+                cx,
+            );
+            assert!(!cx.has_active_drag());
+            window.dispatch_event(
+                crate::PlatformInput::InternalDrag(InternalDragEvent::SourceCancelled {
+                    session_id,
+                }),
+                cx,
+            );
+        })
+        .unwrap();
+        assert_eq!(&*events.borrow(), &["end:external"]);
+    }
+
+    #[test]
+    fn failed_native_drag_preserves_distinct_result() {
+        let (mut cx, window, events) = setup_drag_session_test(false);
+        let session_id = start_test_drag(&mut cx, window);
+        cx.update_window(window, |_, window, cx| {
+            let DragOrigin::Internal(session) = &mut cx.active_drag.as_mut().unwrap().origin else {
+                unreachable!()
+            };
+            session.phase = DragPhase::Native;
+            window.dispatch_event(
+                crate::PlatformInput::InternalDrag(InternalDragEvent::SourceFailed {
+                    session_id,
+                    failure: crate::DragFailure::TimedOut,
+                }),
+                cx,
+            );
+            assert!(!cx.has_active_drag());
+        })
+        .unwrap();
+        assert_eq!(&*events.borrow(), &["end:failed"]);
     }
 
     #[test]

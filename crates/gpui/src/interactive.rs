@@ -776,6 +776,15 @@ pub enum InternalDragEvent {
     SourceFinished {
         /// The process-local drag session.
         session_id: crate::DragSessionId,
+        /// Final external file action, if confirmed by the protocol.
+        action: Option<crate::DragAction>,
+    },
+    /// A native operation failed without a confirmed result.
+    SourceFailed {
+        /// The process-local session.
+        session_id: crate::DragSessionId,
+        /// Failure category.
+        failure: crate::DragFailure,
     },
     /// The native operation was cancelled or rejected.
     SourceCancelled {

@@ -583,6 +583,7 @@ pub struct Window {
     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
     default_prevented: bool,
+    pub(crate) drag_drop_accepted: bool,
     mouse_position: Point<Pixels>,
     pub(crate) pointer_mapping: crate::PointerMapping,
     mouse_hit_test: HitTest,
@@ -1174,6 +1175,7 @@ impl Window {
             focus_listeners: SubscriberSet::new(),
             focus_lost_listeners: SubscriberSet::new(),
             default_prevented: true,
+            drag_drop_accepted: false,
             mouse_position,
             mouse_hit_test: HitTest::default(),
             modifiers,
@@ -1562,6 +1564,46 @@ impl Window {
         options: SystemDragOptions,
         cx: &mut App,
     ) -> Result<crate::DragSessionId> {
+        self.promote_drag_to_system(options, None, cx)
+    }
+
+    /// Exports files alongside the active typed payload. Paths are encoded once, without filesystem IO.
+    /// Native completion is reported through the existing typed `on_drag_end` handler.
+    pub fn promote_active_file_drag_to_system(
+        &mut self,
+        paths: Arc<[std::path::PathBuf]>,
+        options: crate::SystemFileDragOptions,
+        cx: &mut App,
+    ) -> Result<crate::DragSessionId> {
+        if let Some(DragOrigin::Internal(session)) =
+            cx.active_drag.as_ref().map(|drag| &drag.origin)
+        {
+            if session.source_window == self.handle.id && session.phase == DragPhase::Native {
+                anyhow::ensure!(
+                    session.file_export,
+                    "cannot add files to an already promoted native drag"
+                );
+                return Ok(session.session_id);
+            }
+        }
+        let files = crate::SystemFileDrag::new(paths, options)?;
+        self.platform_window.validate_file_drag(&files)?;
+        self.promote_drag_to_system(
+            SystemDragOptions {
+                icon: options.icon,
+                source_window: options.source_window,
+            },
+            Some(files),
+            cx,
+        )
+    }
+
+    fn promote_drag_to_system(
+        &mut self,
+        options: SystemDragOptions,
+        files: Option<crate::SystemFileDrag>,
+        cx: &mut App,
+    ) -> Result<crate::DragSessionId> {
         let source_window = self.handle.id;
         let (session_id, phase) = match cx.active_drag.as_ref().map(|drag| &drag.origin) {
             Some(DragOrigin::Internal(session)) if session.source_window == source_window => {
@@ -1588,6 +1630,7 @@ impl Window {
         {
             session.phase = DragPhase::PreparingNative;
             session.system_options = Some(options);
+            session.file_export = files.is_some();
         }
 
         let icon_created = if options.icon == DragIconPolicy::ActiveDragView {
@@ -1615,10 +1658,14 @@ impl Window {
             false
         };
 
-        if let Err(error) = self
-            .platform_window
-            .start_internal_drag(session_id, icon_created)
-        {
+        let started = if let Some(files) = files {
+            self.platform_window
+                .start_file_drag(session_id, icon_created, files)
+        } else {
+            self.platform_window
+                .start_internal_drag(session_id, icon_created)
+        };
+        if let Err(error) = started {
             if icon_created {
                 self.platform_window.destroy_internal_drag_icon(session_id);
             }
@@ -1658,6 +1705,7 @@ impl Window {
         {
             session.phase = DragPhase::Internal;
             session.system_options = None;
+            session.file_export = false;
             session.icon_created = false;
             session.source_was_unmapped = false;
         }

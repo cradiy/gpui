@@ -1743,7 +1743,29 @@ impl PlatformWindow for WaylandWindow {
         has_icon: bool,
     ) -> anyhow::Result<()> {
         let client = self.borrow().client.clone();
-        client.start_internal_drag(self.0.clone(), session_id, has_icon)
+        client.start_internal_drag(self.0.clone(), session_id, has_icon, None)
+    }
+
+    fn validate_file_drag(&self, files: &gpui::SystemFileDrag) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !files
+                .options()
+                .allowed_actions
+                .contains(gpui::DragActions::LINK),
+            "Wayland file drags do not support Link"
+        );
+        Ok(())
+    }
+
+    fn start_file_drag(
+        &self,
+        session_id: gpui::DragSessionId,
+        has_icon: bool,
+        files: gpui::SystemFileDrag,
+    ) -> anyhow::Result<()> {
+        self.validate_file_drag(&files)?;
+        let client = self.borrow().client.clone();
+        client.start_internal_drag(self.0.clone(), session_id, has_icon, Some(files))
     }
 
     fn cancel_internal_drag(&self, session_id: gpui::DragSessionId) {

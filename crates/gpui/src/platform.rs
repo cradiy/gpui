@@ -825,6 +825,19 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     /// Cancels a platform drag previously started by [`Self::start_internal_drag`].
     fn cancel_internal_drag(&self, _session_id: DragSessionId) {}
+    /// Validates file drag capabilities before allocating a drag icon.
+    fn validate_file_drag(&self, _files: &crate::SystemFileDrag) -> anyhow::Result<()> {
+        anyhow::bail!("native file export is unsupported by this platform")
+    }
+    /// Starts a native file offer alongside the process-local session.
+    fn start_file_drag(
+        &self,
+        _session_id: DragSessionId,
+        _has_icon: bool,
+        _files: crate::SystemFileDrag,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("native file export is unsupported by this platform")
+    }
     fn draw(&self, scene: &Scene);
     fn completed_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;

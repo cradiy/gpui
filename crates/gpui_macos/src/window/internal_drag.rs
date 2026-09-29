@@ -316,6 +316,7 @@ extern "C" fn ended(_: &Object, _: Sel, _: id, _: NSPoint, operation: NSDragOper
             let event = if operation == MOVE && !drag.cancelled {
                 InternalDragEvent::SourceFinished {
                     session_id: drag.id,
+                    action: None,
                 }
             } else {
                 InternalDragEvent::SourceCancelled {

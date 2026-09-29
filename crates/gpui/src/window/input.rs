@@ -1,8 +1,8 @@
 use crate::prelude::*;
 use crate::window::{FocusId, Window};
 use crate::{
-    ActiveDrag, AnyDrag, App, DragEnd, DragOrigin, DragPhase, FileDropEvent, InternalDragEvent,
-    Keystroke, Modifiers, MouseButton, MouseMoveEvent, MouseUpEvent, PlatformInput, Task,
+    ActiveDrag, AnyDrag, App, DragEnd, DragOrigin, FileDropEvent, InternalDragEvent, Keystroke,
+    Modifiers, MouseButton, MouseMoveEvent, MouseUpEvent, PlatformInput, Task,
 };
 #[cfg(feature = "input-latency-histogram")]
 use scheduler::Instant;
@@ -95,6 +95,7 @@ impl Window {
         cx.propagate_event = true;
         // Handlers may set this to true by calling `prevent_default`.
         self.default_prevented = false;
+        self.drag_drop_accepted = false;
         let mut refresh_native_drag_icon = None;
 
         // Once a drag is promoted, Wayland's data-device protocol owns release routing. The
@@ -123,7 +124,7 @@ impl Window {
         }
 
         let mut preserve_drag_on_mouse_up = false;
-        let mut dropped_session = None;
+        let mut is_drop = false;
 
         let event = match event {
             // Track the mouse position with our own state, since accessing the platform
@@ -196,6 +197,7 @@ impl Window {
                     })
                 }
                 FileDropEvent::Submit { position } => {
+                    is_drop = true;
                     cx.activate(true);
                     self.mouse_position = position;
                     PlatformInput::MouseUp(MouseUpEvent {
@@ -272,7 +274,7 @@ impl Window {
                     }
                     self.mouse_position = position;
                     preserve_drag_on_mouse_up = true;
-                    dropped_session = Some(session_id);
+                    is_drop = true;
                     PlatformInput::MouseUp(MouseUpEvent {
                         button: MouseButton::Left,
                         position,
@@ -291,17 +293,37 @@ impl Window {
                         session_id,
                     })
                 }
-                InternalDragEvent::SourceFinished { session_id } => {
+                InternalDragEvent::SourceFinished { session_id, action } => {
                     let outcome = cx.active_drag.as_ref().and_then(|drag| match &drag.origin {
                         DragOrigin::Internal(session) if session.session_id == session_id => {
-                            Some(session.pending_outcome.unwrap_or(DragEnd::Unaccepted))
+                            Some(session.pending_outcome.unwrap_or_else(|| {
+                                action.map_or(DragEnd::Unaccepted, |action| {
+                                    DragEnd::ExternalDropped { action }
+                                })
+                            }))
                         }
                         _ => None,
                     });
                     if let Some(outcome) = outcome {
                         cx.finish_active_drag(outcome, self);
                     }
-                    PlatformInput::InternalDrag(InternalDragEvent::SourceFinished { session_id })
+                    PlatformInput::InternalDrag(InternalDragEvent::SourceFinished {
+                        session_id,
+                        action,
+                    })
+                }
+                InternalDragEvent::SourceFailed {
+                    session_id,
+                    failure,
+                } => {
+                    if matches!(cx.active_drag.as_ref().map(|drag| &drag.origin), Some(DragOrigin::Internal(session)) if session.session_id == session_id)
+                    {
+                        cx.finish_active_drag(DragEnd::Failed(failure), self);
+                    }
+                    PlatformInput::InternalDrag(InternalDragEvent::SourceFailed {
+                        session_id,
+                        failure,
+                    })
                 }
                 InternalDragEvent::SourceCancelled { session_id } => {
                     let outcome = cx.active_drag.as_ref().and_then(|drag| match &drag.origin {
@@ -361,17 +383,7 @@ impl Window {
         DispatchEventResult {
             propagate: cx.propagate_event,
             default_prevented: self.default_prevented,
-            drag_drop_accepted: dropped_session.is_some_and(|session_id| {
-                cx.active_drag
-                    .as_ref()
-                    .is_none_or(|drag| match &drag.origin {
-                        DragOrigin::Internal(session) if session.session_id == session_id => {
-                            session.phase == DragPhase::Finishing
-                                && matches!(session.pending_outcome, Some(DragEnd::Dropped { .. }))
-                        }
-                        _ => true,
-                    })
-            }),
+            drag_drop_accepted: is_drop && self.drag_drop_accepted,
         }
     }
 

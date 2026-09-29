@@ -34,6 +34,8 @@ use std::{
 
 use super::{X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES};
 
+pub(crate) mod drag_icon;
+
 x11rb::atom_manager! {
     pub XcbAtoms: AtomsCookie {
         XA_ATOM,
@@ -47,6 +49,12 @@ x11rb::atom_manager! {
         XdndFinished,
         XdndTypeList,
         XdndActionCopy,
+        XdndActionMove,
+        XdndActionLink,
+        XdndActionList,
+        XdndProxy,
+        TARGETS,
+        INCR,
         TextUriList: b"text/uri-list",
         UTF8_STRING,
         TEXT,
@@ -1170,6 +1178,17 @@ impl X11WindowStatePtr {
         }
     }
 
+    pub(crate) fn handle_drag(&self, event: gpui::InternalDragEvent) -> gpui::DispatchEventResult {
+        let callback = self.callbacks.borrow_mut().input.take();
+        if let Some(mut callback) = callback {
+            let result = callback(PlatformInput::InternalDrag(event));
+            self.callbacks.borrow_mut().input = Some(callback);
+            result
+        } else {
+            gpui::DispatchEventResult::default()
+        }
+    }
+
     pub fn handle_ime_commit(&self, text: String) {
         if self.is_blocked() {
             return;
@@ -1322,6 +1341,66 @@ impl X11WindowStatePtr {
 }
 
 impl PlatformWindow for X11Window {
+    fn create_internal_drag_icon(
+        &self,
+        session: gpui::DragSessionId,
+        size: Size<Pixels>,
+        scale: f32,
+        hotspot: Point<Pixels>,
+        scene: &Scene,
+    ) -> anyhow::Result<()> {
+        self.0
+            .state
+            .borrow()
+            .client
+            .create_drag_icon(session, size, scale, hotspot, scene)
+    }
+    fn update_internal_drag_icon(
+        &self,
+        session: gpui::DragSessionId,
+        size: Size<Pixels>,
+        scale: f32,
+        hotspot: Point<Pixels>,
+        scene: &Scene,
+    ) -> anyhow::Result<()> {
+        self.0
+            .state
+            .borrow()
+            .client
+            .update_drag_icon(session, size, scale, hotspot, scene)
+    }
+    fn destroy_internal_drag_icon(&self, session: gpui::DragSessionId) {
+        self.0.state.borrow().client.destroy_drag_icon(session);
+    }
+    fn start_internal_drag(
+        &self,
+        session: gpui::DragSessionId,
+        has_icon: bool,
+    ) -> anyhow::Result<()> {
+        self.0
+            .state
+            .borrow()
+            .client
+            .start_drag(self.0.clone(), session, has_icon, None)
+    }
+    fn validate_file_drag(&self, _files: &gpui::SystemFileDrag) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn start_file_drag(
+        &self,
+        session: gpui::DragSessionId,
+        has_icon: bool,
+        files: gpui::SystemFileDrag,
+    ) -> anyhow::Result<()> {
+        self.0
+            .state
+            .borrow()
+            .client
+            .start_drag(self.0.clone(), session, has_icon, Some(files))
+    }
+    fn cancel_internal_drag(&self, session: gpui::DragSessionId) {
+        self.0.state.borrow().client.cancel_drag(session);
+    }
     fn bounds(&self) -> Bounds<Pixels> {
         self.0.state.borrow().bounds
     }

@@ -66,6 +66,8 @@ use gpui::{
 };
 use gpui_wgpu::{CompositorGpuHint, GpuContext};
 
+mod drag;
+
 /// Value for DeviceId parameters which selects all devices.
 pub(crate) const XINPUT_ALL_DEVICES: xinput::DeviceId = 0;
 
@@ -222,6 +224,8 @@ pub struct X11ClientState {
     pub(crate) clipboard: Clipboard,
     pub(crate) clipboard_item: Option<ClipboardItem>,
     pub(crate) xdnd_state: Xdnd,
+    native_drag: Option<drag::NativeDrag>,
+    pending_drag_icons: HashMap<gpui::DragSessionId, super::window::drag_icon::X11DragIcon>,
 }
 
 #[derive(Clone)]
@@ -237,6 +241,14 @@ impl X11ClientStatePtr {
             return;
         };
         let mut state = client.0.borrow_mut();
+
+        if state
+            .native_drag
+            .as_ref()
+            .is_some_and(|drag| drag.source.x_window == x_window)
+        {
+            state.native_drag = None;
+        }
 
         if let Some(window_ref) = state.windows.remove(&x_window)
             && let Some(RefreshState::PeriodicRefresh {
@@ -568,6 +580,8 @@ impl X11Client {
             clipboard,
             clipboard_item: None,
             xdnd_state: Xdnd::default(),
+            native_drag: None,
+            pending_drag_icons: HashMap::default(),
         }))))
     }
 
@@ -674,6 +688,9 @@ impl X11Client {
             }
 
             for event in events.into_iter() {
+                if self.handle_native_drag_event(&event) {
+                    continue;
+                }
                 let mut state = self.0.borrow_mut();
                 if !state.has_xim() {
                     drop(state);

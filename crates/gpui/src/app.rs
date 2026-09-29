@@ -2464,6 +2464,11 @@ impl App {
     }
 
     pub(crate) fn finish_active_drag(&mut self, outcome: DragEnd, window: &mut Window) -> bool {
+        // A cleared drag may also mean rejection or cancellation. Record acceptance
+        // explicitly so native destinations can acknowledge only a handled drop.
+        if self.active_drag.is_some() && matches!(outcome, DragEnd::Dropped { .. }) {
+            window.drag_drop_accepted = true;
+        }
         if let Some(active_drag) = self.active_drag.as_mut()
             && let DragOrigin::Internal(session) = &mut active_drag.origin
             && session.phase == DragPhase::Native
@@ -2483,8 +2488,11 @@ impl App {
         let DragOrigin::Internal(session) = active_drag.origin else {
             return true;
         };
-        let should_restore_source =
-            session.source_was_unmapped && matches!(outcome, DragEnd::Cancelled);
+        let should_restore_source = session.source_was_unmapped
+            && !matches!(
+                outcome,
+                DragEnd::Dropped { .. } | DragEnd::ExternalDropped { .. }
+            );
         let icon_created = session.icon_created;
         let session_id = session.session_id;
         let listener = session.on_end;
@@ -2906,6 +2914,13 @@ impl DragSessionId {
 /// The result of a process-local drag operation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DragEnd {
+    /// A native file target completed its operation. GPUI never deletes source files.
+    ExternalDropped {
+        /// The action confirmed by the target.
+        action: crate::DragAction,
+    },
+    /// A native operation failed before success was confirmed.
+    Failed(crate::DragFailure),
     /// A target accepted the value and ran its typed drop handler.
     Dropped {
         /// The window that accepted the drop.
@@ -2978,6 +2993,7 @@ pub(crate) struct InternalDragSession {
     pub pending_outcome: Option<DragEnd>,
     pub on_end: Option<DragEndListener>,
     pub system_options: Option<SystemDragOptions>,
+    pub file_export: bool,
     pub icon_created: bool,
     pub source_was_unmapped: bool,
 }

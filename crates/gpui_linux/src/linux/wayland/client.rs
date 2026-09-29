@@ -399,6 +399,38 @@ struct NativeDragSource {
     window: WaylandWindowStatePtr,
     data_source: wl_data_source::WlDataSource,
     icon: Option<WaylandDragIcon>,
+    files: Option<gpui::SystemFileDrag>,
+    action: Option<gpui::DragAction>,
+    external_target: bool,
+    drop_performed: bool,
+    transfers: DragTransfers,
+}
+
+struct DragTransfers {
+    handle: LoopHandle<'static, WaylandClientStatePtr>,
+    tokens: Vec<calloop::RegistrationToken>,
+}
+impl Drop for DragTransfers {
+    fn drop(&mut self) {
+        for token in self.tokens.drain(..) {
+            self.handle.remove(token);
+        }
+    }
+}
+
+fn file_actions(files: Option<&gpui::SystemFileDrag>) -> DndAction {
+    let Some(files) = files else {
+        return DndAction::Move;
+    };
+    let actions = files.options().allowed_actions;
+    let mut result = DndAction::empty();
+    if actions.contains(gpui::DragActions::COPY) {
+        result |= DndAction::Copy;
+    }
+    if actions.contains(gpui::DragActions::MOVE) {
+        result |= DndAction::Move;
+    }
+    result
 }
 
 #[derive(Clone, Copy)]
@@ -448,6 +480,138 @@ impl WaylandClientState {
 pub struct WaylandClientStatePtr(Weak<RefCell<WaylandClientState>>);
 
 impl WaylandClientStatePtr {
+    fn fail_drag(&self, session_id: DragSessionId, failure: gpui::DragFailure) {
+        let window = self
+            .get_client()
+            .borrow()
+            .native_drag_source
+            .as_ref()
+            .filter(|source| source.session_id == session_id)
+            .map(|source| source.window.clone());
+        self.cancel_internal_drag(session_id);
+        if let Some(window) = window {
+            window.handle_input(PlatformInput::InternalDrag(
+                InternalDragEvent::SourceFailed {
+                    session_id,
+                    failure,
+                },
+            ));
+        }
+    }
+
+    fn drag_timeout(&self, session_id: DragSessionId) {
+        let client = self.get_client();
+        let mut state = client.borrow_mut();
+        let handle = state.loop_handle.clone();
+        if let Ok(token) = handle.insert_source(
+            Timer::from_duration(Duration::from_secs(60)),
+            move |_, _, client| {
+                client.fail_drag(session_id, gpui::DragFailure::TimedOut);
+                TimeoutAction::Drop
+            },
+        ) {
+            if let Some(source) = state
+                .native_drag_source
+                .as_mut()
+                .filter(|source| source.session_id == session_id)
+            {
+                source.transfers.tokens.push(token);
+            } else {
+                handle.remove(token);
+            }
+        }
+    }
+
+    fn send_drag_files(
+        &self,
+        session_id: DragSessionId,
+        fd: std::os::fd::OwnedFd,
+        bytes: std::sync::Arc<[u8]>,
+    ) -> anyhow::Result<()> {
+        use std::io::{ErrorKind, Write};
+        // A writable pipe may have less room than the payload. Never block the UI loop.
+        let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+        anyhow::ensure!(
+            flags >= 0
+                && unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }
+                    >= 0,
+            "cannot make file drag pipe nonblocking"
+        );
+        let client = self.get_client();
+        let mut state = client.borrow_mut();
+        let handle = state.loop_handle.clone();
+        let completed = Rc::new(std::cell::Cell::new(false));
+        let done = completed.clone();
+        let mut offset = 0;
+        let token =
+            handle
+                .insert_source(
+                    calloop::generic::Generic::new(
+                        std::fs::File::from(fd),
+                        calloop::Interest::WRITE,
+                        calloop::Mode::Level,
+                    ),
+                    move |_, file, client| {
+                        let file = unsafe { file.get_mut() };
+                        // Bound work per event so a large file selection does not monopolize rendering.
+                        let end = (offset + 65536).min(bytes.len());
+                        match file.write(&bytes[offset..end]) {
+                            Ok(n) if n > 0 => {
+                                offset += n;
+                                if offset == bytes.len() {
+                                    done.set(true);
+                                    return Ok(calloop::PostAction::Remove);
+                                }
+                            }
+                            Err(error)
+                                if matches!(
+                                    error.kind(),
+                                    ErrorKind::WouldBlock | ErrorKind::Interrupted
+                                ) => {}
+                            _ => {
+                                done.set(true);
+                                client.get_client().borrow().loop_handle.insert_idle(
+                                    move |client| {
+                                        client.fail_drag(session_id, gpui::DragFailure::Transfer)
+                                    },
+                                );
+                                return Ok(calloop::PostAction::Remove);
+                            }
+                        }
+                        Ok(calloop::PostAction::Continue)
+                    },
+                )
+                .map_err(|error| anyhow::anyhow!("cannot register file drag pipe: {error}"))?;
+        let timer = match handle.insert_source(
+            Timer::from_duration(Duration::from_secs(10)),
+            move |_, _, client| {
+                if !completed.get() {
+                    client.fail_drag(session_id, gpui::DragFailure::TimedOut);
+                }
+                TimeoutAction::Drop
+            },
+        ) {
+            Ok(timer) => timer,
+            Err(error) => {
+                handle.remove(token);
+                return Err(anyhow::anyhow!(
+                    "cannot register file drag timeout: {error}"
+                ));
+            }
+        };
+        if let Some(source) = state
+            .native_drag_source
+            .as_mut()
+            .filter(|source| source.session_id == session_id)
+        {
+            source.transfers.tokens.extend([token, timer]);
+        } else {
+            handle.remove(token);
+            handle.remove(timer);
+        }
+        Ok(())
+    }
+
     pub fn get_client(&self) -> Rc<RefCell<WaylandClientState>> {
         self.0
             .upgrade()
@@ -463,6 +627,7 @@ impl WaylandClientStatePtr {
         source_window: WaylandWindowStatePtr,
         session_id: DragSessionId,
         has_icon: bool,
+        files: Option<gpui::SystemFileDrag>,
     ) -> anyhow::Result<()> {
         let client = self.get_client();
         let mut state = client.borrow_mut();
@@ -499,7 +664,10 @@ impl WaylandClientStatePtr {
             WaylandDataSourceKind::InternalDrag(session_id),
         );
         data_source.offer(state.internal_drag_mime.clone());
-        data_source.set_actions(DndAction::Move);
+        if files.is_some() {
+            data_source.offer(FILE_LIST_MIME_TYPE.into());
+        }
+        data_source.set_actions(file_actions(files.as_ref()));
         data_device.start_drag(
             Some(&data_source),
             &source_window.surface(),
@@ -525,6 +693,14 @@ impl WaylandClientStatePtr {
             window: source_window,
             data_source,
             icon,
+            files,
+            action: None,
+            external_target: false,
+            drop_performed: false,
+            transfers: DragTransfers {
+                handle: state.loop_handle.clone(),
+                tokens: Vec::new(),
+            },
         });
         Ok(())
     }
@@ -698,6 +874,15 @@ impl WaylandClientStatePtr {
         let client = self.get_client();
         let mut state = client.borrow_mut();
         let closed_window = state.windows.remove(surface_id).unwrap();
+        if state
+            .native_drag_source
+            .as_ref()
+            .is_some_and(|source| source.window.ptr_eq(&closed_window))
+        {
+            if let Some(source) = state.native_drag_source.take() {
+                source.data_source.destroy();
+            }
+        }
         if let Some(window) = state.mouse_focused_window.take()
             && !window.ptr_eq(&closed_window)
         {
@@ -2698,7 +2883,18 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                         .map(|source| source.session_id);
                     if let Some(session_id) = internal_session {
                         data_offer.accept(serial, Some(state.internal_drag_mime.clone()));
-                        data_offer.set_actions(DndAction::Move, DndAction::Move);
+                        let files = state
+                            .native_drag_source
+                            .as_ref()
+                            .and_then(|source| source.files.as_ref());
+                        let actions = file_actions(files);
+                        let preferred = files.map_or(DndAction::Move, |files| {
+                            match files.options().preferred_action {
+                                gpui::DragAction::Copy => DndAction::Copy,
+                                _ => DndAction::Move,
+                            }
+                        });
+                        data_offer.set_actions(actions, preferred);
                         state.drag.data_offer = Some(data_offer);
                         state.drag.kind = Some(DragOfferKind::Internal(session_id));
                         state.drag.window = Some(drag_window.clone());
@@ -2928,16 +3124,68 @@ impl Dispatch<wl_data_source::WlDataSource, WaylandDataSourceKind> for WaylandCl
             (WaylandDataSourceKind::Clipboard, wl_data_source::Event::Cancelled) => {
                 data_source.destroy();
             }
-            (WaylandDataSourceKind::InternalDrag(_), wl_data_source::Event::Send { fd, .. }) => {
-                // The MIME is a process-private capability marker. The typed value never leaves
-                // GPUI, so there is no payload to serialize into this pipe.
-                drop(fd);
+            (
+                WaylandDataSourceKind::InternalDrag(session_id),
+                wl_data_source::Event::Send { fd, mime_type },
+            ) => {
+                let bytes = state
+                    .native_drag_source
+                    .as_ref()
+                    .filter(|source| {
+                        source.session_id == *session_id && mime_type == FILE_LIST_MIME_TYPE
+                    })
+                    .and_then(|source| source.files.as_ref())
+                    .map(|files| files.uri_list().clone());
+                drop(state);
+                if let Some(bytes) = bytes {
+                    if let Err(error) = this.send_drag_files(*session_id, fd, bytes) {
+                        log::warn!("file drag transfer failed: {error:#}");
+                        this.fail_drag(*session_id, gpui::DragFailure::Transfer);
+                    }
+                }
+            }
+            (
+                WaylandDataSourceKind::InternalDrag(session_id),
+                wl_data_source::Event::Target { mime_type },
+            ) => {
+                if let Some(source) = state
+                    .native_drag_source
+                    .as_mut()
+                    .filter(|source| source.session_id == *session_id)
+                {
+                    if !source.drop_performed {
+                        source.external_target = mime_type.as_deref() == Some(FILE_LIST_MIME_TYPE);
+                    }
+                }
+            }
+            (
+                WaylandDataSourceKind::InternalDrag(session_id),
+                wl_data_source::Event::Action { dnd_action },
+            ) => {
+                if let Some(source) = state
+                    .native_drag_source
+                    .as_mut()
+                    .filter(|source| source.session_id == *session_id)
+                {
+                    source.action = match dnd_action {
+                        WEnum::Value(DndAction::Copy) => Some(gpui::DragAction::Copy),
+                        WEnum::Value(DndAction::Move) => Some(gpui::DragAction::Move),
+                        _ => None,
+                    };
+                }
             }
             (
                 WaylandDataSourceKind::InternalDrag(session_id),
                 wl_data_source::Event::DndDropPerformed,
             ) => {
                 let session_id = *session_id;
+                if let Some(source) = state
+                    .native_drag_source
+                    .as_mut()
+                    .filter(|source| source.session_id == session_id)
+                {
+                    source.drop_performed = true;
+                }
                 let Some(window) = state
                     .native_drag_source
                     .as_ref()
@@ -2947,6 +3195,7 @@ impl Dispatch<wl_data_source::WlDataSource, WaylandDataSourceKind> for WaylandCl
                     return;
                 };
                 drop(state);
+                this.drag_timeout(session_id);
                 window.handle_input(PlatformInput::InternalDrag(
                     InternalDragEvent::SourceDropPerformed { session_id },
                 ));
@@ -2956,6 +3205,25 @@ impl Dispatch<wl_data_source::WlDataSource, WaylandDataSourceKind> for WaylandCl
                 wl_data_source::Event::DndFinished,
             ) => {
                 let session_id = *session_id;
+                let Some(source) = state
+                    .native_drag_source
+                    .as_ref()
+                    .filter(|source| source.session_id == session_id)
+                else {
+                    return;
+                };
+                let external = source.external_target;
+                let action = state
+                    .native_drag_source
+                    .as_ref()
+                    .filter(|source| source.session_id == session_id && source.external_target)
+                    .and_then(|source| {
+                        source.action.filter(|action| {
+                            source.files.as_ref().is_some_and(|files| {
+                                files.options().allowed_actions.allows(*action)
+                            })
+                        })
+                    });
                 let window = state
                     .native_drag_source
                     .as_ref()
@@ -2968,12 +3236,26 @@ impl Dispatch<wl_data_source::WlDataSource, WaylandDataSourceKind> for WaylandCl
                 drop(state);
                 if let Some(window) = window {
                     window.handle_input(PlatformInput::InternalDrag(
-                        InternalDragEvent::SourceFinished { session_id },
+                        if external && action.is_none() {
+                            InternalDragEvent::SourceFailed {
+                                session_id,
+                                failure: gpui::DragFailure::Protocol,
+                            }
+                        } else {
+                            InternalDragEvent::SourceFinished { session_id, action }
+                        },
                     ));
                 }
             }
             (WaylandDataSourceKind::InternalDrag(session_id), wl_data_source::Event::Cancelled) => {
                 let session_id = *session_id;
+                if !state
+                    .native_drag_source
+                    .as_ref()
+                    .is_some_and(|source| source.session_id == session_id)
+                {
+                    return;
+                }
                 let window = state
                     .native_drag_source
                     .as_ref()

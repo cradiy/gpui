@@ -1,6 +1,9 @@
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
-    AnyElement, App, CursorStyle, Entity, Focusable, IntoElement, MouseButton, Pixels,
-    Refineable as _, RenderOnce, StyleRefinement, Styled, Window, deferred, div, prelude::*, px,
+    AnyElement, App, Bounds, CursorStyle, Entity, Focusable, IntoElement, MouseButton, Pixels,
+    Refineable as _, RenderOnce, StyleRefinement, Styled, Window, canvas, deferred, div,
+    prelude::*, px,
 };
 
 use super::{DropdownPlacement, DropdownState};
@@ -75,8 +78,11 @@ impl RenderOnce for Dropdown {
         let escape_state = self.state.clone();
         let menu_style = self.style.clone();
         let menu_gap = self.menu_gap;
+        let trigger_bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
 
         let menu = open.then(|| {
+            let outside_state = self.state.clone();
+            let trigger_bounds = trigger_bounds.clone();
             let positioned = match self.placement {
                 DropdownPlacement::BottomStart => div().absolute().top_full().left_0(),
                 DropdownPlacement::BottomEnd => div().absolute().top_full().right_0(),
@@ -96,6 +102,14 @@ impl RenderOnce for Dropdown {
                 })
                 .overflow_y_scroll()
                 .occlude()
+                .on_mouse_down_out(move |event, window, cx| {
+                    if !trigger_bounds
+                        .get()
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
+                        outside_state.update(cx, |state, cx| state.close(window, cx));
+                    }
+                })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .children(self.menu);
             positioned.style().refine(&menu_style);
@@ -122,6 +136,16 @@ impl RenderOnce for Dropdown {
                     .children(self.trigger),
             )
             .children(menu)
+            .when(open, |this| {
+                this.child(
+                    canvas(
+                        move |bounds, _, _| trigger_bounds.set(Some(bounds)),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+            })
     }
 }
 

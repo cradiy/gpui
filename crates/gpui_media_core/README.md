@@ -6,7 +6,7 @@ a GUI or rendering dependency.
 - `MediaBackend` opens playback and frame-extraction sessions.
 - `MediaOutputSink` publishes frames through a bounded latest-frame queue and
   media events through an independent channel.
-- `VideoFrameExtractor` serializes extraction requests on a worker, with exact
+- On desktop, `VideoFrameExtractor` serializes extraction requests on a worker, with exact
   requests and a latest-only preview mailbox. Options carry a per-session
   `VideoDecoderPolicy`; backends must enforce explicit policies or return an error.
 - `VideoFrame` carries presentation timestamps, an immutable `FrameBuffer`, and
@@ -39,3 +39,14 @@ for playback sessions or frame extraction.
 `VideoSurface`, which adapts frames to GPUI surfaces without copying CPU pixels.
 Custom backends can depend on `gpui_media_core` directly and implement
 `MediaBackend` without importing either consumer or system backend.
+
+## Browser frames
+
+`FrameBacking::Browser` retains an immutable browser video frame. Ownership
+handles can be transferred, while JS access and resource destruction stay on
+the thread that created the frame. The frame is closed after the final owner
+releases it. Consumers select their own rendering or copy strategy.
+
+`VideoFrameExtractor` returns an unsupported error on Web; its blocking worker
+is only available on desktop. Native filesystem sources are also unsupported;
+use browser-accessible URIs instead.

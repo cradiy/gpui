@@ -833,6 +833,8 @@ pub struct SurfaceFrame {
 #[derive(Clone, Debug)]
 enum SurfaceFrameBackingData {
     Cpu(SmallVec<[SurfacePlane; 2]>),
+    #[cfg(target_family = "wasm")]
+    Browser(gpui_util::browser::BrowserVideoFrame),
     #[cfg(target_os = "macos")]
     CoreVideo(CoreVideoHandle),
     #[cfg(target_os = "linux")]
@@ -847,6 +849,9 @@ enum SurfaceFrameBackingData {
 pub enum SurfaceFrameBacking<'a> {
     /// Portable CPU memory that must be uploaded to a GPU texture.
     Cpu(&'a [SurfacePlane]),
+    /// An immutable browser frame copied into a GPU texture on its owner thread.
+    #[cfg(target_family = "wasm")]
+    Browser(&'a gpui_util::browser::BrowserVideoFrame),
     /// A macOS CoreVideo pixel buffer sampled through Metal.
     #[cfg(target_os = "macos")]
     CoreVideo(&'a CoreVideoHandle),
@@ -951,6 +956,34 @@ impl SurfaceFrame {
             format,
             backing: SurfaceFrameBackingData::Cpu(planes),
             color,
+        })
+    }
+
+    /// Creates a surface backed by an immutable browser video frame.
+    #[cfg(target_family = "wasm")]
+    pub fn from_browser(
+        handle: SurfaceHandle,
+        sequence: u64,
+        visible_rect: Bounds<DevicePixels>,
+        display_size: Size<DevicePixels>,
+        frame: gpui_util::browser::BrowserVideoFrame,
+    ) -> Result<Self, SurfaceFrameError> {
+        let coded_size = crate::size(
+            DevicePixels(i32::try_from(frame.width()).map_err(|_| SurfaceFrameError::InvalidSize)?),
+            DevicePixels(
+                i32::try_from(frame.height()).map_err(|_| SurfaceFrameError::InvalidSize)?,
+            ),
+        );
+        validate_frame_geometry(coded_size, visible_rect, display_size)?;
+        Ok(Self {
+            handle,
+            sequence,
+            coded_size,
+            visible_rect,
+            display_size,
+            format: SurfaceFormat::Rgba8,
+            backing: SurfaceFrameBackingData::Browser(frame),
+            color: Default::default(),
         })
     }
 
@@ -1216,6 +1249,8 @@ impl SurfaceFrame {
     pub fn backing(&self) -> SurfaceFrameBacking<'_> {
         match &self.backing {
             SurfaceFrameBackingData::Cpu(planes) => SurfaceFrameBacking::Cpu(planes),
+            #[cfg(target_family = "wasm")]
+            SurfaceFrameBackingData::Browser(frame) => SurfaceFrameBacking::Browser(frame),
             #[cfg(target_os = "macos")]
             SurfaceFrameBackingData::CoreVideo(core_video) => {
                 SurfaceFrameBacking::CoreVideo(core_video)
@@ -1229,6 +1264,8 @@ impl SurfaceFrame {
     pub fn cpu_planes(&self) -> Option<&[SurfacePlane]> {
         match &self.backing {
             SurfaceFrameBackingData::Cpu(planes) => Some(planes),
+            #[cfg(target_family = "wasm")]
+            SurfaceFrameBackingData::Browser(_) => None,
             #[cfg(target_os = "macos")]
             SurfaceFrameBackingData::CoreVideo(_) => None,
             #[cfg(target_os = "linux")]

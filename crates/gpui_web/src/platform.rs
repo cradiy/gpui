@@ -120,6 +120,7 @@ impl Platform for WebPlatform {
 
     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>) {
         let wgpu_context = self.wgpu_context.clone();
+        let browser_window = self.browser_window.clone();
         wasm_bindgen_futures::spawn_local(async move {
             match WgpuContext::new_web().await {
                 Ok(context) => {
@@ -129,7 +130,9 @@ impl Platform for WebPlatform {
                 }
                 Err(err) => {
                     log::error!("Failed to initialize WebGPU context: {err:#}");
-                    on_finish_launching();
+                    if let Err(display_error) = show_graphics_error(&browser_window, &err) {
+                        log::error!("Failed to display startup error: {display_error:?}");
+                    }
                 }
             }
         });
@@ -371,6 +374,33 @@ impl Platform for WebPlatform {
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
         self.callbacks.borrow_mut().keyboard_layout_change = Some(callback);
     }
+}
+
+pub(crate) fn show_graphics_error(
+    window: &web_sys::Window,
+    error: &anyhow::Error,
+) -> Result<(), JsValue> {
+    let document = window
+        .document()
+        .ok_or_else(|| JsValue::from_str("No browser document"))?;
+    let body = document
+        .body()
+        .ok_or_else(|| JsValue::from_str("No document body"))?;
+    let panel = document.create_element("div")?;
+    panel.set_id("gpui-startup-error");
+    panel.set_attribute("role", "alert")?;
+    panel.set_attribute(
+        "style",
+        "position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;\
+         padding:32px;background:#18212d;color:#fff;font:16px/1.6 system-ui;\
+         white-space:pre-wrap;overflow:auto",
+    )?;
+    panel.set_text_content(Some(&format!(
+        "GPUI graphics unavailable\n\n{error:#}\n\n\
+         GPU diagnostics: chrome://gpu (Chrome) or about:support (Firefox)."
+    )));
+    body.append_child(&panel)?;
+    Ok(())
 }
 
 struct EventListenerHandle {

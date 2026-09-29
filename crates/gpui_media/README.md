@@ -11,7 +11,7 @@ frames come from [`gpui_media_core`](../gpui_media_core/README.md), which has
 no GPUI dependency. This crate re-exports those types for UI applications.
 
 Pure audio playback is provided separately by `AudioPlayer`. It uses the same
-Symphonia and CPAL pipeline on every supported platform and does not depend on
+Symphonia and CPAL pipeline on desktop, and browser audio playback on Web and does not depend on
 `VideoPlayer` or a video backend. The default feature set enables
 both audio and video. See the complete
 [audio player guide](docs/audio-player.md).
@@ -57,7 +57,7 @@ gpui_media_backend = { path = ".../gpui_media_backend", features = ["v1_26"] }
 ```
 
 `gpui_media_backend::SystemBackend` selects GStreamer on Linux/macOS and Media
-Foundation on Windows. GStreamer requires at least 1.24; version features and
+Foundation on Windows, and browser media playback on Web. GStreamer requires at least 1.24; version features and
 runtime requirements are documented in the [backend guide](../gpui_media_backend/README.md).
 
 ```rust
@@ -459,3 +459,26 @@ GStreamer DMA-BUF object layout and maps both NV12 image planes to the same
 object when appropriate. Rendering import status remains in the GPUI adapter.
 
 If GPUI reports `DmaBufImportStatus::Failed` after presentation, the player automatically restricts the appsink to CPU frames and seeks to the current position to force renegotiation. Linear NV12/BGRA/RGBA DMA-BUF remains available when native import is not supported.
+
+## Browser playback
+
+The UI crate depends on `gpui_media_core` for video contracts; the application
+selects and injects `gpui_media_backend::SystemBackend`. `AudioPlayer` has its own
+browser implementation and does not use or depend on the video backend.
+
+Both players accept HTTP(S), `blob:` and `data:` URLs. Local filesystem paths,
+custom HTTP headers/proxy settings and caller-fed encoded audio streams are
+unavailable in the browser implementation. Browser codec support determines the
+accepted formats. Audio playback may require a user gesture; rejected play
+requests appear as player errors and can be retried from a click handler.
+
+Video supports play/pause, approximate seeking, volume, mute, playback rate and
+reload. Independent frame extraction, exact frame stepping and stream selection
+are unavailable. Consult `backend_capabilities()` before enabling such controls.
+Frames use `FrameTransport::Browser`, with immutable browser frame ownership and
+GPU texture copies on the window thread. Cross-origin video requires CORS access.
+
+The browser does not expose audio sample rate, channel count or codec metadata
+through the media element. `AudioInfo` reports zero for the unknown numeric
+fields and `browser` for the codec label; timeline duration and seekability
+remain available.

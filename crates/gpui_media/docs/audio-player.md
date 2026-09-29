@@ -2,7 +2,8 @@
 
 `AudioPlayer` is a presentation-free audio component. It is independent from
 `VideoPlayer`: Symphonia performs demuxing and decoding on a worker thread,
-while CPAL writes decoded PCM to the platform's default output device. Audio
+while CPAL writes decoded PCM to the platform's default output device on desktop.
+On Web, the component directly uses browser audio playback and needs no video backend. Audio
 and video are enabled by default. An audio-only application can disable the
 default features:
 
@@ -155,3 +156,14 @@ cargo run -p gpui_media --example audio -- --stream mp3 /path/to/audio.mp3
 - Stream completion is reported after queued PCM has drained.
 - Mid-stream sample-rate or channel-layout changes currently produce an error;
   create a new source when the encoded stream changes format.
+
+## Web
+
+Use HTTP(S), `blob:` or `data:` URLs with the same `AudioPlayer` API. Playback
+format support, loading, decoding and output are managed by the browser. Call
+`play` from a user interaction when autoplay is blocked; failures are reported
+through the player state. Duration and seekability follow the browser timeline.
+
+The browser implementation does not accept native filesystem paths, custom
+network options or caller-fed encoded streams. Sample rate and channel count
+are reported as zero when unavailable, and the codec label is `browser`.

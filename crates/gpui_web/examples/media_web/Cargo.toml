@@ -1,0 +1,21 @@
+[workspace]
+
+[package]
+name = "media_web"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "media_web"
+path = "main.rs"
+
+[dependencies]
+gpui = { path = "../../../gpui" }
+gpui_3d = { path = "../../../gpui_3d", features = ["wgpu"] }
+gpui_web = { path = "../..", default-features = false }
+gpui_media = { path = "../../../gpui_media" }
+gpui_media_backend = { path = "../../../gpui_media_backend", default-features = false }
+web-sys = { version = "0.3", features = ["Window", "Location", "Url", "UrlSearchParams", "Document", "Element", "HtmlElement", "HtmlInputElement", "File", "FileList", "Blob", "Event", "EventTarget", "Node"] }
+console_error_panic_hook = "0.1"
+wasm-bindgen = "0.2"

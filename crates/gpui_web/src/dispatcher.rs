@@ -149,10 +149,12 @@ impl WebDispatcher {
 
         if supports_threads {
             main_thread_mailbox.run_waker_loop(browser_window.clone());
-        } else {
+        } else if cfg!(feature = "multithreaded") && allow_threads {
             log::warn!(
-                "SharedArrayBuffer not available; falling back to single-threaded dispatcher"
+                "Shared WebAssembly memory is unavailable; falling back to single-threaded dispatcher"
             );
+        } else {
+            log::debug!("Using single-threaded dispatcher");
         }
 
         #[cfg(feature = "multithreaded")]

@@ -19,10 +19,12 @@ pub struct AudioInfo {
 }
 
 impl AudioInfo {
+    /// Sample rate, or zero when the browser does not expose it.
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
+    /// Channel count, or zero when the browser does not expose it.
     pub fn channels(&self) -> u16 {
         self.channels
     }
@@ -90,7 +92,8 @@ pub enum AudioPlayerEvent {
 /// A cross-platform, presentation-free audio player.
 ///
 /// Symphonia owns demuxing and decoding on a worker thread. CPAL owns device
-/// output. The component renders no UI; applications compose controls from the
+/// output on desktop; Web uses browser audio playback directly. The component
+/// renders no UI; applications compose controls from the
 /// public state, methods and events.
 pub struct AudioPlayer {
     source: AudioSource,

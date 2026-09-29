@@ -207,6 +207,13 @@ impl WgpuContext {
 
     #[cfg(target_family = "wasm")]
     pub async fn new_web() -> anyhow::Result<Self> {
+        // Probe the raw JS result: wgpu 30.0.0 can wrap a null adapter as Ok.
+        if !wgpu::util::is_browser_webgpu_supported().await {
+            anyhow::bail!(
+                "WebGPU is unavailable: the browser did not provide a GPU adapter. \
+                 Use localhost or HTTPS and check the browser's WebGPU support and GPU diagnostics."
+            );
+        }
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
             flags: wgpu::InstanceFlags::default(),
@@ -234,6 +241,13 @@ impl WgpuContext {
         let device_lost = Arc::new(AtomicBool::new(false));
         let (device, queue, dual_source_blending, color_texture_format) =
             Self::create_device(&adapter).await?;
+        device.set_device_lost_callback({
+            let device_lost = Arc::clone(&device_lost);
+            move |reason, message| {
+                log::error!("WebGPU device lost: reason={reason:?}, message={message}");
+                device_lost.store(true, Ordering::Relaxed);
+            }
+        });
 
         Ok(Self {
             instance,

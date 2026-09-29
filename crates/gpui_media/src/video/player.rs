@@ -1,5 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
+#[cfg(target_os = "linux")]
+use crate::MediaError;
 use gpui::{
     Context, EventEmitter, GpuSpecs, IntoElement, Render, SharedString, Window, div, prelude::*,
     surface,
@@ -9,9 +11,9 @@ use gpui::{DmaBufImportStatus, SurfaceFrameBacking};
 
 use crate::{
     FrameTransport, FrameTransportPreference, MediaBackend, MediaBackendEvent, MediaCapabilities,
-    MediaError, MediaInfo, MediaOutputSink, MediaPlaybackRequest, MediaPlaybackSession,
-    MediaResult, MediaSource, MediaStreamId, PlaybackState, PlaybackTimeline, SeekMode,
-    SubtitleEvent, TransportChange, VideoFrame, VideoFrameExtractor, VideoPlaybackStats,
+    MediaInfo, MediaOutputSink, MediaPlaybackRequest, MediaPlaybackSession, MediaResult,
+    MediaSource, MediaStreamId, PlaybackState, PlaybackTimeline, SeekMode, SubtitleEvent,
+    TransportChange, VideoFrame, VideoFrameExtractor, VideoPlaybackStats,
 };
 
 use super::surface::VideoSurface;

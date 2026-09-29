@@ -280,6 +280,7 @@ impl MediaSource {
     }
 
     /// Creates a file URI from a local path.
+    #[cfg(not(target_family = "wasm"))]
     pub fn from_path(path: impl AsRef<Path>) -> MediaResult<Self> {
         let path = path.as_ref();
         let canonical = path
@@ -310,6 +311,13 @@ impl MediaSource {
             display_name,
             network: NetworkSourceOptions::default(),
         })
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub fn from_path(_path: impl AsRef<Path>) -> MediaResult<Self> {
+        Err(MediaError::unsupported(
+            "browser media requires an HTTP(S), blob, or data URI",
+        ))
     }
 
     /// Treats inputs containing a URI scheme as URIs and all other inputs as

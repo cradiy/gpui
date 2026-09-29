@@ -306,6 +306,18 @@ impl WebWindowInner {
 
         let this = Rc::clone(self);
         let closure = Closure::new(move || {
+            if this.state.borrow().renderer.device_lost() {
+                let error = anyhow::anyhow!(
+                    "The WebGPU device was lost. Reload this page to create a new device. \
+                     See the browser console for the device loss reason."
+                );
+                if let Err(error) =
+                    crate::platform::show_graphics_error(&this.browser_window, &error)
+                {
+                    log::error!("Failed to display WebGPU device loss: {error:?}");
+                }
+                return;
+            }
             {
                 let mut callbacks = this.callbacks.borrow_mut();
                 if let Some(ref mut callback) = callbacks.request_frame {
@@ -665,6 +677,9 @@ impl PlatformWindow for WebWindow {
     }
 
     fn draw(&self, scene: &Scene) {
+        if self.inner.state.borrow().renderer.device_lost() {
+            return;
+        }
         if let Some((width, height)) = self.inner.pending_physical_size.take() {
             if self.inner.canvas.width() != width || self.inner.canvas.height() != height {
                 self.inner.canvas.set_width(width);
@@ -700,6 +715,40 @@ impl PlatformWindow for WebWindow {
 
     fn supports_backdrop_blur(&self) -> bool {
         self.inner.state.borrow().renderer.supports_backdrop_blur()
+    }
+
+    fn supports_subtree_effects(&self) -> bool {
+        true
+    }
+
+    fn scene3d_support(&self) -> gpui::Scene3dSupport {
+        self.inner.state.borrow().renderer.scene3d_support()
+    }
+
+    fn clear_scene3d_caches(&mut self) {
+        self.inner
+            .state
+            .borrow_mut()
+            .renderer
+            .clear_scene3d_caches();
+    }
+
+    fn scene3d_output_cache_stats(&self) -> Option<gpui::Scene3dOutputCacheStats> {
+        Some(
+            self.inner
+                .state
+                .borrow()
+                .renderer
+                .scene3d_output_cache_stats(),
+        )
+    }
+
+    fn set_scene3d_output_cache_budget(&mut self, bytes: u64) {
+        self.inner
+            .state
+            .borrow_mut()
+            .renderer
+            .set_scene3d_output_cache_budget(bytes);
     }
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {

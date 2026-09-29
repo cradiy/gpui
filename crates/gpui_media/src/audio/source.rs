@@ -1,13 +1,13 @@
-use std::{
-    fmt,
-    io::{self, Read},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{fmt, io, sync::Arc};
 
+#[cfg(not(target_family = "wasm"))]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+#[cfg(not(target_family = "wasm"))]
+use std::{
+    io::Read,
+    sync::atomic::{AtomicBool, Ordering},
+};
+#[cfg(not(target_family = "wasm"))]
 use symphonia::core::{
     formats::probe::Hint,
     io::{MediaSource as SymphoniaMediaSource, ReadOnlySource},
@@ -56,6 +56,7 @@ enum AudioSourceKind {
 
 struct StreamState {
     receiver: async_channel::Receiver<Arc<[u8]>>,
+    #[cfg(not(target_family = "wasm"))]
     opened: AtomicBool,
 }
 
@@ -108,6 +109,7 @@ impl AudioSource {
             Self {
                 kind: AudioSourceKind::Stream(Arc::new(StreamState {
                     receiver,
+                    #[cfg(not(target_family = "wasm"))]
                     opened: AtomicBool::new(false),
                 })),
                 hint,
@@ -119,6 +121,20 @@ impl AudioSource {
         matches!(self.kind, AudioSourceKind::Stream(_))
     }
 
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn browser_source(&self) -> MediaResult<MediaSource> {
+        match &self.kind {
+            AudioSourceKind::Media(source) => Ok(source.clone()),
+            AudioSourceKind::Stream(state) => {
+                state.receiver.close();
+                Err(MediaError::unsupported(
+                    "caller-fed audio streams are unavailable in the browser player; use an HTTP(S), blob, or data URL",
+                ))
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn open(&self) -> MediaResult<OpenedAudioSource> {
         match &self.kind {
             AudioSourceKind::Media(source) => open_media_source(source, &self.hint),
@@ -139,6 +155,7 @@ impl AudioSource {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn cancel(&self) {
         if let AudioSourceKind::Stream(state) = &self.kind {
             state.receiver.close();
@@ -217,171 +234,177 @@ impl AudioStreamWriter {
     }
 }
 
-pub(crate) struct OpenedAudioSource {
-    pub(crate) source: Box<dyn SymphoniaMediaSource>,
-    pub(crate) hint: Hint,
-    pub(crate) seekable: bool,
-}
-
-fn open_media_source(
-    source: &MediaSource,
-    fallback_hint: &AudioStreamHint,
-) -> MediaResult<OpenedAudioSource> {
-    let uri = url::Url::parse(source.uri()).map_err(|error| {
-        MediaError::from_error(
-            MediaErrorKind::InvalidInput,
-            MediaRecovery::None,
-            "invalid audio URI",
-            error,
-        )
-    })?;
-    match uri.scheme() {
-        "file" => {
-            let path = uri.to_file_path().map_err(|_| {
-                MediaError::invalid_input("cannot convert audio URI to a local path")
-            })?;
-            let file = std::fs::File::open(&path).map_err(|error| {
-                MediaError::io(format!("failed to open {}", path.display()), error)
-            })?;
-            Ok(OpenedAudioSource {
-                source: Box::new(file),
-                hint: symphonia_hint(fallback_hint),
-                seekable: true,
-            })
-        }
-        "http" | "https" => open_http_source(source, fallback_hint),
-        scheme => Err(MediaError::unsupported(format!(
-            "audio source URI scheme {scheme:?} is not supported"
-        ))),
+#[cfg(not(target_family = "wasm"))]
+mod native {
+    use super::*;
+    pub(crate) struct OpenedAudioSource {
+        pub(crate) source: Box<dyn SymphoniaMediaSource>,
+        pub(crate) hint: Hint,
+        pub(crate) seekable: bool,
     }
-}
 
-fn open_http_source(
-    source: &MediaSource,
-    fallback_hint: &AudioStreamHint,
-) -> MediaResult<OpenedAudioSource> {
-    let options = source.network_options();
-    let mut agent = ureq::Agent::config_builder();
-    if let Some(timeout) = options.timeout() {
-        agent = agent.timeout_global(Some(timeout));
-    }
-    if let Some(proxy) = options.proxy() {
-        let proxy = ureq::Proxy::new(proxy).map_err(|error| {
+    pub(super) fn open_media_source(
+        source: &MediaSource,
+        fallback_hint: &AudioStreamHint,
+    ) -> MediaResult<OpenedAudioSource> {
+        let uri = url::Url::parse(source.uri()).map_err(|error| {
             MediaError::from_error(
                 MediaErrorKind::InvalidInput,
                 MediaRecovery::None,
-                "invalid audio proxy configuration",
+                "invalid audio URI",
                 error,
             )
         })?;
-        agent = agent.proxy(Some(proxy));
+        match uri.scheme() {
+            "file" => {
+                let path = uri.to_file_path().map_err(|_| {
+                    MediaError::invalid_input("cannot convert audio URI to a local path")
+                })?;
+                let file = std::fs::File::open(&path).map_err(|error| {
+                    MediaError::io(format!("failed to open {}", path.display()), error)
+                })?;
+                Ok(OpenedAudioSource {
+                    source: Box::new(file),
+                    hint: symphonia_hint(fallback_hint),
+                    seekable: true,
+                })
+            }
+            "http" | "https" => open_http_source(source, fallback_hint),
+            scheme => Err(MediaError::unsupported(format!(
+                "audio source URI scheme {scheme:?} is not supported"
+            ))),
+        }
     }
-    let agent: ureq::Agent = agent.build().into();
-    let mut request = agent.get(source.uri());
-    for (name, value) in options.headers() {
-        request = request.header(name, value);
-    }
-    if let Some(user_agent) = options.user_agent()
-        && !options
+
+    fn open_http_source(
+        source: &MediaSource,
+        fallback_hint: &AudioStreamHint,
+    ) -> MediaResult<OpenedAudioSource> {
+        let options = source.network_options();
+        let mut agent = ureq::Agent::config_builder();
+        if let Some(timeout) = options.timeout() {
+            agent = agent.timeout_global(Some(timeout));
+        }
+        if let Some(proxy) = options.proxy() {
+            let proxy = ureq::Proxy::new(proxy).map_err(|error| {
+                MediaError::from_error(
+                    MediaErrorKind::InvalidInput,
+                    MediaRecovery::None,
+                    "invalid audio proxy configuration",
+                    error,
+                )
+            })?;
+            agent = agent.proxy(Some(proxy));
+        }
+        let agent: ureq::Agent = agent.build().into();
+        let mut request = agent.get(source.uri());
+        for (name, value) in options.headers() {
+            request = request.header(name, value);
+        }
+        if let Some(user_agent) = options.user_agent()
+            && !options
+                .headers()
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("user-agent"))
+        {
+            request = request.header("User-Agent", user_agent);
+        }
+        if !options
             .headers()
             .keys()
-            .any(|name| name.eq_ignore_ascii_case("user-agent"))
-    {
-        request = request.header("User-Agent", user_agent);
-    }
-    if !options
-        .headers()
-        .keys()
-        .any(|name| name.eq_ignore_ascii_case("authorization"))
-        && (options.user_id().is_some() || options.user_password().is_some())
-    {
-        let credentials = format!(
-            "{}:{}",
-            options.user_id().unwrap_or_default(),
-            options.user_password().unwrap_or_default()
-        );
-        request = request.header(
-            "Authorization",
-            format!("Basic {}", BASE64_STANDARD.encode(credentials)),
-        );
-    }
-    let response = request.call().map_err(|error| {
-        MediaError::from_error(
-            MediaErrorKind::Network { status: None },
-            MediaRecovery::Retry,
-            format!("failed to open network audio {}", source.display_name()),
-            source.redact_error_message(&error.to_string()),
-        )
-    })?;
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    let (_, body) = response.into_parts();
-    let mut hint = fallback_hint.clone();
-    if hint.mime_type.is_none() {
-        hint.mime_type = content_type;
-    }
-    Ok(OpenedAudioSource {
-        source: Box::new(ReadOnlySource::new(body.into_reader())),
-        hint: symphonia_hint(&hint),
-        seekable: false,
-    })
-}
-
-fn symphonia_hint(source: &AudioStreamHint) -> Hint {
-    let mut hint = Hint::new();
-    if let Some(extension) = source.extension.as_deref() {
-        hint.with_extension(extension);
-    }
-    if let Some(mime_type) = source.mime_type.as_deref() {
-        hint.mime_type(mime_type);
-    }
-    hint
-}
-
-struct ChunkReader {
-    receiver: async_channel::Receiver<Arc<[u8]>>,
-    current: Arc<[u8]>,
-    offset: usize,
-}
-
-impl ChunkReader {
-    fn new(receiver: async_channel::Receiver<Arc<[u8]>>) -> Self {
-        Self {
-            receiver,
-            current: Arc::from([]),
-            offset: 0,
+            .any(|name| name.eq_ignore_ascii_case("authorization"))
+            && (options.user_id().is_some() || options.user_password().is_some())
+        {
+            let credentials = format!(
+                "{}:{}",
+                options.user_id().unwrap_or_default(),
+                options.user_password().unwrap_or_default()
+            );
+            request = request.header(
+                "Authorization",
+                format!("Basic {}", BASE64_STANDARD.encode(credentials)),
+            );
         }
-    }
-}
-
-impl Read for ChunkReader {
-    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-        if output.is_empty() {
-            return Ok(0);
+        let response = request.call().map_err(|error| {
+            MediaError::from_error(
+                MediaErrorKind::Network { status: None },
+                MediaRecovery::Retry,
+                format!("failed to open network audio {}", source.display_name()),
+                source.redact_error_message(&error.to_string()),
+            )
+        })?;
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let (_, body) = response.into_parts();
+        let mut hint = fallback_hint.clone();
+        if hint.mime_type.is_none() {
+            hint.mime_type = content_type;
         }
-        while self.offset == self.current.len() {
-            match self.receiver.recv_blocking() {
-                Ok(chunk) => {
-                    self.current = chunk;
-                    self.offset = 0;
-                }
-                Err(_) => return Ok(0),
+        Ok(OpenedAudioSource {
+            source: Box::new(ReadOnlySource::new(body.into_reader())),
+            hint: symphonia_hint(&hint),
+            seekable: false,
+        })
+    }
+
+    pub(super) fn symphonia_hint(source: &AudioStreamHint) -> Hint {
+        let mut hint = Hint::new();
+        if let Some(extension) = source.extension.as_deref() {
+            hint.with_extension(extension);
+        }
+        if let Some(mime_type) = source.mime_type.as_deref() {
+            hint.mime_type(mime_type);
+        }
+        hint
+    }
+
+    pub(super) struct ChunkReader {
+        receiver: async_channel::Receiver<Arc<[u8]>>,
+        current: Arc<[u8]>,
+        offset: usize,
+    }
+
+    impl ChunkReader {
+        pub(super) fn new(receiver: async_channel::Receiver<Arc<[u8]>>) -> Self {
+            Self {
+                receiver,
+                current: Arc::from([]),
+                offset: 0,
             }
         }
-        let length = output.len().min(self.current.len() - self.offset);
-        output[..length].copy_from_slice(&self.current[self.offset..self.offset + length]);
-        self.offset += length;
-        Ok(length)
+    }
+
+    impl Read for ChunkReader {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if output.is_empty() {
+                return Ok(0);
+            }
+            while self.offset == self.current.len() {
+                match self.receiver.recv_blocking() {
+                    Ok(chunk) => {
+                        self.current = chunk;
+                        self.offset = 0;
+                    }
+                    Err(_) => return Ok(0),
+                }
+            }
+            let length = output.len().min(self.current.len() - self.offset);
+            output[..length].copy_from_slice(&self.current[self.offset..self.offset + length]);
+            self.offset += length;
+            Ok(length)
+        }
     }
 }
+#[cfg(not(target_family = "wasm"))]
+use native::*;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use std::io::Read;
 

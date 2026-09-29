@@ -24,6 +24,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(target_family = "wasm")]
+mod browser_surface;
 #[cfg(target_os = "macos")]
 mod core_video;
 mod distance_field;
@@ -171,6 +173,8 @@ enum CachedSurfaceTextures {
     Rgba {
         _texture: wgpu::Texture,
         view: wgpu::TextureView,
+        #[cfg(target_family = "wasm")]
+        browser_uploader: RefCell<browser_surface::BrowserSurfaceUploader>,
     },
     Nv12 {
         _y_texture: wgpu::Texture,
@@ -740,10 +744,13 @@ impl WgpuRenderer {
         atlas: Arc<WgpuAtlas>,
     ) -> anyhow::Result<Self> {
         let surface_caps = surface.get_capabilities(&context.adapter);
+        #[cfg(not(target_family = "wasm"))]
         let preferred_formats = [
             wgpu::TextureFormat::Bgra8Unorm,
             wgpu::TextureFormat::Rgba8Unorm,
         ];
+        #[cfg(target_family = "wasm")]
+        let preferred_formats = &surface_caps.formats;
         let surface_format = preferred_formats
             .iter()
             .find(|f| surface_caps.formats.contains(f))
@@ -4547,6 +4554,13 @@ impl WgpuRenderer {
         let size = frame.coded_size();
         let width = size.width.0 as u32;
         let height = size.height.0 as u32;
+        let extra_usage = wgpu::TextureUsages::empty();
+        #[cfg(target_family = "wasm")]
+        let extra_usage = if matches!(frame.backing(), gpui::SurfaceFrameBacking::Browser(_)) {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        } else {
+            extra_usage
+        };
         let descriptor = |label, format, width, height| wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
@@ -4558,7 +4572,9 @@ impl WgpuRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | extra_usage,
             view_formats: &[],
         };
 
@@ -4575,6 +4591,8 @@ impl WgpuRenderer {
                 CachedSurfaceTextures::Rgba {
                     _texture: texture,
                     view,
+                    #[cfg(target_family = "wasm")]
+                    browser_uploader: RefCell::default(),
                 }
             }
             SurfaceFormat::Nv12 => {
@@ -4606,6 +4624,27 @@ impl WgpuRenderer {
         let size = frame.coded_size();
         let width = size.width.0 as u32;
         let height = size.height.0 as u32;
+        #[cfg(target_family = "wasm")]
+        if let gpui::SurfaceFrameBacking::Browser(browser_frame) = frame.backing() {
+            if let CachedSurfaceTextures::Rgba {
+                _texture,
+                browser_uploader,
+                ..
+            } = textures
+            {
+                if browser_frame
+                    .with(|source| {
+                        browser_uploader
+                            .borrow_mut()
+                            .upload(queue, _texture, source)
+                    })
+                    .is_none()
+                {
+                    log::error!("browser video frame must be painted on its owner thread");
+                }
+            }
+            return;
+        }
         let write_plane =
             |texture: &wgpu::Texture, plane: &gpui::SurfacePlane, width: u32, height: u32| {
                 queue.write_texture(

@@ -58,7 +58,7 @@ objc2-metal = "0.3.2"
 naga.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "VideoFrame"] }
 js-sys = "0.3"
 
 [dev-dependencies]

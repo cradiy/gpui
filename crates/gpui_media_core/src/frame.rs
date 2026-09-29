@@ -9,6 +9,9 @@ mod tests;
 /// Describes how a decoded frame is stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameTransport {
+    /// Browser-decoded frame copied directly into a GPU texture.
+    #[cfg(target_family = "wasm")]
+    Browser,
     Cpu,
     CoreVideo,
     DmaBuf,
@@ -90,6 +93,8 @@ impl VideoFrame {
     pub fn transport(&self) -> FrameTransport {
         match self.buffer.backing() {
             FrameBacking::Cpu(_) => FrameTransport::Cpu,
+            #[cfg(target_family = "wasm")]
+            FrameBacking::Browser(_) => FrameTransport::Browser,
             #[cfg(target_os = "macos")]
             FrameBacking::CoreVideo(_) => FrameTransport::CoreVideo,
             #[cfg(target_os = "linux")]

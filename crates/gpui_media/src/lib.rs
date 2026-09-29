@@ -8,7 +8,7 @@
 //! exported state and events.
 //!
 //! `AudioPlayer` is independent from the video backend boundary. It uses
-//! Symphonia and CPAL consistently across platforms and exposes no built-in UI.
+//! Symphonia and CPAL on desktop and browser audio playback on Web, with no built-in UI.
 
 #[cfg(feature = "audio")]
 mod audio;

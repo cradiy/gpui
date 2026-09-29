@@ -2,7 +2,7 @@
 
 A renderer-independent media backend with no GPUI dependency.
 `SystemBackend` uses GStreamer on Linux and macOS, and Media Foundation on
-Windows. Applications use the same player and frame-extraction APIs on each
+Windows, and HTML media playback in browsers. Applications use the same player and frame-extraction APIs on each
 platform. Media types are re-exported from
 [`gpui_media_core`](../gpui_media_core/README.md).
 
@@ -199,3 +199,18 @@ linked libraries replaceable. Plugin licenses can be inspected with
 GStreamer do not redistribute those system libraries, but should still document
 the runtime dependency. See the
 [GStreamer licensing guidance](https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html).
+
+## Browser backend
+
+On `wasm32-unknown-unknown`, `SystemBackend` uses an HTML video element for
+browser decoding and synchronized audio output. No native media libraries are
+linked. `VideoFrame` and `requestVideoFrameCallback` must be available.
+The element stays on the browser window thread; session control and
+frame presentation must run on that thread. The backend publishes immutable
+browser video frames through `gpui_media_core`, without depending on GPUI or
+selecting a renderer.
+
+HTTP(S), `blob:` and `data:` URLs are supported subject to browser codec and CORS
+rules. Playback can require a user gesture. Custom network options, native file
+paths, independent frame extraction, frame stepping and stream selection are
+unsupported. Session capabilities describe the available controls.

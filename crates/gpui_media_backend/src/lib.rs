@@ -2,6 +2,11 @@
 
 pub use gpui_media_core::*;
 
+#[cfg(target_family = "wasm")]
+mod browser;
+#[cfg(target_family = "wasm")]
+use browser as platform;
+
 #[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "v1_24")))]
 compile_error!("enable a GStreamer version feature: v1_24, v1_26, or v1_28");
 
@@ -11,7 +16,8 @@ mod gstreamer;
 mod gstreamer_platform;
 #[cfg(not(any(
     all(any(target_os = "linux", target_os = "macos"), feature = "v1_24"),
-    target_os = "windows"
+    target_os = "windows",
+    target_family = "wasm"
 )))]
 mod unsupported;
 #[cfg(target_os = "windows")]
@@ -21,7 +27,8 @@ mod windows;
 use gstreamer_platform as platform;
 #[cfg(not(any(
     all(any(target_os = "linux", target_os = "macos"), feature = "v1_24"),
-    target_os = "windows"
+    target_os = "windows",
+    target_family = "wasm"
 )))]
 use unsupported as platform;
 #[cfg(target_os = "windows")]
@@ -31,7 +38,7 @@ use windows as platform;
 /// operating system.
 ///
 /// Linux and macOS use the system GStreamer registry, while Windows uses Media
-/// Foundation.
+/// Foundation. Web uses browser media playback.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemBackend;
 

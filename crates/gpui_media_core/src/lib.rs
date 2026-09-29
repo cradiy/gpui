@@ -3,7 +3,12 @@
 mod decoder;
 mod error;
 mod frame;
+#[cfg(not(target_family = "wasm"))]
 mod frame_extractor;
+#[cfg(target_family = "wasm")]
+#[path = "frame_extractor_web.rs"]
+mod frame_extractor;
+mod frame_extractor_options;
 mod media_backend;
 mod media_info;
 mod playback_state;

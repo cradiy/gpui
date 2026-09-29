@@ -13,3 +13,9 @@ which.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+async-channel.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["VideoFrame"] }

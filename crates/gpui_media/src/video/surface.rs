@@ -131,6 +131,11 @@ fn convert_frame(buffer: &FrameBuffer, handle: SurfaceHandle) -> MediaResult<Sur
         },
     };
     match buffer.backing() {
+        #[cfg(target_family = "wasm")]
+        FrameBacking::Browser(frame) => {
+            SurfaceFrame::from_browser(handle, buffer.sequence(), visible, display, frame.clone())
+                .map_err(output_error)
+        }
         FrameBacking::Cpu(planes) => SurfaceFrame::new(
             handle,
             buffer.sequence(),

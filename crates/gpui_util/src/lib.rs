@@ -578,3 +578,6 @@ fn type_id_hasher() {
     verify_hashing_with(TypeId::of::<&str>());
     verify_hashing_with(TypeId::of::<Vec<u8>>());
 }
+
+#[cfg(target_family = "wasm")]
+pub mod browser;

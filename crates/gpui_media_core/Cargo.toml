@@ -16,3 +16,6 @@ core-video = { version = "0.5.2", default-features = false, features = ["link"] 
 
 [lints]
 workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+gpui_util.workspace = true

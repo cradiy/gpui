@@ -154,7 +154,7 @@ impl MediaOutputSink {
     /// Publishes a playback event. Returns `false` after the player has closed
     /// its event stream.
     pub fn emit(&self, event: MediaBackendEvent) -> bool {
-        self.events.send_blocking(event).is_ok()
+        self.events.try_send(event).is_ok()
     }
 
     pub fn is_closed(&self) -> bool {

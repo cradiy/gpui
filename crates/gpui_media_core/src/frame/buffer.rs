@@ -135,6 +135,8 @@ impl FramePlane {
 #[derive(Clone, Debug)]
 pub enum FrameBacking {
     Cpu(Vec<FramePlane>),
+    #[cfg(target_family = "wasm")]
+    Browser(gpui_util::browser::BrowserVideoFrame),
     #[cfg(target_os = "linux")]
     DmaBuf(Arc<DmaBufImage>),
     #[cfg(target_os = "macos")]
@@ -213,6 +215,17 @@ impl FrameBuffer {
                     if end > plane.bytes.len() {
                         return Err(MediaError::invalid_input("frame plane bytes are too short"));
                     }
+                }
+            }
+            #[cfg(target_family = "wasm")]
+            FrameBacking::Browser(frame) => {
+                if format != PixelFormat::Rgba8
+                    || frame.width() != coded_size.width as u32
+                    || frame.height() != coded_size.height as u32
+                {
+                    return Err(MediaError::invalid_input(
+                        "browser frame dimensions or format disagree",
+                    ));
                 }
             }
             #[cfg(target_os = "linux")]

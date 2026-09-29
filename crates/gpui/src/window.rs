@@ -1,20 +1,27 @@
-#[cfg(any(feature = "inspector", debug_assertions))]
-use crate::Inspector;
+#[cfg(any(
+    feature = "inspector",
+    debug_assertions,
+    test,
+    feature = "test-support"
+))]
+use crate::MouseMoveEvent;
 #[cfg(any(not(target_family = "wasm"), test, feature = "test-support"))]
 use crate::PlatformInput;
 use crate::{AnimationFramePolicy, RequestFrameOptions};
+#[cfg(any(feature = "inspector", debug_assertions))]
+use crate::{AnyElement, Inspector};
 use crate::{
-    AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AvailableSpace, Background, Bounds, Capslock, Context, CursorStyle,
-    Decorations, DispatchTree, DisplayId, DragIconPolicy, DragOrigin, DragPhase,
-    DragSourceWindowPolicy, Edges, Effect, EffectShader, EffectUniforms, Entity, EntityId,
-    EventEmitter, Global, GlobalElementId, GpuSpecs, IsZero, LayoutId, Modifiers, MouseMoveEvent,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformWindow, Point, Priority, PromptButton,
-    PromptLevel, Render, ResizeEdge, ScaledPixels, Scene, Size, Style, SubscriberSet, Subscription,
-    SystemDragOptions, SystemWindowTab, SystemWindowTabController, TaffyLayoutEngine, Task,
-    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
-    WindowParams, WindowTextSystem, point, prelude::*, profiler, px, size,
+    AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset, AsyncWindowContext,
+    AvailableSpace, Background, Bounds, Capslock, Context, CursorStyle, Decorations, DispatchTree,
+    DisplayId, DragIconPolicy, DragOrigin, DragPhase, DragSourceWindowPolicy, Edges, Effect,
+    EffectShader, EffectUniforms, Entity, EntityId, EventEmitter, Global, GlobalElementId,
+    GpuSpecs, IsZero, LayoutId, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformWindow,
+    Point, Priority, PromptButton, PromptLevel, Render, ResizeEdge, ScaledPixels, Scene, Size,
+    Style, SubscriberSet, Subscription, SystemDragOptions, SystemWindowTab,
+    SystemWindowTabController, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle,
+    TextStyleRefinement, ThermalState, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem, point,
+    prelude::*, profiler, px, size,
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::{MouseButton, MouseUpEvent};

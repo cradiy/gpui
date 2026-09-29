@@ -1,10 +1,12 @@
 use crate::prelude::*;
+#[cfg(any(feature = "inspector", debug_assertions))]
+use crate::window::HitboxId;
 #[cfg(feature = "input-latency-histogram")]
 use crate::window::InputLatencySnapshot;
 use crate::window::{
     AnyMouseListener, ArenaClearNeeded, ContentMask, CursorStyleRequest, DrawPhase,
     ElementArenaScope, ElementId, ElementStateBox, FocusId, HitTest, Hitbox, HitboxBehavior,
-    HitboxId, TooltipBounds, TooltipRequest, Window, WindowControlArea, WindowFocusEvent,
+    TooltipBounds, TooltipRequest, Window, WindowControlArea, WindowFocusEvent,
 };
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, CursorStyle, DispatchNodeId, DispatchTree, DragOrigin,
@@ -21,6 +23,7 @@ use std::any::TypeId;
 use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::ops::Range;
+#[cfg(any(feature = "inspector", debug_assertions))]
 use std::rc::Rc;
 use std::{cmp, mem};
 

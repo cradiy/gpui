@@ -36,7 +36,8 @@ Scroll deltas, button state and modifiers are unchanged.
 Use `window.raw_mouse_position()` for displayed window coordinates, such as when
 positioning an independent cursor-following lens.
 
-Layout, keyboard focus and deferred overlays are not deformed.
+Layout and keyboard focus are not deformed. Deferred overlays can map their anchors
+without scaling their content, as described below.
 IME and accessibility geometry follow affine scopes as described below; nonlinear
 effects retain untransformed geometry. Mapped child-view caches are invalidated when their coordinate
 scope changes. Backends without subtree-effect support retain ordinary rendering
@@ -111,7 +112,38 @@ including text runs with character positions; authored node transforms are prese
 
 GPUI's fallback accessibility click uses the resulting displayed bounds, and automation
 snapshots report those bounds in logical window pixels. Nonlinear scopes retain their
-original accessibility geometry. Layout and deferred overlay placement are unchanged.
+original accessibility geometry.
+
+## Deferred overlay anchors
+
+Use `anchored().map_anchor(true)` inside `deferred` to attach an unscaled popup to
+an affine source position:
+
+```rust
+use gpui::{anchored, deferred, div, point, prelude::*, px};
+
+let popup = deferred(
+    anchored()
+        .position(point(px(120.), px(80.)))
+        .map_anchor(true)
+        .offset(point(px(0.), px(6.)))
+        .child(div().w(px(200.)).h(px(120.))),
+);
+```
+
+The originating scope is captured when drawing is deferred. Window or local anchor
+coordinates are resolved in that scope and then mapped to displayed window coordinates.
+The offset remains a logical-pixel gap. Window-edge fitting runs after mapping, using
+the popup's normal size. Painting, pointer hits, text input and accessibility inside
+the popup use its final window coordinates.
+
+Nested deferred wrappers preserve the source scope until an anchored element consumes
+it. Submenus inside the positioned popup use window coordinates, so the source transform
+is not applied twice. Cached views track the deferred anchor scope as well as input scopes.
+
+Anchor mapping is disabled by default. Outside deferred drawing, or for a callback-based
+scope with no forward map, it retains ordinary positioning. Mapping an anchor does not
+transform the popup's contents or move overlays that do not opt in.
 
 ## Example
 

@@ -245,6 +245,7 @@ fn run_pointer_mapping_probe(transform: crate::PointerTransform) {
 
 mod affine_a11y;
 mod affine_cache;
+mod affine_deferred;
 mod affine_ime;
 
 struct RootView {

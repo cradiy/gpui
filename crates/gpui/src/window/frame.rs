@@ -37,6 +37,7 @@ pub(crate) struct DeferredDraw {
     pub(super) rem_size: Pixels,
     pub(super) element: Option<AnyElement>,
     pub(super) absolute_offset: Point<Pixels>,
+    pub(super) anchor_mapping: crate::PointerMapping,
     pub(super) prepaint_range: Range<PrepaintStateIndex>,
     pub(super) paint_range: Range<PaintIndex>,
 }
@@ -641,27 +642,21 @@ impl Window {
     ) {
         assert_eq!(self.element_id_stack.len(), 0);
 
-        let mut completed_draws: Vec<_> =
-            self.next_frame.deferred_draws.drain(..completed).collect();
-
         // Process deferred draws in multiple rounds to support nesting.
-        // Each round processes all current deferred draws, which may produce new ones.
+        // Keep entries in place: cached prepaint ranges store absolute queue indices.
+        // Each round processes existing entries; newly appended entries run next round.
+        let mut start = completed;
         let mut depth = 0;
-        loop {
+        while start < self.next_frame.deferred_draws.len() {
             // Limit maximum nesting depth to prevent infinite loops.
             assert!(depth < 10, "Exceeded maximum (10) deferred depth");
             depth += 1;
-            let deferred_count = self.next_frame.deferred_draws.len();
-            if deferred_count == 0 {
-                break;
-            }
-
-            // Sort by priority for this round
-            let traversal_order = self.deferred_draw_traversal_order();
-            let mut deferred_draws = mem::take(&mut self.next_frame.deferred_draws);
+            let end = self.next_frame.deferred_draws.len();
+            let mut traversal_order = (start..end).collect::<SmallVec<[_; 8]>>();
+            traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
-                let deferred_draw = &mut deferred_draws[deferred_draw_ix];
+                let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                 self.element_id_stack
                     .clone_from(&deferred_draw.element_id_stack);
                 self.text_style_stack
@@ -669,35 +664,37 @@ impl Window {
                 self.next_frame
                     .dispatch_tree
                     .set_active_node(deferred_draw.parent_node);
-
+                let mut element = deferred_draw.element.take();
+                let current_view = deferred_draw.current_view;
+                let rem_size = deferred_draw.rem_size;
+                let absolute_offset = deferred_draw.absolute_offset;
+                let reused_range = deferred_draw.prepaint_range.clone();
+                let anchor_mapping = deferred_draw.anchor_mapping.clone();
                 let prepaint_start = self.prepaint_index();
-                if let Some(element) = deferred_draw.element.as_mut() {
-                    self.with_rendered_view(deferred_draw.current_view, |window| {
-                        window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                            window.with_absolute_element_offset(
-                                deferred_draw.absolute_offset,
-                                |window| {
-                                    element.prepaint(window, cx);
-                                },
-                            );
+                let previous_anchor_mapping =
+                    mem::replace(&mut self.deferred_anchor_mapping, anchor_mapping);
+                if let Some(element) = element.as_mut() {
+                    self.with_rendered_view(current_view, |window| {
+                        window.with_rem_size(Some(rem_size), |window| {
+                            window.with_absolute_element_offset(absolute_offset, |window| {
+                                element.prepaint(window, cx);
+                            });
                         });
                     })
                 } else {
-                    self.reuse_prepaint(deferred_draw.prepaint_range.clone());
+                    self.reuse_prepaint(reused_range);
                 }
                 let prepaint_end = self.prepaint_index();
+                let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
+                deferred_draw.element = element;
                 deferred_draw.prepaint_range = prepaint_start..prepaint_end;
+                self.deferred_anchor_mapping = previous_anchor_mapping;
             }
 
-            // Save completed draws and continue with newly added ones
-            completed_draws.append(&mut deferred_draws);
-
+            start = end;
             self.element_id_stack.clear();
             self.text_style_stack.clear();
         }
-
-        // Restore all completed draws
-        self.next_frame.deferred_draws = completed_draws;
     }
 
     pub(in crate::window) fn paint_deferred_draws(&mut self, cx: &mut App) {
@@ -720,6 +717,10 @@ impl Window {
                 .set_active_node(deferred_draw.parent_node);
 
             let paint_start = self.paint_index();
+            let previous_anchor_mapping = mem::replace(
+                &mut self.deferred_anchor_mapping,
+                deferred_draw.anchor_mapping.clone(),
+            );
             let content_mask = deferred_draw.content_mask;
             if let Some(element) = deferred_draw.element.as_mut() {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
@@ -734,6 +735,7 @@ impl Window {
             }
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
+            self.deferred_anchor_mapping = previous_anchor_mapping;
         }
         self.next_frame.deferred_draws = deferred_draws;
         self.element_id_stack.clear();
@@ -811,6 +813,7 @@ impl Window {
                     priority: deferred_draw.priority,
                     element: None,
                     absolute_offset: deferred_draw.absolute_offset,
+                    anchor_mapping: deferred_draw.anchor_mapping.clone(),
                     prepaint_range: deferred_draw.prepaint_range.clone(),
                     paint_range: deferred_draw.paint_range.clone(),
                 }),
@@ -886,6 +889,8 @@ impl Window {
     /// Defers the drawing of the given element, scheduling it to be painted on top of the currently-drawn tree
     /// at a later time. The `priority` parameter determines the drawing order relative to other deferred elements,
     /// with higher values being drawn on top.
+    /// The source coordinate scope is retained for [`crate::Anchored::map_anchor`].
+    /// Deferred content itself draws and receives input in window coordinates.
     ///
     /// When `content_mask` is provided, the deferred element will be clipped to that region during
     /// both prepaint and paint. When `None`, no additional clipping is applied.
@@ -910,9 +915,25 @@ impl Window {
             priority,
             element: Some(element),
             absolute_offset,
+            anchor_mapping: if self.pointer_mapping.is_identity() {
+                self.deferred_anchor_mapping.clone()
+            } else {
+                self.pointer_mapping.clone()
+            },
             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
             paint_range: PaintIndex::default()..PaintIndex::default(),
         });
+    }
+
+    pub(crate) fn with_deferred_anchor_mapping<R>(
+        &mut self,
+        mapping: crate::PointerMapping,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = mem::replace(&mut self.deferred_anchor_mapping, mapping);
+        let result = f(self);
+        self.deferred_anchor_mapping = previous;
+        result
     }
 
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects

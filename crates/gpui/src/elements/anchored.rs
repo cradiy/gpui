@@ -20,6 +20,7 @@ pub struct Anchored {
     anchor_position: Option<Point<Pixels>>,
     position_mode: AnchoredPositionMode,
     offset: Option<Point<Pixels>>,
+    map_anchor: bool,
 }
 
 /// anchored gives you an element that will avoid overflowing the window bounds.
@@ -32,10 +33,21 @@ pub fn anchored() -> Anchored {
         anchor_position: None,
         position_mode: AnchoredPositionMode::Window,
         offset: None,
+        map_anchor: false,
     }
 }
 
 impl Anchored {
+    /// Maps this deferred overlay's anchor from its originating affine scope to the window.
+    /// The children retain their normal size; `offset` remains a logical-pixel gap.
+    /// Position mode is resolved before mapping, and window-edge fitting happens afterward.
+    /// Use inside [`crate::deferred`]. Outside deferred drawing, or when the originating
+    /// scope has no forward map, the anchor is unchanged. Disabled by default.
+    pub fn map_anchor(mut self, enabled: bool) -> Self {
+        self.map_anchor = enabled;
+        self
+    }
+
     /// Sets which corner of the anchored element should be anchored to the current position.
     pub fn anchor(mut self, anchor: Anchor) -> Self {
         self.anchor = anchor;
@@ -139,13 +151,29 @@ impl Element for Anchored {
             .reduce(|acc, bounds| acc.union(&bounds))
             .unwrap();
 
-        let (origin, mut desired) = self.position_mode.get_position_and_bounds(
+        let (mut origin, mut desired) = self.position_mode.get_position_and_bounds(
             self.anchor_position,
             self.anchor,
             children_bounds.size,
             bounds,
             self.offset,
         );
+
+        if self.map_anchor && !window.deferred_anchor_mapping.is_identity() {
+            let source = match self.position_mode {
+                AnchoredPositionMode::Window => self.anchor_position.unwrap_or(bounds.origin),
+                AnchoredPositionMode::Local => {
+                    bounds.origin + self.anchor_position.unwrap_or_default()
+                }
+            };
+            if let Some(displayed) = window.deferred_anchor_mapping.source_to_display(source)
+                && f32::from(displayed.x).is_finite()
+                && f32::from(displayed.y).is_finite()
+            {
+                origin = displayed + self.offset.unwrap_or_default();
+                desired = Bounds::from_anchor_and_size(self.anchor, origin, children_bounds.size);
+            }
+        }
 
         let limits = Bounds {
             origin: Point::default(),
@@ -207,10 +235,12 @@ impl Element for Anchored {
         let offset = desired.origin - bounds.origin;
         let offset = point(offset.x.round(), offset.y.round());
 
-        window.with_element_offset(offset, |window| {
-            for child in &mut self.children {
-                child.prepaint(window, cx);
-            }
+        window.with_deferred_anchor_mapping(Default::default(), |window| {
+            window.with_element_offset(offset, |window| {
+                for child in &mut self.children {
+                    child.prepaint(window, cx);
+                }
+            })
         })
     }
 
@@ -224,9 +254,11 @@ impl Element for Anchored {
         window: &mut Window,
         cx: &mut App,
     ) {
-        for child in &mut self.children {
-            child.paint(window, cx);
-        }
+        window.with_deferred_anchor_mapping(Default::default(), |window| {
+            for child in &mut self.children {
+                child.paint(window, cx);
+            }
+        });
     }
 }
 

@@ -1948,7 +1948,7 @@ impl PlatformWindow for WaylandWindow {
                 id: id.clone(),
                 name: display.name.clone(),
                 scale_factor: state.scale,
-                bounds: display.bounds.to_pixels(state.scale),
+                bounds: display.logical_bounds(),
             }) as Rc<dyn PlatformDisplay>
         })
     }
@@ -2575,6 +2575,7 @@ mod tests {
     fn output_selection_refreshes_properties_even_when_scale_decreases() {
         let id = ObjectId::null();
         let mut output = Output {
+            logical_bounds: None,
             name: Some("eDP-1".into()),
             scale: 2,
             bounds: Bounds::new(
@@ -2605,6 +2606,7 @@ mod tests {
         outputs.insert(id.clone(), None);
         assert!(select_primary_output(&outputs, None).is_none());
         let output = Output {
+            logical_bounds: None,
             name: Some("DP-1".into()),
             scale: 1,
             bounds: Bounds::new(

@@ -63,6 +63,7 @@ use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
 use wayland_protocols::xdg::system_bell::v1::client::xdg_system_bell_v1;
+use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1};
 use wayland_protocols::{
     wp::cursor_shape::v1::client::{wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1},
     xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
@@ -150,6 +151,7 @@ pub struct Globals {
     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
+    pub xdg_output_manager: Option<zxdg_output_manager_v1::ZxdgOutputManagerV1>,
     pub executor: ForegroundExecutor,
 }
 
@@ -192,6 +194,7 @@ impl Globals {
             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
+            xdg_output_manager: globals.bind(&qh, 1..=3, ()).ok(),
             executor,
             qh,
         }
@@ -206,6 +209,10 @@ pub struct InProgressOutput {
     size: Option<Size<DevicePixels>>,
     subpixel: Option<wl_output::Subpixel>,
     transform: Option<wl_output::Transform>,
+    xdg_version: Option<u32>,
+    logical_position: Option<Point<i32>>,
+    logical_size: Option<Size<i32>>,
+    logical_bounds: Option<Bounds<i32>>,
 }
 
 impl InProgressOutput {
@@ -240,13 +247,48 @@ impl InProgressOutput {
             } if flags.contains(wl_output::Mode::Current) && width > 0 && height > 0 => {
                 self.size = Some(size(DevicePixels(width), DevicePixels(height)));
             }
-            wl_output::Event::Done => return self.complete(),
+            wl_output::Event::Done => {
+                if self.xdg_version.is_some_and(|version| version >= 3) {
+                    self.commit_logical_bounds();
+                }
+                return self.complete();
+            }
             _ => {}
         }
         None
     }
 
+    fn apply_xdg(&mut self, event: zxdg_output_v1::Event) -> Option<Output> {
+        match event {
+            zxdg_output_v1::Event::LogicalPosition { x, y } => {
+                self.logical_position = Some(point(x, y));
+            }
+            zxdg_output_v1::Event::LogicalSize { width, height } if width > 0 && height > 0 => {
+                self.logical_size = Some(size(width, height));
+            }
+            zxdg_output_v1::Event::Name { name } if self.name.is_none() => {
+                self.name = Some(name);
+            }
+            zxdg_output_v1::Event::Done if self.xdg_version.is_some_and(|version| version < 3) => {
+                self.commit_logical_bounds();
+                return self.complete();
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn commit_logical_bounds(&mut self) {
+        if let Some((origin, size)) = self.logical_position.zip(self.logical_size) {
+            self.logical_bounds = Some(Bounds::new(origin, size));
+        }
+    }
+
     fn complete(&self) -> Option<Output> {
+        // Do not expose integer-scale estimates while the initial xdg batch is pending.
+        if self.xdg_version.is_some() && self.logical_bounds.is_none() {
+            return None;
+        }
         if let Some((position, mut size)) = self.position.zip(self.size) {
             if matches!(
                 self.transform,
@@ -264,6 +306,7 @@ impl InProgressOutput {
                 name: self.name.clone(),
                 scale,
                 bounds: Bounds::new(position, size),
+                logical_bounds: self.logical_bounds,
                 subpixel: self.subpixel,
             })
         } else {
@@ -277,7 +320,36 @@ pub struct Output {
     pub name: Option<String>,
     pub scale: i32,
     pub bounds: Bounds<DevicePixels>,
+    pub logical_bounds: Option<Bounds<i32>>,
     pub subpixel: Option<wl_output::Subpixel>,
+}
+
+impl Output {
+    pub fn logical_bounds(&self) -> Bounds<Pixels> {
+        if let Some(bounds) = self.logical_bounds {
+            return Bounds::new(
+                point(px(bounds.origin.x as f32), px(bounds.origin.y as f32)),
+                size(px(bounds.size.width as f32), px(bounds.size.height as f32)),
+            );
+        }
+        // wl_output.geometry is already in compositor space. Only the mode size
+        // is in device pixels and needs conversion when xdg-output is unavailable.
+        Bounds::new(
+            point(
+                px(self.bounds.origin.x.0 as f32),
+                px(self.bounds.origin.y.0 as f32),
+            ),
+            self.bounds.size.to_pixels(self.scale as f32),
+        )
+    }
+
+    pub fn display_scale_factor(&self) -> f32 {
+        // xdg-output has no explicit fractional scale; this is an estimate from
+        // the rounded logical size. A window's preferred scale stays authoritative.
+        self.logical_bounds.map_or(self.scale as f32, |bounds| {
+            self.bounds.size.width.0 as f32 / bounds.size.width as f32
+        })
+    }
 }
 
 pub(crate) struct WaylandClientState {
@@ -307,6 +379,7 @@ pub(crate) struct WaylandClientState {
     outputs: HashMap<ObjectId, Output>,
     in_progress_outputs: HashMap<ObjectId, InProgressOutput>,
     wl_outputs: HashMap<ObjectId, wl_output::WlOutput>,
+    xdg_outputs: HashMap<ObjectId, zxdg_output_v1::ZxdgOutputV1>,
     output_globals: HashMap<u32, ObjectId>,
     keyboard_layout: LinuxKeyboardLayout,
     keymap_state: Option<xkb::State>,
@@ -480,6 +553,20 @@ impl WaylandClientState {
 pub struct WaylandClientStatePtr(Weak<RefCell<WaylandClientState>>);
 
 impl WaylandClientStatePtr {
+    fn publish_output(&self, id: &ObjectId, output: Output) {
+        let client = self.get_client();
+        let mut state = client.borrow_mut();
+        if state.outputs.get(id) == Some(&output) {
+            return;
+        }
+        state.outputs.insert(id.clone(), output.clone());
+        let windows = state.windows.values().cloned().collect::<Vec<_>>();
+        drop(state);
+        for window in windows {
+            window.update_output(id, &output);
+        }
+    }
+
     pub(super) fn output_for_display(&self, display_id: DisplayId) -> Option<wl_output::WlOutput> {
         self.get_client().borrow().output_for_display(display_id)
     }
@@ -979,6 +1066,12 @@ impl Drop for WaylandClient {
         }
         let mut state = self.0.borrow_mut();
         state.windows.clear();
+        for (_, output) in state.xdg_outputs.drain() {
+            output.destroy();
+        }
+        if let Some(manager) = &state.globals.xdg_output_manager {
+            manager.destroy();
+        }
 
         if let Some(wl_pointer) = &state.wl_pointer {
             wl_pointer.release();
@@ -1139,6 +1232,16 @@ impl WaylandClient {
             seat.clone(),
         );
 
+        #[allow(clippy::mutable_key_type)]
+        let mut xdg_outputs = HashMap::default();
+        if let Some(manager) = &globals.xdg_output_manager {
+            for (id, output) in &wl_outputs {
+                let xdg_output = manager.get_xdg_output(output, &qh, id.clone());
+                in_progress_outputs.get_mut(id).unwrap().xdg_version = Some(xdg_output.version());
+                xdg_outputs.insert(id.clone(), xdg_output);
+            }
+        }
+
         let data_device = globals
             .data_device_manager
             .as_ref()
@@ -1221,6 +1324,7 @@ impl WaylandClient {
             outputs: HashMap::default(),
             in_progress_outputs,
             wl_outputs,
+            xdg_outputs,
             output_globals,
             windows: HashMap::default(),
             common,
@@ -1303,8 +1407,8 @@ impl LinuxClient for WaylandClient {
                 Rc::new(WaylandDisplay {
                     id: id.clone(),
                     name: output.name.clone(),
-                    scale_factor: output.scale as f32,
-                    bounds: output.bounds.to_pixels(output.scale as f32),
+                    scale_factor: output.display_scale_factor(),
+                    bounds: output.logical_bounds(),
                 }) as Rc<dyn PlatformDisplay>
             })
             .collect()
@@ -1320,8 +1424,8 @@ impl LinuxClient for WaylandClient {
                     Rc::new(WaylandDisplay {
                         id: object_id.clone(),
                         name: output.name.clone(),
-                        scale_factor: output.scale as f32,
-                        bounds: output.bounds.to_pixels(output.scale as f32),
+                        scale_factor: output.display_scale_factor(),
+                        bounds: output.logical_bounds(),
                     }) as Rc<dyn PlatformDisplay>
                 })
             })
@@ -1691,9 +1795,13 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                         (),
                     );
 
-                    state
-                        .in_progress_outputs
-                        .insert(output.id(), InProgressOutput::default());
+                    let mut pending = InProgressOutput::default();
+                    if let Some(manager) = &state.globals.xdg_output_manager {
+                        let xdg_output = manager.get_xdg_output(&output, qh, output.id());
+                        pending.xdg_version = Some(xdg_output.version());
+                        state.xdg_outputs.insert(output.id(), xdg_output);
+                    }
+                    state.in_progress_outputs.insert(output.id(), pending);
                     state.output_globals.insert(name, output.id());
                     state.wl_outputs.insert(output.id(), output);
                 }
@@ -1705,6 +1813,9 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                 };
                 state.in_progress_outputs.remove(&id);
                 state.outputs.remove(&id);
+                if let Some(output) = state.xdg_outputs.remove(&id) {
+                    output.destroy();
+                }
                 if let Some(output) = state.wl_outputs.remove(&id)
                     && output.version() >= wl_output::REQ_RELEASE_SINCE
                 {
@@ -1724,6 +1835,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
 
 delegate_noop!(WaylandClientStatePtr: ignore xdg_activation_v1::XdgActivationV1);
 delegate_noop!(WaylandClientStatePtr: ignore xdg_system_bell_v1::XdgSystemBellV1);
+delegate_noop!(WaylandClientStatePtr: ignore zxdg_output_manager_v1::ZxdgOutputManagerV1);
 delegate_noop!(WaylandClientStatePtr: ignore wl_compositor::WlCompositor);
 delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
 delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
@@ -1813,15 +1925,30 @@ impl Dispatch<wl_output::WlOutput, ()> for WaylandClientStatePtr {
         let Some(complete) = in_progress_output.apply(event) else {
             return;
         };
-        if state.outputs.get(&output.id()) == Some(&complete) {
-            return;
-        }
-        state.outputs.insert(output.id(), complete.clone());
-        let windows = state.windows.values().cloned().collect::<Vec<_>>();
         drop(state);
-        for window in windows {
-            window.update_output(&output.id(), &complete);
-        }
+        this.publish_output(&output.id(), complete);
+    }
+}
+
+impl Dispatch<zxdg_output_v1::ZxdgOutputV1, ObjectId> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _: &zxdg_output_v1::ZxdgOutputV1,
+        event: zxdg_output_v1::Event,
+        output_id: &ObjectId,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+        let Some(pending) = state.in_progress_outputs.get_mut(output_id) else {
+            return;
+        };
+        let Some(complete) = pending.apply_xdg(event) else {
+            return;
+        };
+        drop(state);
+        this.publish_output(output_id, complete);
     }
 }
 
@@ -3445,6 +3572,106 @@ mod tests {
             height,
             refresh: 60000,
         }
+    }
+
+    fn fractional_output(version: Option<u32>) -> InProgressOutput {
+        let mut pending = InProgressOutput {
+            xdg_version: version,
+            ..Default::default()
+        };
+        pending.apply(output_geometry(1707, 0, wl_output::Transform::Normal));
+        pending.apply(output_mode(wl_output::Mode::Current, 3840, 2160));
+        pending.apply(wl_output::Event::Scale { factor: 2 });
+        pending
+    }
+
+    #[test]
+    fn fractional_output_bounds_are_committed_at_wl_done() {
+        let mut pending = fractional_output(Some(3));
+        assert!(pending.apply(wl_output::Event::Done).is_none());
+        pending.apply_xdg(zxdg_output_v1::Event::LogicalPosition { x: 1707, y: -120 });
+        pending.apply_xdg(zxdg_output_v1::Event::LogicalSize {
+            width: 2560,
+            height: 1440,
+        });
+        assert!(pending.apply_xdg(zxdg_output_v1::Event::Done).is_none());
+        assert!(pending.complete().is_none());
+        let first = pending.apply(wl_output::Event::Done).unwrap();
+        assert_eq!(
+            first.logical_bounds(),
+            Bounds::new(point(px(1707.), px(-120.)), size(px(2560.), px(1440.)))
+        );
+        assert_eq!(first.display_scale_factor(), 1.5);
+        assert_eq!(first.scale, 2, "surface buffer scale remains integer");
+
+        // A scale/layout update need not repeat the physical mode or name.
+        pending.apply_xdg(zxdg_output_v1::Event::LogicalPosition { x: -3072, y: 0 });
+        pending.apply_xdg(zxdg_output_v1::Event::LogicalSize {
+            width: 3072,
+            height: 1728,
+        });
+        assert_eq!(pending.complete().unwrap(), first);
+        let next = pending.apply(wl_output::Event::Done).unwrap();
+        assert_eq!(
+            next.logical_bounds(),
+            Bounds::new(point(px(-3072.), px(0.)), size(px(3072.), px(1728.)))
+        );
+        assert_eq!(next.display_scale_factor(), 1.25);
+        assert_ne!(first, next);
+    }
+
+    #[test]
+    fn legacy_xdg_output_waits_for_its_own_done() {
+        for version in [1, 2] {
+            let mut pending = fractional_output(Some(version));
+            pending.apply_xdg(zxdg_output_v1::Event::LogicalPosition { x: 1707, y: 0 });
+            pending.apply_xdg(zxdg_output_v1::Event::LogicalSize {
+                width: 2560,
+                height: 1440,
+            });
+            assert!(pending.apply(wl_output::Event::Done).is_none());
+            let first = pending.apply_xdg(zxdg_output_v1::Event::Done).unwrap();
+            assert_eq!(first.logical_bounds().size, size(px(2560.), px(1440.)));
+
+            pending.apply_xdg(zxdg_output_v1::Event::LogicalPosition { x: -2560, y: 0 });
+            assert_eq!(pending.apply(wl_output::Event::Done).unwrap(), first);
+            let moved = pending.apply_xdg(zxdg_output_v1::Event::Done).unwrap();
+            assert_eq!(moved.logical_bounds().origin, point(px(-2560.), px(0.)));
+            assert_eq!(moved.logical_bounds().size, first.logical_bounds().size);
+        }
+    }
+
+    #[test]
+    fn rotated_output_uses_logical_size_without_rotating_it_again() {
+        let mut pending = fractional_output(Some(3));
+        pending.apply(output_geometry(-1440, 0, wl_output::Transform::_90));
+        pending.apply_xdg(zxdg_output_v1::Event::LogicalPosition { x: -1440, y: 0 });
+        pending.apply_xdg(zxdg_output_v1::Event::LogicalSize {
+            width: 1440,
+            height: 2560,
+        });
+        let output = pending.apply(wl_output::Event::Done).unwrap();
+        assert_eq!(
+            output.bounds.size,
+            size(DevicePixels(2160), DevicePixels(3840))
+        );
+        assert_eq!(
+            output.logical_bounds(),
+            Bounds::new(point(px(-1440.), px(0.)), size(px(1440.), px(2560.)))
+        );
+        assert_eq!(output.display_scale_factor(), 1.5);
+    }
+
+    #[test]
+    fn wl_output_fallback_does_not_scale_global_position() {
+        let mut pending = fractional_output(None);
+        pending.apply(output_geometry(-1920, 120, wl_output::Transform::Normal));
+        let output = pending.apply(wl_output::Event::Done).unwrap();
+        assert_eq!(
+            output.logical_bounds(),
+            Bounds::new(point(px(-1920.), px(120.)), size(px(1920.), px(1080.)))
+        );
+        assert_eq!(output.display_scale_factor(), 2.);
     }
 
     #[test]

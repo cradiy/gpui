@@ -59,6 +59,44 @@ paint to scope hitbox insertion and event registration.
 
 ## Affine coordinate scopes
 
+### Transform groups
+
+`transform_group(content, matrix)` applies one affine matrix to both captured pixels
+and interaction geometry. The matrix uses logical pixels relative to the content's
+top-left layout corner. Input handlers, accessibility nodes and mapped popup anchors
+inherit the same coordinate scope, including for nested groups.
+
+```rust
+use gpui::{TransformationMatrix, div, prelude::*, px};
+use gpui_effects::transform_group;
+
+let viewport = transform_group(
+    div().w(px(600.)).h(px(400.)).child("Content"),
+    TransformationMatrix {
+        rotation_scale: [[1.5, 0.0], [0.0, 1.5]],
+        translation: [40.0, 20.0],
+    },
+);
+```
+
+Scale and rotation use the top-left origin. Compose translations around another pivot
+when needed. Matrices must be finite and invertible; invalid matrices panic at construction.
+Layout size, scroll deltas and keyboard focus order remain unchanged. Both source pixels
+and the displayed result are limited to the group's rectangular viewport. A group cannot
+reveal uncaptured content outside that source region. Put a background on the parent to
+fill space exposed by translation or rotation.
+
+The group captures at the current window density. Large magnification can soften text;
+it does not select a higher raster density. Equal coordinate scopes reuse cached views,
+while changing the matrix invalidates them. Platforms without subtree effects draw and
+hit-test the original content. Deferred popups stay unscaled and can use
+`anchored().map_anchor(true)` to follow the group.
+
+Run `cargo run -p gpui_effects --example transform_group` to exercise scaling, rotation,
+panning, clicks and popup anchors.
+
+### Custom drawing scopes
+
 Use `PointerTransform::affine` for a numeric source-to-display matrix. Coordinates
 and translation are logical window pixels, independent of display density:
 

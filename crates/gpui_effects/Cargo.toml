@@ -19,6 +19,7 @@ uic_macros.workspace = true
 workspace = true
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support", "automation"] }
 gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 naga.workspace = true
 pollster.workspace = true

@@ -35,6 +35,7 @@ pub(crate) struct TestWindowState {
     moved_callback: Option<Box<dyn FnMut()>>,
     input_handler: Option<PlatformInputHandler>,
     pub(crate) ime_position: Option<Bounds<Pixels>>,
+    pub(crate) subtree_effects_supported: bool,
     is_fullscreen: bool,
 }
 
@@ -88,6 +89,7 @@ impl TestWindow {
             moved_callback: None,
             input_handler: None,
             ime_position: None,
+            subtree_effects_supported: false,
             is_fullscreen: false,
         })))
     }
@@ -305,6 +307,10 @@ impl PlatformWindow for TestWindow {
 
     fn sprite_atlas(&self) -> sync::Arc<dyn crate::PlatformAtlas> {
         self.0.lock().sprite_atlas.clone()
+    }
+
+    fn supports_subtree_effects(&self) -> bool {
+        self.0.lock().subtree_effects_supported
     }
 
     #[cfg(any(test, feature = "test-support"))]

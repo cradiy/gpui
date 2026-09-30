@@ -57,6 +57,7 @@ mod subtree_effect;
 mod text_blur;
 mod texture;
 mod timed_text;
+mod transform_group;
 mod transition;
 
 pub use backdrop::*;
@@ -128,4 +129,5 @@ pub use subtree_effect::{SubtreeEffect, subtree_effect, subtree_effect_chain};
 pub use text_blur::TextBlur;
 pub use texture::{depth_fog_shader, hdr_tone_map_shader};
 pub use timed_text::{TimedText, TimedTextEmphasis, TimedTextRevealWave, TimedTextUnit};
+pub use transform_group::{TransformGroup, transform_group, transform_group_shader};
 pub use transition::{SubtreeTransition, TransitionKind, subtree_transition, transition_shader};

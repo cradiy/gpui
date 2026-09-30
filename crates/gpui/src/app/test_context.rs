@@ -381,6 +381,12 @@ impl TestAppContext {
         self.test_window(window_handle).simulate_resize(size);
     }
 
+    /// Configures subtree capture support for subsequent draws in a test window.
+    /// This enables scene and interaction tests without requiring a GPU renderer.
+    pub fn set_subtree_effects_supported(&self, window: AnyWindowHandle, supported: bool) {
+        self.test_window(window).0.lock().subtree_effects_supported = supported;
+    }
+
     /// Returns true if there's an alert dialog open.
     pub fn expect_restart(&self) -> oneshot::Receiver<Option<PathBuf>> {
         let (tx, rx) = futures::channel::oneshot::channel();

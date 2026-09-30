@@ -17,7 +17,7 @@ pipeline and `gpui_effects` providing higher-level components and presets.
 - [Depth parallax](docs/depth_parallax.md): pointer-driven image depth with paired depth maps.
 - [Water ripple](docs/ripple.md): local radial refraction for text and images.
 - [Local lens](docs/lens.md): smooth local magnification and compression.
-- [Interaction mapping](docs/interaction_mapping.md): pointer hit testing and dragging in deformed content.
+- [Interaction mapping](docs/interaction_mapping.md): affine transform groups, pointer hit testing and dragging in deformed content.
 - [Displacement maps](docs/displacement_map.md): external RG maps, local masks and texture-driven distortion.
 - [GPU particles](docs/particles.md): light points, streaks, interactive forces and alpha-mask emission.
 - [Particle transition](docs/particle_transition.md): reversible scattering and gathering of text and images.

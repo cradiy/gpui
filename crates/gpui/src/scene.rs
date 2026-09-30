@@ -1166,6 +1166,36 @@ impl TransformationMatrix {
         }
         Point::new(output[0].into(), output[1].into())
     }
+
+    /// Returns the inverse of a finite, nonsingular matrix, if representable in `f32`.
+    pub fn inverse(&self) -> Option<Self> {
+        let [[a, b], [c, d]] = self.rotation_scale.map(|row| row.map(f64::from));
+        let [x, y] = self.translation.map(f64::from);
+        if ![a, b, c, d, x, y].iter().all(|value| value.is_finite()) {
+            return None;
+        }
+        let determinant = a * d - b * c;
+        if determinant == 0. {
+            return None;
+        }
+        let inverse = Self {
+            rotation_scale: [
+                [(d / determinant) as f32, (-b / determinant) as f32],
+                [(-c / determinant) as f32, (a / determinant) as f32],
+            ],
+            translation: [
+                ((b * y - d * x) / determinant) as f32,
+                ((c * x - a * y) / determinant) as f32,
+            ],
+        };
+        inverse
+            .rotation_scale
+            .iter()
+            .flatten()
+            .chain(inverse.translation.iter())
+            .all(|value| value.is_finite())
+            .then_some(inverse)
+    }
 }
 
 impl Default for TransformationMatrix {

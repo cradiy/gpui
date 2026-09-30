@@ -55,6 +55,36 @@ built-in stages from their options when changing their geometry.
 Custom elements can use `window.with_pointer_transform` around both prepaint and
 paint to scope hitbox insertion and event registration.
 
+## Affine coordinate scopes
+
+Use `PointerTransform::affine` for a numeric source-to-display matrix. Coordinates
+and translation are logical window pixels, independent of display density:
+
+```rust
+use gpui::{PointerTransform, TransformationMatrix};
+
+let transform = PointerTransform::affine(TransformationMatrix {
+    rotation_scale: [[2., 0.], [0., 2.]],
+    translation: [80., 0.],
+}).expect("finite, invertible transform");
+```
+
+Pass the transform to `window.with_pointer_transform` in both prepaint and paint,
+or attach it to a custom stage with matching shader geometry. It supplies input
+mapping only; it does not move or scale the painted content. Capture bounds still
+clip both displayed and sampled positions.
+
+Equal affine matrices and chains reuse cached child views when bounds, clipping,
+display density and the parent scope also match. Changing any of these values
+invalidates the cache. Arbitrary callbacks invalidate cached views in each new
+scope, including shared callbacks that may capture mutable state.
+
+`source_to_display` on `PointerTransform` or a hitbox's `PointerMapping` returns
+the forward-mapped position for affine chains without clipping. It returns `None`
+when a scope has no known forward map. IME and accessibility integration remain
+the caller's responsibility. Nonfinite or singular matrices are rejected by the
+affine constructor.
+
 ## Example
 
 ```sh

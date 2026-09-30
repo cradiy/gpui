@@ -93,14 +93,13 @@ fn animation_frame_policy_never_delays_recovery_or_event_driven_draws() {
 
 struct PointerProbe {
     events: Rc<std::cell::RefCell<Vec<(&'static str, crate::Point<Pixels>, crate::Point<Pixels>)>>>,
+    transform: crate::PointerTransform,
 }
 
 impl Render for PointerProbe {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let events = self.events.clone();
-        let transform = crate::PointerTransform::new(|position, _, _| {
-            position - crate::point(px(100.), px(0.))
-        });
+        let transform = self.transform.clone();
         let prepaint_transform = transform.clone();
         canvas(
             move |bounds, window, _| {
@@ -171,12 +170,29 @@ impl Render for PointerProbe {
 
 #[test]
 fn pointer_mapping_routes_hits_and_captured_events_in_source_coordinates() {
+    run_pointer_mapping_probe(crate::PointerTransform::new(|position, _, _| {
+        position - crate::point(px(100.), px(0.))
+    }));
+}
+
+#[test]
+fn pointer_mapping_affine_routes_hits_and_captured_events_in_source_coordinates() {
+    run_pointer_mapping_probe(
+        crate::PointerTransform::affine(crate::TransformationMatrix {
+            translation: [100., 0.],
+            ..crate::TransformationMatrix::unit()
+        })
+        .unwrap(),
+    );
+}
+
+fn run_pointer_mapping_probe(transform: crate::PointerTransform) {
     use crate::{MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, point};
     let mut cx = TestAppContext::single();
     let events = Rc::new(std::cell::RefCell::new(Vec::new()));
     let window = cx.add_window({
         let events = events.clone();
-        move |_, _| PointerProbe { events }
+        move |_, _| PointerProbe { events, transform }
     });
     cx.update_window(window.into(), |_, window, cx| {
         window.draw(cx).clear();
@@ -226,6 +242,8 @@ fn pointer_mapping_routes_hits_and_captured_events_in_source_coordinates() {
     assert!(events.contains(&("up", point(px(350.), px(30.)), point(px(350.), px(30.)))));
     assert!(events.contains(&("raw", point(px(450.), px(30.)), point(px(450.), px(30.)))));
 }
+
+mod affine_cache;
 
 struct RootView {
     explicit_size: bool,

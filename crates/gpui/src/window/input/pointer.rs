@@ -136,6 +136,9 @@ impl Window {
 
     /// Scopes hitbox insertion and mouse listeners to a displayed-to-source mapping.
     /// Use the same transform around both prepaint and paint. Layout and drawing are unchanged.
+    /// Affine transforms with identical matrices, bounds, clipping and density allow cached
+    /// views to be reused across scopes. Callback-based transforms invalidate cached views
+    /// in a new scope because captured state may have changed.
     pub fn with_pointer_transform<R>(
         &mut self,
         bounds: Bounds<Pixels>,

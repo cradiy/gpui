@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, App, Bounds, EffectShader, EffectUniforms, Element, GlobalElementId,
+    AnyElement, App, Bounds, EffectShader, EffectUniforms, Element, ElementId, GlobalElementId,
     InspectorElementId, InteractiveElement, IntoElement, LayoutId, ParentElement, Pixels,
     PointerTransform, StyleRefinement, Styled, TransformationMatrix, Window,
 };
@@ -26,6 +26,7 @@ pub fn transform_group<E: IntoElement>(
         element: Some(element.into_element()),
         matrix,
         raster_scale: 1.,
+        auto_raster_id: None,
     }
 }
 
@@ -34,12 +35,13 @@ pub fn transform_group<E: IntoElement>(
 /// Pointer events, IME geometry, accessibility and opt-in popup anchors share
 /// the drawing matrix. Scroll deltas and keyboard focus order remain unchanged.
 /// Captures default to the window's raster density. Use [`Self::raster_scale`] for
-/// sharper magnified text. Zoom does not automatically change capture density or
-/// reveal content outside the source capture.
+/// sharper magnified text, or [`Self::auto_raster_scale`] to follow zoom in tiers.
+/// Zoom cannot reveal content outside the source capture.
 pub struct TransformGroup<E: Element> {
     element: Option<E>,
     matrix: TransformationMatrix,
     raster_scale: f32,
+    auto_raster_id: Option<ElementId>,
 }
 
 impl<E: Element> TransformGroup<E> {
@@ -56,8 +58,42 @@ impl<E: Element> TransformGroup<E> {
             "raster scale must be finite and at least one"
         );
         self.raster_scale = scale;
+        self.auto_raster_id = None;
         self
     }
+
+    /// Selects 1×, 2× or 4× source density from this group's maximum affine stretch.
+    /// Translation and rotation alone do not increase density. Use a stable, unique
+    /// element ID to retain the tier between frames. A tier drops only below 80% of
+    /// the next lower tier, avoiding repeated allocation around a zoom boundary.
+    /// The usual viewport and nested capture limits still apply. This replaces a
+    /// fixed [`Self::raster_scale`]; calling that method afterward disables auto mode.
+    pub fn auto_raster_scale(mut self, id: impl Into<ElementId>) -> Self {
+        self.auto_raster_id = Some(id.into());
+        self
+    }
+}
+
+struct AutoRasterState(f32);
+
+fn auto_raster_scale(matrix: TransformationMatrix, previous: Option<f32>) -> f32 {
+    // The largest singular value includes shear and nonuniform scaling. f64
+    // keeps the calculation finite even for large but valid f32 matrices.
+    let [[a, b], [c, d]] = matrix.rotation_scale.map(|row| row.map(f64::from));
+    let x = a * a + c * c;
+    let y = b * b + d * d;
+    let cross = a * b + c * d;
+    let stretch = ((x + y + (x - y).hypot(2. * cross)) * 0.5).sqrt();
+    // Ignore float rounding from pure rotations at exact tier boundaries.
+    let stretch = stretch / (1. + 8. * f64::from(f32::EPSILON));
+    let mut tier = previous.unwrap_or(1.);
+    while tier < 4. && stretch > f64::from(tier) {
+        tier *= 2.;
+    }
+    while tier > 1. && stretch < f64::from(tier * 0.5) * 0.8 {
+        tier *= 0.5;
+    }
+    tier
 }
 
 fn window_matrix(matrix: TransformationMatrix, bounds: Bounds<Pixels>) -> TransformationMatrix {
@@ -97,7 +133,7 @@ impl<E: Element> Element for TransformGroup<E> {
     type PrepaintState = ();
 
     fn id(&self) -> Option<gpui::ElementId> {
-        None
+        self.auto_raster_id.clone()
     }
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
@@ -122,7 +158,7 @@ impl<E: Element> Element for TransformGroup<E> {
     }
     fn prepaint(
         &mut self,
-        _: Option<&GlobalElementId>,
+        global_id: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         child: &mut Self::RequestLayoutState,
@@ -132,6 +168,15 @@ impl<E: Element> Element for TransformGroup<E> {
         if !window.supports_subtree_effects() {
             child.prepaint(window, cx);
             return;
+        }
+        if self.auto_raster_id.is_some() {
+            self.raster_scale = window.with_element_state(
+                global_id.expect("auto raster density requires an element ID"),
+                |state: Option<AutoRasterState>, _| {
+                    let scale = auto_raster_scale(self.matrix, state.map(|state| state.0));
+                    (scale, AutoRasterState(scale))
+                },
+            );
         }
         let transform = PointerTransform::affine(window_matrix(self.matrix, bounds))
             .expect("resolved transform must be invertible");
@@ -209,6 +254,9 @@ impl<E: Element + ParentElement> ParentElement for TransformGroup<E> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod auto_raster_tests;
 
 #[cfg(test)]
 mod gpu_tests;

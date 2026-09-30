@@ -10,7 +10,7 @@ struct Demo {
     zoom: f32,
     pan: f32,
     angle: f32,
-    raster_scale: f32,
+    raster_scale: Option<f32>,
     content: Entity<Content>,
 }
 
@@ -107,6 +107,17 @@ impl Render for Demo {
             .clone()
             .cached(div().w(px(600.)).h(px(360.)).style().clone())
             .cache_across_transforms();
+        let viewport = transform_group(content, matrix);
+        let viewport = match self.raster_scale {
+            Some(scale) => viewport.raster_scale(scale),
+            None => viewport.auto_raster_scale("canvas-raster"),
+        };
+        let raster_label = match self.raster_scale {
+            None => "Raster: Auto",
+            Some(1.) => "Raster: 1×",
+            Some(2.) => "Raster: 2×",
+            _ => "Raster: 4×",
+        };
         div()
             .size_full()
             .p_8()
@@ -123,7 +134,7 @@ impl Render for Demo {
             )
             .child(
                 div().flex().gap_2().children(
-                    ["−", "+", "←", "→", "Rotate", "Raster 1× / 2×", "Reset"]
+                    ["−", "+", "←", "→", "Rotate", raster_label, "Reset"]
                         .into_iter()
                         .enumerate()
                         .map(|(index, label)| {
@@ -143,13 +154,18 @@ impl Render for Demo {
                                         3 => this.pan += 20.,
                                         4 => this.angle += std::f32::consts::PI / 12.,
                                         5 => {
-                                            this.raster_scale =
-                                                if this.raster_scale == 1. { 2. } else { 1. }
+                                            this.raster_scale = match this.raster_scale {
+                                                None => Some(1.),
+                                                Some(1.) => Some(2.),
+                                                Some(2.) => Some(4.),
+                                                _ => None,
+                                            }
                                         }
                                         _ => {
                                             this.zoom = 1.;
                                             this.pan = 0.;
                                             this.angle = 0.;
+                                            this.raster_scale = None;
                                         }
                                     }
                                     cx.notify();
@@ -159,17 +175,19 @@ impl Render for Demo {
             )
             .child(
                 div()
+                    .id("transform-viewport")
+                    .automation_id("transform-viewport")
                     .w(px(600.))
                     .h(px(360.))
                     .bg(rgb(0x1c2733))
-                    .child(transform_group(content, matrix).raster_scale(self.raster_scale)),
+                    .child(viewport),
             )
             .child(div().text_sm().text_color(rgb(0x99aabc)).child(format!(
-                "Zoom {:.0}% · Pan {:.0}px · Rotation {:.0}° · Requested raster {:.0}×",
+                "Zoom {:.0}% · Pan {:.0}px · Rotation {:.0}° · {}",
                 self.zoom * 100.,
                 self.pan,
                 self.angle.to_degrees(),
-                self.raster_scale
+                raster_label
             )))
     }
 }
@@ -190,7 +208,7 @@ fn main() {
                     zoom: 1.,
                     pan: 0.,
                     angle: 0.,
-                    raster_scale: 2.,
+                    raster_scale: None,
                     content: cx.new(|_| Content {
                         clicks: [0; 3],
                         popup: None,
@@ -201,4 +219,77 @@ fn main() {
         .unwrap();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{MouseDownEvent, MouseUpEvent, PlatformInput, TestAppContext};
+
+    #[gpui::test]
+    fn zoomed_cards_accept_clicks_across_press_redraw(cx: &mut TestAppContext) {
+        for size in [size(px(780.), px(660.)), size(px(513.5), px(585.))] {
+            let handle = cx.open_window(size, |_, cx| Demo {
+                zoom: 1.,
+                pan: 0.,
+                angle: 0.,
+                raster_scale: None,
+                content: cx.new(|_| Content {
+                    clicks: [0; 3],
+                    popup: None,
+                }),
+            });
+            cx.set_subtree_effects_supported(handle.into(), true);
+            let viewport = cx
+                .update_window(handle.into(), |_, window, cx| {
+                    window.set_automation_enabled(true).unwrap();
+                    window.draw(cx).clear();
+                    let snapshot = window.automation_snapshot().unwrap();
+                    let bounds = snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.automation_id.as_deref() == Some("transform-viewport"))
+                        .unwrap()
+                        .bounds
+                        .unwrap();
+                    window.set_automation_enabled(false).unwrap();
+                    bounds
+                })
+                .unwrap();
+            for (index, zoom) in [1., 1.2, 1.44, 1.728, 2.0736, 3.].into_iter().enumerate() {
+                handle
+                    .update(cx, |root, _, cx| {
+                        root.zoom = zoom;
+                        cx.notify();
+                    })
+                    .unwrap();
+                cx.update_window(handle.into(), |_, window, cx| {
+                    window.draw(cx).clear();
+                    let position = viewport.origin + point(px(300.), px(180.));
+                    window.dispatch_event(
+                        PlatformInput::MouseDown(MouseDownEvent {
+                            position,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    window.draw(cx).clear();
+                    window.dispatch_event(
+                        PlatformInput::MouseUp(MouseUpEvent {
+                            position,
+                            ..Default::default()
+                        }),
+                        cx,
+                    );
+                    window.draw(cx).clear();
+                })
+                .unwrap();
+                handle
+                    .update(cx, |root, _, cx| {
+                        assert_eq!(root.content.read(cx).clicks[1], index + 1, "zoom {zoom}");
+                    })
+                    .unwrap();
+            }
+        }
+    }
 }

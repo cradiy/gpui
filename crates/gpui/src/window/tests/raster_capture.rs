@@ -112,6 +112,8 @@ fn raster_capture_limits_allocation_at_large_window_sizes(cx: &mut TestAppContex
     // Test windows use a 2x display density. The last case already exceeds the
     // cap at native density and must not be supersampled or downsampled.
     for viewport in [
+        // 1027 × 1170 physical pixels exercises a rounded allocation limit.
+        size(px(513.5), px(585.)),
         size(px(1301.), px(733.)),
         size(px(3000.), px(300.)),
         size(px(5000.), px(3000.)),

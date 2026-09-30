@@ -89,9 +89,18 @@ fill space exposed by translation or rotation.
 The group captures at the current window density by default. Use
 `transform_group(content, matrix).raster_scale(2.0)` for sharper magnified text and
 vector content. This changes source rasterization without changing logical layout,
-pointer coordinates or IME geometry. Zoom does not automatically choose a density;
-magnification beyond the chosen density can still soften text. Keep the multiplier
-fixed while zooming to reuse capture textures.
+pointer coordinates or IME geometry. Fixed density does not follow zoom;
+magnification beyond the chosen density can still soften text.
+
+Use `transform_group(content, matrix).auto_raster_scale("canvas-raster")` to select
+1×, 2× or 4× from this group's maximum affine stretch, including nonuniform scaling
+and shear. The ID must be stable and unique within its element scope. Pure translation
+or rotation does not raise density. Increasing zoom promotes the tier when it exceeds
+the current density; decreasing zoom drops a tier below 80% of the next lower density
+(4× → 2× below 160%, 2× → 1× below 80%). This keeps small changes around a threshold
+from repeatedly reallocating captures. Nested groups choose their own multipliers;
+parent raster density and capture limits still apply. Calling `raster_scale` afterward
+returns to fixed density. The default remains fixed 1×.
 
 On WGPU, ordinary UI and nested transform groups allocate captures at the group's
 bounds, clipped to the window, at both normal and increased density. Backdrop blur,

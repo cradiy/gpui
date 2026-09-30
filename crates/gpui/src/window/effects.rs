@@ -30,13 +30,25 @@ impl Window {
             .min(8192. / width.max(height))
             .min((16_777_216. / (width * height)).sqrt())
             .max(1.);
-        // Leave enough room for allocation rounding at fractional display densities.
-        while scale > 1.
-            && ((width * scale).ceil() > 8192.
-                || (height * scale).ceil() > 8192.
-                || (width * scale).ceil() * (height * scale).ceil() > 16_777_216.)
-        {
-            scale = (((width * scale).ceil() - 1.) / width).max(1.);
+        // Float division can round a one-pixel decrement back to the same scale.
+        // Search the ordered positive-f32 bit range so every iteration progresses.
+        let fits = |scale: f32| {
+            let width = f64::from((width * scale).ceil());
+            let height = f64::from((height * scale).ceil());
+            width <= 8192. && height <= 8192. && width * height <= 16_777_216.
+        };
+        if scale > 1. && !fits(scale) {
+            let mut lower = 1_f32.to_bits();
+            let mut upper = scale.to_bits();
+            while upper - lower > 1 {
+                let middle = lower + (upper - lower) / 2;
+                if fits(f32::from_bits(middle)) {
+                    lower = middle;
+                } else {
+                    upper = middle;
+                }
+            }
+            scale = f32::from_bits(lower);
         }
         if !self.supports_subtree_effects() {
             return f(self);

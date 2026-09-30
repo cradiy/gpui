@@ -383,6 +383,13 @@ impl<E: Element> Drawable<E> {
                 }
 
                 let node_id = window.next_frame.dispatch_tree.push_node();
+                #[cfg(any(feature = "inspector", debug_assertions))]
+                let inspector_node = window.push_inspector_element(
+                    inspector_id.as_ref(),
+                    std::any::type_name::<E>(),
+                    bounds,
+                    layout_id,
+                );
                 let mut prepaint = self.element.prepaint(
                     global_id.as_ref(),
                     inspector_id.as_ref(),
@@ -391,6 +398,10 @@ impl<E: Element> Drawable<E> {
                     window,
                     cx,
                 );
+                #[cfg(any(feature = "inspector", debug_assertions))]
+                if inspector_node {
+                    window.next_frame.inspector_stack.pop();
+                }
                 window.next_frame.dispatch_tree.pop_node();
 
                 if pushed_a11y_node {

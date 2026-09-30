@@ -1,0 +1,16 @@
+[package]
+name = "gpui_inspector"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+gpui = { workspace = true, features = ["inspector"] }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }

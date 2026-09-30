@@ -284,7 +284,7 @@ impl Element for &'static str {
         _window: &mut Window,
         _cx: &mut App,
     ) {
-        text_layout.prepaint(bounds, self)
+        text_layout.prepaint(bounds, self, _window)
     }
 
     fn paint(
@@ -358,7 +358,7 @@ impl Element for SharedString {
         _window: &mut Window,
         _cx: &mut App,
     ) {
-        text_layout.prepaint(bounds, self.as_ref())
+        text_layout.prepaint(bounds, self.as_ref(), _window)
     }
 
     fn paint(
@@ -584,7 +584,7 @@ impl Element for StyledText {
         _window: &mut Window,
         _cx: &mut App,
     ) {
-        self.layout.prepaint(bounds, &self.text)
+        self.layout.prepaint(bounds, &self.text, _window)
     }
 
     fn paint(
@@ -758,13 +758,15 @@ impl TextLayout {
         })
     }
 
-    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str) {
+    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str, _window: &mut Window) {
         let mut element_state = self.0.borrow_mut();
         let element_state = element_state
             .as_mut()
             .with_context(|| format!("measurement has not been performed on {text}"))
             .unwrap();
         element_state.bounds = Some(bounds);
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        _window.inspect_text(text, bounds, element_state.line_height);
     }
 
     fn paint(&self, text: &str, window: &mut Window, cx: &mut App) {

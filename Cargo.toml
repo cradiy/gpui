@@ -4,6 +4,7 @@ members = [
   "crates/collections",
   "crates/gpui",
   "crates/gpui_automation",
+  "crates/gpui_inspector",
   "crates/gpui_media",
   "crates/gpui_media_core",
   "crates/gpui_media_backend",
@@ -47,6 +48,7 @@ edition = "2024"
 collections = { path = "crates/collections", version = "0.1.0" }
 derive_refineable = { path = "crates/refineable/derive_refineable" }
 gpui = { path = "crates/gpui", default-features = false }
+gpui_inspector = { path = "crates/gpui_inspector" }
 gpui_automation = { path = "crates/gpui_automation" }
 gpui_media = { path = "crates/gpui_media" }
 gpui_media_core = { path = "crates/gpui_media_core" }

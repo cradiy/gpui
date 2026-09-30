@@ -2896,6 +2896,109 @@ impl Window {
         }
     }
 
+    pub(super) fn inspector_width(&self) -> Pixels {
+        crate::rems(30.0)
+            .to_pixels(self.rem_size())
+            .min(self.viewport_size.width * 0.6)
+    }
+
+    /// Returns whether the inspector panel is open.
+    pub fn is_inspector_open(&self) -> bool {
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        {
+            return self.inspector.is_some();
+        }
+        #[cfg(not(any(feature = "inspector", debug_assertions)))]
+        {
+            false
+        }
+    }
+
+    /// Returns the open inspector for programmatic selection or picking control.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn inspector(&self) -> Option<Entity<Inspector>> {
+        self.inspector.clone()
+    }
+
+    /// Elements laid out in the current frame during drawing, or the last presented frame.
+    /// Only populated while the inspector is open. Elements without a source location are
+    /// omitted; their children attach to the nearest inspectable ancestor.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn inspector_elements(&self) -> &[crate::InspectorElement] {
+        if self.invalidator.not_drawing() {
+            &self.rendered_frame.inspector_elements
+        } else {
+            &self.next_frame.inspector_elements
+        }
+    }
+
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) fn push_inspector_element(
+        &mut self,
+        id: Option<&crate::InspectorElementId>,
+        type_name: &'static str,
+        bounds: Bounds<Pixels>,
+        layout_id: LayoutId,
+    ) -> bool {
+        if !self.is_inspector_open() {
+            return false;
+        }
+        let Some(id) = id else {
+            return false;
+        };
+        let element = crate::InspectorElement {
+            id: id.clone(),
+            parent: self.next_frame.inspector_stack.last().copied(),
+            type_name,
+            bounds,
+            content_mask: self.content_mask(),
+            style: None,
+            box_model: self
+                .layout_engine
+                .as_ref()
+                .unwrap()
+                .inspector_box_model(layout_id, self.scale_factor()),
+            text_style: self.text_style(),
+            rem_size: self.rem_size(),
+            text: Vec::new(),
+        };
+        self.next_frame
+            .inspector_stack
+            .push(self.next_frame.inspector_elements.len());
+        self.next_frame.inspector_elements.push(element);
+        true
+    }
+
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) fn inspect_style(&mut self, id: Option<&crate::InspectorElementId>, style: &Style) {
+        if let Some(index) = self.next_frame.inspector_stack.last().copied() {
+            let mut text_style = self.text_style();
+            text_style.refine(&style.text);
+            let element = &mut self.next_frame.inspector_elements[index];
+            if Some(&element.id) == id {
+                element.style = Some(style.clone());
+                element.text_style = text_style;
+            }
+        }
+    }
+
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) fn inspect_text(&mut self, text: &str, bounds: Bounds<Pixels>, line_height: Pixels) {
+        let Some(index) = self.next_frame.inspector_stack.last().copied() else {
+            return;
+        };
+        let mut chars = text.chars();
+        let preview: String = chars.by_ref().take(256).collect();
+        let text = crate::InspectorText {
+            preview: preview.into(),
+            preview_shortened: chars.next().is_some(),
+            bounds,
+            base_style: self.text_style(),
+            line_height,
+        };
+        self.next_frame.inspector_elements[index].text.push(text);
+    }
+
     /// Toggles the inspector mode on this window.
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub fn toggle_inspector(&mut self, cx: &mut App) {
@@ -2959,6 +3062,7 @@ impl Window {
     #[cfg(any(feature = "inspector", debug_assertions))]
     fn prepaint_inspector(&mut self, inspector_width: Pixels, cx: &mut App) -> Option<AnyElement> {
         if let Some(inspector) = self.inspector.take() {
+            let completed_deferred_draws = self.next_frame.deferred_draws.len();
             let mut inspector_element = AnyView::from(inspector.clone()).into_any_element();
             inspector_element.prepaint_as_root(
                 point(self.viewport_size.width - inspector_width, px(0.0)),
@@ -2966,6 +3070,9 @@ impl Window {
                 self,
                 cx,
             );
+            if self.next_frame.deferred_draws.len() > completed_deferred_draws {
+                self.prepaint_deferred_draws_since(completed_deferred_draws, cx);
+            }
             self.inspector = Some(inspector);
             Some(inspector_element)
         } else {
@@ -3004,14 +3111,27 @@ impl Window {
     fn paint_inspector_hitbox(&mut self, cx: &App) {
         if let Some(inspector) = self.inspector.as_ref() {
             let inspector = inspector.read(cx);
-            if let Some((hitbox_id, _)) = self.hovered_inspector_hitbox(inspector, &self.next_frame)
-                && let Some(hitbox) = self
-                    .next_frame
-                    .hitboxes
-                    .iter()
-                    .find(|hitbox| hitbox.id == hitbox_id)
+            if !inspector.is_highlighting() {
+                return;
+            }
+            if let Some(element) = self
+                .next_frame
+                .inspector_elements
+                .iter()
+                .find(|element| Some(&element.id) == inspector.active_element_id())
             {
-                self.paint_quad(crate::fill(hitbox.bounds, crate::rgba(0x61afef4d)));
+                let bounds = element.bounds.intersect(&element.content_mask.bounds);
+                let app_bounds = Bounds::new(
+                    Point::default(),
+                    size(
+                        self.viewport_size.width - self.inspector_width(),
+                        self.viewport_size.height,
+                    ),
+                );
+                self.paint_quad(crate::fill(
+                    bounds.intersect(&app_bounds),
+                    crate::rgba(0x61afef4d),
+                ));
             }
         }
     }

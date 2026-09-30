@@ -2754,6 +2754,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_inspector"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui_platform",
+]
+
+[[package]]
 name = "gpui_linux"
 version = "0.1.0"
 dependencies = [

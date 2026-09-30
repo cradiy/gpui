@@ -25,6 +25,59 @@ mod conditional {
     use collections::{FxHashMap, TypeIdHashMap};
     use std::any::{Any, TypeId};
 
+    /// A laid-out element in the inspected window. Parent indices refer to the same snapshot.
+    #[derive(Clone, Debug)]
+    pub struct InspectorElement {
+        /// Identity shared with picking and registered state renderers.
+        pub id: InspectorElementId,
+        /// Nearest inspectable ancestor, or `None` for a root.
+        pub parent: Option<usize>,
+        /// Rust element type.
+        pub type_name: &'static str,
+        /// Layout bounds in logical window pixels, before subtree effects.
+        pub bounds: crate::Bounds<crate::Pixels>,
+        /// Inherited clipping rectangle in logical window pixels.
+        pub content_mask: crate::ContentMask<crate::Pixels>,
+        /// Computed style for elements backed by `Interactivity`.
+        pub style: Option<crate::Style>,
+        /// Resolved layout spacing, in logical pixels.
+        pub box_model: InspectorBoxModel,
+        /// Effective inherited text style, including this element's text refinements.
+        pub text_style: crate::TextStyle,
+        /// Logical pixel size of one rem at this element.
+        pub rem_size: crate::Pixels,
+        /// Text drawn directly within this element, excluding inspectable descendants.
+        pub text: Vec<InspectorText>,
+    }
+
+    /// Spacing resolved by the layout engine, including percentages and auto margins.
+    #[derive(Clone, Debug, Default)]
+    pub struct InspectorBoxModel {
+        /// Resolved outer spacing.
+        pub margin: crate::Edges<crate::Pixels>,
+        /// Resolved border widths.
+        pub border: crate::Edges<crate::Pixels>,
+        /// Resolved inner spacing.
+        pub padding: crate::Edges<crate::Pixels>,
+        /// Space reserved for scrollbars.
+        pub scrollbar: crate::Size<crate::Pixels>,
+    }
+
+    /// A bounded preview of a text layout associated with an inspected element.
+    #[derive(Clone, Debug)]
+    pub struct InspectorText {
+        /// First 256 Unicode scalar values of the source text.
+        pub preview: crate::SharedString,
+        /// Whether the source extends beyond the preview.
+        pub preview_shortened: bool,
+        /// Layout bounds in logical window coordinates.
+        pub bounds: crate::Bounds<crate::Pixels>,
+        /// Resolved base text style. Styled spans may override individual runs.
+        pub base_style: crate::TextStyle,
+        /// Computed line height in logical pixels.
+        pub line_height: crate::Pixels,
+    }
+
     /// `GlobalElementId` qualified by source location of element construction.
     #[derive(Debug, Eq, PartialEq, Hash)]
     pub struct InspectorElementPath {
@@ -60,6 +113,7 @@ mod conditional {
     pub struct Inspector {
         active_element: Option<InspectedElement>,
         pub(crate) pick_depth: Option<f32>,
+        highlight: bool,
     }
 
     struct InspectedElement {
@@ -81,12 +135,15 @@ mod conditional {
             Self {
                 active_element: None,
                 pick_depth: Some(0.0),
+                highlight: true,
             }
         }
 
-        pub(crate) fn select(&mut self, id: InspectorElementId, window: &mut Window) {
+        /// Selects an element and leaves picking mode.
+        pub fn select(&mut self, id: InspectorElementId, window: &mut Window) {
             self.set_active_element_id(id, window);
             self.pick_depth = None;
+            window.refresh();
         }
 
         pub(crate) fn hover(&mut self, id: InspectorElementId, window: &mut Window) {
@@ -145,6 +202,23 @@ mod conditional {
         /// Starts element picking mode, allowing the user to select elements by clicking.
         pub fn start_picking(&mut self) {
             self.pick_depth = Some(0.0);
+            self.highlight = true;
+        }
+
+        /// Whether the selected element's overlay is visible.
+        pub fn is_highlighting(&self) -> bool {
+            self.highlight
+        }
+
+        /// Shows or hides the selection overlay without changing the selection.
+        pub fn set_highlighting(&mut self, highlight: bool, window: &mut Window) {
+            self.highlight = highlight;
+            window.refresh();
+        }
+
+        /// Leaves picking mode without changing the selected element.
+        pub fn stop_picking(&mut self) {
+            self.pick_depth = None;
         }
 
         /// Returns whether the inspector is currently in picking mode.

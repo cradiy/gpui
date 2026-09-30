@@ -50,7 +50,9 @@ impl Window {
         }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
-        if self.is_inspector_picking(cx) {
+        if self.is_inspector_picking(cx)
+            && self.raw_mouse_position().x < self.viewport_size.width - self.inspector_width()
+        {
             self.handle_inspector_mouse_event(event, cx);
             // When inspector is picking, all other mouse handling is skipped.
             return;

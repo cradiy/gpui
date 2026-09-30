@@ -347,6 +347,26 @@ impl TaffyLayoutEngine {
     // snapped independently, but the raw content-box origin can carry a
     // 1dp residual into descendants.
 
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) fn inspector_box_model(&self, id: LayoutId, scale: f32) -> crate::InspectorBoxModel {
+        let layout = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE);
+        let edges = |rect: TaffyRect<f32>| Edges {
+            top: Pixels(rect.top / scale),
+            right: Pixels(rect.right / scale),
+            bottom: Pixels(rect.bottom / scale),
+            left: Pixels(rect.left / scale),
+        };
+        crate::InspectorBoxModel {
+            margin: edges(layout.margin),
+            border: edges(layout.border),
+            padding: edges(layout.padding),
+            scrollbar: size(
+                Pixels(layout.scrollbar_size.width / scale),
+                Pixels(layout.scrollbar_size.height / scale),
+            ),
+        }
+    }
+
     pub fn layout_bounds(&mut self, id: LayoutId, scale_factor: f32) -> Bounds<Pixels> {
         if let Some(layout) = self.absolute_layout_bounds.get(&id).cloned() {
             return layout;

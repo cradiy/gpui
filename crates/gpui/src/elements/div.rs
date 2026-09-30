@@ -1754,6 +1754,9 @@ pub struct DivInspectorState {
     pub content_size: Size<Pixels>,
 }
 
+#[cfg(any(feature = "inspector", debug_assertions))]
+struct InspectorStyleSource(Box<StyleRefinement>);
+
 impl Styled for Div {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.interactivity.base_style
@@ -2095,21 +2098,42 @@ impl Interactivity {
         f: impl FnOnce(Style, &mut Window, &mut App) -> LayoutId,
     ) -> LayoutId {
         #[cfg(any(feature = "inspector", debug_assertions))]
-        window.with_inspector_state(
-            _inspector_id,
-            cx,
-            |inspector_state: &mut Option<DivInspectorState>, _window| {
-                if let Some(inspector_state) = inspector_state {
-                    self.base_style = inspector_state.base_style.clone();
-                } else {
-                    *inspector_state = Some(DivInspectorState {
-                        base_style: self.base_style.clone(),
-                        bounds: Default::default(),
-                        content_size: Default::default(),
-                    })
-                }
-            },
-        );
+        if _inspector_id.is_some()
+            && window
+                .inspector()
+                .is_some_and(|inspector| inspector.read(cx).active_element_id() == _inspector_id)
+        {
+            let previous_style = window.with_inspector_state(
+                _inspector_id,
+                cx,
+                |source: &mut Option<InspectorStyleSource>, _| {
+                    source.replace(InspectorStyleSource(self.base_style.clone()))
+                },
+            );
+            window.with_inspector_state(
+                _inspector_id,
+                cx,
+                |inspector_state: &mut Option<DivInspectorState>, _window| {
+                    if let Some(inspector_state) = inspector_state {
+                        // Keep observing application styles unless a registered editor has changed them.
+                        if previous_style
+                            .as_ref()
+                            .is_some_and(|previous| previous.0 != inspector_state.base_style)
+                        {
+                            self.base_style = inspector_state.base_style.clone();
+                        } else {
+                            inspector_state.base_style = self.base_style.clone();
+                        }
+                    } else {
+                        *inspector_state = Some(DivInspectorState {
+                            base_style: self.base_style.clone(),
+                            bounds: Default::default(),
+                            content_size: Default::default(),
+                        })
+                    }
+                },
+            );
+        }
 
         window.with_optional_element_state::<InteractiveElementState, _>(
             global_id,
@@ -2222,6 +2246,9 @@ impl Interactivity {
                 let mut element_state =
                     element_state.map(|element_state| element_state.unwrap_or_default());
                 let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
+
+                #[cfg(any(feature = "inspector", debug_assertions))]
+                window.inspect_style(_inspector_id, &style);
 
                 if let Some(element_state) = element_state.as_mut() {
                     if let Some(clicked_state) = element_state.clicked_state.as_ref() {

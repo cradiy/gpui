@@ -11,7 +11,7 @@ use crate::window::{
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, CursorStyle, DispatchNodeId, DispatchTree, DragOrigin,
     DragPhase, EntityId, GlobalElementId, LineLayoutIndex, Pixels, PlatformInputHandler, Point,
-    Scene, TabStopMap, TextStyleRefinement, point, profiler, px, rems,
+    Scene, TabStopMap, TextStyleRefinement, point, profiler, px,
 };
 use anyhow::Result;
 use collections::FxHashMap;
@@ -61,11 +61,19 @@ pub(crate) struct Frame {
     pub(crate) next_inspector_instance_ids: FxHashMap<Rc<crate::InspectorElementPath>, usize>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) inspector_elements: Vec<crate::InspectorElement>,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) inspector_stack: Vec<usize>,
     pub(crate) tab_stops: TabStopMap,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct PrepaintStateIndex {
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    inspector_elements_index: usize,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    inspector_text_index: Option<(usize, usize)>,
     pub(super) hitboxes_index: usize,
     pub(super) tooltips_index: usize,
     pub(super) deferred_draws_index: usize,
@@ -110,6 +118,10 @@ impl Frame {
 
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector_hitboxes: FxHashMap::default(),
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            inspector_elements: Vec::new(),
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            inspector_stack: Vec::new(),
             tab_stops: TabStopMap::default(),
         }
     }
@@ -138,6 +150,8 @@ impl Frame {
         {
             self.next_inspector_instance_ids.clear();
             self.inspector_hitboxes.clear();
+            self.inspector_elements.clear();
+            self.inspector_stack.clear();
         }
     }
 
@@ -390,7 +404,7 @@ impl Window {
             self.automation.click_handlers.clear();
         }
 
-        let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
+        let _inspector_width: Pixels = self.inspector_width();
         let root_size = {
             #[cfg(any(feature = "inspector", debug_assertions))]
             {
@@ -420,10 +434,10 @@ impl Window {
             .stretch_auto_size_to_fill(root_layout_id, root_size, scale_factor);
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
 
+        self.prepaint_deferred_draws(cx);
+
         #[cfg(any(feature = "inspector", debug_assertions))]
         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
-
-        self.prepaint_deferred_draws(cx);
 
         let mut prompt_element = None;
         let mut active_drag_element = None;
@@ -610,9 +624,18 @@ impl Window {
     }
 
     pub(in crate::window) fn prepaint_deferred_draws(&mut self, cx: &mut App) {
+        self.prepaint_deferred_draws_since(0, cx);
+    }
+
+    pub(in crate::window) fn prepaint_deferred_draws_since(
+        &mut self,
+        completed: usize,
+        cx: &mut App,
+    ) {
         assert_eq!(self.element_id_stack.len(), 0);
 
-        let mut completed_draws = Vec::new();
+        let mut completed_draws: Vec<_> =
+            self.next_frame.deferred_draws.drain(..completed).collect();
 
         // Process deferred draws in multiple rounds to support nesting.
         // Each round processes all current deferred draws, which may produce new ones.
@@ -718,6 +741,15 @@ impl Window {
 
     pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
         PrepaintStateIndex {
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            inspector_elements_index: self.next_frame.inspector_elements.len(),
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            inspector_text_index: self.next_frame.inspector_stack.last().map(|index| {
+                (
+                    *index,
+                    self.next_frame.inspector_elements[*index].text.len(),
+                )
+            }),
             hitboxes_index: self.next_frame.hitboxes.len(),
             tooltips_index: self.next_frame.tooltip_requests.len(),
             deferred_draws_index: self.next_frame.deferred_draws.len(),
@@ -886,6 +918,16 @@ impl Window {
         let index = self.prepaint_index();
         let result = f(self);
         if result.is_err() {
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            if let Some((node, length)) = index.inspector_text_index {
+                self.next_frame.inspector_elements[node]
+                    .text
+                    .truncate(length);
+            }
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            self.next_frame
+                .inspector_elements
+                .truncate(index.inspector_elements_index);
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
             self.next_frame
                 .tooltip_requests

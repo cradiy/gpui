@@ -29,11 +29,11 @@ focus state the same when comparing runs. `--no-cache` disables node view caches
 renderer source-capture caching still operates. Use `--release` before `--` to
 measure an optimized build. The automated path does not simulate clicks or IME.
 
-Accessibility integration stays enabled by default. When the desktop activates
-the accessibility tree, GPUI rebuilds cached views to populate that tree; the
-panel and logs identify those misses. For an isolated cache comparison, use
-`--no-accessibility` on **both** runs. This disables accessibility only in the
-example application and is not representative of an accessible application.
+Accessibility integration stays enabled by default. Cached views retain their
+accessibility nodes and actions; activation or focus changes rebuild that data.
+The panel and logs identify those misses. `--no-accessibility` disables
+accessibility only in the example application. Use the same setting on both
+runs when comparing measurements.
 
 Check menus and popovers while zooming manually, edit text using an input method,
 and repeat clear/restore while watching retained capture storage. The source

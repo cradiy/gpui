@@ -380,8 +380,7 @@ impl<E: Element> Drawable<E> {
                             self.element.write_a11y_info(&mut node);
                             window
                                 .a11y
-                                .node_mappings
-                                .insert(node_id, window.pointer_mapping.clone());
+                                .set_node_mapping(node_id, window.pointer_mapping.clone());
                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
                         }
                     }

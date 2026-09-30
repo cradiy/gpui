@@ -275,11 +275,12 @@ impl<V: View> ViewElement<V> {
     /// must not derive it from mapped pointer positions or retain coordinate mappings.
     /// Event callbacks receive updated source positions and can use `window.mouse_position()`.
     /// Hitboxes and IME handlers follow the current matrix without rendering the view again.
+    /// Accessibility nodes and actions are retained; activation and focus changes rebuild them.
     ///
     /// Bounds, clipping, density, hover changes, notifications and refreshes still
     /// invalidate the cache.
     /// Views with deferred overlays, tooltips or nested input scopes redraw on matrix changes,
-    /// as do views inspected through the Inspector or accessibility system.
+    /// as do views inspected through the Inspector or automation system.
     /// This has no effect on views without caching enabled.
     pub fn cache_across_transforms(mut self) -> Self {
         self.cache_across_transforms = true;
@@ -304,6 +305,7 @@ struct ViewElementState {
 }
 
 struct ViewElementCacheKey {
+    a11y: (bool, Option<crate::FocusId>),
     bounds: Bounds<Pixels>,
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
@@ -403,8 +405,14 @@ impl<V: View> Element for ViewElement<V> {
                         let text_style = window.text_style();
                         let subtree_effect = window.prepainting_subtree_effect;
                         let cold = element_state.is_none();
+                        let accessibility_changed = element_state.as_ref().is_some_and(|state| {
+                            state.cache_key.a11y != window.a11y.cache_key(window.focus)
+                                || !window.a11y.cache_reuse_allowed()
+                        });
 
                         if let Some(mut element_state) = element_state
+                            && element_state.cache_key.a11y == window.a11y.cache_key(window.focus)
+                            && window.a11y.cache_reuse_allowed()
                             && element_state.cache_key.bounds == bounds
                             && element_state.cache_key.content_mask == content_mask
                             && element_state.cache_key.text_style == text_style
@@ -427,7 +435,6 @@ impl<V: View> Element for ViewElement<V> {
                                 == window.deferred_anchor_mapping
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
-                            && !window.a11y.is_active()
                         {
                             window.record_view_cache_hit();
                             let prepaint_start = window.prepaint_index();
@@ -447,7 +454,7 @@ impl<V: View> Element for ViewElement<V> {
                             return (None, element_state);
                         }
 
-                        window.record_view_cache_miss(cold, entity_id);
+                        window.record_view_cache_miss(cold, accessibility_changed, entity_id);
                         let refreshing = mem::replace(&mut window.refreshing, true);
                         let prepaint_start = window.prepaint_index();
                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
@@ -473,6 +480,7 @@ impl<V: View> Element for ViewElement<V> {
                                 prepaint_range: prepaint_start..prepaint_end,
                                 paint_range: PaintIndex::default()..PaintIndex::default(),
                                 cache_key: ViewElementCacheKey {
+                                    a11y: window.a11y.cache_key(window.focus),
                                     bounds,
                                     content_mask,
                                     text_style,

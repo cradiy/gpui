@@ -79,7 +79,7 @@ mod tests {
 pub struct ViewCacheMisses {
     /// No previous cache state exists.
     pub cold: u64,
-    /// Accessibility requires a fresh tree.
+    /// Accessibility activation, focus or automation requires a fresh tree.
     pub accessibility: u64,
     /// A full-window or ancestor refresh requires repainting.
     pub refresh: u64,
@@ -181,13 +181,18 @@ impl Window {
         }
     }
 
-    pub(crate) fn record_view_cache_miss(&mut self, cold: bool, entity: crate::EntityId) {
+    pub(crate) fn record_view_cache_miss(
+        &mut self,
+        cold: bool,
+        accessibility_changed: bool,
+        entity: crate::EntityId,
+    ) {
         if let Some(tracker) = &mut self.frame_diagnostics {
             tracker.current.view_cache.misses += 1;
             let reasons = &mut tracker.current.view_cache_misses;
             if cold {
                 reasons.cold += 1;
-            } else if self.a11y.is_active() {
+            } else if accessibility_changed {
                 reasons.accessibility += 1;
             } else if self.refreshing {
                 reasons.refresh += 1;

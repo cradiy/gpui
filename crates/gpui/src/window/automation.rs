@@ -147,10 +147,10 @@ impl Window {
             .a11y
             .action_listeners
             .get(&target)
-            .is_some_and(|listeners| listeners.iter().any(|(kind, _)| *kind == action));
+            .is_some_and(|listeners| listeners.iter().flatten().any(|(kind, _)| *kind == action));
         if registered {
             let mut listeners = self.a11y.action_listeners.remove(&target).unwrap();
-            for (kind, listener) in &mut listeners {
+            for (kind, listener) in listeners.iter_mut().flatten() {
                 if *kind == action {
                     listener(data.as_ref(), self, cx);
                 }

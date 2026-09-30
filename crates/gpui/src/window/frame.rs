@@ -71,6 +71,8 @@ pub(crate) struct Frame {
 
 #[derive(Clone, Default)]
 pub(crate) struct PrepaintStateIndex {
+    pub(super) a11y_index: usize,
+    pub(super) a11y_actions_index: usize,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector_elements_index: usize,
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -85,6 +87,7 @@ pub(crate) struct PrepaintStateIndex {
 
 #[derive(Clone, Default)]
 pub(crate) struct PaintIndex {
+    pub(super) a11y_index: usize,
     pub(super) scene_index: usize,
     pub(super) mouse_listeners_index: usize,
     pub(super) input_handlers_index: usize,
@@ -452,8 +455,8 @@ impl Window {
         self.tooltip_bounds.take();
 
         self.a11y.sync_active_flag();
+        self.a11y.begin_frame();
         if self.a11y.is_active() {
-            self.a11y.begin_frame();
             #[cfg(feature = "automation")]
             self.automation.click_handlers.clear();
         }
@@ -796,6 +799,8 @@ impl Window {
 
     pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
         PrepaintStateIndex {
+            a11y_index: self.a11y.prepaint_index(),
+            a11y_actions_index: self.a11y.paint_index(),
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector_elements_index: self.next_frame.inspector_elements.len(),
             #[cfg(any(feature = "inspector", debug_assertions))]
@@ -815,6 +820,10 @@ impl Window {
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+        self.a11y
+            .reuse_paint(range.start.a11y_actions_index..range.end.a11y_actions_index);
+        self.a11y
+            .reuse_prepaint(range.start.a11y_index..range.end.a11y_index);
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                 .iter()
@@ -877,6 +886,9 @@ impl Window {
         let previous_position = mapping.hit_position(self.mouse_position);
         let next_position = self.pointer_mapping.hit_position(self.mouse_position);
         prepaint.start.deferred_draws_index == prepaint.end.deferred_draws_index
+            && self
+                .a11y
+                .can_remap(prepaint.start.a11y_index..prepaint.end.a11y_index, mapping)
             && prepaint.start.tooltips_index == prepaint.end.tooltips_index
             && self.rendered_frame.hitboxes
                 [prepaint.start.hitboxes_index..prepaint.end.hitboxes_index]
@@ -904,6 +916,10 @@ impl Window {
     }
 
     pub(crate) fn remap_reused_prepaint(&mut self, range: &Range<PrepaintStateIndex>) {
+        self.a11y.remap_prepaint(
+            range.start.a11y_index..range.end.a11y_index,
+            &self.pointer_mapping,
+        );
         for hitbox in
             &mut self.next_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
         {
@@ -930,6 +946,7 @@ impl Window {
 
     pub(crate) fn paint_index(&self) -> PaintIndex {
         PaintIndex {
+            a11y_index: self.a11y.paint_index(),
             scene_index: self.next_frame.scene.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
@@ -941,6 +958,8 @@ impl Window {
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+        self.a11y
+            .reuse_paint(range.start.a11y_index..range.end.a11y_index);
         self.next_frame.cursor_styles.extend(
             self.rendered_frame.cursor_styles
                 [range.start.cursor_styles_index..range.end.cursor_styles_index]

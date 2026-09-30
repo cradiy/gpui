@@ -52,6 +52,10 @@
 //! node's ID changes, then, from AccessKit's point of view, it is a different
 //! node.
 //!
+//! Cached views replay their node hierarchy, focus declarations and synthetic
+//! properties during prepaint. Affine scope changes rebase recorded mappings;
+//! accessibility activation and focus changes invalidate the view cache.
+//!
 //! We derive the node ID from the [`GlobalElementId`] in
 //! [`GlobalElementId::accesskit_node_id`]. Nodes without [`GlobalElementId`]s
 //! cannot produce an AccessKit [`NodeId`], and so are not included in the
@@ -94,7 +98,8 @@
 //! - [`Interactivity::paint`], which is called by:
 //! - [`StatefulInteractiveElement::on_a11y_action`], which is a public-facing API
 //!
-//! These are cleared at the start of a frame, and re-populated during painting.
+//! Each frame retains listeners registered or reused by its rendered subtrees.
+//! Listeners belonging to removed subtrees are released at frame completion.
 //!
 //! [`NodeId`]: accesskit::NodeId
 
@@ -109,6 +114,9 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+
+mod cache;
+use cache::PrepaintEvent;
 
 /// The fixed AccessKit node ID used for the root of every window's a11y tree.
 pub(crate) const ROOT_NODE_ID: NodeId = NodeId(0);
@@ -149,7 +157,10 @@ pub(crate) struct A11y {
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
     pub(crate) node_mappings: FxHashMap<NodeId, PointerMapping>,
-    pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+    pub(crate) action_listeners: FxHashMap<NodeId, Vec<Option<(Action, A11yActionListener)>>>,
+    previous_action_listeners: FxHashMap<NodeId, Vec<Option<(Action, A11yActionListener)>>>,
+    action_order: Vec<(NodeId, usize)>,
+    previous_action_order: Vec<(NodeId, usize)>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
     window_title: Option<SharedString>,
@@ -172,6 +183,9 @@ impl A11y {
             node_bounds: FxHashMap::default(),
             node_mappings: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
+            previous_action_listeners: FxHashMap::default(),
+            action_order: Vec::new(),
+            previous_action_order: Vec::new(),
             window_title,
         }
     }
@@ -209,6 +223,9 @@ impl A11y {
     }
 
     pub(crate) fn set_focusable(&mut self, node_id: NodeId, focus_id: FocusId) {
+        self.nodes
+            .events
+            .push(PrepaintEvent::Focusable(node_id, focus_id));
         self.focus_ids.insert(node_id, focus_id);
     }
 
@@ -217,6 +234,7 @@ impl A11y {
     ///
     /// Must only be called once per frame.
     pub(crate) fn set_focus(&mut self, node_id: NodeId) {
+        self.nodes.events.push(PrepaintEvent::Focus(node_id));
         // A focused node must have been registered as focusable this frame.
         if !self.focus_ids.contains_key(&node_id) {
             if cfg!(debug_assertions) {
@@ -234,6 +252,9 @@ impl A11y {
     }
 
     pub(crate) fn set_active_descendant(&mut self, node_id: NodeId) {
+        self.nodes
+            .events
+            .push(PrepaintEvent::ActiveDescendant(node_id));
         // The active descendant must be a descendant of the focused container,
         // not the focused node itself.
         if self.nodes.node_is_focused(node_id) {
@@ -254,13 +275,22 @@ impl A11y {
         self.focus_ids.clear();
         self.node_bounds.clear();
         self.node_mappings.clear();
-        self.action_listeners.clear();
+        self.previous_action_listeners = std::mem::take(&mut self.action_listeners);
+        std::mem::swap(&mut self.action_order, &mut self.previous_action_order);
+        self.action_order.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
+        if !self.is_active() {
+            self.previous_action_listeners.clear();
+            self.previous_action_order.clear();
+            self.nodes.previous_events.clear();
+        }
     }
 
     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
     pub(crate) fn end_frame(&mut self, scale_factor: f32) -> TreeUpdate {
         let mut update = self.nodes.finalize();
+        self.previous_action_listeners.clear();
+        self.nodes.previous_events.clear();
         let indices: FxHashMap<_, _> = update
             .nodes
             .iter()
@@ -387,6 +417,9 @@ pub(crate) struct A11yNodeBuilder {
     /// pattern, which allows a focused container to act as if a descendant is
     /// focused.
     active_descendant: Option<NodeId>,
+    events: Vec<PrepaintEvent>,
+    previous_events: Vec<PrepaintEvent>,
+    event_stack: Vec<usize>,
 }
 
 impl A11yNodeBuilder {
@@ -398,6 +431,9 @@ impl A11yNodeBuilder {
             seen_ids: FxHashSet::default(),
             focus: None,
             active_descendant: None,
+            events: Vec::new(),
+            previous_events: Vec::new(),
+            event_stack: Vec::new(),
         }
     }
 
@@ -421,13 +457,19 @@ impl A11yNodeBuilder {
     ///
     /// Returns `true` if the node was successfully pushed.
     pub(crate) fn push(&mut self, id: NodeId, node: accesskit::Node) -> bool {
+        self.push_recorded(id, node, true)
+    }
+
+    fn push_recorded(&mut self, id: NodeId, node: accesskit::Node, attach: bool) -> bool {
         if !self.can_push(id) {
             return false;
         }
 
-        if let Some(parent) = self.nodes_stack.last_mut() {
+        if attach && let Some(parent) = self.nodes_stack.last_mut() {
             parent.push_child(id);
         }
+        self.event_stack.push(self.events.len());
+        self.events.push(PrepaintEvent::Push(id, None));
         self.ids_stack.push(id);
         self.nodes_stack.push(node);
         true
@@ -439,13 +481,19 @@ impl A11yNodeBuilder {
     ///
     /// Returns `true` if the node was successfully pushed.
     pub(crate) fn push_leaf(&mut self, id: NodeId, node: accesskit::Node) -> bool {
+        self.push_leaf_recorded(id, node, true)
+    }
+
+    fn push_leaf_recorded(&mut self, id: NodeId, node: accesskit::Node, attach: bool) -> bool {
         if !self.can_push(id) {
             return false;
         }
 
-        if let Some(parent) = self.nodes_stack.last_mut() {
+        if attach && let Some(parent) = self.nodes_stack.last_mut() {
             parent.push_child(id);
         }
+        self.events
+            .push(PrepaintEvent::Leaf(id, Arc::new(node.clone())));
         self.all_nodes.push((id, node));
         true
     }
@@ -460,12 +508,21 @@ impl A11yNodeBuilder {
         debug_assert!(self.ids_stack.len() > 1, "pop would remove the root node");
 
         if let (Some(id), Some(node)) = (self.ids_stack.pop(), self.nodes_stack.pop()) {
+            let event = self
+                .event_stack
+                .pop()
+                .expect("balanced accessibility subtree");
+            self.events[event] = PrepaintEvent::Push(id, Some(Arc::new(node.clone())));
+            self.events.push(PrepaintEvent::Pop);
             self.all_nodes.push((id, node));
         }
     }
 
     /// Push the root node to start a new frame.
     fn begin_frame(&mut self, window_title: Option<&SharedString>) {
+        std::mem::swap(&mut self.events, &mut self.previous_events);
+        self.events.clear();
+        self.event_stack.clear();
         self.all_nodes.clear();
         self.ids_stack.clear();
         self.nodes_stack.clear();

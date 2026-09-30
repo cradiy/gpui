@@ -2872,11 +2872,7 @@ impl Window {
         action: accesskit::Action,
         listener: impl FnMut(Option<&accesskit::ActionData>, &mut Window, &mut App) + 'static,
     ) {
-        self.a11y
-            .action_listeners
-            .entry(node_id)
-            .or_default()
-            .push((action, Box::new(listener)));
+        self.a11y.add_action(node_id, action, Box::new(listener));
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -2886,7 +2882,7 @@ impl Window {
         if let Some(mut listeners) = self.a11y.action_listeners.remove(&request.target_node) {
             let extra_data = request.data.as_ref();
             let mut matched = false;
-            for (action, listener) in &mut listeners {
+            for (action, listener) in listeners.iter_mut().flatten() {
                 if *action == request.action {
                     listener(extra_data, self, cx);
                     matched = true;

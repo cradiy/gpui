@@ -1071,8 +1071,12 @@ impl Window {
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
+        let a11y_checkpoint = self.a11y.prepaint_checkpoint();
         let result = f(self);
         if result.is_err() {
+            if let Some(checkpoint) = a11y_checkpoint {
+                self.a11y.rollback_prepaint(checkpoint);
+            }
             #[cfg(any(feature = "inspector", debug_assertions))]
             if let Some((node, length)) = index.inspector_text_index {
                 self.next_frame.inspector_elements[node]

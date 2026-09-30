@@ -20,6 +20,69 @@ struct Control {
     label: &'static str,
 }
 
+struct RetryPrepaint {
+    focus: FocusHandle,
+}
+
+impl Render for RetryPrepaint {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let focus = self.focus.clone();
+        canvas(
+            move |_, window, cx| {
+                let child = || {
+                    div()
+                        .id("row")
+                        .role(accesskit::Role::Button)
+                        .track_focus(&focus)
+                        .size_full()
+                        .into_any_element()
+                };
+                let _: Result<(), ()> = window.transact(|window| {
+                    child().prepaint_as_root(
+                        point(px(10.), px(20.)),
+                        size(px(40.), px(20.)).into(),
+                        window,
+                        cx,
+                    );
+                    Err(())
+                });
+                let mut retry = child();
+                retry.prepaint_as_root(
+                    point(px(50.), px(60.)),
+                    size(px(40.), px(20.)).into(),
+                    window,
+                    cx,
+                );
+                retry
+            },
+            |_, mut child, window, cx| child.paint(window, cx),
+        )
+        .size_full()
+    }
+}
+
+#[crate::test]
+fn a11y_prepaint_transaction_retries_focused_element(cx: &mut TestAppContext) {
+    let handle = cx.add_window(|window, cx| {
+        window.a11y = crate::window::a11y::A11y::new(Arc::new(AtomicBool::new(true)), false, None);
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        RetryPrepaint { focus }
+    });
+    cx.update_window(handle.into(), |_, window, cx| {
+        for _ in 0..3 {
+            window.draw(cx).clear();
+            assert_eq!(window.a11y.node_bounds.len(), 1);
+            let (&id, bounds) = window.a11y.node_bounds.iter().next().unwrap();
+            assert_eq!(bounds.origin, point(px(50.), px(60.)));
+            assert_eq!(bounds.size, size(px(40.), px(20.)));
+            assert_eq!(window.a11y.focus_ids.len(), 1);
+            assert!(window.a11y.focus_ids.contains_key(&id));
+        }
+    })
+    .unwrap();
+}
+
 impl Render for Control {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         self.renders.set(self.renders.get() + 1);

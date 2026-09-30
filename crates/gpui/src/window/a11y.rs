@@ -116,7 +116,7 @@ use std::sync::{
 };
 
 mod cache;
-use cache::PrepaintEvent;
+use cache::{ActionRegistration, PrepaintEvent};
 
 /// The fixed AccessKit node ID used for the root of every window's a11y tree.
 pub(crate) const ROOT_NODE_ID: NodeId = NodeId(0);
@@ -159,8 +159,8 @@ pub(crate) struct A11y {
     pub(crate) node_mappings: FxHashMap<NodeId, PointerMapping>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<Option<(Action, A11yActionListener)>>>,
     previous_action_listeners: FxHashMap<NodeId, Vec<Option<(Action, A11yActionListener)>>>,
-    action_order: Vec<(NodeId, usize)>,
-    previous_action_order: Vec<(NodeId, usize)>,
+    action_order: Vec<ActionRegistration>,
+    previous_action_order: Vec<ActionRegistration>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
     window_title: Option<SharedString>,

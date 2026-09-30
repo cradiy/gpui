@@ -1,7 +1,7 @@
 use gpui::{
-    AnchoredPositionMode, App, Bounds, Context, MouseButton, Render, TransformationMatrix, Window,
-    WindowBounds, WindowOptions, anchored, deferred, div, point, prelude::*, px, radians, rgb,
-    size,
+    AnchoredPositionMode, App, Bounds, Context, Entity, MouseButton, Render, TransformationMatrix,
+    Window, WindowBounds, WindowOptions, anchored, deferred, div, point, prelude::*, px, radians,
+    rgb, size,
 };
 use gpui_effects::transform_group;
 use gpui_platform::application;
@@ -10,18 +10,17 @@ struct Demo {
     zoom: f32,
     pan: f32,
     angle: f32,
+    content: Entity<Content>,
+}
+
+struct Content {
     clicks: [usize; 3],
     popup: Option<usize>,
 }
 
-impl Render for Demo {
+impl Render for Content {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let matrix = TransformationMatrix::unit()
-            .translate(point(px(300. + self.pan), px(180.)).scale(1.))
-            .rotate(radians(self.angle))
-            .scale(size(self.zoom, self.zoom))
-            .translate(point(px(-300.), px(-180.)).scale(1.));
-        let content = div()
+        div()
             .relative()
             .w(px(600.))
             .h(px(360.))
@@ -91,7 +90,22 @@ impl Render for Demo {
                 } else {
                     card
                 }
-            }));
+            }))
+    }
+}
+
+impl Render for Demo {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let matrix = TransformationMatrix::unit()
+            .translate(point(px(300. + self.pan), px(180.)).scale(1.))
+            .rotate(radians(self.angle))
+            .scale(size(self.zoom, self.zoom))
+            .translate(point(px(-300.), px(-180.)).scale(1.));
+        let content = self
+            .content
+            .clone()
+            .cached(div().w(px(600.)).h(px(360.)).style().clone())
+            .cache_across_transforms();
         div()
             .size_full()
             .p_8()
@@ -166,12 +180,14 @@ fn main() {
                 ..Default::default()
             },
             |_, cx| {
-                cx.new(|_| Demo {
+                cx.new(|cx| Demo {
                     zoom: 1.,
                     pan: 0.,
                     angle: 0.,
-                    clicks: [0; 3],
-                    popup: None,
+                    content: cx.new(|_| Content {
+                        clicks: [0; 3],
+                        popup: None,
+                    }),
                 })
             },
         )

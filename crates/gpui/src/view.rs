@@ -234,6 +234,7 @@ pub struct ViewElement<V: View> {
     view: Option<V>,
     entity_id: Option<EntityId>,
     cached_style: Option<StyleRefinement>,
+    cache_across_transforms: bool,
     #[cfg(debug_assertions)]
     source: &'static core::panic::Location<'static>,
 }
@@ -246,6 +247,7 @@ impl<V: View> ViewElement<V> {
         ViewElement {
             entity_id,
             cached_style: None,
+            cache_across_transforms: false,
             view: Some(view),
             #[cfg(debug_assertions)]
             source: core::panic::Location::caller(),
@@ -265,6 +267,24 @@ impl<V: View> ViewElement<V> {
         self.cached_style = Some(style);
         self
     }
+
+    /// Allows an entity-backed cached view to reuse content when its enclosing affine
+    /// matrix changes. Use after [`Entity::cached`] or [`AnyView::cached`].
+    ///
+    /// Content must be independent of the enclosing transform: render, layout and paint
+    /// must not derive it from mapped pointer positions or retain coordinate mappings.
+    /// Event callbacks receive updated source positions and can use `window.mouse_position()`.
+    /// Hitboxes and IME handlers follow the current matrix without rendering the view again.
+    ///
+    /// Bounds, clipping, density, hover changes, notifications and refreshes still
+    /// invalidate the cache.
+    /// Views with deferred overlays, tooltips or nested input scopes redraw on matrix changes,
+    /// as do views inspected through the Inspector or accessibility system.
+    /// This has no effect on views without caching enabled.
+    pub fn cache_across_transforms(mut self) -> Self {
+        self.cache_across_transforms = true;
+        self
+    }
 }
 
 impl<V: View> IntoElement for ViewElement<V> {
@@ -280,6 +300,7 @@ struct ViewElementState {
     paint_range: Range<PaintIndex>,
     cache_key: ViewElementCacheKey,
     accessed_entities: FxHashSet<EntityId>,
+    remap_input: bool,
 }
 
 struct ViewElementCacheKey {
@@ -387,7 +408,17 @@ impl<V: View> Element for ViewElement<V> {
                             && element_state.cache_key.text_style == text_style
                             && element_state.cache_key.subtree_effect == subtree_effect
                             && element_state.cache_key.scale_factor == window.scale_factor()
-                            && element_state.cache_key.pointer_mapping == window.pointer_mapping
+                            && (element_state.cache_key.pointer_mapping == window.pointer_mapping
+                                || (self.cache_across_transforms
+                                    && element_state
+                                        .cache_key
+                                        .pointer_mapping
+                                        .same_affine_viewport(&window.pointer_mapping)
+                                    && window.can_remap_cached_view(
+                                        &element_state.prepaint_range,
+                                        &element_state.paint_range,
+                                        &element_state.cache_key.pointer_mapping,
+                                    )))
                             && element_state.cache_key.deferred_anchor_mapping
                                 == window.deferred_anchor_mapping
                             && !window.dirty_views.contains(&entity_id)
@@ -400,6 +431,13 @@ impl<V: View> Element for ViewElement<V> {
                                 .extend_accessed(&element_state.accessed_entities);
                             let prepaint_end = window.prepaint_index();
                             element_state.prepaint_range = prepaint_start..prepaint_end;
+                            element_state.remap_input =
+                                element_state.cache_key.pointer_mapping != window.pointer_mapping;
+                            if element_state.remap_input {
+                                window.remap_reused_prepaint(&element_state.prepaint_range);
+                                element_state.cache_key.pointer_mapping =
+                                    window.pointer_mapping.clone();
+                            }
 
                             return (None, element_state);
                         }
@@ -424,6 +462,7 @@ impl<V: View> Element for ViewElement<V> {
                         (
                             Some(element),
                             ViewElementState {
+                                remap_input: false,
                                 accessed_entities,
                                 prepaint_range: prepaint_start..prepaint_end,
                                 paint_range: PaintIndex::default()..PaintIndex::default(),
@@ -485,6 +524,9 @@ impl<V: View> Element for ViewElement<V> {
 
                             let paint_end = window.paint_index();
                             element_state.paint_range = paint_start..paint_end;
+                            if element_state.remap_input {
+                                window.remap_reused_paint(&element_state.paint_range);
+                            }
 
                             ((), element_state)
                         },

@@ -39,9 +39,9 @@ positioning an independent cursor-following lens.
 Layout and keyboard focus are not deformed. Deferred overlays can map their anchors
 without scaling their content, as described below.
 IME and accessibility geometry follow affine scopes as described below; nonlinear
-effects retain untransformed geometry. Mapped child-view caches are invalidated when their coordinate
-scope changes. Backends without subtree-effect support retain ordinary rendering
-and pointer behavior.
+effects retain untransformed geometry. Mapped child-view caches are invalidated when their
+coordinate scope changes unless they opt into affine cache reuse as described below.
+Backends without subtree-effect support retain ordinary rendering and pointer behavior.
 
 ## Custom stages
 
@@ -87,9 +87,9 @@ reveal uncaptured content outside that source region. Put a background on the pa
 fill space exposed by translation or rotation.
 
 The group captures at the current window density. Large magnification can soften text;
-it does not select a higher raster density. Equal coordinate scopes reuse cached views,
-while changing the matrix invalidates them. Platforms without subtree effects draw and
-hit-test the original content. Deferred popups stay unscaled and can use
+it does not select a higher raster density. Equal coordinate scopes reuse cached views;
+matrix changes require the explicit cache option below to reuse view content. Platforms
+without subtree effects draw and hit-test the original content. Deferred popups stay unscaled and can use
 `anchored().map_anchor(true)` to follow the group.
 
 On WGPU, an unchanged source subtree can reuse its captured pixels while the matrix
@@ -97,6 +97,26 @@ changes. Reuse requires a single writer at that capture depth and no multipass,
 two-input or 3D layers in the frame. Content, atlas-image and text-rendering changes
 invalidate the capture; video and simulation content is redrawn. This uses existing
 capture textures and does not prevent child-view cache invalidation.
+
+For an entity-backed view whose content is independent of the enclosing matrix, use
+`.cached(style).cache_across_transforms()` inside the group:
+
+```rust,ignore
+let content = content_view
+    .cached(div().w(px(600.)).h(px(400.)).style().clone())
+    .cache_across_transforms();
+let viewport = transform_group(content, matrix);
+```
+
+This reuses render, prepaint and paint output while updating hitboxes, mouse listeners
+and IME handlers to the current affine scope. Event callbacks receive current source
+coordinates. Render, layout and paint must not derive content from mapped pointer
+positions or retain coordinate mappings. Notify the entity when its content changes.
+
+Layout bounds, clipping, display density, hover changes and explicit refreshes still
+invalidate the view cache. A changed matrix also redraws views containing deferred
+overlays, tooltips or nested input scopes. Inspector and accessibility rendering bypass
+the view cache. Arbitrary mapping callbacks are not eligible for this option.
 
 Run `cargo run -p gpui_effects --example transform_group` to exercise scaling, rotation,
 panning, clicks and popup anchors.
@@ -121,8 +141,8 @@ mapping only; it does not move or scale the painted content. Capture bounds stil
 clip both displayed and sampled positions.
 
 Equal affine matrices and chains reuse cached child views when bounds, clipping,
-display density and the parent scope also match. Changing any of these values
-invalidates the cache. Arbitrary callbacks invalidate cached views in each new
+display density and the parent scope also match. Without `cache_across_transforms`, changing
+any of these values invalidates the cache. Arbitrary callbacks invalidate cached views in each new
 scope, including shared callbacks that may capture mutable state.
 
 `source_to_display` on `PointerTransform` or a hitbox's `PointerMapping` returns

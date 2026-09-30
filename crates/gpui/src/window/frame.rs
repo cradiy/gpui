@@ -820,6 +820,68 @@ impl Window {
         );
     }
 
+    pub(crate) fn can_remap_cached_view(
+        &self,
+        prepaint: &Range<PrepaintStateIndex>,
+        paint: &Range<PaintIndex>,
+        mapping: &crate::PointerMapping,
+    ) -> bool {
+        // Deferred elements keep already-positioned paint ranges. Tooltips may
+        // also retain displayed coordinates. Rebuild these instead of rebasing.
+        let previous_position = mapping.hit_position(self.mouse_position);
+        let next_position = self.pointer_mapping.hit_position(self.mouse_position);
+        prepaint.start.deferred_draws_index == prepaint.end.deferred_draws_index
+            && prepaint.start.tooltips_index == prepaint.end.tooltips_index
+            && self.rendered_frame.hitboxes
+                [prepaint.start.hitboxes_index..prepaint.end.hitboxes_index]
+                .iter()
+                .all(|hitbox| {
+                    let contains = |position: Option<Point<Pixels>>| {
+                        position.is_some_and(|position| {
+                            hitbox.bounds.contains(&position)
+                                && hitbox.content_mask.bounds.contains(&position)
+                        })
+                    };
+                    hitbox.pointer_mapping == *mapping
+                        && contains(previous_position) == contains(next_position)
+                })
+            && self.rendered_frame.mouse_listeners
+                [paint.start.mouse_listeners_index..paint.end.mouse_listeners_index]
+                .iter()
+                .flatten()
+                .all(|listener| listener.mapping == *mapping)
+            && self.rendered_frame.input_handlers
+                [paint.start.input_handlers_index..paint.end.input_handlers_index]
+                .iter()
+                .flatten()
+                .all(|handler| handler.pointer_mapping() == mapping)
+    }
+
+    pub(crate) fn remap_reused_prepaint(&mut self, range: &Range<PrepaintStateIndex>) {
+        for hitbox in
+            &mut self.next_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
+        {
+            hitbox.pointer_mapping = self.pointer_mapping.clone();
+        }
+    }
+
+    pub(crate) fn remap_reused_paint(&mut self, range: &Range<PaintIndex>) {
+        for listener in self.next_frame.mouse_listeners
+            [range.start.mouse_listeners_index..range.end.mouse_listeners_index]
+            .iter_mut()
+            .flatten()
+        {
+            listener.mapping = self.pointer_mapping.clone();
+        }
+        for handler in self.next_frame.input_handlers
+            [range.start.input_handlers_index..range.end.input_handlers_index]
+            .iter_mut()
+            .flatten()
+        {
+            handler.set_pointer_mapping(self.pointer_mapping.clone());
+        }
+    }
+
     pub(crate) fn paint_index(&self) -> PaintIndex {
         PaintIndex {
             scene_index: self.next_frame.scene.len(),

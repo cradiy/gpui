@@ -1523,6 +1523,10 @@ impl PlatformInputHandler {
         &self.pointer_mapping
     }
 
+    pub(crate) fn set_pointer_mapping(&mut self, mapping: PointerMapping) {
+        self.pointer_mapping = mapping;
+    }
+
     fn display_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
         self.pointer_mapping
             .bounds_to_display(bounds)

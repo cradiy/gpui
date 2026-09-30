@@ -81,7 +81,9 @@ impl Render for Probe {
             move |_, window, cx| {
                 let mut element = transform_group(
                     transform_group(
-                        content.cached(div().w(px(200.)).h(px(150.)).style().clone()),
+                        content
+                            .cached(div().w(px(200.)).h(px(150.)).style().clone())
+                            .cache_across_transforms(),
                         TransformationMatrix {
                             translation: [10., 5.],
                             ..TransformationMatrix::unit()

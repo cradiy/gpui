@@ -114,6 +114,7 @@ struct MappedText {
     text: Entity<TextView>,
     transform: PointerTransform,
     nested: bool,
+    cache_across_transforms: bool,
 }
 
 impl Render for MappedText {
@@ -122,11 +123,15 @@ impl Render for MappedText {
         let prepaint_transform = self.transform.clone();
         let paint_transform = self.transform.clone();
         let nested = self.nested;
+        let cache_across_transforms = self.cache_across_transforms;
         canvas(
             move |bounds, window, cx| {
                 let mut element = text
                     .clone()
                     .cached(div().size_full().style().clone())
+                    .when(cache_across_transforms, |view| {
+                        view.cache_across_transforms()
+                    })
                     .into_any_element();
                 with_scopes(window, bounds, prepaint_transform, nested, |window| {
                     element.prepaint_as_root(bounds.origin, bounds.size.into(), window, cx);
@@ -169,6 +174,17 @@ fn with_scopes<R>(
 
 #[crate::test]
 fn affine_ime_maps_platform_queries_cached_handlers_and_candidate_updates(cx: &mut TestAppContext) {
+    check_ime_cache(cx, false);
+}
+
+#[crate::test]
+fn affine_ime_rebases_cached_handlers_and_candidate_positions_without_rendering(
+    cx: &mut TestAppContext,
+) {
+    check_ime_cache(cx, true);
+}
+
+fn check_ime_cache(cx: &mut TestAppContext, cache_across_transforms: bool) {
     let composing = Rc::new(Cell::new(true));
     let renders = Rc::new(Cell::new(0));
     let scale = PointerTransform::affine(TransformationMatrix {
@@ -195,6 +211,7 @@ fn affine_ime_maps_platform_queries_cached_handlers_and_candidate_updates(cx: &m
                 }),
                 transform: PointerTransform::identity(),
                 nested: false,
+                cache_across_transforms,
             }
         }
     });
@@ -261,7 +278,14 @@ fn affine_ime_maps_platform_queries_cached_handlers_and_candidate_updates(cx: &m
         cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
             .unwrap();
         if expected_renders != 0 {
-            assert_eq!(renders.get(), expected_renders);
+            assert_eq!(
+                renders.get(),
+                if cache_across_transforms {
+                    1
+                } else {
+                    expected_renders
+                }
+            );
         }
         let mut platform = cx.test_window(handle.into());
         assert_eq!(platform.0.lock().ime_position, Some(rect(candidate)));

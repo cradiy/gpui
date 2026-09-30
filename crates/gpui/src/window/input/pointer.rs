@@ -1,11 +1,24 @@
 use crate::window::{
-    CursorStyleRequest, DispatchPhase, Hitbox, HitboxBehavior, HitboxId, Window, WindowControlArea,
+    AnyMouseListener, CursorStyleRequest, DispatchPhase, Hitbox, HitboxBehavior, HitboxId, Window,
+    WindowControlArea,
 };
 use crate::{
     App, Bounds, CursorStyle, DragEnd, MouseEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, px,
 };
 use std::any::Any;
 use std::mem;
+
+impl AnyMouseListener {
+    fn dispatch(
+        &mut self,
+        event: &dyn Any,
+        phase: DispatchPhase,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        (self.callback)(event, phase, &self.mapping, window, cx);
+    }
+}
 
 impl Window {
     /// Register a mouse event listener on the window for the next frame. The type of event
@@ -18,23 +31,29 @@ impl Window {
         mut listener: impl FnMut(&Event, DispatchPhase, &mut Window, &mut App) + 'static,
     ) {
         self.invalidator.debug_assert_paint();
-        let mapping = self.pointer_mapping.clone();
-        self.next_frame.mouse_listeners.push(Some(Box::new(
-            move |event: &dyn Any, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
-                if let Some(event) = event.downcast_ref::<Event>() {
-                    if mapping.is_identity() {
-                        let previous = mem::take(&mut window.pointer_mapping);
-                        listener(event, phase, window, cx);
+        self.next_frame.mouse_listeners.push(Some(AnyMouseListener {
+            mapping: self.pointer_mapping.clone(),
+            callback: Box::new(
+                move |event: &dyn Any,
+                      phase: DispatchPhase,
+                      mapping: &crate::PointerMapping,
+                      window: &mut Window,
+                      cx: &mut App| {
+                    if let Some(event) = event.downcast_ref::<Event>() {
+                        if mapping.is_identity() {
+                            let previous = mem::take(&mut window.pointer_mapping);
+                            listener(event, phase, window, cx);
+                            window.pointer_mapping = previous;
+                            return;
+                        }
+                        let event = event.map_position(|position| mapping.map(position));
+                        let previous = mem::replace(&mut window.pointer_mapping, mapping.clone());
+                        listener(&event, phase, window, cx);
                         window.pointer_mapping = previous;
-                        return;
                     }
-                    let event = event.map_position(|position| mapping.map(position));
-                    let previous = mem::replace(&mut window.pointer_mapping, mapping.clone());
-                    listener(&event, phase, window, cx);
-                    window.pointer_mapping = previous;
-                }
-            },
-        )));
+                },
+            ),
+        }));
     }
 
     pub(in crate::window) fn dispatch_mouse_event(
@@ -74,7 +93,7 @@ impl Window {
         // special purposes, such as detecting events outside of a given Bounds.
         for listener in &mut mouse_listeners {
             let listener = listener.as_mut().unwrap();
-            listener(event, DispatchPhase::Capture, self, cx);
+            listener.dispatch(event, DispatchPhase::Capture, self, cx);
             if !cx.propagate_event {
                 break;
             }
@@ -84,7 +103,7 @@ impl Window {
         if cx.propagate_event {
             for listener in mouse_listeners.iter_mut().rev() {
                 let listener = listener.as_mut().unwrap();
-                listener(event, DispatchPhase::Bubble, self, cx);
+                listener.dispatch(event, DispatchPhase::Bubble, self, cx);
                 if !cx.propagate_event {
                     break;
                 }

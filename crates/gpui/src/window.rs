@@ -304,8 +304,12 @@ impl ArenaClearNeeded {
 
 type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
 
-pub(crate) type AnyMouseListener =
-    Box<dyn FnMut(&dyn Any, DispatchPhase, &mut Window, &mut App) + 'static>;
+pub(crate) struct AnyMouseListener {
+    mapping: crate::PointerMapping,
+    callback: Box<
+        dyn FnMut(&dyn Any, DispatchPhase, &crate::PointerMapping, &mut Window, &mut App) + 'static,
+    >,
+}
 
 #[derive(Clone)]
 pub(crate) struct CursorStyleRequest {

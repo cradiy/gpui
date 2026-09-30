@@ -374,6 +374,21 @@ impl PartialEq for PointerMapping {
 }
 
 impl PointerMapping {
+    pub(crate) fn same_affine_viewport(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.bounds == b.bounds
+                    && a.clip == b.clip
+                    && a.scale_factor == b.scale_factor
+                    && a.transform.affine_matrix().is_some()
+                    && b.transform.affine_matrix().is_some()
+                    && a.parent.same_affine_viewport(&b.parent)
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn is_identity(&self) -> bool {
         self.0.is_none()
     }

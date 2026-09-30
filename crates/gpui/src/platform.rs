@@ -47,10 +47,10 @@ use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, DragSessionId, Edges, Font, FontId,
     FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource, Keymap,
-    LineLayout, Pixels, PlatformGestures, PlatformInput, Point, Priority, RenderColorSvgParams,
-    RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Scene, ShapedGlyph,
-    ShapedRun, SharedString, Size, SvgRenderer, SystemWindowTab, Task, Window, WindowControlArea,
-    hash, point, px, size,
+    LineLayout, Pixels, PlatformGestures, PlatformInput, Point, PointerMapping, Priority,
+    RenderColorSvgParams, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
+    Scene, ShapedGlyph, ShapedRun, SharedString, Size, SvgRenderer, SystemWindowTab, Task, Window,
+    WindowControlArea, hash, point, px, size,
 };
 use anyhow::Result;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -1494,6 +1494,7 @@ impl From<TileId> for etagere::AllocId {
 pub struct PlatformInputHandler {
     cx: AsyncWindowContext,
     handler: Box<dyn InputHandler>,
+    pointer_mapping: PointerMapping,
 }
 
 #[expect(missing_docs)]
@@ -1506,7 +1507,26 @@ pub struct PlatformInputHandler {
 )]
 impl PlatformInputHandler {
     pub fn new(cx: AsyncWindowContext, handler: Box<dyn InputHandler>) -> Self {
-        Self { cx, handler }
+        Self {
+            cx,
+            handler,
+            pointer_mapping: PointerMapping::default(),
+        }
+    }
+
+    pub(crate) fn with_pointer_mapping(mut self, mapping: PointerMapping) -> Self {
+        self.pointer_mapping = mapping;
+        self
+    }
+
+    pub(crate) fn pointer_mapping(&self) -> &PointerMapping {
+        &self.pointer_mapping
+    }
+
+    fn display_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        self.pointer_mapping
+            .bounds_to_display(bounds)
+            .unwrap_or(bounds)
     }
 
     pub fn selected_text_range(&mut self, ignore_disabled_input: bool) -> Option<UTF16Selection> {
@@ -1585,6 +1605,7 @@ impl PlatformInputHandler {
             .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
             .ok()
             .flatten()
+            .map(|bounds| self.display_bounds(bounds))
     }
 
     #[allow(dead_code)]
@@ -1637,18 +1658,22 @@ impl PlatformInputHandler {
         Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
             self.handler.bounds_for_range(range, window, cx)
         })
+        .map(|bounds| self.display_bounds(bounds))
     }
 
     pub fn ime_candidate_bounds(&mut self) -> Option<Bounds<Pixels>> {
-        let marked_range = self.marked_text_range();
-        let selection = self.selected_text_range(true)?;
-        Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
-            self.bounds_for_range(range)
-        })
+        // Resolve the composing line in source coordinates before transforming its bounds.
+        // Rotation or shear must not make characters on one line look like different lines.
+        self.cx
+            .clone()
+            .update(|window, cx| self.selected_bounds(window, cx))
+            .ok()
+            .flatten()
     }
 
     #[allow(unused)]
     pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
+        let point = self.pointer_mapping.map(point);
         self.cx
             .update(|window, cx| self.handler.character_index_for_point(point, window, cx))
             .ok()
@@ -1671,6 +1696,7 @@ impl PlatformInputHandler {
             .update(|window, cx| self.handler.element_bounds(window, cx))
             .ok()
             .flatten()
+            .map(|bounds| self.display_bounds(bounds))
     }
 
     /// See [`InputHandler::text_length_utf16`].
@@ -1778,10 +1804,12 @@ pub trait InputHandler: 'static {
     /// Corresponds to [unmarkText()](https://developer.apple.com/documentation/appkit/nstextinputclient/1438239-unmarktext)
     fn unmark_text(&mut self, window: &mut Window, cx: &mut App);
 
-    /// Get the bounds of the given document range in screen coordinates
+    /// Get the bounds of the given document range in window-relative source coordinates.
     /// Corresponds to [firstRect(forCharacterRange:actualRange:)](https://developer.apple.com/documentation/appkit/nstextinputclient/1438240-firstrect)
     ///
-    /// This is used for positioning the IME candidate window
+    /// This is used for positioning the IME candidate window. Handlers registered with
+    /// [`Window::handle_input`] inside an affine pointer scope are mapped to displayed
+    /// window coordinates by GPUI; platform backends perform any screen conversion.
     fn bounds_for_range(
         &mut self,
         range_utf16: Range<usize>,
@@ -1790,6 +1818,7 @@ pub trait InputHandler: 'static {
     ) -> Option<Bounds<Pixels>>;
 
     /// Get the character offset for the given point in terms of UTF16 characters
+    /// The point is in window-relative source coordinates of the registered pointer scope.
     ///
     /// Corresponds to [characterIndexForPoint:](https://developer.apple.com/documentation/appkit/nstextinputclient/characterindex(for:))
     fn character_index_for_point(
@@ -1816,7 +1845,8 @@ pub trait InputHandler: 'static {
     ) {
     }
 
-    /// Get the bounds of the focused text element in window coordinates, if known.
+    /// Get the bounds of the focused text element in window-relative source coordinates, if known.
+    /// Affine pointer scopes map these bounds to displayed window coordinates.
     ///
     /// This is the pull counterpart to the [`PlatformWindow::update_ime_position`]
     /// push: mobile platforms ask for the focused element's geometry when they

@@ -36,8 +36,9 @@ Scroll deltas, button state and modifiers are unchanged.
 Use `window.raw_mouse_position()` for displayed window coordinates, such as when
 positioning an independent cursor-following lens.
 
-Layout, keyboard focus, accessibility bounds, IME placement and deferred overlays
-are not deformed. Mapped child-view caches are invalidated when their coordinate
+Layout, keyboard focus, accessibility bounds and deferred overlays are not deformed.
+IME geometry follows affine scopes as described below; nonlinear effects retain
+untransformed IME bounds. Mapped child-view caches are invalidated when their coordinate
 scope changes. Backends without subtree-effect support retain ordinary rendering
 and pointer behavior.
 
@@ -81,9 +82,26 @@ scope, including shared callbacks that may capture mutable state.
 
 `source_to_display` on `PointerTransform` or a hitbox's `PointerMapping` returns
 the forward-mapped position for affine chains without clipping. It returns `None`
-when a scope has no known forward map. IME and accessibility integration remain
-the caller's responsibility. Nonfinite or singular matrices are rejected by the
-affine constructor.
+when a scope has no known forward map. Nonfinite or singular matrices are rejected
+by the affine constructor.
+
+## Text input geometry
+
+Input handlers registered with `window.handle_input` retain the current coordinate
+scope, including when a child view is cached. Return text and element bounds in
+window-relative source coordinates. Affine scopes map these rectangles to displayed
+window coordinates before passing them to the platform. Rectangles enclose all four
+transformed corners; rotation and shear use an axis-aligned bounding rectangle.
+Display-density and screen-origin conversion remain platform responsibilities.
+
+IME composition anchors are resolved in source coordinates before transformation.
+Changing the focused handler's scope refreshes the platform candidate position after
+painting, without requiring another keystroke. Platform character-position queries
+are mapped back to source coordinates without clipping.
+
+Scopes containing a callback or decorative transform have no forward geometry map,
+so text bounds retain their source coordinates. Accessibility bounds and deferred
+overlay placement are not automatically mapped.
 
 ## Example
 

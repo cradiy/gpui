@@ -244,6 +244,7 @@ fn run_pointer_mapping_probe(transform: crate::PointerTransform) {
 }
 
 mod affine_cache;
+mod affine_ime;
 
 struct RootView {
     explicit_size: bool,

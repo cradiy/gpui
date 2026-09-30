@@ -251,7 +251,9 @@ impl Window {
         // Place it back into a None slot (left by a previous .take()) so that
         // cached paint_range indices in reuse_paint find the handler at the
         // expected position.
+        let mut previous_input_mapping = crate::PointerMapping::default();
         if let Some(input_handler) = self.platform_window.take_input_handler() {
+            previous_input_mapping = input_handler.pointer_mapping().clone();
             if let Some(slot) = self
                 .rendered_frame
                 .input_handlers
@@ -275,13 +277,18 @@ impl Window {
         // paint_range indices remain valid for reuse_paint on the next frame.
         // Search backwards to find the last Some entry, since reuse_paint may
         // have copied None slots from the previous frame. (Fixes #50456)
-        if let Some(input_handler) = self
+        if let Some(mut input_handler) = self
             .next_frame
             .input_handlers
             .iter_mut()
             .rev()
             .find_map(|h| h.take())
         {
+            if input_handler.pointer_mapping() != &previous_input_mapping
+                && let Some(bounds) = input_handler.selected_bounds(self, cx)
+            {
+                self.platform_window.update_ime_position(bounds);
+            }
             self.platform_window.set_input_handler(input_handler);
         }
 

@@ -15,6 +15,8 @@ impl Window {
     /// platform to receive textual input with proper integration with concerns such
     /// as IME interactions. This handler will be active for the upcoming frame until the following frame is
     /// rendered.
+    /// Affine pointer scopes map text bounds to displayed window coordinates and map
+    /// platform character-position queries back to source coordinates.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     ///
@@ -29,9 +31,10 @@ impl Window {
 
         if focus_handle.is_focused(self) {
             let cx = self.to_async(cx);
-            self.next_frame
-                .input_handlers
-                .push(Some(PlatformInputHandler::new(cx, Box::new(input_handler))));
+            self.next_frame.input_handlers.push(Some(
+                PlatformInputHandler::new(cx, Box::new(input_handler))
+                    .with_pointer_mapping(self.pointer_mapping.clone()),
+            ));
         }
     }
 

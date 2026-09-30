@@ -34,6 +34,7 @@ pub(crate) struct TestWindowState {
     resize_callback: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
     moved_callback: Option<Box<dyn FnMut()>>,
     input_handler: Option<PlatformInputHandler>,
+    pub(crate) ime_position: Option<Bounds<Pixels>>,
     is_fullscreen: bool,
 }
 
@@ -86,6 +87,7 @@ impl TestWindow {
             resize_callback: None,
             moved_callback: None,
             input_handler: None,
+            ime_position: None,
             is_fullscreen: false,
         })))
     }
@@ -335,7 +337,9 @@ impl PlatformWindow for TestWindow {
         unimplemented!()
     }
 
-    fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}
+    fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+        self.0.lock().ime_position = Some(bounds);
+    }
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         None

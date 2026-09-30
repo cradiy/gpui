@@ -308,6 +308,21 @@ mod tests {
         assert_eq!(transform.source_to_display(source), Some(display));
         assert_eq!(transform.map(display, Bounds::default(), 1.5), source);
     }
+
+    #[test]
+    fn affine_text_bounds_enclose_all_four_transformed_corners() {
+        let bounds = Bounds::new(point(px(10.), px(20.)), size(px(3.), px(4.)));
+        let transform = PointerTransform::affine(TransformationMatrix {
+            rotation_scale: [[1., -1.], [1., 1.]],
+            translation: [5., 7.],
+        })
+        .unwrap();
+        let mapping = PointerMapping::default().then(bounds, bounds, 2., transform);
+        assert_eq!(
+            mapping.bounds_to_display(bounds),
+            Some(Bounds::new(point(px(-9.), px(37.)), size(px(7.), px(7.))))
+        );
+    }
 }
 
 impl fmt::Debug for PointerTransform {
@@ -386,6 +401,28 @@ impl PointerMapping {
                 .source_to_display(node.transform.source_to_display(position)?),
             None => Some(position),
         }
+    }
+
+    pub(crate) fn bounds_to_display(&self, bounds: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+        let corners = [
+            bounds.origin,
+            bounds.top_right(),
+            bounds.bottom_left(),
+            bounds.bottom_right(),
+        ];
+        let mut min = self.source_to_display(bounds.origin)?;
+        let mut max = min;
+        for corner in corners {
+            let point = self.source_to_display(corner)?;
+            if !f32::from(point.x).is_finite() || !f32::from(point.y).is_finite() {
+                return None;
+            }
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+        Some(Bounds::from_corners(min, max))
     }
 
     pub(crate) fn hit_position(&self, position: Point<Pixels>) -> Option<Point<Pixels>> {

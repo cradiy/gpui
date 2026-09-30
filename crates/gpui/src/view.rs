@@ -309,6 +309,7 @@ struct ViewElementCacheKey {
     text_style: TextStyle,
     subtree_effect: bool,
     scale_factor: f32,
+    raster_scale_factor: f32,
     pointer_mapping: crate::PointerMapping,
     deferred_anchor_mapping: crate::PointerMapping,
 }
@@ -408,6 +409,8 @@ impl<V: View> Element for ViewElement<V> {
                             && element_state.cache_key.text_style == text_style
                             && element_state.cache_key.subtree_effect == subtree_effect
                             && element_state.cache_key.scale_factor == window.scale_factor()
+                            && element_state.cache_key.raster_scale_factor
+                                == window.raster_scale_factor()
                             && (element_state.cache_key.pointer_mapping == window.pointer_mapping
                                 || (self.cache_across_transforms
                                     && element_state
@@ -472,6 +475,7 @@ impl<V: View> Element for ViewElement<V> {
                                     text_style,
                                     subtree_effect,
                                     scale_factor: window.scale_factor(),
+                                    raster_scale_factor: window.raster_scale_factor(),
                                     pointer_mapping: window.pointer_mapping.clone(),
                                     deferred_anchor_mapping: window.deferred_anchor_mapping.clone(),
                                 },

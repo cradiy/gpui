@@ -94,6 +94,7 @@ impl Render for Probe {
                         translation: [offset, 0.],
                     },
                 )
+                .raster_scale(2.)
                 .into_any_element();
                 element.prepaint_as_root(
                     point(px(10.), px(15.)),

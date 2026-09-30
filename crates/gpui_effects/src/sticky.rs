@@ -45,7 +45,7 @@ pub fn paint_sticky_shapes(
     tension: f32,
     fill: Hsla,
 ) -> Result<()> {
-    let scale = window.scale_factor();
+    let scale = window.raster_scale_factor();
     let fill: Rgba = fill.into();
     let uniforms = EffectUniforms::new()
         .with_slot(ANCHOR_SLOT, shape_slot(anchor, scale))

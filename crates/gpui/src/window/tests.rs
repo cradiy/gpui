@@ -247,6 +247,7 @@ mod affine_a11y;
 mod affine_cache;
 mod affine_deferred;
 mod affine_ime;
+mod raster_capture;
 
 struct RootView {
     explicit_size: bool,

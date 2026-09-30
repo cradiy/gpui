@@ -1,6 +1,6 @@
 use super::scene_snapshot::{OutputValidity, SceneSnapshot};
 use super::{SceneEncoding, WgpuExternalRenderTarget, WgpuRenderer};
-use gpui::{Scene, SubtreeLayer, UiTexture3d};
+use gpui::{DevicePixels, Scene, Size, SubtreeLayer, size};
 
 pub(super) struct UiCapture {
     pub(super) renderer: WgpuRenderer,
@@ -51,24 +51,58 @@ impl WgpuRenderer {
         encoder: &mut wgpu::CommandEncoder,
         retain_outputs: bool,
     ) -> anyhow::Result<bool> {
-        fn collect<'a>(scene: &'a Scene, captures: &mut Vec<(&'a SubtreeLayer, UiTexture3d)>) {
+        fn collect<'a>(
+            scene: &'a Scene,
+            viewport: Size<DevicePixels>,
+            captures: &mut Vec<(&'a SubtreeLayer, Size<DevicePixels>)>,
+        ) {
             for layer in &scene.subtree_layers {
                 if let Some(texture) = layer.scene3d.as_ref().and_then(|frame| frame.ui_texture) {
-                    captures.push((layer, texture));
+                    captures.push((layer, texture.pixel_size()));
+                } else if let Some(scale) = layer.scene.raster_scale {
+                    captures.push((
+                        layer,
+                        viewport.map(|value| DevicePixels((value.0 as f32 * scale).ceil() as i32)),
+                    ));
                 } else {
-                    collect(&layer.scene, captures);
+                    collect(&layer.scene, viewport, captures);
                     if let Some(second) = &layer.second_scene {
-                        collect(second, captures);
+                        collect(second, viewport, captures);
                     }
                 }
             }
         }
         let mut captures = Vec::new();
-        collect(scene, &mut captures);
+        collect(
+            scene,
+            size(
+                DevicePixels(self.surface_config.width as i32),
+                DevicePixels(self.surface_config.height as i32),
+            ),
+            &mut captures,
+        );
         self.resources_mut().ui_captures.truncate(captures.len());
         self.resources_mut().ui_capture_indices.clear();
-        for (index, (layer, config)) in captures.into_iter().enumerate() {
-            let size = config.pixel_size();
+        for (index, (layer, size)) in captures.into_iter().enumerate() {
+            anyhow::ensure!(
+                size.width.0 > 0
+                    && size.height.0 > 0
+                    && size.width.0 as u32
+                        <= self.resources().device.limits().max_texture_dimension_2d
+                    && size.height.0 as u32
+                        <= self.resources().device.limits().max_texture_dimension_2d,
+                "UI capture exceeds device texture limits"
+            );
+            if let Some(scale) = layer.scene.raster_scale {
+                anyhow::ensure!(
+                    scale.is_finite()
+                        && scale >= 1.
+                        && layer.scene3d.is_none()
+                        && layer.second_scene.is_none()
+                        && layer.intermediate_effects.is_empty(),
+                    "raster captures require a finite density and a single-input, single-pass layer"
+                );
+            }
             let width = size.width.0 as u32;
             let height = size.height.0 as u32;
             if index == self.resources().ui_captures.len() {
@@ -120,13 +154,19 @@ impl WgpuRenderer {
             let snapshot = retain_outputs
                 .then(|| SceneSnapshot::new(&layer.scene, |tile| self.atlas.tile_generation(tile)))
                 .flatten();
+            let parameters = self.rendering_params;
+            let is_bgr = self.is_bgr;
             let capture = &mut self.resources_mut().ui_captures[index];
             let reusable = capture.validity.reusable()
+                && capture.renderer.rendering_params == parameters
+                && capture.renderer.is_bgr == is_bgr
                 && snapshot
                     .as_ref()
                     .zip(capture.snapshot.as_ref())
                     .is_some_and(|(new, old)| new.matches(old));
             capture.snapshot = snapshot;
+            capture.renderer.rendering_params = parameters;
+            capture.renderer.is_bgr = is_bgr;
             if reusable {
                 self.resources_mut()
                     .ui_capture_indices
@@ -195,8 +235,8 @@ impl WgpuRenderer {
 mod tests {
     use super::*;
     use gpui::{
-        Bounds, ContentMask, DevicePixels, EffectQuad, EffectShader, Quad, ScaledPixels, point,
-        rgba, size,
+        Bounds, ContentMask, DevicePixels, EffectQuad, EffectShader, Quad, ScaledPixels,
+        UiTexture3d, point, rgba, size,
     };
     use std::{rc::Rc, sync::Arc};
 

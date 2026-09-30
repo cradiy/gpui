@@ -602,6 +602,7 @@ pub struct Window {
     modifiers: Modifiers,
     capslock: Capslock,
     scale_factor: f32,
+    subtree_raster_scale: f32,
     pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
     appearance: WindowAppearance,
     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
@@ -1193,6 +1194,7 @@ impl Window {
             modifiers,
             capslock,
             scale_factor,
+            subtree_raster_scale: 1.,
             bounds_observers: SubscriberSet::new(),
             appearance,
             appearance_observers: SubscriberSet::new(),
@@ -1955,6 +1957,12 @@ impl Window {
         self.scale_factor
     }
 
+    /// Device pixels per logical pixel for paint output, including the current capture density.
+    /// Layout and interaction coordinates continue to use [`Self::scale_factor`].
+    pub fn raster_scale_factor(&self) -> f32 {
+        self.scale_factor * self.subtree_raster_scale
+    }
+
     /// The size of an em for the base font of the application. Adjusting this value allows the
     /// UI to scale, just like zooming a web page.
     pub fn rem_size(&self) -> Pixels {
@@ -2043,6 +2051,12 @@ impl Window {
         bounds.map(|c| self.pixel_snap(c))
     }
 
+    /// Snaps painting bounds to the current raster grid, returning logical coordinates.
+    pub fn raster_snap_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        self.snap_bounds(bounds)
+            .map(|value| px(value.0 / self.raster_scale_factor()))
+    }
+
     /// Snaps a point's coordinates to the nearest device pixel.
     #[inline]
     pub fn pixel_snap_point(&self, position: Point<Pixels>) -> Point<Pixels> {
@@ -2051,7 +2065,10 @@ impl Window {
 
     #[inline]
     fn snap_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
-        let scale_factor = self.scale_factor();
+        Self::snap_bounds_at(bounds, self.raster_scale_factor())
+    }
+
+    fn snap_bounds_at(bounds: Bounds<Pixels>, scale_factor: f32) -> Bounds<ScaledPixels> {
         let left = round_to_device_pixel(bounds.left().0, scale_factor);
         let top = round_to_device_pixel(bounds.top().0, scale_factor);
         let right = round_to_device_pixel(bounds.right().0, scale_factor).max(left);
@@ -2065,7 +2082,10 @@ impl Window {
     /// Rounds half-to-zero but clamps any non-zero input up to 1 dp so thin strokes do not disappear.
     #[inline]
     fn snap_stroke(&self, value: Pixels) -> ScaledPixels {
-        ScaledPixels(round_stroke_to_device_pixel(value.0, self.scale_factor()))
+        ScaledPixels(round_stroke_to_device_pixel(
+            value.0,
+            self.raster_scale_factor(),
+        ))
     }
 
     #[inline]
@@ -2076,7 +2096,7 @@ impl Window {
     /// Floors the near edge and ceils the far edge, producing a strict superset of the raw region.
     #[inline]
     fn cover_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
-        let scale_factor = self.scale_factor();
+        let scale_factor = self.raster_scale_factor();
         let left = floor_to_device_pixel(bounds.left().0, scale_factor);
         let top = floor_to_device_pixel(bounds.top().0, scale_factor);
         let right = ceil_to_device_pixel(bounds.right().0, scale_factor).max(left);

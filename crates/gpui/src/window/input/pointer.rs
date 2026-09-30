@@ -164,8 +164,7 @@ impl Window {
         transform: crate::PointerTransform,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        let bounds = self
-            .snap_bounds(bounds)
+        let bounds = Self::snap_bounds_at(bounds, self.scale_factor())
             .map(|value| px(value.0 / self.scale_factor()));
         let mapping = self.pointer_mapping.then(
             bounds,

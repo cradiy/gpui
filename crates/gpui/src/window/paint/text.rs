@@ -21,7 +21,7 @@ impl Window {
     ) {
         self.invalidator.debug_assert_paint();
 
-        let scale_factor = self.scale_factor();
+        let scale_factor = self.raster_scale_factor();
         let thickness = self.snap_stroke(style.thickness);
         let height = if style.wavy {
             ScaledPixels(thickness.0 * 3.)
@@ -56,7 +56,7 @@ impl Window {
     ) {
         self.invalidator.debug_assert_paint();
 
-        let scale_factor = self.scale_factor();
+        let scale_factor = self.raster_scale_factor();
         let height = style.thickness;
         let bounds = Bounds {
             origin: origin.map(|c| ScaledPixels(round_to_device_pixel(c.0, scale_factor))),
@@ -196,7 +196,7 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let element_opacity = self.element_opacity();
-        let scale_factor = self.scale_factor();
+        let scale_factor = self.raster_scale_factor();
         let transformation = transformation.into_matrix(anchor, scale_factor);
         let glyph_origin = origin.scale(scale_factor);
 
@@ -370,7 +370,7 @@ impl Window {
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
-        let scale_factor = self.scale_factor();
+        let scale_factor = self.raster_scale_factor();
         let transformation = transformation.into_matrix(anchor, scale_factor);
         let glyph_origin = origin.scale(scale_factor);
         let integer_origin = glyph_origin.map(|c| ScaledPixels(round_half_toward_zero(c.0)));

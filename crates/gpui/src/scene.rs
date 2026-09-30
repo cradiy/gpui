@@ -43,6 +43,9 @@ impl From<bool> for PaddedBool32 {
 #[derive(Default)]
 #[expect(missing_docs)]
 pub struct Scene {
+    /// Raster-density multiplier relative to the parent when used as a subtree input.
+    /// `None` uses the parent's density. Set by `Window::with_subtree_raster_scale`.
+    pub raster_scale: Option<f32>,
     pub(crate) paint_operations: Vec<PaintOperation>,
     primitive_bounds: BoundsTree<ScaledPixels>,
     layer_stack: Vec<DrawOrder>,
@@ -73,6 +76,7 @@ struct PendingSubtree {
 #[expect(missing_docs)]
 impl Scene {
     pub fn clear(&mut self) {
+        self.raster_scale = None;
         self.paint_operations.clear();
         self.primitive_bounds.clear();
         self.layer_stack.clear();
@@ -211,6 +215,7 @@ impl Scene {
                 PaintOperation::EndSubtree => self.end_subtree(),
                 PaintOperation::NextSubtreeInput => self.next_subtree_input(),
                 PaintOperation::SetScene3d(frame) => self.set_subtree_scene3d(frame.clone()),
+                PaintOperation::SetRasterScale(scale) => self.set_subtree_raster_scale(*scale),
                 PaintOperation::RetainImage(lifetime) => self.retain_image(lifetime.clone()),
             }
         }
@@ -272,11 +277,30 @@ impl Scene {
             .last_mut()
             .expect("missing scene capture");
         assert!(
-            pending.first_scene.is_none() && pending.passes.is_empty() && pending.scene3d.is_none()
+            pending.first_scene.is_none()
+                && pending.passes.is_empty()
+                && pending.scene3d.is_none()
+                && pending.scene.raster_scale.is_none()
         );
         pending.scene3d = Some(frame.clone());
         self.paint_operations
             .push(PaintOperation::SetScene3d(frame));
+    }
+
+    pub(crate) fn set_subtree_raster_scale(&mut self, scale: f32) {
+        let pending = self
+            .pending_subtrees
+            .last_mut()
+            .expect("missing subtree capture");
+        assert!(
+            pending.first_scene.is_none()
+                && pending.passes.is_empty()
+                && pending.scene3d.is_none()
+                && pending.scene.raster_scale.is_none()
+        );
+        pending.scene.raster_scale = Some(scale);
+        self.paint_operations
+            .push(PaintOperation::SetRasterScale(scale));
     }
 
     pub(crate) fn next_subtree_input(&mut self) {
@@ -285,7 +309,10 @@ impl Scene {
             .last_mut()
             .expect("missing subtree capture");
         assert!(
-            pending.first_scene.is_none() && pending.passes.is_empty() && pending.scene3d.is_none(),
+            pending.first_scene.is_none()
+                && pending.passes.is_empty()
+                && pending.scene3d.is_none()
+                && pending.scene.raster_scale.is_none(),
             "two-input captures require exactly two scenes and no intermediate passes"
         );
         let mut scene = std::mem::take(&mut pending.scene);
@@ -447,6 +474,7 @@ pub(crate) enum PaintOperation {
     EndSubtree,
     NextSubtreeInput,
     SetScene3d(Arc<crate::Scene3dFrame>),
+    SetRasterScale(f32),
     RetainImage(Arc<()>),
 }
 
@@ -1499,6 +1527,27 @@ mod tests {
             weak.upgrade().is_none(),
             "unrelated replay must not retain discarded images"
         );
+    }
+
+    #[test]
+    fn raster_capture_replay_preserves_nested_density() {
+        let mut original = Scene::default();
+        original.start_subtree(subtree_composite());
+        original.set_subtree_raster_scale(2.);
+        original.start_subtree(subtree_composite());
+        original.set_subtree_raster_scale(1.5);
+        insert_test_quad(&mut original);
+        original.end_subtree();
+        original.end_subtree();
+        original.finish();
+        let mut replayed = Scene::default();
+        replayed.replay(0..original.len(), &original);
+        replayed.finish();
+        let outer = &replayed.subtree_layers[0].scene;
+        assert_eq!(outer.raster_scale, Some(2.));
+        let inner = &outer.subtree_layers[0].scene;
+        assert_eq!(inner.raster_scale, Some(1.5));
+        assert_eq!(inner.quads.len(), 1);
     }
 
     #[test]

@@ -143,6 +143,77 @@ fn pixels(context: &WgpuContext, texture: &wgpu::Texture) -> Vec<u8> {
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn raster_capture_preserves_offset_alpha_and_nested_density() -> anyhow::Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let mut renderer = renderer(&context)?;
+    let target = texture(&context, 64);
+    for (density, nested) in [
+        (2., false),
+        (2., false),
+        (3., false),
+        (2., true),
+        (1., false),
+    ] {
+        let total_density = density * if nested { 2. } else { 1. };
+        let mut source = Scene::default();
+        source.raster_scale = (total_density > 1.).then_some(if nested { 2. } else { density });
+        let rect = bounds(12., 14., 8., 6.).map(|p| ScaledPixels(p.0 * total_density));
+        source.insert_primitive(Quad {
+            bounds: rect,
+            content_mask: ContentMask { bounds: rect },
+            background: rgba(0xff000080).into(),
+            ..Default::default()
+        });
+        source.finish();
+        if nested {
+            let mut inner = layer(source, 0.);
+            inner.composite.bounds = bounds(8., 8., 48., 48.).map(|p| ScaledPixels(p.0 * density));
+            inner.composite.effect_bounds = inner.composite.bounds;
+            inner.composite.content_mask.bounds = inner.composite.bounds;
+            source = Scene::default();
+            source.raster_scale = Some(density);
+            source.insert_primitive(gpui::Primitive::SubtreeLayer(inner));
+            source.finish();
+        }
+        let mut outer = layer(source, 0.);
+        outer.composite.bounds = bounds(8., 8., 48., 48.);
+        outer.composite.effect_bounds = outer.composite.bounds;
+        outer.composite.content_mask.bounds = outer.composite.bounds;
+        outer.composite.uniforms = gpui::EffectUniforms::default()
+            .with_slot(0, [0.5, 0., 0., 0.])
+            .with_slot(1, [0., 0.5, 0., 0.]);
+        let mut scene = Scene::default();
+        scene.insert_primitive(gpui::Primitive::SubtreeLayer(outer));
+        scene.finish();
+        draw(&mut renderer, &scene, &target);
+        let output = pixels(&context, &target);
+        let sample = |x: usize, y: usize| &output[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4];
+        assert_eq!(
+            sample(22, 25),
+            &[128, 0, 0, 128],
+            "density={density}, nested={nested}"
+        );
+        for (x, y) in [(10, 10), (38, 25), (22, 38)] {
+            assert_eq!(sample(x, y), &[0; 4]);
+        }
+        if density > 1. {
+            let capture = &renderer.resources().ui_captures[0];
+            assert_eq!(capture.texture.width(), (64. * density) as u32);
+            if nested {
+                assert_eq!(
+                    capture.renderer.resources().ui_captures[0].texture.width(),
+                    256
+                );
+            }
+        } else {
+            assert!(renderer.resources().ui_captures.is_empty());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn subtree_capture_cache_reuses_only_submitted_unchanged_single_writer_textures()
 -> anyhow::Result<()> {
     let context = WgpuContext::new_headless()?;

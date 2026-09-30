@@ -43,7 +43,7 @@ impl Window {
     ) {
         self.invalidator.debug_assert_paint();
 
-        let scale_factor = self.scale_factor();
+        let scale_factor = self.raster_scale_factor();
         let content_mask = self.snapped_content_mask();
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
@@ -79,7 +79,7 @@ impl Window {
     ) {
         self.invalidator.debug_assert_paint();
 
-        let scale_factor = self.scale_factor();
+        let scale_factor = self.raster_scale_factor();
         let content_mask = self.snapped_content_mask();
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
@@ -135,7 +135,7 @@ impl Window {
             background: quad.background.opacity(opacity),
             border_colors: quad.border_colors.map(|color| color.opacity(opacity)),
             border_gradient: quad.border_gradient.opacity(opacity),
-            corner_radii: quad.corner_radii.scale(self.scale_factor()),
+            corner_radii: quad.corner_radii.scale(self.raster_scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
         });
@@ -147,7 +147,7 @@ impl Window {
     pub fn paint_path(&mut self, mut path: Path<Pixels>, color: impl Into<Background>) {
         self.invalidator.debug_assert_paint();
 
-        let scale_factor = self.scale_factor();
+        let scale_factor = self.raster_scale_factor();
         let content_mask = self.content_mask();
         let opacity = self.element_opacity();
         path.content_mask = content_mask;

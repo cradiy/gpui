@@ -26,7 +26,7 @@ impl LiquidGlassRegion {
     }
 
     fn uniforms(self, color: Hsla, window: &Window) -> EffectUniforms {
-        let scale = window.scale_factor();
+        let scale = window.raster_scale_factor();
         let deformation = self.deformation.clamped(self.bounds.size);
         let center = self.bounds.center();
         let size = self.bounds.size;

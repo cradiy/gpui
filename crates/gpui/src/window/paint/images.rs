@@ -209,7 +209,7 @@ impl Window {
             bounds,
             clip_bounds: bounds,
             content_mask: self.snapped_content_mask(),
-            corner_radii: corner_radii.scale(self.scale_factor()),
+            corner_radii: corner_radii.scale(self.raster_scale_factor()),
             tile,
             opacity: element_opacity,
             transformation,
@@ -282,7 +282,7 @@ impl Window {
             .expect("Callback above only returns Some");
         let mut content_mask = self.snapped_content_mask();
         content_mask.bounds = content_mask.bounds.intersect(&clip_bounds);
-        let corner_radii = corner_radii.scale(self.scale_factor());
+        let corner_radii = corner_radii.scale(self.raster_scale_factor());
         let opacity = self.element_opacity();
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
@@ -323,7 +323,7 @@ impl Window {
             bounds,
             clip_bounds,
             content_mask,
-            corner_radii: corner_radii.scale(self.scale_factor()),
+            corner_radii: corner_radii.scale(self.raster_scale_factor()),
             opacity: self.element_opacity(),
             source,
         });

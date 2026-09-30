@@ -182,7 +182,7 @@ impl RenderOnce for FrostedGlass {
 
         self.div.on_paint_before_children(
             move |bounds: Bounds<Pixels>, resolved_style, window: &mut Window, _| {
-                let scale = window.scale_factor();
+                let scale = window.raster_scale_factor();
                 let corner_radii = resolved_style
                     .corner_radii
                     .to_pixels(window.rem_size())

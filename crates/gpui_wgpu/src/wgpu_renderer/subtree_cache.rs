@@ -67,6 +67,7 @@ impl WgpuRenderer {
         ) -> bool {
             for layer in &scene.subtree_layers {
                 if layer.scene3d.is_some()
+                    || layer.scene.raster_scale.is_some()
                     || layer.second_scene.is_some()
                     || !layer.intermediate_effects.is_empty()
                 {

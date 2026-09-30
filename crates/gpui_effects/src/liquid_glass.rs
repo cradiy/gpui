@@ -291,7 +291,7 @@ pub fn paint_deformed_liquid_glass(
     let deformation = deformation.clamped(bounds.size);
     let bulge = deformation.bulge;
     let ripple = deformation.ripple;
-    let scale = window.scale_factor();
+    let scale = window.raster_scale_factor();
     let padding = bulge.abs() + ripple.abs() + px(1. / scale);
     let uniforms = appearance.uniforms(corners.clamp_radii_for_quad_size(bounds.size), scale);
     let light = uniforms.slots()[LIGHT_SLOT];

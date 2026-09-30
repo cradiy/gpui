@@ -8,6 +8,47 @@ use anyhow::{Result, anyhow};
 use std::{borrow::Cow, sync::Arc};
 
 impl Window {
+    /// Paints an isolated subtree at a higher raster density without changing layout or input.
+    /// Use inside both `prepaint_subtree_effect` and a single-pass `with_subtree_effect`.
+    /// The multiplier must be finite and at least one; it is limited to four and reduced
+    /// to keep a full-viewport capture within 8192 pixels per axis and 16 megapixels.
+    /// Nested captures share these limits. Unsupported subtree backends keep normal density.
+    pub fn with_subtree_raster_scale<R>(
+        &mut self,
+        multiplier: f32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        assert!(multiplier.is_finite() && multiplier >= 1.);
+        let size = self.viewport_size().scale(self.raster_scale_factor());
+        let width = size.width.0.ceil().max(1.);
+        let height = size.height.0.ceil().max(1.);
+        let mut scale = multiplier
+            .min(4.)
+            .min(8192. / width.max(height))
+            .min((16_777_216. / (width * height)).sqrt())
+            .max(1.);
+        // Leave enough room for allocation rounding at fractional display densities.
+        while scale > 1.
+            && ((width * scale).ceil() > 8192.
+                || (height * scale).ceil() > 8192.
+                || (width * scale).ceil() * (height * scale).ceil() > 16_777_216.)
+        {
+            scale = (((width * scale).ceil() - 1.) / width).max(1.);
+        }
+        if !self.supports_subtree_effects() || scale == 1. {
+            return f(self);
+        }
+        if self.invalidator.inner.borrow().draw_phase == super::DrawPhase::Paint {
+            self.next_frame.scene.set_subtree_raster_scale(scale);
+        }
+        let previous = self.subtree_raster_scale;
+        self.subtree_raster_scale *= scale;
+        let result = f(self);
+        self.subtree_raster_scale = previous;
+        result
+    }
+
     /// Overrides the fill used by monochrome content painted by `f`.
     ///
     /// Text glyphs and monochrome SVGs use their alpha atlas as a mask for the
@@ -134,6 +175,7 @@ impl Window {
     ) -> R {
         self.invalidator.debug_assert_paint_or_prepaint();
         let scale = std::mem::replace(&mut self.scale_factor, texture.scale_factor());
+        let raster = std::mem::replace(&mut self.subtree_raster_scale, 1.);
         let masks = std::mem::replace(
             &mut self.content_mask_stack,
             vec![ContentMask {
@@ -143,6 +185,7 @@ impl Window {
         let result = f(self);
         self.content_mask_stack = masks;
         self.scale_factor = scale;
+        self.subtree_raster_scale = raster;
         result
     }
 
@@ -188,7 +231,7 @@ impl Window {
             order: 0,
             bounds,
             content_mask,
-            scale_factor: self.scale_factor(),
+            scale_factor: self.raster_scale_factor(),
             opacity: self.element_opacity,
             frame,
         });
@@ -212,7 +255,7 @@ impl Window {
             order: 0,
             bounds,
             content_mask,
-            scale_factor: self.scale_factor(),
+            scale_factor: self.raster_scale_factor(),
             opacity: self.element_opacity,
             frame,
         });
@@ -445,8 +488,8 @@ impl Window {
             order: 0,
             bounds: self.snap_bounds(backdrop.bounds),
             content_mask: self.snapped_content_mask(),
-            corner_radii: backdrop.corner_radii.scale(self.scale_factor()),
-            blur_radius: ScaledPixels(blur_radius.0 * self.scale_factor()),
+            corner_radii: backdrop.corner_radii.scale(self.raster_scale_factor()),
+            blur_radius: ScaledPixels(blur_radius.0 * self.raster_scale_factor()),
             opacity,
             shader: None,
             uniforms: EffectUniforms::default(),
@@ -469,8 +512,8 @@ impl Window {
             order: 0,
             bounds: self.snap_bounds(effect.bounds),
             content_mask: self.snapped_content_mask(),
-            corner_radii: effect.corner_radii.scale(self.scale_factor()),
-            blur_radius: ScaledPixels(blur_radius.0 * self.scale_factor()),
+            corner_radii: effect.corner_radii.scale(self.raster_scale_factor()),
+            blur_radius: ScaledPixels(blur_radius.0 * self.raster_scale_factor()),
             opacity,
             shader: Some(effect.shader),
             uniforms: effect.uniforms,
@@ -550,7 +593,7 @@ impl Window {
             shader: effect.shader,
             uniforms: effect.uniforms,
             time: effect.time,
-            corner_radii: effect.corner_radii.scale(self.scale_factor()),
+            corner_radii: effect.corner_radii.scale(self.raster_scale_factor()),
             opacity,
             image_tile,
             second_image_tile,

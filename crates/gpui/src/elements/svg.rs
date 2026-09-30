@@ -168,7 +168,7 @@ impl Element for ColorSvg {
                 let transformation = self
                     .transformation
                     .map(|transformation| {
-                        transformation.into_matrix(bounds.center(), window.scale_factor())
+                        transformation.into_matrix(bounds.center(), window.raster_scale_factor())
                     })
                     .unwrap_or_default();
                 let corner_radii = style
@@ -333,7 +333,8 @@ impl Element for Svg {
                         .transformation
                         .as_ref()
                         .map(|transformation| {
-                            transformation.into_matrix(bounds.center(), window.scale_factor())
+                            transformation
+                                .into_matrix(bounds.center(), window.raster_scale_factor())
                         })
                         .unwrap_or_default();
 
@@ -354,7 +355,8 @@ impl Element for Svg {
                         .transformation
                         .as_ref()
                         .map(|transformation| {
-                            transformation.into_matrix(bounds.center(), window.scale_factor())
+                            transformation
+                                .into_matrix(bounds.center(), window.raster_scale_factor())
                         })
                         .unwrap_or_default();
 

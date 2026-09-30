@@ -86,15 +86,30 @@ and the displayed result are limited to the group's rectangular viewport. A grou
 reveal uncaptured content outside that source region. Put a background on the parent to
 fill space exposed by translation or rotation.
 
-The group captures at the current window density. Large magnification can soften text;
-it does not select a higher raster density. Equal coordinate scopes reuse cached views;
+The group captures at the current window density by default. Use
+`transform_group(content, matrix).raster_scale(2.0)` for sharper magnified text and
+vector content. This changes source rasterization without changing logical layout,
+pointer coordinates or IME geometry. Zoom does not automatically choose a density;
+magnification beyond the chosen density can still soften text. Keep the multiplier
+fixed while zooming to reuse capture textures.
+
+High-density captures allocate a full-window texture, even for a small group. Each
+requested multiplier is capped at four and reduced to fit 8192 pixels per axis and
+16,777,216 pixels (64 MiB for one RGBA8 texture), without reducing native density.
+Nested groups share these dimension and area limits. These are per-capture limits,
+not a total GPU memory budget; intermediate textures and glyph caches also consume
+memory. Custom painting code should use `window.raster_scale_factor()` for device-pixel
+shader parameters; layout and input continue to use `window.scale_factor()`.
+
+Equal coordinate scopes reuse cached views;
 matrix changes require the explicit cache option below to reuse view content. Platforms
 without subtree effects draw and hit-test the original content. Deferred popups stay unscaled and can use
 `anchored().map_anchor(true)` to follow the group.
 
 On WGPU, an unchanged source subtree can reuse its captured pixels while the matrix
 changes. Reuse requires a single writer at that capture depth and no multipass,
-two-input or 3D layers in the frame. Content, atlas-image and text-rendering changes
+two-input, high-density or 3D layers in the frame. High-density captures have their own
+source cache and can reuse unchanged pixels across matrix changes. Content, atlas-image and text-rendering changes
 invalidate the capture; video and simulation content is redrawn. This uses existing
 capture textures and does not prevent child-view cache invalidation.
 
@@ -113,7 +128,7 @@ and IME handlers to the current affine scope. Event callbacks receive current so
 coordinates. Render, layout and paint must not derive content from mapped pointer
 positions or retain coordinate mappings. Notify the entity when its content changes.
 
-Layout bounds, clipping, display density, hover changes and explicit refreshes still
+Layout bounds, clipping, display or capture density, hover changes and explicit refreshes still
 invalidate the view cache. A changed matrix also redraws views containing deferred
 overlays, tooltips or nested input scopes. Inspector and accessibility rendering bypass
 the view cache. Arbitrary mapping callbacks are not eligible for this option.

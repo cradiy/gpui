@@ -242,7 +242,7 @@ impl Element for TransitionContent {
                     0,
                     [
                         self.0.progress,
-                        f32::from(self.0.blur_radius) * window.scale_factor(),
+                        f32::from(self.0.blur_radius) * window.raster_scale_factor(),
                         self.0.edge_softness,
                         0.,
                     ],

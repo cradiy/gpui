@@ -25,6 +25,7 @@ pub fn transform_group<E: IntoElement>(
     TransformGroup {
         element: Some(element.into_element()),
         matrix,
+        raster_scale: 1.,
     }
 }
 
@@ -32,11 +33,29 @@ pub fn transform_group<E: IntoElement>(
 ///
 /// Pointer events, IME geometry, accessibility and opt-in popup anchors share
 /// the drawing matrix. Scroll deltas and keyboard focus order remain unchanged.
-/// Captured pixels use the window's raster density; zoom does not rerasterize text
-/// at a higher density or reveal content outside the source capture.
+/// Captures default to the window's raster density. Use [`Self::raster_scale`] for
+/// sharper magnified text. Zoom does not automatically change capture density or
+/// reveal content outside the source capture.
 pub struct TransformGroup<E: Element> {
     element: Option<E>,
     matrix: TransformationMatrix,
+    raster_scale: f32,
+}
+
+impl<E: Element> TransformGroup<E> {
+    /// Multiplies source raster density, independently of zoom. Defaults to one.
+    /// Values must be finite and at least one. Each requested multiplier is limited
+    /// to four; captures use the full window viewport and reduce the multiplier to
+    /// fit 8192 pixels per axis and 16 megapixels, without lowering native density.
+    /// A fixed value avoids reallocating captures during continuous zoom.
+    pub fn raster_scale(mut self, scale: f32) -> Self {
+        assert!(
+            scale.is_finite() && scale >= 1.,
+            "raster scale must be finite and at least one"
+        );
+        self.raster_scale = scale;
+        self
+    }
 }
 
 fn window_matrix(matrix: TransformationMatrix, bounds: Bounds<Pixels>) -> TransformationMatrix {
@@ -115,7 +134,11 @@ impl<E: Element> Element for TransformGroup<E> {
         let transform = PointerTransform::affine(window_matrix(self.matrix, bounds))
             .expect("resolved transform must be invertible");
         window.prepaint_subtree_effect(|window| {
-            window.with_pointer_transform(bounds, transform, |window| child.prepaint(window, cx))
+            window.with_pointer_transform(bounds, transform, |window| {
+                window.with_subtree_raster_scale(self.raster_scale, |window| {
+                    child.prepaint(window, cx)
+                })
+            })
         });
     }
     fn paint(
@@ -137,8 +160,8 @@ impl<E: Element> Element for TransformGroup<E> {
             PointerTransform::affine(matrix).expect("resolved transform must be invertible");
         let uniforms = uniforms(
             matrix,
-            window.pixel_snap_bounds(bounds),
-            window.scale_factor(),
+            window.raster_snap_bounds(bounds),
+            window.raster_scale_factor(),
         );
         window.with_subtree_effect(
             bounds,
@@ -147,7 +170,11 @@ impl<E: Element> Element for TransformGroup<E> {
             0.,
             1.,
             |window| {
-                window.with_pointer_transform(bounds, transform, |window| child.paint(window, cx))
+                window.with_pointer_transform(bounds, transform, |window| {
+                    window.with_subtree_raster_scale(self.raster_scale, |window| {
+                        child.paint(window, cx)
+                    })
+                })
             },
         );
     }

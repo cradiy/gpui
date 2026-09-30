@@ -344,27 +344,27 @@ impl<E: Element> Element for SubtreeEffect<E> {
             passes.push(gpui::SubtreeEffectPass {
                 images,
                 shader: self.shader.clone(),
-                uniforms: self.scaled_uniforms(window.scale_factor()),
+                uniforms: self.scaled_uniforms(window.raster_scale_factor()),
                 time: self.time,
                 bloom: self.bloom.clone(),
                 distance_field: self.distance_field.clone(),
                 particle_transition: self.particle_transition.map(|mut transition| {
-                    transition.scale_factor = window.scale_factor();
+                    transition.scale_factor = window.raster_scale_factor();
                     transition
                 }),
                 particles: self.particles.clone().map(|mut particles| {
-                    particles.scale_factor = window.scale_factor();
+                    particles.scale_factor = window.raster_scale_factor();
                     particles
                 }),
                 feedback: self.feedback.clone().map(|mut feedback| {
-                    feedback.scale_factor = window.scale_factor();
+                    feedback.scale_factor = window.raster_scale_factor();
                     feedback
                 }),
             });
         }
         for stage in &self.following_stages {
             if let Some(images) = stage.images.prepare(window, cx) {
-                let mut pass = stage.prepare(window.scale_factor(), self.time);
+                let mut pass = stage.prepare(window.raster_scale_factor(), self.time);
                 pass.images = images;
                 passes.push(pass);
             }

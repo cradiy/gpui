@@ -10,6 +10,7 @@ struct Demo {
     zoom: f32,
     pan: f32,
     angle: f32,
+    raster_scale: f32,
     content: Entity<Content>,
 }
 
@@ -122,7 +123,7 @@ impl Render for Demo {
             )
             .child(
                 div().flex().gap_2().children(
-                    ["−", "+", "←", "→", "Rotate", "Reset"]
+                    ["−", "+", "←", "→", "Rotate", "Raster 1× / 2×", "Reset"]
                         .into_iter()
                         .enumerate()
                         .map(|(index, label)| {
@@ -141,6 +142,10 @@ impl Render for Demo {
                                         2 => this.pan -= 20.,
                                         3 => this.pan += 20.,
                                         4 => this.angle += std::f32::consts::PI / 12.,
+                                        5 => {
+                                            this.raster_scale =
+                                                if this.raster_scale == 1. { 2. } else { 1. }
+                                        }
                                         _ => {
                                             this.zoom = 1.;
                                             this.pan = 0.;
@@ -157,13 +162,14 @@ impl Render for Demo {
                     .w(px(600.))
                     .h(px(360.))
                     .bg(rgb(0x1c2733))
-                    .child(transform_group(content, matrix)),
+                    .child(transform_group(content, matrix).raster_scale(self.raster_scale)),
             )
             .child(div().text_sm().text_color(rgb(0x99aabc)).child(format!(
-                "Zoom {:.0}% · Pan {:.0}px · Rotation {:.0}°",
+                "Zoom {:.0}% · Pan {:.0}px · Rotation {:.0}° · Requested raster {:.0}×",
                 self.zoom * 100.,
                 self.pan,
-                self.angle.to_degrees()
+                self.angle.to_degrees(),
+                self.raster_scale
             )))
     }
 }
@@ -184,6 +190,7 @@ fn main() {
                     zoom: 1.,
                     pan: 0.,
                     angle: 0.,
+                    raster_scale: 2.,
                     content: cx.new(|_| Content {
                         clicks: [0; 3],
                         popup: None,

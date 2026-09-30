@@ -38,7 +38,8 @@ fn same_scene(a: &Rc<Scene>, b: &Rc<Scene>) -> bool {
         if Rc::ptr_eq(a, b) {
             continue;
         }
-        if a.quads != b.quads
+        if a.raster_scale != b.raster_scale
+            || a.quads != b.quads
             || a.shadows != b.shadows
             || a.underlines != b.underlines
             || a.monochrome_sprites != b.monochrome_sprites

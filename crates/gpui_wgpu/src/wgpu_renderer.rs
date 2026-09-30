@@ -3720,7 +3720,15 @@ impl WgpuRenderer {
                                     ..Default::default()
                                 });
                             let mut instance = EffectInstance::from(&layer.composite);
-                            instance.image_bounds = layer.composite.bounds.into();
+                            instance.image_bounds = layer
+                                .composite
+                                .bounds
+                                .map(|value| {
+                                    gpui::ScaledPixels(
+                                        value.0 * layer.scene.raster_scale.unwrap_or(1.),
+                                    )
+                                })
+                                .into();
                             did_draw &= if let Some(second_view) = &second_view {
                                 instance.second_image_bounds = layer.composite.bounds.into();
                                 self.draw_instances_with_two_textures(
@@ -5811,6 +5819,7 @@ fn create_surface(
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
 struct RenderingParameters {
     path_sample_count: u32,
     gamma_ratios: [f32; 4],

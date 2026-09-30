@@ -252,7 +252,8 @@ impl SdfScene {
     /// Paints into a surface-local rectangle. Parent clipping and opacity are preserved.
     pub fn paint(&self, bounds: Bounds<Pixels>, window: &mut Window) -> Result<()> {
         window.paint_effect(
-            PaintEffect::new(bounds, self.shader()).uniforms(self.uniforms(window.scale_factor())),
+            PaintEffect::new(bounds, self.shader())
+                .uniforms(self.uniforms(window.raster_scale_factor())),
         )
     }
 }

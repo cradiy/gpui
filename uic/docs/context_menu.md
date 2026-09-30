@@ -71,6 +71,14 @@ ContextMenu::new()
 
 `surface` applies one callback to all three levels. Set surface callbacks on the root `ContextMenu`; submenu definitions inherit the root session's surfaces and appearance.
 
+## Positioning
+
+`ContextMenuTrigger` anchors a menu to the current displayed bounds of its trigger.
+Open menus and submenus follow layout, scrolling and affine transforms while retaining
+their normal size and logical-pixel gap. Give triggers created in a loop a stable `.id(...)`.
+`show_below` maps the supplied bounds once; use `ContextMenuTrigger` for continuous tracking.
+Right-click menus map the click to window coordinates and stay at that position.
+
 ## Interaction
 
 - Hovering a submenu entry opens it after a short delay.
@@ -87,3 +95,13 @@ Actions close the session before running. Use `ContextMenuItem::keep_open(true)`
 Use `action_with` and `submenu_with` when a row label needs custom GPUI content such as an icon, status badge, or check indicator.
 
 Menus deeper than three levels are rejected by `context_menu::show` with `ContextMenuDepthError`.
+
+## Examples
+
+```sh
+cargo run -p uic --example context_menu
+cargo run -p uic --example transform_overlays
+```
+
+The transform example includes Dropdown, Popover and context menus. Open a popup,
+then scroll over the background to change zoom.

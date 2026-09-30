@@ -1,10 +1,10 @@
-use std::{cell::Cell, rc::Rc};
-
 use gpui::{
-    AnyElement, App, Bounds, CursorStyle, Entity, Focusable, IntoElement, MouseButton, Pixels,
-    Refineable as _, RenderOnce, StyleRefinement, Styled, Window, canvas, deferred, div,
+    Anchor, AnyElement, App, CursorStyle, Entity, Focusable, IntoElement, MouseButton, Pixels,
+    Refineable as _, RenderOnce, StyleRefinement, Styled, Window, anchored, deferred, div, point,
     prelude::*, px,
 };
+
+use crate::components::overlay_anchor::{TriggerAnchor, resolve_overlay};
 
 use super::{DropdownPlacement, DropdownState};
 
@@ -78,42 +78,54 @@ impl RenderOnce for Dropdown {
         let escape_state = self.state.clone();
         let menu_style = self.style.clone();
         let menu_gap = self.menu_gap;
-        let trigger_bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+        let trigger_bounds = TriggerAnchor::default();
 
         let menu = open.then(|| {
             let outside_state = self.state.clone();
-            let trigger_bounds = trigger_bounds.clone();
-            let positioned = match self.placement {
-                DropdownPlacement::BottomStart => div().absolute().top_full().left_0(),
-                DropdownPlacement::BottomEnd => div().absolute().top_full().right_0(),
-                DropdownPlacement::TopStart => div().absolute().bottom_full().left_0(),
-                DropdownPlacement::TopEnd => div().absolute().bottom_full().right_0(),
-            };
-
-            let mut positioned = positioned
+            let outside_trigger = trigger_bounds.clone();
+            let mut positioned = div()
                 .id(("dropdown-menu", state_id))
-                .mt(match self.placement {
-                    DropdownPlacement::BottomStart | DropdownPlacement::BottomEnd => menu_gap,
-                    DropdownPlacement::TopStart | DropdownPlacement::TopEnd => gpui::px(0.),
-                })
-                .mb(match self.placement {
-                    DropdownPlacement::TopStart | DropdownPlacement::TopEnd => menu_gap,
-                    DropdownPlacement::BottomStart | DropdownPlacement::BottomEnd => gpui::px(0.),
-                })
+                .debug_selector(|| "uic-dropdown-menu".to_string())
                 .overflow_y_scroll()
                 .occlude()
                 .on_mouse_down_out(move |event, window, cx| {
-                    if !trigger_bounds
-                        .get()
-                        .is_some_and(|bounds| bounds.contains(&event.position))
-                    {
+                    if !outside_trigger.contains(event.position) {
                         outside_state.update(cx, |state, cx| state.close(window, cx));
                     }
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .children(self.menu);
             positioned.style().refine(&menu_style);
-            deferred(positioned).with_priority(self.priority)
+            let trigger = trigger_bounds.clone();
+            deferred(resolve_overlay(move |_, _| {
+                let bounds = trigger.bounds()?;
+                let (position, anchor) = match self.placement {
+                    DropdownPlacement::BottomStart => (
+                        point(bounds.left(), bounds.bottom() + menu_gap),
+                        Anchor::TopLeft,
+                    ),
+                    DropdownPlacement::BottomEnd => (
+                        point(bounds.right(), bounds.bottom() + menu_gap),
+                        Anchor::TopRight,
+                    ),
+                    DropdownPlacement::TopStart => (
+                        point(bounds.left(), bounds.top() - menu_gap),
+                        Anchor::BottomLeft,
+                    ),
+                    DropdownPlacement::TopEnd => (
+                        point(bounds.right(), bounds.top() - menu_gap),
+                        Anchor::BottomRight,
+                    ),
+                };
+                Some(
+                    anchored()
+                        .position(position)
+                        .anchor(anchor)
+                        .child(positioned)
+                        .into_any_element(),
+                )
+            }))
+            .with_priority(self.priority)
         });
 
         div()
@@ -127,6 +139,8 @@ impl RenderOnce for Dropdown {
             })
             .child(
                 div()
+                    .id(("dropdown-trigger", state_id))
+                    .debug_selector(|| "uic-dropdown-trigger".to_string())
                     .cursor(CursorStyle::PointingHand)
                     .occlude()
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -136,16 +150,7 @@ impl RenderOnce for Dropdown {
                     .children(self.trigger),
             )
             .children(menu)
-            .when(open, |this| {
-                this.child(
-                    canvas(
-                        move |bounds, _, _| trigger_bounds.set(Some(bounds)),
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-            })
+            .child(trigger_bounds.tracker())
     }
 }
 

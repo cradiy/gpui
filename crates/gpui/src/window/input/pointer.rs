@@ -153,6 +153,13 @@ impl Window {
         self.mouse_position
     }
 
+    /// The current source-to-window coordinate scope for geometry and pointer events.
+    /// Read during prepaint or a mouse callback. Retained mappings describe that frame;
+    /// collect them again when the source element is laid out or transformed.
+    pub fn pointer_mapping(&self) -> &crate::PointerMapping {
+        &self.pointer_mapping
+    }
+
     /// Scopes hitbox insertion and mouse listeners to a displayed-to-source mapping.
     /// Use the same transform around both prepaint and paint. Layout and drawing are unchanged.
     /// Affine transforms with identical matrices, bounds, clipping and density allow cached

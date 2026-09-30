@@ -1,12 +1,13 @@
-use std::{cell::Cell, rc::Rc};
+use std::rc::Rc;
+
+use super::overlay_anchor::{TriggerAnchor, resolve_overlay};
 
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, MouseButton, Pixels, Point, RenderOnce, Role, SharedString, StyleRefinement,
-    Styled, Subscription, Window, anchored, canvas, deferred, div, point, prelude::*, px,
+    Styled, Subscription, Window, anchored, deferred, div, point, prelude::*, px,
 };
 
-type BoundsTracker = Rc<Cell<Option<Bounds<Pixels>>>>;
 type ContentRenderer = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
 /// Where the popover should appear relative to its trigger.
@@ -57,7 +58,7 @@ pub struct PopoverState {
     open: bool,
     focus_handle: FocusHandle,
     previous_focus: Option<FocusHandle>,
-    trigger_bounds: BoundsTracker,
+    trigger_bounds: TriggerAnchor,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -73,7 +74,7 @@ impl PopoverState {
             open: false,
             focus_handle,
             previous_focus: None,
-            trigger_bounds: Rc::new(Cell::new(None)),
+            trigger_bounds: TriggerAnchor::default(),
             _subscriptions: vec![blur_subscription],
         }
     }
@@ -277,11 +278,11 @@ impl RenderOnce for Popover {
                     })
             })
             .children(self.trigger)
-            .child(bounds_tracker(trigger_bounds.clone()));
+            .child(trigger_bounds.tracker());
 
         let overlay = if open {
-            match (trigger_bounds.get(), self.content) {
-                (Some(bounds), Some(render)) => {
+            match self.content {
+                Some(render) => {
                     let content = render(window, cx);
                     let mut surface = div()
                         .id(("uic-popover-surface", state_id))
@@ -291,34 +292,44 @@ impl RenderOnce for Popover {
                         .child(content);
                     surface.style().refine(&self.style);
 
-                    let (position, anchor) = placement(bounds, self.placement, self.gap);
-                    let positioned = anchored().position(position).anchor(anchor).child(surface);
-                    let positioned = match self.collision {
-                        PopoverCollision::FlipAndShift => positioned,
-                        PopoverCollision::Shift => {
-                            positioned.snap_to_window_with_margin(self.viewport_margin)
-                        }
-                    };
-
                     let outside_state = self.state.clone();
-                    let viewport = window.viewport_size();
-                    let mut layer = div()
-                        .id(("uic-popover-layer", state_id))
-                        .absolute()
-                        .left(-bounds.left())
-                        .top(-bounds.top())
-                        .w(viewport.width)
-                        .h(viewport.height)
-                        .child(positioned);
-                    if self.close_on_outside {
-                        layer = layer.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            outside_state.update(cx, |state, cx| {
-                                state.dismiss(PopoverDismissReason::OutsideClick, true, window, cx)
+                    let overlay = resolve_overlay(move |window, _| {
+                        let bounds = trigger_bounds.bounds()?;
+                        let (position, anchor) = placement(bounds, self.placement, self.gap);
+                        let positioned =
+                            anchored().position(position).anchor(anchor).child(surface);
+                        let positioned = match self.collision {
+                            PopoverCollision::FlipAndShift => positioned,
+                            PopoverCollision::Shift => {
+                                positioned.snap_to_window_with_margin(self.viewport_margin)
+                            }
+                        };
+
+                        let viewport = window.viewport_size();
+                        let mut layer = div()
+                            .id(("uic-popover-layer", state_id))
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .w(viewport.width)
+                            .h(viewport.height)
+                            .child(positioned);
+                        if self.close_on_outside {
+                            layer = layer.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                outside_state.update(cx, |state, cx| {
+                                    state.dismiss(
+                                        PopoverDismissReason::OutsideClick,
+                                        true,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                                cx.stop_propagation();
                             });
-                            cx.stop_propagation();
-                        });
-                    }
-                    Some(deferred(layer).with_priority(self.priority))
+                        }
+                        Some(layer.into_any_element())
+                    });
+                    Some(deferred(overlay).with_priority(self.priority))
                 }
                 _ => None,
             }
@@ -399,15 +410,6 @@ fn placement(
             Anchor::BottomLeft,
         ),
     }
-}
-
-fn bounds_tracker(tracker: BoundsTracker) -> impl IntoElement {
-    canvas(
-        move |bounds, _, _| tracker.set(Some(bounds)),
-        |_, _, _, _| {},
-    )
-    .absolute()
-    .inset_0()
 }
 
 #[cfg(test)]

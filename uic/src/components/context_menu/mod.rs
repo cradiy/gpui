@@ -1,10 +1,12 @@
 mod appearance;
 mod menu;
 
+use super::overlay_anchor::{TriggerAnchor, resolve_overlay};
+
 use std::{cell::Cell, fmt, rc::Rc, time::Duration};
 
 use gpui::{
-    Anchor, AnchoredPositionMode, AnyElement, App, Bounds, Context, Entity, FocusHandle, Global,
+    Anchor, AnyElement, App, Bounds, Context, ElementId, Entity, FocusHandle, Global,
     InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point,
     Render, RenderOnce, Subscription, Task, Window, WindowId, anchored, canvas, deferred, div,
     point, prelude::*,
@@ -35,10 +37,15 @@ pub enum ContextMenuAlignment {
 
 /// A left-click trigger that measures its child and opens a menu below it.
 ///
+/// The open menu follows the trigger's current layout and affine transform.
+/// Menus and their gap remain in unscaled window pixels. Use a stable [`Self::id`]
+/// for repeated triggers created at the same call site.
+///
 /// Use this for toolbar and overflow menus. Pointer-positioned right-click menus
 /// should continue to use [`ContextMenuExt::context_menu`] or [`show`].
 #[derive(IntoElement)]
 pub struct ContextMenuTrigger {
+    id: ElementId,
     trigger: AnyElement,
     build: MenuBuilder,
     alignment: ContextMenuAlignment,
@@ -46,16 +53,24 @@ pub struct ContextMenuTrigger {
 }
 
 impl ContextMenuTrigger {
+    #[track_caller]
     pub fn new(
         trigger: impl IntoElement,
         build: impl Fn(&mut Window, &mut App) -> ContextMenu + 'static,
     ) -> Self {
         Self {
+            id: ElementId::CodeLocation(*core::panic::Location::caller()),
             trigger: trigger.into_any_element(),
             build: Rc::new(build),
             alignment: ContextMenuAlignment::default(),
             gap: gpui::px(6.),
         }
+    }
+
+    /// Sets a stable identity when multiple triggers are created at the same call site.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn alignment(mut self, alignment: ContextMenuAlignment) -> Self {
@@ -70,25 +85,51 @@ impl ContextMenuTrigger {
 }
 
 impl RenderOnce for ContextMenuTrigger {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let trigger_bounds: BoundsTracker = Rc::new(Cell::new(None));
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let trigger_bounds = window.with_global_id(self.id.clone(), |id, window| {
+            window.with_element_state(id, |state: Option<TriggerAnchor>, _| {
+                let state = state.unwrap_or_default();
+                (state.clone(), state)
+            })
+        });
+        let tracking = layer(cx).read(cx).active.as_ref().is_some_and(|active| {
+            active
+                .trigger
+                .as_ref()
+                .is_some_and(|(trigger, _, _)| trigger.same_trigger(&trigger_bounds))
+        });
         let bounds_for_click = trigger_bounds.clone();
         let build = self.build;
         let alignment = self.alignment;
         let gap = self.gap;
 
         div()
+            .id(self.id)
             .relative()
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                let Some(bounds) = bounds_for_click.get() else {
+                let Some(bounds) = bounds_for_click.bounds() else {
                     return;
                 };
-                let result = show_below((build)(window, cx), bounds, alignment, gap, window, cx);
+                let menu = (build)(window, cx);
+                let result = menu
+                    .validate_depth(0)
+                    .map_err(|depth| ContextMenuDepthError { depth });
+                if result.is_ok() {
+                    let (position, anchor) = below_menu_anchor(bounds, alignment, gap);
+                    layer(cx).update(cx, |layer, cx| {
+                        layer.show(menu, position, anchor, window, cx);
+                        layer.active.as_mut().unwrap().trigger =
+                            Some((bounds_for_click.clone(), alignment, gap));
+                    });
+                }
                 debug_assert!(result.is_ok(), "{result:?}");
                 cx.stop_propagation();
             })
             .child(self.trigger)
-            .child(bounds_tracker(trigger_bounds))
+            .child(trigger_bounds.tracker())
+            // A tracked trigger must prepaint again when its affine scope changes,
+            // including inside views that opt into cache_across_transforms.
+            .when(tracking, |this| this.child(deferred(div().absolute())))
     }
 }
 
@@ -165,6 +206,7 @@ impl std::error::Error for ContextMenuDepthError {}
 
 #[derive(Clone)]
 struct ContextMenuLevel {
+    parent_item: Option<usize>,
     menu: ContextMenu,
     position: Point<Pixels>,
     anchor: Anchor,
@@ -188,6 +230,7 @@ impl ContextMenuLevel {
             .map(|_| Rc::new(Cell::new(None)))
             .collect();
         Self {
+            parent_item: None,
             menu,
             position,
             anchor,
@@ -200,6 +243,7 @@ impl ContextMenuLevel {
 }
 
 struct ActiveContextMenu {
+    trigger: Option<(TriggerAnchor, ContextMenuAlignment, Pixels)>,
     session_id: u64,
     window_id: WindowId,
     previous_focus: Option<FocusHandle>,
@@ -260,6 +304,7 @@ impl ContextMenuLayer {
         let session_id = self.next_session_id;
         self.next_session_id += 1;
         self.active = Some(ActiveContextMenu {
+            trigger: None,
             session_id,
             window_id: window.window_handle().window_id(),
             previous_focus: window.focused(cx),
@@ -418,7 +463,8 @@ impl ContextMenuLayer {
                 ContextMenuPlacement::Left,
             )
         };
-        let level = ContextMenuLevel::new((**submenu).clone(), position, anchor, placement);
+        let mut level = ContextMenuLevel::new((**submenu).clone(), position, anchor, placement);
+        level.parent_item = Some(index);
         active.levels.truncate(depth + 1);
         active.levels.push(level);
         cx.notify();
@@ -690,14 +736,36 @@ impl ContextMenuLayer {
             ));
         }
 
-        deferred(
-            anchored()
-                .anchor(level.anchor)
-                .position(level.position)
-                .position_mode(AnchoredPositionMode::Window)
-                .snap_to_window_with_margin(active.viewport_margin)
-                .child(wrapper),
-        )
+        let trigger = (depth == 0).then(|| active.trigger.clone()).flatten();
+        let parent_row = level
+            .parent_item
+            .map(|index| active.levels[depth - 1].item_bounds[index].clone());
+        let placement = level.placement;
+        let gap = active.submenu_gap;
+        let margin = active.viewport_margin;
+        let fallback = (level.position, level.anchor);
+        deferred(resolve_overlay(move |_, _| {
+            let (position, anchor) = if let Some((trigger, alignment, gap)) = trigger {
+                below_menu_anchor(trigger.bounds()?, alignment, gap)
+            } else if let Some(bounds) = parent_row.and_then(|row| row.get()) {
+                match placement {
+                    ContextMenuPlacement::Left => {
+                        (point(bounds.left() - gap, bounds.top()), Anchor::TopRight)
+                    }
+                    _ => (point(bounds.right() + gap, bounds.top()), Anchor::TopLeft),
+                }
+            } else {
+                fallback
+            };
+            Some(
+                anchored()
+                    .anchor(anchor)
+                    .position(position)
+                    .snap_to_window_with_margin(margin)
+                    .child(wrapper)
+                    .into_any_element(),
+            )
+        }))
         .with_priority(CONTEXT_MENU_PRIORITY + depth)
         .into_any_element()
     }
@@ -776,6 +844,8 @@ pub fn layer(cx: &App) -> Entity<ContextMenuLayer> {
     cx.global::<GlobalContextMenu>().0.clone()
 }
 
+/// Opens at a point in the current pointer scope. Affine scopes map the point to
+/// the window once; the menu remains at that displayed position until dismissed.
 pub fn show(
     menu: ContextMenu,
     position: Point<Pixels>,
@@ -784,12 +854,16 @@ pub fn show(
 ) -> Result<(), ContextMenuDepthError> {
     menu.validate_depth(0)
         .map_err(|depth| ContextMenuDepthError { depth })?;
+    let position = window
+        .pointer_mapping()
+        .source_to_display(position)
+        .unwrap_or(position);
     layer(cx).update(cx, |layer, cx| {
         let offset = point(gpui::px(4.), gpui::px(4.));
         layer.show(menu, position + offset, root_menu_anchor(), window, cx);
         if let Some(active) = layer.active.as_mut() {
             active.levels[0].selected_index = None;
-            active.initial_pointer_position = Some(window.mouse_position());
+            active.initial_pointer_position = Some(window.raw_mouse_position());
         }
     });
     Ok(())
@@ -799,6 +873,8 @@ pub fn show(
 ///
 /// This is useful for toolbar, overflow, and dropdown menus. Viewport margins
 /// configured on the menu are still honored by the context-menu layer.
+/// Bounds are in the current pointer scope and are mapped once. Use
+/// [`ContextMenuTrigger`] to follow subsequent layout or transform changes.
 pub fn show_below(
     menu: ContextMenu,
     trigger_bounds: Bounds<Pixels>,
@@ -809,7 +885,11 @@ pub fn show_below(
 ) -> Result<(), ContextMenuDepthError> {
     menu.validate_depth(0)
         .map_err(|depth| ContextMenuDepthError { depth })?;
-    let (position, anchor) = below_menu_anchor(trigger_bounds, alignment, gap);
+    let bounds = window
+        .pointer_mapping()
+        .bounds_to_display(trigger_bounds)
+        .unwrap_or(trigger_bounds);
+    let (position, anchor) = below_menu_anchor(bounds, alignment, gap);
     layer(cx).update(cx, |layer, cx| {
         layer.show(menu, position, anchor, window, cx)
     });

@@ -430,7 +430,9 @@ impl PointerMapping {
         }
     }
 
-    pub(crate) fn bounds_to_display(&self, bounds: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+    /// Encloses all four transformed corners in displayed window coordinates, without clipping.
+    /// Returns `None` for scopes without a forward map or nonfinite coordinates.
+    pub fn bounds_to_display(&self, bounds: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
         let corners = [
             bounds.origin,
             bounds.top_right(),
@@ -464,7 +466,8 @@ impl PointerMapping {
         Some(matrix)
     }
 
-    pub(crate) fn hit_position(&self, position: Point<Pixels>) -> Option<Point<Pixels>> {
+    /// Maps a displayed pointer position into source coordinates, respecting each scope's clip.
+    pub fn hit_position(&self, position: Point<Pixels>) -> Option<Point<Pixels>> {
         let Some(node) = &self.0 else {
             return Some(position);
         };

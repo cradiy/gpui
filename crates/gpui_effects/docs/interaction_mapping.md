@@ -107,9 +107,11 @@ bounds, clipped to the window, at both normal and increased density. Backdrop bl
 simulation, 3D, multipass, two-input effects and nested subtrees without an isolated
 raster capture retain full-window captures. Shader positions stay in window coordinates.
 
-Each requested multiplier is capped at four and reduced using the full window viewport
-to fit 8192 pixels per axis and 16,777,216 pixels (64 MiB for one RGBA8 texture),
-without reducing native density. This density limit also applies to cropped captures.
+Each requested multiplier is capped at four and reduced to fit 8192 pixels per axis
+and 16,777,216 pixels (64 MiB for one RGBA8 texture), without reducing native density.
+Compatible captures use their window-clipped source bounds for this budget, so a small
+group can retain high density in a large window. Effects requiring full-window inputs
+use full-window limits. Density adjusts when the source's capture requirements change.
 Nested groups share these dimension and area limits. These are per-capture limits,
 not a total GPU memory budget; intermediate textures and glyph caches also consume
 memory. Custom painting code should use `window.raster_scale_factor()` for device-pixel

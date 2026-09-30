@@ -107,6 +107,198 @@ struct Root {
     density: f32,
 }
 
+struct RegionContent {
+    full_window: bool,
+    renders: Rc<Cell<usize>>,
+}
+
+fn identity_shader() -> EffectShader {
+    EffectShader::wgsl_image(
+        "fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return sample_effect_image(input, input.uv); }",
+    )
+}
+
+impl Render for RegionContent {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.renders.set(self.renders.get() + 1);
+        let full = self.full_window;
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                if full {
+                    // An ordinary nested effect requires full-window source pixels.
+                    window.with_subtree_effect(
+                        bounds,
+                        identity_shader(),
+                        Default::default(),
+                        0.,
+                        1.,
+                        |window| {
+                            window.paint_quad(fill(bounds, rgb(0xff0000)));
+                        },
+                    );
+                } else {
+                    window.paint_quad(fill(bounds, rgb(0xff0000)));
+                }
+            },
+        )
+        .size_full()
+    }
+}
+
+struct RegionRoot {
+    content: Entity<RegionContent>,
+    bounds: Bounds<Pixels>,
+}
+
+impl Render for RegionRoot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let content = self.content.clone();
+        let bounds = self.bounds;
+        canvas(
+            move |_, window, cx| {
+                window.prepaint_subtree_effect(|window| {
+                    window.with_subtree_raster_scale_in(bounds, 4., |window| {
+                        let mut child = content
+                            .cached(
+                                div()
+                                    .w(bounds.size.width)
+                                    .h(bounds.size.height)
+                                    .style()
+                                    .clone(),
+                            )
+                            .into_any_element();
+                        child.prepaint_as_root(bounds.origin, bounds.size.into(), window, cx);
+                        child
+                    })
+                })
+            },
+            move |_, mut child, window, cx| {
+                window.with_subtree_effect(
+                    bounds,
+                    identity_shader(),
+                    Default::default(),
+                    0.,
+                    1.,
+                    |window| {
+                        window.with_subtree_raster_scale_in(bounds, 4., |window| {
+                            child.paint(window, cx)
+                        });
+                    },
+                );
+            },
+        )
+        .size_full()
+    }
+}
+
+#[crate::test]
+fn raster_region_budget_preserves_small_captures_and_recovers_from_full_window_effects(
+    cx: &mut TestAppContext,
+) {
+    let renders = Rc::new(Cell::new(0));
+    let handle = cx.open_window(size(px(2000.), px(1400.)), {
+        let renders = renders.clone();
+        move |_, cx| RegionRoot {
+            content: cx.new(|_| RegionContent {
+                full_window: false,
+                renders,
+            }),
+            bounds: Bounds::new(point(px(30.4), px(40.4)), size(px(100.), px(80.))),
+        }
+    });
+    cx.set_subtree_effects_supported(handle.into(), true);
+    let mut previous_renders = 0;
+    for (full, changed) in [
+        (false, false),
+        (true, true),
+        (true, false),
+        (false, true),
+        (false, false),
+    ] {
+        if changed {
+            handle
+                .update(cx, |root, _, cx| {
+                    root.content.update(cx, |content, cx| {
+                        content.full_window = full;
+                        cx.notify();
+                    })
+                })
+                .unwrap();
+        }
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear();
+            let scale = window.rendered_frame.scene.subtree_layers[0]
+                .scene
+                .raster_scale
+                .unwrap();
+            if full {
+                assert!(scale > 1. && scale < 2.);
+                let width = (4000. * scale).ceil() as u64;
+                let height = (2800. * scale).ceil() as u64;
+                assert!(width * height <= 16_777_216);
+                assert!(!window.raster_budget_retrying);
+            } else {
+                // Removing a viewport-sized effect schedules a density upgrade.
+                window.draw(cx).clear();
+                let source = &window.rendered_frame.scene.subtree_layers[0].scene;
+                assert_eq!(source.raster_scale, Some(4.));
+                assert_eq!(
+                    source.quads[0].bounds.size,
+                    size(ScaledPixels(800.), ScaledPixels(640.))
+                );
+            }
+        })
+        .unwrap();
+        if !changed && previous_renders > 0 {
+            assert_eq!(renders.get(), previous_renders);
+        }
+        previous_renders = renders.get();
+    }
+}
+
+#[crate::test]
+fn raster_region_budget_limits_fractional_clipped_and_large_sources(cx: &mut TestAppContext) {
+    let viewport = size(px(5000.), px(3000.));
+    for bounds in [
+        Bounds::new(point(px(30.4), px(40.4)), size(px(100.), px(80.))),
+        Bounds::new(point(px(30.4), px(40.4)), size(px(1700.3), px(1300.7))),
+        Bounds::new(point(px(-900.4), px(40.4)), size(px(1000.), px(100.))),
+        Bounds::new(point(px(4900.4), px(40.4)), size(px(1000.), px(100.))),
+    ] {
+        let handle = cx.open_window(viewport, move |_, cx| RegionRoot {
+            content: cx.new(|_| RegionContent {
+                full_window: false,
+                renders: Default::default(),
+            }),
+            bounds,
+        });
+        cx.set_subtree_effects_supported(handle.into(), true);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.draw(cx).clear();
+            let layer = &window.rendered_frame.scene.subtree_layers[0];
+            let scale = layer.scene.raster_scale.unwrap();
+            // The base window already exceeds the full-window pixel budget.
+            assert!(scale > 1.);
+            let capture = layer.composite.bounds;
+            let width = (capture.right().0 * scale)
+                .ceil()
+                .min((10000. * scale).ceil())
+                - (capture.left().0 * scale).floor().max(0.);
+            let height = (capture.bottom().0 * scale)
+                .ceil()
+                .min((6000. * scale).ceil())
+                - (capture.top().0 * scale).floor().max(0.);
+            assert!(width <= 8192. && height <= 8192.);
+            assert!(f64::from(width) * f64::from(height) <= 16_777_216.);
+            if bounds.size.height < px(200.) {
+                assert_eq!(scale, 4.);
+            }
+        })
+        .unwrap();
+    }
+}
+
 #[crate::test]
 fn raster_capture_limits_allocation_at_large_window_sizes(cx: &mut TestAppContext) {
     // Test windows use a 2x display density. The last case already exceeds the

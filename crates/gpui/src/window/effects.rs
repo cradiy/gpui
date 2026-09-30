@@ -8,61 +8,6 @@ use anyhow::{Result, anyhow};
 use std::{borrow::Cow, sync::Arc};
 
 impl Window {
-    /// Paints an isolated subtree at a higher raster density without changing layout or input.
-    /// Use inside both `prepaint_subtree_effect` and a single-pass `with_subtree_effect`.
-    /// The multiplier must be finite and at least one; it is limited to four and reduced
-    /// to keep a full-viewport capture within 8192 pixels per axis and 16 megapixels.
-    /// WGPU crops compatible captures to the subtree bounds, including at multiplier one.
-    /// The density limit still uses the full viewport to allow full-size fallback captures.
-    /// Nested captures share these limits. Unsupported subtree backends keep normal density.
-    pub fn with_subtree_raster_scale<R>(
-        &mut self,
-        multiplier: f32,
-        f: impl FnOnce(&mut Self) -> R,
-    ) -> R {
-        self.invalidator.debug_assert_paint_or_prepaint();
-        assert!(multiplier.is_finite() && multiplier >= 1.);
-        let size = self.viewport_size().scale(self.raster_scale_factor());
-        let width = size.width.0.ceil().max(1.);
-        let height = size.height.0.ceil().max(1.);
-        let mut scale = multiplier
-            .min(4.)
-            .min(8192. / width.max(height))
-            .min((16_777_216. / (width * height)).sqrt())
-            .max(1.);
-        // Float division can round a one-pixel decrement back to the same scale.
-        // Search the ordered positive-f32 bit range so every iteration progresses.
-        let fits = |scale: f32| {
-            let width = f64::from((width * scale).ceil());
-            let height = f64::from((height * scale).ceil());
-            width <= 8192. && height <= 8192. && width * height <= 16_777_216.
-        };
-        if scale > 1. && !fits(scale) {
-            let mut lower = 1_f32.to_bits();
-            let mut upper = scale.to_bits();
-            while upper - lower > 1 {
-                let middle = lower + (upper - lower) / 2;
-                if fits(f32::from_bits(middle)) {
-                    lower = middle;
-                } else {
-                    upper = middle;
-                }
-            }
-            scale = f32::from_bits(lower);
-        }
-        if !self.supports_subtree_effects() {
-            return f(self);
-        }
-        if self.invalidator.inner.borrow().draw_phase == super::DrawPhase::Paint {
-            self.next_frame.scene.set_subtree_raster_scale(scale);
-        }
-        let previous = self.subtree_raster_scale;
-        self.subtree_raster_scale *= scale;
-        let result = f(self);
-        self.subtree_raster_scale = previous;
-        result
-    }
-
     /// Overrides the fill used by monochrome content painted by `f`.
     ///
     /// Text glyphs and monochrome SVGs use their alpha atlas as a mask for the

@@ -47,10 +47,10 @@ pub struct TransformGroup<E: Element> {
 impl<E: Element> TransformGroup<E> {
     /// Multiplies source raster density, independently of zoom. Defaults to one.
     /// Values must be finite and at least one. Each requested multiplier is limited
-    /// to four and reduced using the full viewport to fit 8192 pixels per axis and
-    /// 16 megapixels, without lowering native density. WGPU allocates compatible
-    /// captures at the group's bounds; effects requiring full-window inputs retain
-    /// full-size captures.
+    /// to four and reduced to fit 8192 pixels per axis and 16 megapixels, without
+    /// lowering native density. WGPU budgets compatible captures using the group's
+    /// bounds clipped to the window. Effects requiring full-window inputs use
+    /// full-window allocation limits.
     /// A fixed value avoids reallocating captures during continuous zoom.
     pub fn raster_scale(mut self, scale: f32) -> Self {
         assert!(
@@ -66,7 +66,7 @@ impl<E: Element> TransformGroup<E> {
     /// Translation and rotation alone do not increase density. Use a stable, unique
     /// element ID to retain the tier between frames. A tier drops only below 80% of
     /// the next lower tier, avoiding repeated allocation around a zoom boundary.
-    /// The usual viewport and nested capture limits still apply. This replaces a
+    /// The usual allocation and nested capture limits still apply. This replaces a
     /// fixed [`Self::raster_scale`]; calling that method afterward disables auto mode.
     pub fn auto_raster_scale(mut self, id: impl Into<ElementId>) -> Self {
         self.auto_raster_id = Some(id.into());
@@ -182,7 +182,7 @@ impl<E: Element> Element for TransformGroup<E> {
             .expect("resolved transform must be invertible");
         window.prepaint_subtree_effect(|window| {
             window.with_pointer_transform(bounds, transform, |window| {
-                window.with_subtree_raster_scale(self.raster_scale, |window| {
+                window.with_subtree_raster_scale_in(bounds, self.raster_scale, |window| {
                     child.prepaint(window, cx)
                 })
             })
@@ -218,7 +218,7 @@ impl<E: Element> Element for TransformGroup<E> {
             1.,
             |window| {
                 window.with_pointer_transform(bounds, transform, |window| {
-                    window.with_subtree_raster_scale(self.raster_scale, |window| {
+                    window.with_subtree_raster_scale_in(bounds, self.raster_scale, |window| {
                         child.paint(window, cx)
                     })
                 })

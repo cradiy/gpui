@@ -349,6 +349,20 @@ impl Window {
             });
         }
 
+        let (retry_raster, upgrade_raster) = self.update_raster_capture_budgets();
+        if retry_raster && !self.raster_budget_retrying {
+            // No GPU submission occurs until present(). The second draw uses
+            // full-viewport limits even if user paint changes again on retry.
+            self.raster_budget_retrying = true;
+            self.refreshing = true;
+            let result = self.draw(cx);
+            self.raster_budget_retrying = false;
+            return result;
+        }
+        if upgrade_raster {
+            self.refresh();
+            self.on_next_frame(|window, _| window.refresh());
+        }
         ArenaClearNeeded::new(&cx.element_arena)
     }
 

@@ -46,6 +46,7 @@ pub struct Scene {
     /// Raster-density multiplier relative to the parent when used as a subtree input.
     /// `None` uses the parent's density. Set by `Window::with_subtree_raster_scale`.
     pub raster_scale: Option<f32>,
+    pub(crate) raster_region: Option<RasterCaptureRegion>,
     pub(crate) paint_operations: Vec<PaintOperation>,
     primitive_bounds: BoundsTree<ScaledPixels>,
     layer_stack: Vec<DrawOrder>,
@@ -65,6 +66,13 @@ pub struct Scene {
     pub surfaces: Vec<PaintSurface>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct RasterCaptureRegion {
+    pub bounds: Bounds<Pixels>,
+    pub full_viewport_scale: f32,
+    pub region_scale: f32,
+}
+
 struct PendingSubtree {
     composite: EffectQuad,
     passes: Arc<[SubtreeEffectPass]>,
@@ -77,6 +85,7 @@ struct PendingSubtree {
 impl Scene {
     pub fn clear(&mut self) {
         self.raster_scale = None;
+        self.raster_region = None;
         self.paint_operations.clear();
         self.primitive_bounds.clear();
         self.layer_stack.clear();
@@ -215,7 +224,9 @@ impl Scene {
                 PaintOperation::EndSubtree => self.end_subtree(),
                 PaintOperation::NextSubtreeInput => self.next_subtree_input(),
                 PaintOperation::SetScene3d(frame) => self.set_subtree_scene3d(frame.clone()),
-                PaintOperation::SetRasterScale(scale) => self.set_subtree_raster_scale(*scale),
+                PaintOperation::SetRasterScale(scale, region) => {
+                    self.set_subtree_raster_capture(*scale, *region)
+                }
                 PaintOperation::RetainImage(lifetime) => self.retain_image(lifetime.clone()),
             }
         }
@@ -287,7 +298,11 @@ impl Scene {
             .push(PaintOperation::SetScene3d(frame));
     }
 
-    pub(crate) fn set_subtree_raster_scale(&mut self, scale: f32) {
+    pub(crate) fn set_subtree_raster_capture(
+        &mut self,
+        scale: f32,
+        region: Option<RasterCaptureRegion>,
+    ) {
         let pending = self
             .pending_subtrees
             .last_mut()
@@ -299,8 +314,9 @@ impl Scene {
                 && pending.scene.raster_scale.is_none()
         );
         pending.scene.raster_scale = Some(scale);
+        pending.scene.raster_region = region;
         self.paint_operations
-            .push(PaintOperation::SetRasterScale(scale));
+            .push(PaintOperation::SetRasterScale(scale, region));
     }
 
     pub(crate) fn next_subtree_input(&mut self) {
@@ -357,6 +373,22 @@ impl Scene {
 
     pub(crate) fn is_capturing_subtree(&self) -> bool {
         !self.pending_subtrees.is_empty()
+    }
+
+    /// Whether this scene can render into a window-relative cropped capture.
+    /// Nested captures must be isolated so they can move pixels into the crop
+    /// from elsewhere in the window. Viewport-sized effects require full captures.
+    pub fn supports_region_capture(&self) -> bool {
+        self.backdrop_blurs.is_empty()
+            && self.particles.is_empty()
+            && self.fluids.is_empty()
+            && self.subtree_layers.iter().all(|layer| {
+                layer.scene.raster_scale.is_some()
+                    && layer.scene3d.is_none()
+                    && layer.intermediate_effects.is_empty()
+                    && layer.second_scene.is_none()
+                    && layer.scene.supports_region_capture()
+            })
     }
 
     /// Visits this scene and all captured child scenes in draw-tree order.
@@ -474,7 +506,7 @@ pub(crate) enum PaintOperation {
     EndSubtree,
     NextSubtreeInput,
     SetScene3d(Arc<crate::Scene3dFrame>),
-    SetRasterScale(f32),
+    SetRasterScale(f32, Option<RasterCaptureRegion>),
     RetainImage(Arc<()>),
 }
 
@@ -1533,9 +1565,17 @@ mod tests {
     fn raster_capture_replay_preserves_nested_density() {
         let mut original = Scene::default();
         original.start_subtree(subtree_composite());
-        original.set_subtree_raster_scale(2.);
+        let region = RasterCaptureRegion {
+            bounds: Bounds::new(
+                point(crate::px(10.), crate::px(20.)),
+                crate::size(crate::px(100.), crate::px(80.)),
+            ),
+            full_viewport_scale: 1.,
+            region_scale: 2.,
+        };
+        original.set_subtree_raster_capture(2., Some(region));
         original.start_subtree(subtree_composite());
-        original.set_subtree_raster_scale(1.5);
+        original.set_subtree_raster_capture(1.5, None);
         insert_test_quad(&mut original);
         original.end_subtree();
         original.end_subtree();
@@ -1545,6 +1585,10 @@ mod tests {
         replayed.finish();
         let outer = &replayed.subtree_layers[0].scene;
         assert_eq!(outer.raster_scale, Some(2.));
+        let replayed_region = outer.raster_region.unwrap();
+        assert_eq!(replayed_region.bounds, region.bounds);
+        assert_eq!(replayed_region.full_viewport_scale, 1.);
+        assert_eq!(replayed_region.region_scale, 2.);
         let inner = &outer.subtree_layers[0].scene;
         assert_eq!(inner.raster_scale, Some(1.5));
         assert_eq!(inner.quads.len(), 1);

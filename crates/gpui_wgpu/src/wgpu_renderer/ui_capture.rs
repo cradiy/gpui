@@ -9,22 +9,6 @@ struct CaptureRegion {
     extent: Size<DevicePixels>,
 }
 
-// These passes address full-screen textures or maintain viewport-sized state.
-// Nested layers also need independent captures so they can move pixels into the
-// parent crop from elsewhere in the window.
-fn supports_region(scene: &Scene) -> bool {
-    scene.backdrop_blurs.is_empty()
-        && scene.particles.is_empty()
-        && scene.fluids.is_empty()
-        && scene.subtree_layers.iter().all(|layer| {
-            layer.scene.raster_scale.is_some()
-                && layer.scene3d.is_none()
-                && layer.intermediate_effects.is_empty()
-                && layer.second_scene.is_none()
-                && supports_region(&layer.scene)
-        })
-}
-
 impl CaptureRegion {
     fn full(extent: Size<DevicePixels>) -> Self {
         Self {
@@ -174,7 +158,7 @@ impl WgpuRenderer {
                 if let Some(texture) = layer.scene3d.as_ref().and_then(|frame| frame.ui_texture) {
                     captures.push((layer, CaptureRegion::full(texture.pixel_size())));
                 } else if let Some(scale) = layer.scene.raster_scale {
-                    let cropped = supports_region(&layer.scene);
+                    let cropped = layer.scene.supports_region_capture();
                     if scale == 1. && !cropped {
                         collect(&layer.scene, viewport, captures);
                         continue;

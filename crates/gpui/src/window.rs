@@ -60,6 +60,7 @@ mod input;
 mod input_metrics;
 mod paint;
 mod prompts;
+mod raster;
 #[cfg(test)]
 mod tests;
 
@@ -603,6 +604,8 @@ pub struct Window {
     capslock: Capslock,
     scale_factor: f32,
     subtree_raster_scale: f32,
+    raster_full_viewport_regions: FxHashSet<[u32; 4]>,
+    raster_budget_retrying: bool,
     pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
     appearance: WindowAppearance,
     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
@@ -1195,6 +1198,8 @@ impl Window {
             capslock,
             scale_factor,
             subtree_raster_scale: 1.,
+            raster_full_viewport_regions: FxHashSet::default(),
+            raster_budget_retrying: false,
             bounds_observers: SubscriberSet::new(),
             appearance,
             appearance_observers: SubscriberSet::new(),

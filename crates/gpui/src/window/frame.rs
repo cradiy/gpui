@@ -547,7 +547,7 @@ impl Window {
 
         if a11y_active_start_of_frame {
             // clear the builder state regardless
-            let tree_update = self.a11y.end_frame();
+            let tree_update = self.a11y.end_frame(self.scale_factor());
             #[cfg(feature = "automation")]
             self.publish_automation_snapshot(&tree_update);
 

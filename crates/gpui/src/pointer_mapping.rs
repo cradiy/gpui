@@ -98,6 +98,18 @@ impl PointerTransform {
         }
     }
 
+    fn affine_matrix(&self) -> Option<TransformationMatrix> {
+        match &self.0 {
+            TransformKind::Affine { forward, .. } => Some(*forward),
+            TransformKind::Chain(transforms) => transforms
+                .iter()
+                .try_fold(TransformationMatrix::unit(), |matrix, transform| {
+                    Some(transform.affine_matrix()?.compose(matrix))
+                }),
+            _ => None,
+        }
+    }
+
     /// Composes transforms supplied in paint-pass order. Pointer mapping runs in reverse;
     /// hit testing rejects samples outside the capture at any intermediate stage.
     pub fn chain(transforms: impl IntoIterator<Item = Self>) -> Self {
@@ -423,6 +435,18 @@ impl PointerMapping {
             max.y = max.y.max(point.y);
         }
         Some(Bounds::from_corners(min, max))
+    }
+
+    pub(crate) fn affine_matrix(&self) -> Option<TransformationMatrix> {
+        let matrix = match &self.0 {
+            Some(node) => node
+                .parent
+                .affine_matrix()?
+                .compose(node.transform.affine_matrix()?),
+            None => TransformationMatrix::unit(),
+        };
+        matrix.inverse()?;
+        Some(matrix)
     }
 
     pub(crate) fn hit_position(&self, position: Point<Pixels>) -> Option<Point<Pixels>> {

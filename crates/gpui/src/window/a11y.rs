@@ -148,6 +148,7 @@ pub(crate) struct A11y {
     pub(crate) nodes: A11yNodeBuilder,
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+    pub(crate) node_mappings: FxHashMap<NodeId, PointerMapping>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
@@ -169,6 +170,7 @@ impl A11y {
             nodes: A11yNodeBuilder::new(),
             focus_ids: FxHashMap::default(),
             node_bounds: FxHashMap::default(),
+            node_mappings: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
             window_title,
         }
@@ -251,13 +253,81 @@ impl A11y {
     pub(crate) fn begin_frame(&mut self) {
         self.focus_ids.clear();
         self.node_bounds.clear();
+        self.node_mappings.clear();
         self.action_listeners.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
     }
 
     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
-    pub(crate) fn end_frame(&mut self) -> TreeUpdate {
-        self.nodes.finalize()
+    pub(crate) fn end_frame(&mut self, scale_factor: f32) -> TreeUpdate {
+        let mut update = self.nodes.finalize();
+        let indices: FxHashMap<_, _> = update
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _))| (*id, index))
+            .collect();
+        let mut visited = FxHashSet::default();
+        let mut pending = vec![(
+            ROOT_NODE_ID,
+            accesskit::Affine::IDENTITY,
+            accesskit::Affine::IDENTITY,
+        )];
+        while let Some((id, parent_scope, parent_transform)) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(&index) = indices.get(&id) else {
+                continue;
+            };
+            // Synthetic nodes inherit their owner's scope. Ordinary nodes record their
+            // complete window-relative scope, so only the delta belongs in the tree.
+            let scope = self
+                .node_mappings
+                .get(&id)
+                .map(|mapping| {
+                    let matrix = mapping.affine_matrix().unwrap_or_default();
+                    let [[a, c], [b, d]] = matrix.rotation_scale;
+                    let [x, y] = matrix.translation;
+                    accesskit::Affine::new([
+                        a as f64,
+                        b as f64,
+                        c as f64,
+                        d as f64,
+                        x as f64 * scale_factor as f64,
+                        y as f64 * scale_factor as f64,
+                    ])
+                })
+                .unwrap_or(parent_scope);
+            let node = &mut update.nodes[index].1;
+            let mut local = node
+                .transform()
+                .copied()
+                .unwrap_or(accesskit::Affine::IDENTITY);
+            if scope != parent_scope {
+                local = parent_scope.inverse() * scope * local;
+                node.set_transform(local);
+            }
+            let transform = parent_transform * local;
+            if let Some(bounds) = node.bounds() {
+                let bounds = transform.transform_rect_bbox(bounds);
+                let scale = scale_factor as f64;
+                let [x0, y0, x1, y1] = [bounds.x0, bounds.y0, bounds.x1, bounds.y1]
+                    .map(|value| (value / scale) as f32);
+                if [x0, y0, x1, y1].iter().all(|value| value.is_finite()) {
+                    self.node_bounds.insert(
+                        id,
+                        Bounds::from_corners(point(px(x0), px(y0)), point(px(x1), px(y1))),
+                    );
+                }
+            }
+            pending.extend(
+                node.children()
+                    .iter()
+                    .map(|child| (*child, scope, transform)),
+            );
+        }
+        update
     }
 }
 
@@ -580,6 +650,100 @@ mod tests {
         a11y
     }
 
+    #[test]
+    fn affine_scopes_preserve_accesskit_hierarchy_and_synthetic_geometry() {
+        use crate::{
+            Bounds, PointerMapping, PointerTransform, TransformationMatrix, point, px, size,
+        };
+        let mut a11y = new_a11y();
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(300.)));
+        let outer = PointerMapping::default().then(
+            bounds,
+            bounds,
+            2.,
+            PointerTransform::affine(TransformationMatrix {
+                rotation_scale: [[2., 0.], [0., 2.]],
+                translation: [100., 50.],
+            })
+            .unwrap(),
+        );
+        let inner = outer.then(
+            bounds,
+            bounds,
+            2.,
+            PointerTransform::affine(TransformationMatrix {
+                translation: [10., 5.],
+                ..TransformationMatrix::unit()
+            })
+            .unwrap(),
+        );
+        let rect = accesskit::Rect::new(20., 40., 60., 60.);
+        let mut node = test_node();
+        node.set_bounds(rect);
+        a11y.nodes.push(NodeId(1), node.clone());
+        a11y.node_mappings.insert(NodeId(1), outer.clone());
+        a11y.nodes.push(NodeId(2), node.clone());
+        a11y.node_mappings.insert(NodeId(2), outer);
+        a11y.nodes.push(NodeId(3), node.clone());
+        a11y.node_mappings.insert(NodeId(3), inner);
+        a11y.nodes.push_leaf(NodeId(5), node.clone());
+        a11y.node_mappings
+            .insert(NodeId(5), PointerMapping::default());
+        // A synthetic text run retains its authored geometry and local transform.
+        node.set_transform(accesskit::Affine::translate((6., 4.)));
+        node.set_character_positions(vec![0., 8., 16.]);
+        a11y.nodes.push_leaf(NodeId(4), node);
+        a11y.nodes.pop();
+        a11y.nodes.pop();
+        a11y.nodes.pop();
+        let update = a11y.end_frame(2.);
+        let node = |id| {
+            &update
+                .nodes
+                .iter()
+                .find(|(key, _)| *key == NodeId(id))
+                .unwrap()
+                .1
+        };
+        assert_eq!(
+            node(2).transform(),
+            None,
+            "unchanged scopes must not compound"
+        );
+        let outer = *node(1).transform().unwrap();
+        let nested = outer * *node(3).transform().unwrap();
+        let synthetic = nested * *node(4).transform().unwrap();
+        assert_eq!(
+            (nested * *node(5).transform().unwrap()).transform_rect_bbox(rect),
+            rect,
+            "a window-coordinate node must cancel its parent's scope"
+        );
+        assert_eq!(
+            outer.transform_rect_bbox(rect),
+            accesskit::Rect::new(240., 180., 320., 220.)
+        );
+        assert_eq!(
+            nested.transform_rect_bbox(rect),
+            accesskit::Rect::new(280., 200., 360., 240.)
+        );
+        assert_eq!(
+            synthetic.transform_rect_bbox(rect),
+            accesskit::Rect::new(292., 208., 372., 248.)
+        );
+        assert_eq!(
+            node(4).character_positions(),
+            Some([0., 8., 16.].as_slice())
+        );
+        assert_eq!(
+            a11y.node_bounds[&NodeId(4)],
+            Bounds::new(point(px(146.), px(104.)), size(px(40.), px(20.)))
+        );
+        // Scope and fallback click geometry must disappear with the old frame.
+        a11y.begin_frame();
+        assert!(a11y.node_mappings.is_empty());
+        assert!(a11y.node_bounds.is_empty());
+    }
+
     #[cfg(feature = "automation")]
     #[test]
     fn automation_collection_does_not_activate_the_platform_adapter() {
@@ -833,7 +997,7 @@ mod tests {
         a11y.nodes.pop(); // c
         a11y.nodes.pop(); // b
 
-        let update = a11y.end_frame();
+        let update = a11y.end_frame(1.);
         assert_eq!(update.focus, a);
     }
 }

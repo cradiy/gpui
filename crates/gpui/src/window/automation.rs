@@ -1,4 +1,4 @@
-use crate::{App, Bounds, Pixels, Size, Window, WindowId, point, px};
+use crate::{App, Bounds, Pixels, Size, Window, WindowId};
 use accesskit::{NodeId, Role, Toggled, TreeUpdate};
 use collections::{FxHashMap, FxHashSet};
 use std::sync::Arc;
@@ -252,12 +252,7 @@ impl Window {
                 },
                 numeric_value: if secret { None } else { node.numeric_value() },
                 children: node.children().iter().map(|child| child.0).collect(),
-                bounds: node.bounds().map(|rect| {
-                    Bounds::from_corners(
-                        point(px(rect.x0 as f32 / scale), px(rect.y0 as f32 / scale)),
-                        point(px(rect.x1 as f32 / scale), px(rect.y1 as f32 / scale)),
-                    )
-                }),
+                bounds: self.a11y.node_bounds.get(&id).copied(),
                 disabled,
                 read_only: node.is_read_only(),
                 hidden,

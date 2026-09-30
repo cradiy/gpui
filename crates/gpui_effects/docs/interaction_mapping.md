@@ -36,9 +36,9 @@ Scroll deltas, button state and modifiers are unchanged.
 Use `window.raw_mouse_position()` for displayed window coordinates, such as when
 positioning an independent cursor-following lens.
 
-Layout, keyboard focus, accessibility bounds and deferred overlays are not deformed.
-IME geometry follows affine scopes as described below; nonlinear effects retain
-untransformed IME bounds. Mapped child-view caches are invalidated when their coordinate
+Layout, keyboard focus and deferred overlays are not deformed.
+IME and accessibility geometry follow affine scopes as described below; nonlinear
+effects retain untransformed geometry. Mapped child-view caches are invalidated when their coordinate
 scope changes. Backends without subtree-effect support retain ordinary rendering
 and pointer behavior.
 
@@ -100,8 +100,18 @@ painting, without requiring another keystroke. Platform character-position queri
 are mapped back to source coordinates without clipping.
 
 Scopes containing a callback or decorative transform have no forward geometry map,
-so text bounds retain their source coordinates. Accessibility bounds and deferred
-overlay placement are not automatically mapped.
+so text bounds retain their source coordinates.
+
+## Accessibility geometry
+
+Accessible elements retain their affine coordinate scopes. AccessKit receives relative
+node transforms, with translation converted to physical pixels. Nested nodes in the
+same scope inherit the transform once. Synthetic children inherit their owner's scope,
+including text runs with character positions; authored node transforms are preserved.
+
+GPUI's fallback accessibility click uses the resulting displayed bounds, and automation
+snapshots report those bounds in logical window pixels. Nonlinear scopes retain their
+original accessibility geometry. Layout and deferred overlay placement are unchanged.
 
 ## Example
 

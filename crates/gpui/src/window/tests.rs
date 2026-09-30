@@ -243,6 +243,7 @@ fn run_pointer_mapping_probe(transform: crate::PointerTransform) {
     assert!(events.contains(&("raw", point(px(450.), px(30.)), point(px(450.), px(30.)))));
 }
 
+mod affine_a11y;
 mod affine_cache;
 mod affine_ime;
 

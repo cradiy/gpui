@@ -82,7 +82,9 @@ struct Background {
     uint stop_count;
     float gradient_phase;
     uint gradient_repeating;
-    uint pad[2];
+    float gradient_midpoints[4];
+    float angular_seam_width;
+    uint pad;
 };
 
 struct GradientColor {
@@ -357,7 +359,7 @@ float4 select_gradient_color(
     return color3;
 }
 
-float4 sample_linear_gradient(
+float4 sample_gradient_stops(
     Background background,
     float position,
     float4 color0,
@@ -413,7 +415,12 @@ float4 sample_linear_gradient(
     float t = clamp((sample_position - left_position) / segment, 0.0, 1.0);
     float4 left_color = select_gradient_color(left_ix, color0, color1, color2, color3);
     float4 right_color = select_gradient_color(right_ix, color0, color1, color2, color3);
-    float4 color = lerp(left_color, right_color, t);
+    float midpoint = background.gradient_midpoints[left_ix];
+    float weight = t;
+    if (midpoint != 0.5 && t > 0.0 && t < 1.0) {
+        weight = pow(t, log(0.5) / log(midpoint));
+    }
+    float4 color = lerp(left_color, right_color, weight);
     if (background.gradient_repeating != 0) {
         uint before_ix = left_ix > 0 ? left_ix - 1 : count - 1;
         uint after_ix = right_ix + 1 < count ? right_ix + 1 : 0;
@@ -432,6 +439,26 @@ float4 sample_linear_gradient(
             + weight1 * left_color
             + weight2 * right_color
             + weight3 * select_gradient_color(after_ix, color0, color1, color2, color3);
+    }
+    return color;
+}
+
+float4 sample_linear_gradient(
+    Background background,
+    float position,
+    float4 color0,
+    float4 color1,
+    float4 color2,
+    float4 color3) {
+    float4 color = sample_gradient_stops(background, position, color0, color1, color2, color3);
+    float width = background.angular_seam_width;
+    float half_width = width * 0.5;
+    if (background.tag == 5 && background.gradient_repeating == 0 && width > 0.0
+        && (position < half_width || position > 1.0 - half_width)) {
+        float4 seam_start = sample_gradient_stops(background, 1.0 - half_width, color0, color1, color2, color3);
+        float4 seam_end = sample_gradient_stops(background, half_width, color0, color1, color2, color3);
+        float wrapped = position < half_width ? position : position - 1.0;
+        color = lerp(seam_start, seam_end, smoothstep(-half_width, half_width, wrapped));
     }
     return background.color_space == 1 ? oklab_to_srgb(color) : color;
 }

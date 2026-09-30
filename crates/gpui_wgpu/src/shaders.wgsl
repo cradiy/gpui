@@ -165,7 +165,9 @@ struct Background {
     stop_count: u32,
     gradient_phase: f32,
     gradient_repeating: u32,
-    pad: array<u32, 2>,
+    gradient_midpoints: array<f32, 4>,
+    angular_seam_width: f32,
+    pad: u32,
 }
 
 struct AtlasTextureId {
@@ -444,7 +446,7 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
     return result;
 }
 
-fn sample_linear_gradient(
+fn sample_gradient_stops(
     background: Background,
     position: f32,
     colors: array<vec4<f32>, 4>,
@@ -497,7 +499,13 @@ fn sample_linear_gradient(
 
     let segment = max(right_position - left_position, 0.000001);
     let t = clamp((sample_position - left_position) / segment, 0.0, 1.0);
-    var color = mix(colors[left_ix], colors[right_ix], t);
+    // CSS color-hint interpolation: the segment midpoint is a 50% mix.
+    let midpoint = background.gradient_midpoints[left_ix];
+    var weight = t;
+    if (midpoint != 0.5 && t > 0.0 && t < 1.0) {
+        weight = pow(t, log(0.5) / log(midpoint));
+    }
+    var color = mix(colors[left_ix], colors[right_ix], weight);
     if (background.gradient_repeating != 0u) {
         var before_ix = count - 1u;
         if (left_ix > 0u) {
@@ -522,6 +530,21 @@ fn sample_linear_gradient(
             + weight1 * colors[left_ix]
             + weight2 * colors[right_ix]
             + weight3 * colors[after_ix];
+    }
+    return color;
+}
+
+fn sample_linear_gradient(background: Background, position: f32,
+    colors: array<vec4<f32>, 4>) -> vec4<f32> {
+    var color = sample_gradient_stops(background, position, colors);
+    let width = background.angular_seam_width;
+    let half_width = width * 0.5;
+    if (background.tag == 5u && background.gradient_repeating == 0u && width > 0.0
+        && (position < half_width || position > 1.0 - half_width)) {
+        let seam_start = sample_gradient_stops(background, 1.0 - half_width, colors);
+        let seam_end = sample_gradient_stops(background, half_width, colors);
+        let wrapped = select(position - 1.0, position, position < half_width);
+        color = mix(seam_start, seam_end, smoothstep(-half_width, half_width, wrapped));
     }
     if (background.color_space == 1u) {
         return oklab_to_linear_srgb(color);

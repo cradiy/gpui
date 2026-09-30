@@ -1387,7 +1387,7 @@ GradientColor prepare_fill_color(Background background) {
   return out;
 }
 
-float4 sample_linear_gradient(
+float4 sample_gradient_stops(
     Background background,
     float position,
     thread const float4 colors[4]) {
@@ -1438,7 +1438,13 @@ float4 sample_linear_gradient(
 
   float segment = max(right_position - left_position, 0.000001);
   float t = clamp((sample_position - left_position) / segment, 0.0, 1.0);
-  float4 color = mix(colors[left_ix], colors[right_ix], t);
+  // Match CSS color-hint interpolation and the WGSL backend.
+  float midpoint = background.gradient_midpoints[left_ix];
+  float weight = t;
+  if (midpoint != 0.5 && t > 0.0 && t < 1.0) {
+    weight = pow(t, log(0.5) / log(midpoint));
+  }
+  float4 color = mix(colors[left_ix], colors[right_ix], weight);
   if (background.gradient_repeating != 0) {
     uint before_ix = left_ix > 0 ? left_ix - 1 : count - 1;
     uint after_ix = right_ix + 1 < count ? right_ix + 1 : 0;
@@ -1457,6 +1463,21 @@ float4 sample_linear_gradient(
       + weight1 * colors[left_ix]
       + weight2 * colors[right_ix]
       + weight3 * colors[after_ix];
+  }
+  return color;
+}
+
+float4 sample_linear_gradient(Background background, float position,
+    thread const float4 colors[4]) {
+  float4 color = sample_gradient_stops(background, position, colors);
+  float width = background.angular_seam_width;
+  float half_width = width * 0.5;
+  if (background.tag == 5 && background.gradient_repeating == 0 && width > 0.0
+      && (position < half_width || position > 1.0 - half_width)) {
+    float4 seam_start = sample_gradient_stops(background, 1.0 - half_width, colors);
+    float4 seam_end = sample_gradient_stops(background, half_width, colors);
+    float wrapped = position < half_width ? position : position - 1.0;
+    color = mix(seam_start, seam_end, smoothstep(-half_width, half_width, wrapped));
   }
   return background.color_space == 1 ? oklab_to_srgb(color) : color;
 }

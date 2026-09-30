@@ -903,8 +903,10 @@ pub struct Background {
     pub(crate) stop_count: u32,
     pub(crate) gradient_phase: f32,
     pub(crate) gradient_repeating: u32,
+    pub(crate) gradient_midpoints: [f32; 4],
+    pub(crate) angular_seam_width: f32,
     /// Padding for alignment for repr(C) layout and containing GPU arrays.
-    pad: [u32; 2],
+    pad: u32,
 }
 
 impl std::fmt::Debug for Background {
@@ -949,7 +951,9 @@ impl Default for Background {
             stop_count: 0,
             gradient_phase: 0.0,
             gradient_repeating: 0,
-            pad: [0; 2],
+            gradient_midpoints: [0.5; 4],
+            angular_seam_width: 0.0,
+            pad: 0,
         }
     }
 }
@@ -1137,6 +1141,34 @@ impl LinearColorStop {
 }
 
 impl Background {
+    /// Blends across an angular gradient's wrap seam without changing its stops.
+    /// The width is a fraction of a full turn, split equally around the seam.
+    /// Zero preserves the hard seam; other gradient kinds are unaffected.
+    pub fn angular_seam_width(mut self, width: f32) -> Self {
+        assert!(
+            (0.0..=0.5).contains(&width),
+            "angular seam width must be between 0 and 0.5"
+        );
+        self.angular_seam_width = width;
+        self
+    }
+
+    /// Sets the 50% color-mix position within the segment starting at `index`.
+    ///
+    /// The position is relative to that segment, not to the entire gradient.
+    /// Values must be finite and strictly between zero and one. The default
+    /// midpoint of 0.5 preserves linear interpolation. Periodic spline
+    /// backgrounds ignore midpoints.
+    pub fn gradient_midpoint(mut self, index: usize, midpoint: f32) -> Self {
+        assert!(index < 3, "gradient segment index must be less than 3");
+        assert!(
+            midpoint > 0.0 && midpoint < 1.0,
+            "gradient midpoint must be between 0 and 1"
+        );
+        self.gradient_midpoints[index] = midpoint;
+        self
+    }
+
     /// Select gradient geometry without changing stops, interpolation, angle or phase.
     /// Non-gradient backgrounds are returned unchanged.
     pub fn gradient_kind(mut self, kind: GradientKind) -> Self {

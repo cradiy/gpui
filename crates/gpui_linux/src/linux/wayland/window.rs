@@ -35,9 +35,9 @@ use crate::linux::wayland::{
 };
 use crate::linux::{Globals, Output, WaylandClientStatePtr, get_window};
 use gpui::{
-    AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, GpuSpecs, Modifiers, Pixels,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling,
+    AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, DisplayId, GpuSpecs, Modifiers,
+    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
+    Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
     WindowDecorations, WindowKind, WindowParams, layer_shell::LayerShellNotSupportedError,
     popup::PopupOptions, px, size,
@@ -226,6 +226,7 @@ pub struct WaylandWindowState {
     pending_resize: Option<Size<Pixels>>,
     frame_callback: PendingFrameCallback<ObjectId>,
     display: Option<(ObjectId, Output)>,
+    requested_display: Option<DisplayId>,
     globals: Globals,
     renderer: WgpuRenderer,
     bounds: Bounds<Pixels>,
@@ -759,6 +760,7 @@ impl WaylandWindowState {
             pending_resize: None,
             frame_callback: PendingFrameCallback::default(),
             display: None,
+            requested_display: options.display_id,
             renderer,
             bounds: options.bounds,
             scale: 1.0,
@@ -2100,7 +2102,10 @@ impl PlatformWindow for WaylandWindow {
         let state = self.borrow();
         if let Some(toplevel) = state.surface_state.toplevel() {
             if !state.fullscreen {
-                toplevel.set_fullscreen(None);
+                let output = state
+                    .requested_display
+                    .and_then(|id| state.client.output_for_display(id));
+                toplevel.set_fullscreen(output.as_ref());
             } else {
                 toplevel.unset_fullscreen();
             }

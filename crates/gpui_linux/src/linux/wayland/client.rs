@@ -480,6 +480,10 @@ impl WaylandClientState {
 pub struct WaylandClientStatePtr(Weak<RefCell<WaylandClientState>>);
 
 impl WaylandClientStatePtr {
+    pub(super) fn output_for_display(&self, display_id: DisplayId) -> Option<wl_output::WlOutput> {
+        self.get_client().borrow().output_for_display(display_id)
+    }
+
     fn fail_drag(&self, session_id: DragSessionId, failure: gpui::DragFailure) {
         let window = self
             .get_client()
@@ -902,6 +906,14 @@ impl WaylandClientStatePtr {
 }
 
 impl WaylandClientState {
+    fn output_for_display(&self, display_id: DisplayId) -> Option<wl_output::WlOutput> {
+        let protocol_id: u64 = display_id.into();
+        self.wl_outputs
+            .iter()
+            .find(|(id, _)| id.protocol_id() as u64 == protocol_id)
+            .map(|(_, output)| output.clone())
+    }
+
     fn hide_cursor_until_mouse_moves(&mut self) {
         if self.cursor_hidden_window.is_some() {
             return;
@@ -1034,7 +1046,8 @@ impl WaylandClient {
         startup_activation_token: Option<String>,
         external_surface_role: Option<ExternalWaylandSurfaceRoleFactory>,
     ) -> Self {
-        let (globals, event_queue) = registry_queue_init::<WaylandClientStatePtr>(&conn).unwrap();
+        let (globals, mut event_queue) =
+            registry_queue_init::<WaylandClientStatePtr>(&conn).unwrap();
         let qh = event_queue.handle();
 
         let mut seat: Option<wl_seat::WlSeat> = None;
@@ -1264,6 +1277,12 @@ impl WaylandClient {
             ime_enabled: None,
         }));
 
+        // The registry roundtrip only discovers globals. Dispatch the initial
+        // properties of the outputs bound above before applications query displays.
+        event_queue
+            .roundtrip(&mut WaylandClientStatePtr(Rc::downgrade(&state)))
+            .expect("failed to initialize Wayland output information");
+
         insert_wayland_source(conn, event_queue, handle).unwrap();
 
         Self(state)
@@ -1353,14 +1372,9 @@ impl LinuxClient for WaylandClient {
             _ => (state.keyboard_focused_window.clone(), None),
         };
 
-        let target_output = params.display_id.and_then(|display_id| {
-            let target_protocol_id: u64 = display_id.into();
-            state
-                .wl_outputs
-                .iter()
-                .find(|(id, _)| id.protocol_id() as u64 == target_protocol_id)
-                .map(|(_, output)| output.clone())
-        });
+        let target_output = params
+            .display_id
+            .and_then(|display_id| state.output_for_display(display_id));
 
         let appearance = state.common.appearance;
         let compositor_gpu = state.compositor_gpu.take();
@@ -3390,6 +3404,26 @@ impl Dispatch<XdgDialogV1, ()> for WaylandClientStatePtr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a running Wayland compositor with an enabled output"]
+    fn startup_displays_are_available_before_opening_a_window() {
+        let connection = Connection::connect_to_env().unwrap();
+        let client = WaylandClient::with_connection(connection, None, None);
+        let displays = client.displays();
+        assert!(
+            !displays.is_empty(),
+            "startup must receive the initial output batch"
+        );
+        assert!(client.0.borrow().windows.is_empty());
+        for display in displays {
+            let state = client.0.borrow();
+            let output = state.output_for_display(display.id()).unwrap();
+            assert!(state.outputs.contains_key(&output.id()));
+            assert!(display.bounds().size.width > px(0.));
+            assert!(display.bounds().size.height > px(0.));
+        }
+    }
 
     fn output_geometry(x: i32, y: i32, transform: wl_output::Transform) -> wl_output::Event {
         wl_output::Event::Geometry {

@@ -1597,7 +1597,11 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
 
 float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Target {
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
-    float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
+    float2 atlas_size;
+    t_sprite.GetDimensions(atlas_size.x, atlas_size.y);
+    float2 tile_min = (float2(sprite.tile.bounds.origin) + 0.5) / atlas_size;
+    float2 tile_max = (float2(sprite.tile.bounds.origin + sprite.tile.bounds.size) - 0.5) / atlas_size;
+    float4 sample = t_sprite.Sample(s_sprite, clamp(input.tile_position, tile_min, tile_max));
     float distance = quad_sdf(input.local_position, sprite.clip_bounds, sprite.corner_radii);
 
     float4 color = sample;

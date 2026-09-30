@@ -50,6 +50,16 @@ impl Window {
         }
 
         #[cfg(any(feature = "inspector", debug_assertions))]
+        if self.raw_mouse_position().x < self.viewport_size.width - self.inspector_width()
+            && let Some(inspector) = self.inspector.clone()
+        {
+            inspector.update(cx, |inspector, _| {
+                inspector.pointer_position = Some(self.raw_mouse_position());
+            });
+            self.refresh();
+        }
+
+        #[cfg(any(feature = "inspector", debug_assertions))]
         if self.is_inspector_picking(cx)
             && self.raw_mouse_position().x < self.viewport_size.width - self.inspector_width()
         {
@@ -208,6 +218,13 @@ impl Window {
             behavior,
         };
         self.next_frame.hitboxes.push(hitbox.clone());
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        if let Some(index) = self.next_frame.inspector_stack.last() {
+            self.next_frame.inspector_hitboxes.insert(
+                hitbox.id,
+                self.next_frame.inspector_elements[*index].id.clone(),
+            );
+        }
         hitbox
     }
 

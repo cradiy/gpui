@@ -8,10 +8,12 @@ and measured dimensions. The selected element remains highlighted.
   spacing, and clipping.
 - **Style**: color swatches, opacity, borders, corner radii, and shadows.
 - **Text**: inherited base typography, direct text previews, and text layout bounds.
+- **Input**: focus, cursor, key context, scroll offset, registered listeners, and a
+  pointer probe showing hitboxes and occlusion from front to back.
 - **Source**: Rust type, element identity, and source location.
 
-**Parent** selects the containing element. **Copy report** copies all four pages
-and resolved spacing for the selected element. **Hide overlay** shows the
+**Parent** selects the containing element. **Copy report** copies all property pages,
+resolved spacing, and the pointer probe. **Hide overlay** shows the
 application's original colors while preserving the selection.
 
 ```rust,ignore
@@ -33,6 +35,14 @@ cargo run -p gpui_inspector --example inspector
 Picking intercepts pointer events in the application area. Scroll while picking
 to select an ancestor. Stop picking to interact with the application normally.
 Custom element details can be added with `App::register_inspector_element`.
+
+The pointer probe retains the last position inside the application while you use
+the panel. Before the pointer moves there, it probes the selection center. Click
+an attributed hitbox to inspect its element. Stop picking to see normal input
+regions: picking also creates hitboxes for otherwise non-interactive elements.
+Mouse and scroll eligibility include clipping and pointer coordinate mappings;
+they do not indicate whether a handler consumes an event. Listener counts cover
+explicit element registrations, not window-level or internally installed handlers.
 
 The tree contains laid-out elements with source locations, including the visible
 portion of virtualized lists. Deferred elements appear as separate roots.

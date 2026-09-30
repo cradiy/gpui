@@ -7,6 +7,8 @@ use gpui::{
 use std::collections::HashSet;
 
 mod details;
+mod interaction;
+mod theme;
 
 /// Registers the inspector UI. The application controls window toggles and keyboard bindings.
 pub fn init(cx: &mut App) {
@@ -17,25 +19,26 @@ fn button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .debug_selector(|| id.to_owned())
-        .px_3()
+        .px_2()
         .py_1()
-        .rounded_md()
+        .text_size(px(11.))
+        .rounded(px(5.))
         .cursor_pointer()
-        .bg(rgb(0x293443))
-        .hover(|style| style.bg(rgb(0x39495d)))
+        .text_color(rgb(theme::MUTED))
+        .hover(|style| style.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT)))
         .child(label)
 }
 
 fn property(label: &str, value: impl Into<String>) -> Div {
     div()
         .flex()
-        .gap_3()
-        .py_1()
+        .gap_2()
+        .py(px(5.))
         .child(
             div()
-                .w(px(128.))
+                .w(px(106.))
                 .flex_shrink_0()
-                .text_color(rgb(0x94a3b8))
+                .text_color(rgb(theme::MUTED))
                 .child(label.to_owned()),
         )
         .child(div().flex_1().min_w_0().child(value.into()))
@@ -54,6 +57,18 @@ fn render(
         None::<InspectorElementId>
     });
     let copy_status = window.use_keyed_state("inspector-copy-status", cx, |_, _| "");
+    let tree_height = px((f32::from(window.viewport_size().height) * 0.24).clamp(80., 220.));
+    let previous_tree_height = window.use_keyed_state("inspector-tree-height", cx, |_, _| px(0.));
+    let tree_resized = *previous_tree_height.read(cx) != tree_height;
+    if tree_resized {
+        previous_tree_height.update(cx, |height, _| *height = tree_height);
+    }
+    let tree_scroll = window
+        .use_keyed_state("inspector-tree-scroll", cx, |_, _| {
+            gpui::ScrollHandle::new()
+        })
+        .read(cx)
+        .clone();
     let elements = window.inspector_elements();
     // Prune state for elements no longer present in this window.
     collapsed.update(cx, |collapsed, _| {
@@ -61,7 +76,8 @@ fn render(
         collapsed.retain(|id| present.contains(id));
     });
     let selected = inspector.active_element_id();
-    if previous_selection.read(cx).as_ref() != selected {
+    let selection_changed = previous_selection.read(cx).as_ref() != selected;
+    if selection_changed {
         previous_selection.update(cx, |previous, _| *previous = selected.cloned());
         copy_status.update(cx, |status, _| *status = "");
         if let Some(index) = elements
@@ -90,6 +106,7 @@ fn render(
         }
     }
     let mut rows = Vec::new();
+    let mut reveal_row = None;
     for (index, element) in elements.iter().enumerate() {
         if let Some(parent) = element.parent {
             depths[index] = depths[parent] + 1;
@@ -100,6 +117,9 @@ fn render(
         }
         let id = element.id.clone();
         let is_selected = Some(&id) == selected;
+        if is_selected && (selection_changed || tree_resized) {
+            reveal_row = Some(rows.len());
+        }
         let is_collapsed = collapsed.read(cx).contains(&id);
         let type_name = element
             .type_name
@@ -170,14 +190,19 @@ fn render(
                 .debug_selector(move || format!("inspector-row-{index}"))
                 .flex()
                 .items_center()
-                .h(px(30.))
+                .h(px(27.))
                 .flex_shrink_0()
                 .pl(px(8. + depths[index] as f32 * 12.))
                 .pr_2()
                 .gap_1()
                 .cursor_pointer()
-                .when(is_selected, |row| row.bg(rgb(0x25466a)))
-                .hover(|style| style.bg(rgb(0x2c3e52)))
+                .border_l_2()
+                .border_color(gpui::transparent_black())
+                .when(is_selected, |row| {
+                    row.bg(rgb(theme::SELECTED))
+                        .border_color(rgb(theme::ACCENT))
+                })
+                .hover(|style| style.bg(rgb(theme::HOVER)))
                 .on_click(cx.listener(move |inspector, _, window, cx| {
                     inspector.select(id.clone(), window);
                     cx.notify();
@@ -212,8 +237,8 @@ fn render(
                 )
                 .child(
                     div()
-                        .text_color(rgb(0x94a3b8))
-                        .text_xs()
+                        .text_color(rgb(theme::MUTED))
+                        .text_size(px(10.))
                         .flex_shrink_0()
                         .child(format!(
                             "{:.0}×{:.0}",
@@ -230,11 +255,11 @@ fn render(
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .p_4();
+        .p_3();
     let mut navigation = div()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap_1()
         .px_3()
         .py_2()
         .flex_shrink_0();
@@ -252,14 +277,22 @@ fn render(
         }
         let report_element = element.clone();
         let report_parent = parent.clone();
+        let probe = inspector
+            .pointer_position()
+            .unwrap_or(element.bounds.center());
+        let hits = window.inspector_hitboxes_at(probe);
+        let hit_report = interaction::report(probe, &hits);
         let status = *copy_status.read(cx);
         actions = actions
             .child(
                 button("inspector-copy", "Copy report").on_click(cx.listener(
                     move |_, _, _, cx| {
-                        let task = cx.write_to_clipboard_async(gpui::ClipboardItem::new_string(
-                            details::report(&report_element, report_parent.as_ref()),
-                        ));
+                        let task =
+                            cx.write_to_clipboard_async(gpui::ClipboardItem::new_string(format!(
+                                "{}\n{}",
+                                details::report(&report_element, report_parent.as_ref()),
+                                hit_report
+                            )));
                         let status = copy_status.clone();
                         cx.spawn(async move |_, cx| {
                             let result = task.await;
@@ -276,7 +309,14 @@ fn render(
                     },
                 )),
             )
-            .child(div().text_xs().text_color(rgb(0x94a3b8)).child(status));
+            .when(!status.is_empty(), |actions| {
+                actions.child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(theme::ACCENT))
+                        .child(status),
+                )
+            });
         actions = actions.child(
             button(
                 "inspector-highlight",
@@ -291,34 +331,87 @@ fn render(
                 cx.notify();
             })),
         );
-        navigation = navigation.child(actions);
+        navigation = navigation
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .mb_1()
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(theme::ACCENT)))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(
+                                element
+                                    .id
+                                    .path
+                                    .global_id
+                                    .last()
+                                    .map(|id| id.to_string())
+                                    .unwrap_or_else(|| "Element".into()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(rgb(theme::MUTED))
+                            .child(format!(
+                                "{:.0} × {:.0}",
+                                f32::from(element.bounds.size.width),
+                                f32::from(element.bounds.size.height)
+                            )),
+                    ),
+            )
+            .child(actions);
         let tab = *active_tab.read(cx);
         navigation = navigation.child(
-            div().flex().gap_1().children(
-                [
-                    ("inspector-layout", "Layout"),
-                    ("inspector-style", "Style"),
-                    ("inspector-text", "Text"),
-                    ("inspector-source", "Source"),
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (id, label))| {
-                    let state = active_tab.clone();
-                    button(id, label)
-                        .when(tab == index, |button| button.bg(rgb(0x25466a)))
-                        .on_click(move |_, window, cx| {
-                            state.update(cx, |tab, cx| {
-                                *tab = index;
-                                cx.notify();
-                            });
-                            window.refresh();
-                        })
-                }),
-            ),
+            div()
+                .flex()
+                .mt_1()
+                .p(px(3.))
+                .rounded(px(7.))
+                .bg(rgb(theme::BACKGROUND))
+                .children(
+                    [
+                        (0, "inspector-layout", "Layout"),
+                        (1, "inspector-style", "Style"),
+                        (2, "inspector-text", "Text"),
+                        (4, "inspector-interaction", "Input"),
+                        (3, "inspector-source", "Source"),
+                    ]
+                    .into_iter()
+                    .map(|(index, id, label)| {
+                        let state = active_tab.clone();
+                        button(id, label)
+                            .flex_1()
+                            .min_w_0()
+                            .text_center()
+                            .when(tab == index, |button| {
+                                button.bg(rgb(theme::HOVER)).text_color(rgb(theme::TEXT))
+                            })
+                            .on_click(move |_, window, cx| {
+                                state.update(cx, |tab, cx| {
+                                    *tab = index;
+                                    cx.notify();
+                                });
+                                window.refresh();
+                            })
+                    }),
+                ),
         );
         if tab == 0 {
             details = details.child(details::box_model(&element));
+        }
+        if tab == 4 {
+            details = details.child(interaction::render(
+                probe,
+                &hits,
+                inspector.is_picking(),
+                cx,
+            ));
         }
         details = details.child(details::render(details::sections(
             &element,
@@ -337,27 +430,36 @@ fn render(
         );
     }
     details = details.children(inspector.render_inspector_states(window, cx));
+    if let Some(index) = reveal_row {
+        let scroll = tree_scroll.clone();
+        window.on_next_frame(move |window, _| {
+            scroll.scroll_to_item(index);
+            window.refresh();
+        });
+    }
     div()
         .id("gpui-inspector")
         .size_full()
         .flex()
         .flex_col()
         .overflow_hidden()
-        .bg(rgb(0x17212d))
-        .text_color(rgb(0xe2e8f0))
-        .text_sm()
+        .bg(rgb(theme::BACKGROUND))
+        .text_color(rgb(theme::TEXT))
+        .text_size(px(12.))
         .border_l_1()
-        .border_color(rgb(0x344154))
+        .border_color(rgb(theme::BORDER))
         .child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
-                .p_4()
+                .px_3()
+                .py_2()
                 .flex_shrink_0()
                 .child(
                     div()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_size(px(14.))
                         .child("Inspector"),
                 )
                 .child(
@@ -367,8 +469,8 @@ fn render(
         )
         .child(
             div()
-                .px_4()
-                .pb_3()
+                .px_3()
+                .pb_2()
                 .flex()
                 .items_center()
                 .gap_3()
@@ -382,6 +484,8 @@ fn render(
                             "Pick element"
                         },
                     )
+                    .bg(rgb(theme::SELECTED))
+                    .text_color(rgb(theme::ACCENT))
                     .on_click(cx.listener(|inspector, _, window, cx| {
                         if inspector.is_picking() {
                             inspector.stop_picking();
@@ -394,42 +498,47 @@ fn render(
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(rgb(0x94a3b8))
+                        .text_size(px(10.))
+                        .text_color(rgb(theme::MUTED))
                         .child(format!("{count} elements")),
                 ),
         )
         .child(
             div()
-                .px_4()
-                .pb_2()
-                .text_xs()
-                .text_color(rgb(0x94a3b8))
-                .child("ELEMENTS"),
+                .px_3()
+                .py_1()
+                .border_t_1()
+                .border_color(rgb(theme::BORDER))
+                .text_size(px(10.))
+                .text_color(rgb(theme::MUTED))
+                .child("ELEMENT TREE"),
         )
         .child(
             div()
                 .id("inspector-tree")
-                .h(px(
-                    (f32::from(window.viewport_size().height) * 0.28).clamp(80., 260.)
-                ))
+                .h(tree_height)
                 .flex_shrink_0()
                 .overflow_y_scroll()
+                .track_scroll(&tree_scroll)
+                .bg(rgb(theme::SURFACE))
                 .children(rows),
         )
-        .child(div().h(px(1.)).flex_shrink_0().bg(rgb(0x344154)))
+        .child(div().h(px(1.)).flex_shrink_0().bg(rgb(theme::BORDER)))
         .child(navigation)
         .child(details)
         .child(
             div()
-                .p_3()
+                .px_3()
+                .py_2()
                 .flex_shrink_0()
-                .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .border_t_1()
+                .border_color(rgb(theme::BORDER))
+                .text_size(px(10.))
+                .text_color(rgb(theme::MUTED))
                 .child(if picking {
                     "Click to select · Scroll to pick an ancestor"
                 } else {
-                    "Padding / margin: top · right · bottom · left"
+                    "Logical pixels · Live inspection"
                 }),
         )
         .into_any_element()

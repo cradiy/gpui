@@ -48,6 +48,44 @@ mod conditional {
         pub rem_size: crate::Pixels,
         /// Text drawn directly within this element, excluding inspectable descendants.
         pub text: Vec<InspectorText>,
+        /// Interaction configuration for elements backed by `Interactivity`.
+        pub interaction: Option<InspectorInteraction>,
+    }
+
+    /// Interaction metadata captured before event listeners are consumed during paint.
+    #[derive(Clone, Debug, Default)]
+    pub struct InspectorInteraction {
+        /// Whether this element needs a hitbox outside inspector picking mode.
+        pub has_hitbox: bool,
+        /// Whether the element tracks a focus handle.
+        pub focusable: bool,
+        /// Whether that handle currently owns keyboard focus.
+        pub focused: bool,
+        /// Whether that handle or one of its descendants owns keyboard focus.
+        pub contains_focus: bool,
+        /// Configured key context, when present.
+        pub key_context: Option<String>,
+        /// Explicit cursor request; `None` inherits normal cursor resolution.
+        pub cursor: Option<crate::CursorStyle>,
+        /// Registered listener counts, grouped by event type.
+        pub listeners: Vec<(&'static str, usize)>,
+        /// Current local scroll offset in logical pixels.
+        pub scroll_offset: crate::Point<crate::Pixels>,
+    }
+
+    /// One hitbox containing a probe point, ordered front to back by the window API.
+    #[derive(Clone, Debug)]
+    pub struct InspectorHitbox {
+        /// Owning or nearest inspectable element, if known.
+        pub element: Option<InspectorElementId>,
+        /// The hitbox including clipping, behavior and pointer coordinate mapping.
+        pub hitbox: crate::Hitbox,
+        /// Geometrically eligible for mouse input after occlusion, before event propagation.
+        pub mouse: bool,
+        /// Geometrically eligible for scrolling after occlusion, before event propagation.
+        pub scroll: bool,
+        /// Whether this hitbox currently holds pointer capture.
+        pub captured: bool,
     }
 
     /// Spacing resolved by the layout engine, including percentages and auto margins.
@@ -114,6 +152,7 @@ mod conditional {
         active_element: Option<InspectedElement>,
         pub(crate) pick_depth: Option<f32>,
         highlight: bool,
+        pub(crate) pointer_position: Option<crate::Point<crate::Pixels>>,
     }
 
     struct InspectedElement {
@@ -136,6 +175,7 @@ mod conditional {
                 active_element: None,
                 pick_depth: Some(0.0),
                 highlight: true,
+                pointer_position: None,
             }
         }
 
@@ -208,6 +248,11 @@ mod conditional {
         /// Whether the selected element's overlay is visible.
         pub fn is_highlighting(&self) -> bool {
             self.highlight
+        }
+
+        /// Last pointer position in the application area, retained while using the panel.
+        pub fn pointer_position(&self) -> Option<crate::Point<crate::Pixels>> {
+            self.pointer_position
         }
 
         /// Shows or hides the selection overlay without changing the selection.

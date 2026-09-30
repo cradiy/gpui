@@ -2282,6 +2282,45 @@ impl Interactivity {
 
                             let scroll_offset =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
+                            #[cfg(any(feature = "inspector", debug_assertions))]
+                            if window.is_inspector_open() {
+                                let focus = self.tracked_focus_handle.as_ref();
+                                window.inspect_interaction(crate::InspectorInteraction {
+                                    has_hitbox: self.needs_hitbox(&style),
+                                    focusable: focus.is_some(),
+                                    focused: focus.is_some_and(|handle| handle.is_focused(window)),
+                                    contains_focus: focus
+                                        .is_some_and(|handle| handle.contains_focused(window, cx)),
+                                    key_context: self
+                                        .key_context
+                                        .as_ref()
+                                        .map(|context| format!("{context:?}")),
+                                    cursor: style.mouse_cursor,
+                                    scroll_offset,
+                                    listeners: [
+                                        ("Click", self.click_listeners.len()),
+                                        ("Aux click", self.aux_click_listeners.len()),
+                                        ("Mouse down", self.mouse_down_listeners.len()),
+                                        ("Mouse up", self.mouse_up_listeners.len()),
+                                        ("Mouse move", self.mouse_move_listeners.len()),
+                                        ("Mouse exit", self.mouse_exit_listeners.len()),
+                                        ("Mouse pressure", self.mouse_pressure_listeners.len()),
+                                        ("Scroll", self.scroll_wheel_listeners.len()),
+                                        ("Pinch", self.pinch_listeners.len()),
+                                        ("Key down", self.key_down_listeners.len()),
+                                        ("Key up", self.key_up_listeners.len()),
+                                        ("Modifiers", self.modifiers_changed_listeners.len()),
+                                        ("Action", self.action_listeners.len()),
+                                        ("Drag", usize::from(self.drag_listener.is_some())),
+                                        ("Drag end", usize::from(self.drag_end_listener.is_some())),
+                                        ("Drop", self.drop_listeners.len()),
+                                        ("Hover", usize::from(self.hover_listener.is_some())),
+                                    ]
+                                    .into_iter()
+                                    .filter(|(_, count)| *count > 0)
+                                    .collect(),
+                                });
+                            }
                             let result = f(&style, scroll_offset, hitbox, window, cx);
                             (result, element_state)
                         },
@@ -2292,6 +2331,10 @@ impl Interactivity {
     }
 
     fn should_insert_hitbox(&self, style: &Style, window: &Window, cx: &App) -> bool {
+        self.needs_hitbox(style) || window.is_inspector_picking(cx)
+    }
+
+    fn needs_hitbox(&self, style: &Style) -> bool {
         self.hitbox_behavior != HitboxBehavior::Normal
             || self.window_control.is_some()
             || style.mouse_cursor.is_some()
@@ -2313,7 +2356,6 @@ impl Interactivity {
             || self.drag_listener.is_some()
             || !self.drop_listeners.is_empty()
             || self.tooltip_builder.is_some()
-            || window.is_inspector_picking(cx)
     }
 
     fn clamp_scroll_position(

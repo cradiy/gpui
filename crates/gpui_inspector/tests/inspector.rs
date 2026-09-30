@@ -147,6 +147,145 @@ fn panel_controls_work_while_picking_and_tree_can_collapse(cx: &mut TestAppConte
     });
 }
 
+struct Overlap {
+    block_scroll: bool,
+    focus: gpui::FocusHandle,
+}
+
+impl Render for Overlap {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("overlap")
+            .size_full()
+            .child(
+                div()
+                    .id("base")
+                    .absolute()
+                    .left(px(20.))
+                    .top(px(20.))
+                    .w(px(160.))
+                    .h(px(80.))
+                    .track_focus(&self.focus)
+                    .key_context("InspectorTest")
+                    .cursor_pointer()
+                    .on_click(|_, _, _| {})
+                    .on_key_down(|_, _, _| {}),
+            )
+            .child(
+                div()
+                    .id("clip")
+                    .absolute()
+                    .left(px(60.))
+                    .top(px(20.))
+                    .w(px(40.))
+                    .h(px(80.))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("blocker")
+                            .w(px(80.))
+                            .h(px(80.))
+                            .when(self.block_scroll, |div| div.occlude())
+                            .when(!self.block_scroll, |div| div.block_mouse_except_scroll()),
+                    ),
+            )
+    }
+}
+
+#[gpui::test]
+fn input_probe_matches_occlusion_clipping_and_focus(cx: &mut TestAppContext) {
+    cx.update(gpui_inspector::init);
+    let handle = cx.open_window(size(px(1000.), px(700.)), |_, cx| Overlap {
+        block_scroll: false,
+        focus: cx.focus_handle(),
+    });
+    let view = handle.root(cx).unwrap();
+    let mut cx = VisualTestContext::from_window(handle.into(), cx);
+    cx.update(|window, cx| {
+        window.toggle_inspector(cx);
+        window
+            .inspector()
+            .unwrap()
+            .update(cx, |inspector, _| inspector.stop_picking());
+        let focus = view.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    draw(&mut cx);
+    let probe = point(px(80.), px(40.));
+    cx.update(|window, _| {
+        let hits = window.inspector_hitboxes_at(probe);
+        assert_eq!(hits.len(), 2);
+        assert!(
+            hits[0]
+                .element
+                .as_ref()
+                .unwrap()
+                .path
+                .global_id
+                .to_string()
+                .ends_with("blocker")
+        );
+        assert!(hits[0].mouse && hits[0].scroll);
+        assert!(!hits[1].mouse && hits[1].scroll);
+        let outside_clip = window.inspector_hitboxes_at(point(px(120.), px(40.)));
+        assert_eq!(outside_clip.len(), 1);
+        assert!(outside_clip[0].mouse);
+        let base = window
+            .inspector_elements()
+            .iter()
+            .find(|element| element.id.path.global_id.to_string().ends_with("base"))
+            .unwrap();
+        let input = base.interaction.as_ref().unwrap();
+        assert!(input.focusable && input.focused && input.has_hitbox);
+        assert!(input.listeners.contains(&("Click", 1)));
+        assert!(input.listeners.contains(&("Key down", 1)));
+        assert_eq!(input.cursor, Some(gpui::CursorStyle::PointingHand));
+    });
+    cx.simulate_mouse_move(probe, None, Modifiers::default());
+    let panel = cx.debug_bounds("inspector-pick").unwrap().center();
+    cx.simulate_mouse_move(panel, None, Modifiers::default());
+    cx.update(|window, cx| {
+        assert_eq!(
+            window.inspector().unwrap().read(cx).pointer_position(),
+            Some(probe)
+        );
+        view.update(cx, |view, cx| {
+            view.block_scroll = true;
+            cx.notify();
+        });
+    });
+    draw(&mut cx);
+    cx.update(|window, _| {
+        let hits = window.inspector_hitboxes_at(probe);
+        assert_eq!(hits.len(), 2);
+        assert!(!hits[1].mouse && !hits[1].scroll);
+    });
+    cx.update(|window, cx| {
+        let id = window
+            .inspector_elements()
+            .iter()
+            .find(|node| node.id.path.global_id.to_string().ends_with("base"))
+            .unwrap()
+            .id
+            .clone();
+        window
+            .inspector()
+            .unwrap()
+            .update(cx, |inspector, _| inspector.select(id, window));
+    });
+    draw(&mut cx);
+    let tab = cx.debug_bounds("inspector-interaction").unwrap().center();
+    cx.simulate_click(tab, Modifiers::default());
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("inspector-hit-1").is_some(),
+        "probe must also be available while rendering the inspector"
+    );
+    cx.update(|window, cx| window.toggle_inspector(cx));
+    draw(&mut cx);
+    cx.update(|window, _| assert!(window.inspector_hitboxes_at(probe).is_empty()));
+}
+
 #[gpui::test]
 fn explicit_style_edits_remain_overrides(cx: &mut TestAppContext) {
     let (content, mut cx) = setup(cx);

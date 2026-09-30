@@ -3,7 +3,7 @@ use gpui::{
     rgb,
 };
 
-use crate::{definite, edges, property};
+use crate::{definite, edges, property, theme};
 
 pub(super) struct Property {
     label: &'static str,
@@ -369,6 +369,69 @@ pub(super) fn sections(
                 ],
             );
         }
+        4 => {
+            if let Some(input) = &element.interaction {
+                push(
+                    "INPUT",
+                    vec![
+                        row(
+                            "Hitbox",
+                            if input.has_hitbox {
+                                "Interactive"
+                            } else {
+                                "Only while picking"
+                            },
+                        ),
+                        row(
+                            "Focus handle",
+                            if input.focusable { "Tracked" } else { "None" },
+                        ),
+                        row("Focused", input.focused.to_string()),
+                        row("Contains focus", input.contains_focus.to_string()),
+                        row("Cursor", optional(input.cursor)),
+                        row(
+                            "Key context",
+                            input.key_context.clone().unwrap_or_else(|| "None".into()),
+                        ),
+                        row(
+                            "Scroll x / y",
+                            format!(
+                                "{:.1}, {:.1} px",
+                                f32::from(input.scroll_offset.x),
+                                f32::from(input.scroll_offset.y)
+                            ),
+                        ),
+                    ],
+                );
+                push(
+                    "REGISTERED LISTENERS",
+                    if input.listeners.is_empty() {
+                        vec![row("Listeners", "No explicit listeners on this element")]
+                    } else {
+                        input
+                            .listeners
+                            .iter()
+                            .map(|(name, count)| row(name, count.to_string()))
+                            .collect()
+                    },
+                );
+            } else {
+                push(
+                    "INPUT",
+                    vec![row(
+                        "Metadata",
+                        "Custom element; use the pointer probe to inspect its hitboxes",
+                    )],
+                );
+            }
+            push(
+                "SCOPE",
+                vec![row(
+                    "Listeners",
+                    "Declared on this element, before paint. Window-level handlers and callbacks installed internally are not counted.",
+                )],
+            );
+        }
         _ => {
             let source = element.id.path.source_location;
             push(
@@ -392,13 +455,19 @@ pub(super) fn render(sections: Vec<Section>) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap_4()
+        .gap_3()
         .children(sections.into_iter().map(|section| {
             div()
+                .p_3()
+                .rounded(px(8.))
+                .bg(rgb(theme::SURFACE))
+                .border_1()
+                .border_color(rgb(theme::BORDER))
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(rgb(0x94a3b8))
+                        .text_size(px(10.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::MUTED))
                         .mb_2()
                         .child(section.title),
                 )
@@ -422,7 +491,7 @@ pub(super) fn render(sections: Vec<Section>) -> Div {
 
 pub(super) fn report(element: &InspectorElement, parent: Option<&InspectorElement>) -> String {
     let mut result = String::from("GPUI Inspector\n");
-    for tab in 0..4 {
+    for tab in 0..5 {
         for section in sections(element, parent, tab) {
             result.push_str(&format!("\n{}\n", section.title));
             for row in section.rows {
@@ -446,16 +515,17 @@ pub(super) fn report(element: &InspectorElement, parent: Option<&InspectorElemen
 fn layer(label: &'static str, values: Edges<Pixels>, color: u32, inner: Div) -> Div {
     let value = |value: Pixels| format!("{:.1}", f32::from(value));
     div()
+        .rounded(px(5.))
         .border_1()
         .border_color(rgb(color))
         .bg(gpui::rgba((color << 8) | 0x20))
         .px_2()
-        .py_1()
+        .py(px(2.))
         .child(
             div()
                 .flex()
                 .justify_between()
-                .text_xs()
+                .text_size(px(10.))
                 .child(label)
                 .child(value(values.top)),
         )
@@ -464,11 +534,16 @@ fn layer(label: &'static str, values: Edges<Pixels>, color: u32, inner: Div) -> 
                 .flex()
                 .gap_2()
                 .items_center()
-                .child(div().text_xs().child(value(values.left)))
+                .child(div().text_size(px(10.)).child(value(values.left)))
                 .child(inner.flex_1().min_w_0())
-                .child(div().text_xs().child(value(values.right))),
+                .child(div().text_size(px(10.)).child(value(values.right))),
         )
-        .child(div().text_xs().text_center().child(value(values.bottom)))
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_center()
+                .child(value(values.bottom)),
+        )
 }
 
 pub(super) fn box_model(element: &InspectorElement) -> Div {
@@ -476,26 +551,28 @@ pub(super) fn box_model(element: &InspectorElement) -> Div {
     let content = div()
         .py_2()
         .text_center()
-        .bg(rgb(0x25466a))
+        .rounded(px(4.))
+        .text_color(rgb(theme::ACCENT))
+        .bg(rgb(theme::SELECTED))
         .child(size(content_size(element)));
     div()
-        .mb_4()
+        .mb_3()
         .child(layer(
             "margin",
             model.margin,
-            0xa67a4a,
+            0x806748,
             layer(
                 "border",
                 model.border,
-                0xaaa16a,
-                layer("padding", model.padding, 0x5b9367, content),
+                0x807951,
+                layer("padding", model.padding, 0x4e7968, content),
             ),
         ))
         .child(
             div()
                 .mt_1()
-                .text_xs()
-                .text_color(rgb(0x94a3b8))
+                .text_size(px(10.))
+                .text_color(rgb(theme::MUTED))
                 .child("Resolved layout pixels · center is the content box"),
         )
 }

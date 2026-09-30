@@ -2961,6 +2961,7 @@ impl Window {
             text_style: self.text_style(),
             rem_size: self.rem_size(),
             text: Vec::new(),
+            interaction: None,
         };
         self.next_frame
             .inspector_stack
@@ -2997,6 +2998,55 @@ impl Window {
             line_height,
         };
         self.next_frame.inspector_elements[index].text.push(text);
+    }
+
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) fn inspect_interaction(&mut self, interaction: crate::InspectorInteraction) {
+        if let Some(index) = self.next_frame.inspector_stack.last().copied() {
+            self.next_frame.inspector_elements[index].interaction = Some(interaction);
+        }
+    }
+
+    /// Returns hitboxes at a displayed window point, front to back, including occluded boxes.
+    /// Uses the same clipping and inverse pointer mappings as normal hit testing. Eligibility
+    /// describes geometry, not whether a listener later stops propagation or handles an event.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn inspector_hitboxes_at(&self, position: Point<Pixels>) -> Vec<crate::InspectorHitbox> {
+        if self.invalidator.not_drawing() && !self.is_inspector_open() {
+            return Vec::new();
+        }
+        let frame = if self.invalidator.not_drawing() {
+            &self.rendered_frame
+        } else {
+            &self.next_frame
+        };
+        let test = frame.hit_test(position);
+        frame
+            .hitboxes
+            .iter()
+            .rev()
+            .filter_map(|hitbox| {
+                let position = hitbox.pointer_mapping.hit_position(position)?;
+                if !hitbox
+                    .bounds
+                    .intersect(&hitbox.content_mask.bounds)
+                    .contains(&position)
+                {
+                    return None;
+                }
+                Some(crate::InspectorHitbox {
+                    element: frame.inspector_hitboxes.get(&hitbox.id).cloned(),
+                    hitbox: hitbox.clone(),
+                    mouse: test
+                        .ids
+                        .iter()
+                        .take(test.hover_hitbox_count)
+                        .any(|id| *id == hitbox.id),
+                    scroll: test.ids.contains(&hitbox.id),
+                    captured: self.captured_hitbox == Some(hitbox.id),
+                })
+            })
+            .collect()
     }
 
     /// Toggles the inspector mode on this window.

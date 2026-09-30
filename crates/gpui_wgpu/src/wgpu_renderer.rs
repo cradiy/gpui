@@ -38,6 +38,7 @@ mod pipeline_cache;
 pub(crate) use pipeline_cache::PipelineCache;
 pub(crate) mod scene3d;
 mod scene_snapshot;
+mod subtree_cache;
 mod subtree_output;
 #[cfg(not(target_family = "wasm"))]
 mod texture_effect;
@@ -240,7 +241,7 @@ pub(super) fn surface_uv_bounds(frame: &SurfaceFrame) -> ([f32; 2], [f32; 2]) {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, PartialEq, Pod, Zeroable)]
 struct GammaParams {
     gamma_ratios: [f32; 4],
     grayscale_enhanced_contrast: f32,
@@ -454,6 +455,7 @@ struct WgpuResources {
     subtree_image_effect_pipelines:
         HashMap<(u64, wgpu::TextureFormat), Option<wgpu::RenderPipeline>>,
     subtree_textures: Vec<wgpu::Texture>,
+    subtree_cache: subtree_cache::SubtreeCaptureCache,
     bloom_textures: HashMap<u32, [wgpu::Texture; 2]>,
     distance_field: Option<distance_field::DistanceFieldRenderer>,
     feedback_textures: HashMap<gpui::EffectHistoryId, FeedbackTextures>,
@@ -498,6 +500,7 @@ struct WgpuResources {
 impl WgpuResources {
     fn invalidate_intermediate_textures(&mut self) {
         self.subtree_textures.clear();
+        self.subtree_cache = Default::default();
         self.bloom_textures.clear();
         self.distance_field = None;
         self.feedback_textures.clear();
@@ -983,6 +986,7 @@ impl WgpuRenderer {
             subtree_effect_pipelines: HashMap::default(),
             subtree_image_effect_pipelines: HashMap::default(),
             subtree_textures: Vec::new(),
+            subtree_cache: Default::default(),
             bloom_textures: HashMap::new(),
             distance_field: None,
             feedback_textures: HashMap::new(),
@@ -2446,9 +2450,11 @@ impl WgpuRenderer {
         }
     }
 
-    /// Encodes into caller-owned commands without reusing mesh or UI capture pixels.
+    /// Encodes into caller-owned commands without reusing mesh, subtree or UI capture pixels.
     /// Exposed vertex buffers are not recycled for other mesh snapshots; retained
     /// replacement uploads remain replayable on later draws of the same snapshot.
+    /// Subtree source reuse stays disabled until the shared capture textures are replaced,
+    /// since caller-owned commands can be submitted after later frames.
     /// Use `draw_external` for renderer-owned submission and output reuse.
     pub fn encode_external(&mut self, scene: &Scene, target: WgpuExternalRenderTarget<'_>) -> bool {
         let encoded = matches!(
@@ -2461,7 +2467,7 @@ impl WgpuRenderer {
     }
 
     /// Clears, encodes, and submits an external target on this renderer's queue.
-    /// Enables reuse of submitted 3D viewport and UI capture pixels. A false result submits no
+    /// Enables reuse of submitted 3D viewport, subtree and UI capture pixels. A false result submits no
     /// frame commands. Instance capacity growth may require a retry; scene preparation
     /// errors do not grow instance storage. The target must match this
     /// renderer's configured size/format and support render attachments.
@@ -2571,6 +2577,10 @@ impl WgpuRenderer {
             texture.width() != width || texture.height() != height || texture.format() != format
         }) {
             resources.subtree_textures.clear();
+            resources.subtree_cache = Default::default();
+        }
+        if depth == 0 {
+            resources.subtree_cache = Default::default();
         }
         resources.subtree_textures.truncate(depth);
         while resources.subtree_textures.len() < depth {
@@ -3212,6 +3222,7 @@ impl WgpuRenderer {
             is_bgr: self.is_bgr as u32,
             _pad: 0,
         };
+        self.prepare_subtree_cache(scene, retain_outputs, gamma_params);
 
         let globals = GlobalParams {
             viewport_size: [
@@ -3274,6 +3285,7 @@ impl WgpuRenderer {
     }
 
     fn commit_encoded_scene(&self, encoded: bool) {
+        self.resources().subtree_cache.commit(encoded);
         self.commit_ui_captures(encoded);
         if let Some(particles) = &self.resources().particles {
             particles.commit(encoded);
@@ -3384,7 +3396,9 @@ impl WgpuRenderer {
                                 .ui_capture_indices
                                 .get(&(layer as *const _ as usize))
                                 .map(|index| &self.resources().ui_captures[*index].texture);
+                            let reuse = self.resources().subtree_cache.reuse(depth, layer);
                             if captured.is_none()
+                                && !reuse
                                 && !self.encode_scene_batches(
                                     &layer.scene,
                                     texture,
@@ -3398,6 +3412,9 @@ impl WgpuRenderer {
                             {
                                 did_draw = false;
                                 break;
+                            }
+                            if captured.is_none() && !reuse {
+                                self.resources().subtree_cache.encoded(depth, layer);
                             }
                             let mut source_view = captured
                                 .unwrap_or(texture)

@@ -25,6 +25,7 @@ impl WgpuRenderer {
             resources.feedback_textures.clear();
             resources.ui_captures.clear();
             resources.subtree_textures.clear();
+            resources.subtree_cache = Default::default();
             resources.surfaces.clear();
             #[cfg(target_os = "macos")]
             {

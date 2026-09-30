@@ -92,6 +92,12 @@ while changing the matrix invalidates them. Platforms without subtree effects dr
 hit-test the original content. Deferred popups stay unscaled and can use
 `anchored().map_anchor(true)` to follow the group.
 
+On WGPU, an unchanged source subtree can reuse its captured pixels while the matrix
+changes. Reuse requires a single writer at that capture depth and no multipass,
+two-input or 3D layers in the frame. Content, atlas-image and text-rendering changes
+invalidate the capture; video and simulation content is redrawn. This uses existing
+capture textures and does not prevent child-view cache invalidation.
+
 Run `cargo run -p gpui_effects --example transform_group` to exercise scaling, rotation,
 panning, clicks and popup anchors.
 

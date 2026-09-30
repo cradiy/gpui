@@ -1,6 +1,62 @@
 use super::scene_snapshot::{OutputValidity, SceneSnapshot};
 use super::{SceneEncoding, WgpuExternalRenderTarget, WgpuRenderer};
-use gpui::{DevicePixels, Scene, Size, SubtreeLayer, size};
+use gpui::{Bounds, DevicePixels, ScaledPixels, Scene, Size, SubtreeLayer, size};
+
+#[derive(Clone, Copy)]
+struct CaptureRegion {
+    origin: [f32; 2],
+    size: Size<DevicePixels>,
+    extent: Size<DevicePixels>,
+}
+
+// These passes address full-screen textures or maintain viewport-sized state.
+// Nested layers also need independent captures so they can move pixels into the
+// parent crop from elsewhere in the window.
+fn supports_region(scene: &Scene) -> bool {
+    scene.backdrop_blurs.is_empty()
+        && scene.particles.is_empty()
+        && scene.fluids.is_empty()
+        && scene.subtree_layers.iter().all(|layer| {
+            layer.scene.raster_scale.is_some()
+                && layer.scene3d.is_none()
+                && layer.intermediate_effects.is_empty()
+                && layer.second_scene.is_none()
+                && supports_region(&layer.scene)
+        })
+}
+
+impl CaptureRegion {
+    fn full(extent: Size<DevicePixels>) -> Self {
+        Self {
+            origin: [0.; 2],
+            size: extent,
+            extent,
+        }
+    }
+
+    fn cropped(bounds: Bounds<ScaledPixels>, scale: f32, extent: Size<DevicePixels>) -> Self {
+        let left = (bounds.left().0 * scale).floor().max(0.);
+        let top = (bounds.top().0 * scale).floor().max(0.);
+        let right = (bounds.right().0 * scale).ceil().min(extent.width.0 as f32);
+        let bottom = (bounds.bottom().0 * scale)
+            .ceil()
+            .min(extent.height.0 as f32);
+        if right <= left || bottom <= top {
+            return Self {
+                size: size(DevicePixels(1), DevicePixels(1)),
+                ..Self::full(extent)
+            };
+        }
+        Self {
+            origin: [left, top],
+            size: size(
+                DevicePixels((right - left) as i32),
+                DevicePixels((bottom - top) as i32),
+            ),
+            extent,
+        }
+    }
+}
 
 pub(super) struct UiCapture {
     pub(super) renderer: WgpuRenderer,
@@ -39,6 +95,64 @@ impl UiCapture {
 }
 
 impl WgpuRenderer {
+    fn has_isolated_capture(&self, layer: &SubtreeLayer) -> bool {
+        layer.scene3d.is_none()
+            && layer.second_scene.is_none()
+            && layer.intermediate_effects.is_empty()
+            && self
+                .resources()
+                .ui_capture_indices
+                .contains_key(&(layer as *const _ as usize))
+            && self
+                .resources()
+                .subtree_effect_pipelines
+                .get(&(
+                    layer.composite.shader.id().as_u64(),
+                    self.surface_config.format,
+                ))
+                .is_some_and(Option::is_some)
+    }
+
+    pub(super) fn visit_rendered_scenes(&self, scene: &Scene, visit: &mut impl FnMut(&Scene)) {
+        visit(scene);
+        for layer in &scene.subtree_layers {
+            if self.has_isolated_capture(layer) {
+                continue;
+            }
+            self.visit_rendered_scenes(&layer.scene, visit);
+            if let Some(second) = &layer.second_scene {
+                self.visit_rendered_scenes(second, visit);
+            }
+        }
+    }
+
+    pub(super) fn subtree_scratch_target_count(&self, scene: &Scene) -> usize {
+        scene
+            .subtree_layers
+            .iter()
+            .map(|layer| {
+                if self.has_isolated_capture(layer) {
+                    return 0;
+                }
+                (1 + self.subtree_scratch_target_count(&layer.scene))
+                    .max(
+                        layer
+                            .second_scene
+                            .as_ref()
+                            .map_or(0, |scene| 2 + self.subtree_scratch_target_count(scene)),
+                    )
+                    .max(
+                        if layer.intermediate_effects.is_empty() && layer.scene3d.is_none() {
+                            1
+                        } else {
+                            2
+                        },
+                    )
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     pub(super) fn commit_ui_captures(&self, encoded: bool) {
         for capture in &self.resources().ui_captures {
             capture.renderer.commit_encoded_scene(encoded);
@@ -54,16 +168,25 @@ impl WgpuRenderer {
         fn collect<'a>(
             scene: &'a Scene,
             viewport: Size<DevicePixels>,
-            captures: &mut Vec<(&'a SubtreeLayer, Size<DevicePixels>)>,
+            captures: &mut Vec<(&'a SubtreeLayer, CaptureRegion)>,
         ) {
             for layer in &scene.subtree_layers {
                 if let Some(texture) = layer.scene3d.as_ref().and_then(|frame| frame.ui_texture) {
-                    captures.push((layer, texture.pixel_size()));
+                    captures.push((layer, CaptureRegion::full(texture.pixel_size())));
                 } else if let Some(scale) = layer.scene.raster_scale {
-                    captures.push((
-                        layer,
-                        viewport.map(|value| DevicePixels((value.0 as f32 * scale).ceil() as i32)),
-                    ));
+                    let cropped = supports_region(&layer.scene);
+                    if scale == 1. && !cropped {
+                        collect(&layer.scene, viewport, captures);
+                        continue;
+                    }
+                    let extent =
+                        viewport.map(|value| DevicePixels((value.0 as f32 * scale).ceil() as i32));
+                    let region = if cropped {
+                        CaptureRegion::cropped(layer.composite.bounds, scale, extent)
+                    } else {
+                        CaptureRegion::full(extent)
+                    };
+                    captures.push((layer, region));
                 } else {
                     collect(&layer.scene, viewport, captures);
                     if let Some(second) = &layer.second_scene {
@@ -75,15 +198,18 @@ impl WgpuRenderer {
         let mut captures = Vec::new();
         collect(
             scene,
-            size(
-                DevicePixels(self.surface_config.width as i32),
-                DevicePixels(self.surface_config.height as i32),
-            ),
+            self.capture_extent.unwrap_or_else(|| {
+                size(
+                    DevicePixels(self.surface_config.width as i32),
+                    DevicePixels(self.surface_config.height as i32),
+                )
+            }),
             &mut captures,
         );
         self.resources_mut().ui_captures.truncate(captures.len());
         self.resources_mut().ui_capture_indices.clear();
-        for (index, (layer, size)) in captures.into_iter().enumerate() {
+        for (index, (layer, region)) in captures.into_iter().enumerate() {
+            let size = region.size;
             anyhow::ensure!(
                 size.width.0 > 0
                     && size.height.0 > 0
@@ -157,7 +283,10 @@ impl WgpuRenderer {
             let parameters = self.rendering_params;
             let is_bgr = self.is_bgr;
             let capture = &mut self.resources_mut().ui_captures[index];
+            let coordinates_changed = capture.renderer.capture_origin != region.origin
+                || capture.renderer.capture_extent != Some(region.extent);
             let reusable = capture.validity.reusable()
+                && !coordinates_changed
                 && capture.renderer.rendering_params == parameters
                 && capture.renderer.is_bgr == is_bgr
                 && snapshot
@@ -167,6 +296,11 @@ impl WgpuRenderer {
             capture.snapshot = snapshot;
             capture.renderer.rendering_params = parameters;
             capture.renderer.is_bgr = is_bgr;
+            capture.renderer.capture_origin = region.origin;
+            capture.renderer.capture_extent = Some(region.extent);
+            if coordinates_changed {
+                capture.renderer.resources_mut().subtree_cache = Default::default();
+            }
             if reusable {
                 self.resources_mut()
                     .ui_capture_indices

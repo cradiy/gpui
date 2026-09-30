@@ -45,8 +45,10 @@ pub struct TransformGroup<E: Element> {
 impl<E: Element> TransformGroup<E> {
     /// Multiplies source raster density, independently of zoom. Defaults to one.
     /// Values must be finite and at least one. Each requested multiplier is limited
-    /// to four; captures use the full window viewport and reduce the multiplier to
-    /// fit 8192 pixels per axis and 16 megapixels, without lowering native density.
+    /// to four and reduced using the full viewport to fit 8192 pixels per axis and
+    /// 16 megapixels, without lowering native density. WGPU allocates compatible
+    /// captures at the group's bounds; effects requiring full-window inputs retain
+    /// full-size captures.
     /// A fixed value avoids reallocating captures during continuous zoom.
     pub fn raster_scale(mut self, scale: f32) -> Self {
         assert!(

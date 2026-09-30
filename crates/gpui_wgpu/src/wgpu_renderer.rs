@@ -76,6 +76,8 @@ struct GlobalParams {
     viewport_size: [f32; 2],
     premultiplied_alpha: u32,
     pad: u32,
+    viewport_origin: [f32; 2],
+    origin_pad: [u32; 2],
 }
 
 #[repr(C)]
@@ -531,6 +533,10 @@ pub struct WgpuRenderer {
     compositor_gpu: Option<CompositorGpuHint>,
     resources: Option<WgpuResources>,
     surface_config: wgpu::SurfaceConfiguration,
+    // Raster coordinates remain window-relative inside a cropped render target.
+    capture_origin: [f32; 2],
+    // Nested captures clip to the window extent, not their parent's cropped size.
+    capture_extent: Option<Size<DevicePixels>>,
     atlas: Arc<WgpuAtlas>,
     path_globals_offset: u64,
     gamma_offset: u64,
@@ -1035,6 +1041,8 @@ impl WgpuRenderer {
             compositor_gpu,
             resources: Some(resources),
             surface_config,
+            capture_origin: [0.; 2],
+            capture_extent: None,
             atlas,
             path_globals_offset,
             gamma_offset,
@@ -2058,7 +2066,7 @@ impl WgpuRenderer {
         self.trim_instance_buffer();
         let mut needs_paths = false;
         let mut needs_backdrop = false;
-        scene.visit(&mut |scene| {
+        self.visit_rendered_scenes(scene, &mut |scene| {
             needs_paths |= !scene.paths.is_empty();
             needs_backdrop |= !scene.backdrop_blurs.is_empty();
         });
@@ -2379,9 +2387,6 @@ impl WgpuRenderer {
             }
         };
 
-        // Now that we know the surface is healthy, ensure intermediate textures exist
-        self.ensure_intermediate_textures(scene);
-        self.ensure_subtree_textures(scene.subtree_target_count());
         self.ensure_bloom_textures(scene);
         self.ensure_distance_field(scene);
         self.ensure_feedback_textures(scene);
@@ -2541,8 +2546,6 @@ impl WgpuRenderer {
         self.atlas.before_frame();
         self.ensure_effect_pipelines(scene);
         self.ensure_backdrop_effect_pipelines(scene);
-        self.ensure_intermediate_textures(scene);
-        self.ensure_subtree_textures(scene.subtree_target_count());
         self.ensure_bloom_textures(scene);
         self.ensure_distance_field(scene);
         self.ensure_feedback_textures(scene);
@@ -3145,6 +3148,8 @@ impl WgpuRenderer {
         if !self.encode_ui_captures(scene, encoder, retain_outputs)? {
             return Ok(SceneEncoding::CaptureCapacity);
         }
+        self.ensure_intermediate_textures(scene);
+        self.ensure_subtree_textures(self.subtree_scratch_target_count(scene));
         let format = self.surface_config.format;
         let viewport = [
             self.surface_config.width as f32,
@@ -3237,6 +3242,8 @@ impl WgpuRenderer {
                 0
             },
             pad: 0,
+            viewport_origin: self.capture_origin,
+            origin_pad: [0; 2],
         };
 
         let path_globals = GlobalParams {
@@ -3354,9 +3361,6 @@ impl WgpuRenderer {
                 let ok = match batch {
                     PrimitiveBatch::SubtreeLayers(range) => {
                         drop(pass);
-                        let texture = &self.resources().subtree_textures[depth];
-                        let capture_view =
-                            texture.create_view(&wgpu::TextureViewDescriptor::default());
                         let mut did_draw = true;
                         for index in range {
                             let layer = &scene.subtree_layers[index];
@@ -3395,7 +3399,14 @@ impl WgpuRenderer {
                                 .resources()
                                 .ui_capture_indices
                                 .get(&(layer as *const _ as usize))
-                                .map(|index| &self.resources().ui_captures[*index].texture);
+                                .map(|index| &self.resources().ui_captures[*index]);
+                            let source_origin = captured.map_or(self.capture_origin, |capture| {
+                                capture.renderer.capture_origin
+                            });
+                            let captured = captured.map(|capture| &capture.texture);
+                            let texture = captured
+                                .unwrap_or_else(|| &self.resources().subtree_textures[depth]);
+                            let capture_view = texture.create_view(&Default::default());
                             let reuse = self.resources().subtree_cache.reuse(depth, layer);
                             if captured.is_none()
                                 && !reuse
@@ -3729,6 +3740,8 @@ impl WgpuRenderer {
                                     )
                                 })
                                 .into();
+                            instance.image_bounds.origin[0] -= source_origin[0];
+                            instance.image_bounds.origin[1] -= source_origin[1];
                             did_draw &= if let Some(second_view) = &second_view {
                                 instance.second_image_bounds = layer.composite.bounds.into();
                                 self.draw_instances_with_two_textures(

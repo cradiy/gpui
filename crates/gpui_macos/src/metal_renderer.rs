@@ -265,6 +265,8 @@ struct EffectGlobalParams {
     viewport_size: [f32; 2],
     premultiplied_alpha: u32,
     pad: u32,
+    viewport_origin: [f32; 2],
+    origin_pad: [u32; 2],
 }
 
 #[derive(Clone, Copy)]
@@ -1712,6 +1714,8 @@ impl MetalRenderer {
                 viewport_size: [viewport_size.width.0 as f32, viewport_size.height.0 as f32],
                 premultiplied_alpha: 0,
                 pad: 0,
+                viewport_origin: [0.; 2],
+                origin_pad: [0; 2],
             };
             let buffer_sizes = [bytes_len as u32];
             let encoder = new_command_encoder_for_texture(
@@ -1817,6 +1821,8 @@ impl MetalRenderer {
                 viewport_size: [viewport_size.width.0 as f32, viewport_size.height.0 as f32],
                 premultiplied_alpha: 0,
                 pad: 0,
+                viewport_origin: [0.; 2],
+                origin_pad: [0; 2],
             };
             let buffer_sizes = [bytes_len as u32];
             command_encoder.set_render_pipeline_state(pipeline);

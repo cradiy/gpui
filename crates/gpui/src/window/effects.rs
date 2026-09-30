@@ -12,6 +12,8 @@ impl Window {
     /// Use inside both `prepaint_subtree_effect` and a single-pass `with_subtree_effect`.
     /// The multiplier must be finite and at least one; it is limited to four and reduced
     /// to keep a full-viewport capture within 8192 pixels per axis and 16 megapixels.
+    /// WGPU crops compatible captures to the subtree bounds, including at multiplier one.
+    /// The density limit still uses the full viewport to allow full-size fallback captures.
     /// Nested captures share these limits. Unsupported subtree backends keep normal density.
     pub fn with_subtree_raster_scale<R>(
         &mut self,
@@ -36,7 +38,7 @@ impl Window {
         {
             scale = (((width * scale).ceil() - 1.) / width).max(1.);
         }
-        if !self.supports_subtree_effects() || scale == 1. {
+        if !self.supports_subtree_effects() {
             return f(self);
         }
         if self.invalidator.inner.borrow().draw_phase == super::DrawPhase::Paint {

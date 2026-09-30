@@ -305,6 +305,8 @@ impl DirectXRenderer {
                 viewport_size: [resources.viewport.Width, resources.viewport.Height],
                 premultiplied_alpha: 0,
                 pad: 0,
+                viewport_origin: [0.; 2],
+                origin_pad: [0; 2],
             }],
         )?;
         unsafe {
@@ -1733,6 +1735,8 @@ struct EffectGlobalParams {
     viewport_size: [f32; 2],
     premultiplied_alpha: u32,
     pad: u32,
+    viewport_origin: [f32; 2],
+    origin_pad: [u32; 2],
 }
 
 #[derive(Clone, Copy)]

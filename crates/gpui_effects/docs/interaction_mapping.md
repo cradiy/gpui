@@ -93,9 +93,14 @@ pointer coordinates or IME geometry. Zoom does not automatically choose a densit
 magnification beyond the chosen density can still soften text. Keep the multiplier
 fixed while zooming to reuse capture textures.
 
-High-density captures allocate a full-window texture, even for a small group. Each
-requested multiplier is capped at four and reduced to fit 8192 pixels per axis and
-16,777,216 pixels (64 MiB for one RGBA8 texture), without reducing native density.
+On WGPU, ordinary UI and nested transform groups allocate captures at the group's
+bounds, clipped to the window, at both normal and increased density. Backdrop blur,
+simulation, 3D, multipass, two-input effects and nested subtrees without an isolated
+raster capture retain full-window captures. Shader positions stay in window coordinates.
+
+Each requested multiplier is capped at four and reduced using the full window viewport
+to fit 8192 pixels per axis and 16,777,216 pixels (64 MiB for one RGBA8 texture),
+without reducing native density. This density limit also applies to cropped captures.
 Nested groups share these dimension and area limits. These are per-capture limits,
 not a total GPU memory budget; intermediate textures and glyph caches also consume
 memory. Custom painting code should use `window.raster_scale_factor()` for device-pixel
@@ -107,9 +112,10 @@ without subtree effects draw and hit-test the original content. Deferred popups 
 `anchored().map_anchor(true)` to follow the group.
 
 On WGPU, an unchanged source subtree can reuse its captured pixels while the matrix
-changes. Reuse requires a single writer at that capture depth and no multipass,
-two-input, high-density or 3D layers in the frame. High-density captures have their own
-source cache and can reuse unchanged pixels across matrix changes. Content, atlas-image and text-rendering changes
+changes. Transform groups have independent source caches at both normal and increased
+density. Ordinary subtrees sharing scratch textures require a single writer at that
+capture depth and no multipass, two-input, raster-scaled or 3D layers in the frame.
+Content, atlas-image, capture-region and text-rendering changes
 invalidate the capture; video and simulation content is redrawn. This uses existing
 capture textures and does not prevent child-view cache invalidation.
 

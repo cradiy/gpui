@@ -364,6 +364,8 @@ impl WgpuTextureEffect {
                 viewport_size: size.map(|v| v as f32),
                 premultiplied_alpha: u32::from(self.config.premultiplied_alpha),
                 pad: 0,
+                viewport_origin: [0.; 2],
+                origin_pad: [0; 2],
             }),
             usage: wgpu::BufferUsages::UNIFORM,
         });

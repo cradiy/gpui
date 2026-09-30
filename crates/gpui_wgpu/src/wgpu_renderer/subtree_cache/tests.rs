@@ -156,7 +156,7 @@ fn raster_capture_preserves_offset_alpha_and_nested_density() -> anyhow::Result<
     ] {
         let total_density = density * if nested { 2. } else { 1. };
         let mut source = Scene::default();
-        source.raster_scale = (total_density > 1.).then_some(if nested { 2. } else { density });
+        source.raster_scale = Some(if nested { 2. } else { density });
         let rect = bounds(12., 14., 8., 6.).map(|p| ScaledPixels(p.0 * total_density));
         source.insert_primitive(Quad {
             bounds: rect,
@@ -196,15 +196,178 @@ fn raster_capture_preserves_offset_alpha_and_nested_density() -> anyhow::Result<
         for (x, y) in [(10, 10), (38, 25), (22, 38)] {
             assert_eq!(sample(x, y), &[0; 4]);
         }
-        if density > 1. {
+        {
             let capture = &renderer.resources().ui_captures[0];
-            assert_eq!(capture.texture.width(), (64. * density) as u32);
+            assert_eq!(capture.texture.width(), (48. * density) as u32);
+            assert_eq!(capture.renderer.capture_origin, [8. * density; 2]);
+            assert!(renderer.resources().subtree_textures.is_empty());
             if nested {
                 assert_eq!(
                     capture.renderer.resources().ui_captures[0].texture.width(),
-                    256
+                    192
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn regional_capture_matches_full_frame_pixels_after_moving_crop() -> anyhow::Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let mut full_renderer = renderer(&context)?;
+    full_renderer.update_drawable_size(size(DevicePixels(128), DevicePixels(128)));
+    let full_target = texture(&context, 128);
+    let mut source = Scene::default();
+    source.raster_scale = Some(2.);
+    let rect = bounds(32., 36., 28., 24.);
+    let clip = ContentMask {
+        bounds: bounds(0., 0., 128., 128.),
+    };
+    source.insert_primitive(gpui::Shadow {
+        order: 0,
+        bounds: rect,
+        content_mask: clip,
+        color: rgba(0x00000080).into(),
+        blur_radius: ScaledPixels(3.),
+        corner_radii: gpui::Corners::all(ScaledPixels(5.)),
+        element_bounds: rect,
+        element_corner_radii: gpui::Corners::all(ScaledPixels(5.)),
+        inset: 0,
+        pad: 0,
+    });
+    source.insert_primitive(Quad {
+        bounds: rect,
+        content_mask: clip,
+        background: rgba(0xff000080).into(),
+        corner_radii: gpui::Corners::all(ScaledPixels(5.)),
+        ..Default::default()
+    });
+    source.insert_primitive(gpui::Underline {
+        order: 0,
+        pad: 0,
+        bounds: bounds(40., 66., 36., 6.),
+        content_mask: clip,
+        color: rgba(0x00ff00ff).into(),
+        thickness: ScaledPixels(2.),
+        wavy: true.into(),
+    });
+    let mut path = gpui::PathBuilder::fill();
+    path.move_to(point(gpui::px(25.), gpui::px(40.)));
+    path.line_to(point(gpui::px(35.), gpui::px(55.)));
+    path.line_to(point(gpui::px(15.), gpui::px(55.)));
+    path.close();
+    let mut path = path.build()?.scale(2.);
+    path.color = rgba(0x2244ffff).into();
+    path.content_mask = clip;
+    source.insert_primitive(path);
+    let mut effect = layer(Scene::default(), 0.).composite;
+    effect.bounds = bounds(80., 24., 20., 20.);
+    effect.effect_bounds = effect.bounds;
+    effect.content_mask = clip;
+    effect.shader = gpui::EffectShader::wgsl(
+        "fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return vec4<f32>(input.position / 128.0, 0.0, 1.0); }",
+    );
+    source.insert_primitive(effect);
+    source.finish();
+    draw(&mut full_renderer, &source, &full_target);
+    let reference = pixels(&context, &full_target);
+    let source = Rc::new(source);
+    let mut cropped_renderer = renderer(&context)?;
+    let target = texture(&context, 64);
+    for crop in [
+        bounds(8., 8., 48., 48.),
+        bounds(10., 6., 48., 48.),
+        bounds(10.25, 6.75, 40., 45.),
+        bounds(-4., -3., 48., 48.),
+    ] {
+        let mut outer = layer(Scene::default(), 0.);
+        outer.scene = source.clone();
+        outer.composite.bounds = crop;
+        outer.composite.effect_bounds = crop;
+        outer.composite.content_mask.bounds = crop;
+        let mut scene = Scene::default();
+        scene.insert_primitive(gpui::Primitive::SubtreeLayer(outer));
+        scene.finish();
+        draw(&mut cropped_renderer, &scene, &target);
+        let capture = &cropped_renderer.resources().ui_captures[0];
+        let actual = pixels(&context, &capture.texture);
+        let [left, top] = capture.renderer.capture_origin.map(|value| value as usize);
+        let width = capture.texture.width() as usize;
+        let stride = (width * 4).div_ceil(256) * 256;
+        for row in 0..capture.texture.height() as usize {
+            let expected =
+                &reference[(row + top) * 512 + left * 4..(row + top) * 512 + (left + width) * 4];
+            let actual = &actual[row * stride..row * stride + width * 4];
+            assert!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| a.abs_diff(*b) <= 1),
+                "row {row}, crop {crop:?}"
+            );
+        }
+        assert!(cropped_renderer.resources().subtree_textures.is_empty());
+        assert!(
+            cropped_renderer
+                .resources()
+                .path_intermediate_texture
+                .is_none()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn nested_capture_can_translate_source_from_outside_parent_crop() -> anyhow::Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let mut renderer = renderer(&context)?;
+    let target = texture(&context, 64);
+    for (density, inner_density) in [(1., Some(2.)), (2., Some(2.)), (1., None), (2., None)] {
+        let mut source = Scene::default();
+        source.raster_scale = inner_density;
+        let rect = bounds(44., 16., 4., 4.)
+            .map(|p| ScaledPixels(p.0 * density * inner_density.unwrap_or(1.)));
+        source.insert_primitive(Quad {
+            bounds: rect,
+            content_mask: ContentMask { bounds: rect },
+            background: rgba(0xff0000ff).into(),
+            ..Default::default()
+        });
+        source.finish();
+        let mut inner = layer(source, -30. * density);
+        inner.composite.bounds = bounds(0., 0., 64., 64.).map(|p| ScaledPixels(p.0 * density));
+        inner.composite.effect_bounds = inner.composite.bounds;
+        inner.composite.content_mask.bounds = inner.composite.bounds;
+        let mut parent = Scene::default();
+        parent.raster_scale = Some(density);
+        parent.insert_primitive(gpui::Primitive::SubtreeLayer(inner));
+        parent.finish();
+        let mut outer = layer(parent, 0.);
+        outer.composite.bounds = bounds(8., 8., 24., 24.);
+        outer.composite.effect_bounds = outer.composite.bounds;
+        outer.composite.content_mask.bounds = outer.composite.bounds;
+        let mut scene = Scene::default();
+        scene.insert_primitive(gpui::Primitive::SubtreeLayer(outer));
+        scene.finish();
+        draw(&mut renderer, &scene, &target);
+        let output = pixels(&context, &target);
+        assert_eq!(
+            &output[(17 * 64 + 15) * 4..(17 * 64 + 15) * 4 + 4],
+            &[255, 0, 0, 255],
+            "density={density}, inner={inner_density:?}"
+        );
+        if inner_density.is_some() {
+            let capture = &renderer.resources().ui_captures[0];
+            assert_eq!(capture.texture.width(), (24. * density) as u32);
+            assert_eq!(
+                capture.renderer.resources().ui_captures[0].texture.width(),
+                (128. * density) as u32
+            );
+        } else if density > 1. {
+            assert_eq!(renderer.resources().ui_captures[0].texture.width(), 128);
         } else {
             assert!(renderer.resources().ui_captures.is_empty());
         }

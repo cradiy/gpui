@@ -2,6 +2,8 @@ struct GlobalParams {
     viewport_size: vec2<f32>,
     premultiplied_alpha: u32,
     pad: u32,
+    viewport_origin: vec2<f32>,
+    origin_pad: vec2<u32>,
 }
 
 struct Bounds {
@@ -55,7 +57,7 @@ fn effect_to_device_position(
 ) -> vec4<f32> {
     let position = unit_vertex * bounds.size + bounds.origin;
     let transformed = transpose(transform.rotation_scale) * position + transform.translation;
-    let device_position = transformed / globals.viewport_size * vec2<f32>(2.0, -2.0)
+    let device_position = (transformed - globals.viewport_origin) / globals.viewport_size * vec2<f32>(2.0, -2.0)
         + vec2<f32>(-1.0, 1.0);
     return vec4<f32>(device_position, 0.0, 1.0);
 }
@@ -157,7 +159,7 @@ fn fs_effect(input: EffectVarying) -> @location(0) vec4<f32> {
         / max(instance.effect_bounds.size, vec2<f32>(0.0001));
     let effect_input = EffectInput(
         effect_uv,
-        input.position.xy,
+        input.position.xy + globals.viewport_origin,
         instance.effect_bounds.size,
         instance.time,
         instance.image_bounds.origin,

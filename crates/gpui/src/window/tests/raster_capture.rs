@@ -202,7 +202,7 @@ fn raster_capture_updates_glyph_atlas_and_cached_paint_without_moving_layout_or_
         cx.update_window(handle.into(), |_, window, cx| {
             window.draw(cx).clear();
             let source = &window.rendered_frame.scene.subtree_layers[0].scene;
-            assert_eq!(source.raster_scale, (density > 1.).then_some(density));
+            assert_eq!(source.raster_scale, Some(density));
             assert_eq!(
                 source.quads[0].bounds.size,
                 size(ScaledPixels(200. * density), ScaledPixels(160. * density))

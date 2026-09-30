@@ -402,6 +402,7 @@ impl<V: View> Element for ViewElement<V> {
                         let content_mask = window.content_mask();
                         let text_style = window.text_style();
                         let subtree_effect = window.prepainting_subtree_effect;
+                        let cold = element_state.is_none();
 
                         if let Some(mut element_state) = element_state
                             && element_state.cache_key.bounds == bounds
@@ -428,6 +429,7 @@ impl<V: View> Element for ViewElement<V> {
                             && !window.refreshing
                             && !window.a11y.is_active()
                         {
+                            window.record_view_cache_hit();
                             let prepaint_start = window.prepaint_index();
                             window.reuse_prepaint(element_state.prepaint_range.clone());
                             cx.entities
@@ -445,6 +447,7 @@ impl<V: View> Element for ViewElement<V> {
                             return (None, element_state);
                         }
 
+                        window.record_view_cache_miss(cold, entity_id);
                         let refreshing = mem::replace(&mut window.refreshing, true);
                         let prepaint_start = window.prepaint_index();
                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {

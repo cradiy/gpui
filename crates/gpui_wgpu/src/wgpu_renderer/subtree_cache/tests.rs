@@ -377,6 +377,74 @@ fn nested_capture_can_translate_source_from_outside_parent_crop() -> anyhow::Res
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn capture_diagnostics_track_reuse_nested_storage_and_release() -> anyhow::Result<()> {
+    let context = WgpuContext::new_headless()?;
+    let mut renderer = renderer(&context)?;
+    let target = texture(&context, 64);
+    let make_scene = |color, offset| {
+        let mut source = Scene::default();
+        source.raster_scale = Some(2.);
+        let rect = bounds(8., 8., 16., 16.);
+        source.insert_primitive(Quad {
+            bounds: rect,
+            content_mask: ContentMask { bounds: rect },
+            background: rgba(color).into(),
+            ..Default::default()
+        });
+        source.finish();
+        let mut outer = Scene::default();
+        outer.raster_scale = Some(2.);
+        outer.insert_primitive(gpui::Primitive::SubtreeLayer(layer(source, 0.)));
+        outer.finish();
+        let mut scene = Scene::default();
+        scene.insert_primitive(gpui::Primitive::SubtreeLayer(layer(outer, offset)));
+        scene.finish();
+        scene
+    };
+    draw(&mut renderer, &make_scene(0xff0000ff, 0.), &target);
+    let first = renderer.diagnostics().unwrap();
+    assert_eq!(first.capture_cache.hits, 0);
+    assert_eq!(first.capture_cache.misses, 2);
+    assert_eq!(first.capture_textures.len(), 2);
+    let first_bytes: u64 = first
+        .capture_textures
+        .iter()
+        .map(|t| t.estimated_bytes)
+        .sum();
+    assert!(first_bytes > 0);
+    for texture in &first.capture_textures {
+        assert_eq!(
+            texture.estimated_bytes,
+            u64::from(texture.width) * u64::from(texture.height) * 4
+        );
+        assert_eq!(texture.raster_scale, Some(2.));
+    }
+    draw(&mut renderer, &make_scene(0xff0000ff, 8.), &target);
+    let reused = renderer.diagnostics().unwrap();
+    assert_eq!(
+        reused.capture_cache.hits, 1,
+        "a reused parent does not visit the child"
+    );
+    assert_eq!(reused.capture_cache.misses, 0);
+    assert_eq!(
+        reused
+            .capture_textures
+            .iter()
+            .map(|t| t.estimated_bytes)
+            .sum::<u64>(),
+        first_bytes
+    );
+    draw(&mut renderer, &make_scene(0x0000ffff, 8.), &target);
+    assert_eq!(renderer.diagnostics().unwrap().capture_cache.misses, 2);
+    draw(&mut renderer, &Scene::default(), &target);
+    let empty = renderer.diagnostics().unwrap();
+    assert!(empty.capture_textures.is_empty());
+    assert_eq!(empty.capture_cache.hits + empty.capture_cache.misses, 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn subtree_capture_cache_reuses_only_submitted_unchanged_single_writer_textures()
 -> anyhow::Result<()> {
     let context = WgpuContext::new_headless()?;

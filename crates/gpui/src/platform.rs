@@ -882,6 +882,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         anyhow::bail!("native file export is unsupported by this platform")
     }
     fn draw(&self, scene: &Scene);
+    /// Returns renderer diagnostics when supported; no GPU synchronization is performed.
+    fn renderer_diagnostics(&self) -> Option<crate::RendererDiagnostics> {
+        None
+    }
     fn completed_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
     fn is_subpixel_rendering_supported(&self) -> bool;

@@ -195,6 +195,8 @@ fn check_grid_cache(cx: &mut TestAppContext, cache_across_transforms: bool) {
     });
     cx.update_window(handle.into(), |_, window, _| {
         window.mouse_position = point(px(500.), px(500.));
+        assert!(window.frame_diagnostics().is_none());
+        window.set_frame_diagnostics_enabled(true);
     })
     .unwrap();
     for (scale, translation, clip, callback, expected) in [
@@ -222,6 +224,25 @@ fn check_grid_cache(cx: &mut TestAppContext, cache_across_transforms: bool) {
             window.mouse_position = point(px(500.), px(500.));
             let before_draw = renders.get();
             window.draw(cx).clear();
+            let diagnostics = window.frame_diagnostics().unwrap();
+            let reasons = diagnostics.view_cache_misses;
+            assert_eq!(
+                reasons.cold
+                    + reasons.accessibility
+                    + reasons.refresh
+                    + reasons.dirty
+                    + reasons.context,
+                diagnostics.view_cache.misses
+            );
+            assert_eq!(
+                diagnostics.view_cache.misses,
+                (renders.get() - before_draw) as u64
+            );
+            assert_eq!(
+                diagnostics.view_cache.hits + diagnostics.view_cache.misses,
+                100
+            );
+            assert!(diagnostics.platform_draw_time.is_none());
             if callback {
                 assert_eq!(
                     renders.get(),
@@ -306,4 +327,9 @@ fn check_grid_cache(cx: &mut TestAppContext, cache_across_transforms: bool) {
         .unwrap();
         assert_eq!(renders.get(), 101, "refresh must render all nodes");
     }
+    cx.update_window(handle.into(), |_, window, _| {
+        window.set_frame_diagnostics_enabled(false);
+        assert!(window.frame_diagnostics().is_none());
+    })
+    .unwrap();
 }

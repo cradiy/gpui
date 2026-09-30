@@ -45,6 +45,7 @@ impl CaptureRegion {
 pub(super) struct UiCapture {
     pub(super) renderer: WgpuRenderer,
     pub(super) texture: wgpu::Texture,
+    pub(super) raster_scale: f32,
     snapshot: Option<SceneSnapshot>,
     validity: OutputValidity,
     external_writes: bool,
@@ -241,6 +242,7 @@ impl WgpuRenderer {
                 self.resources_mut().ui_captures.push(UiCapture {
                     renderer,
                     texture,
+                    raster_scale: layer.scene.raster_scale.unwrap_or(1.),
                     snapshot: None,
                     validity: OutputValidity::default(),
                     external_writes: false,
@@ -267,6 +269,7 @@ impl WgpuRenderer {
             let parameters = self.rendering_params;
             let is_bgr = self.is_bgr;
             let capture = &mut self.resources_mut().ui_captures[index];
+            capture.raster_scale = layer.scene.raster_scale.unwrap_or(1.);
             let coordinates_changed = capture.renderer.capture_origin != region.origin
                 || capture.renderer.capture_extent != Some(region.extent);
             let reusable = capture.validity.reusable()
@@ -286,6 +289,7 @@ impl WgpuRenderer {
                 capture.renderer.resources_mut().subtree_cache = Default::default();
             }
             if reusable {
+                self.record_capture_diagnostics(true);
                 self.resources_mut()
                     .ui_capture_indices
                     .insert(layer as *const _ as usize, index);
@@ -320,6 +324,9 @@ impl WgpuRenderer {
                 return Ok(false);
             }
             capture.validity.encoded();
+            let child_stats = capture.renderer.capture_diagnostics.get();
+            self.record_capture_diagnostics(false);
+            self.add_capture_diagnostics(child_stats);
             self.resources_mut()
                 .ui_capture_indices
                 .insert(layer as *const _ as usize, index);

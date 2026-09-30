@@ -36,6 +36,7 @@ mod particle_transition;
 mod particles;
 mod pipeline_cache;
 pub(crate) use pipeline_cache::PipelineCache;
+mod diagnostics;
 pub(crate) mod scene3d;
 mod scene_snapshot;
 mod subtree_cache;
@@ -563,6 +564,8 @@ pub struct WgpuRenderer {
     unused_backdrop_frames: u16,
     recent_instance_peak: Cell<u64>,
     frames_since_instance_trim: u16,
+    capture_diagnostics: Cell<gpui::CacheDiagnostics>,
+    diagnostics_valid: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1069,6 +1072,8 @@ impl WgpuRenderer {
             unused_backdrop_frames: 0,
             recent_instance_peak: Cell::new(0),
             frames_since_instance_trim: 0,
+            capture_diagnostics: Cell::new(Default::default()),
+            diagnostics_valid: Cell::new(false),
         })
     }
 
@@ -2311,6 +2316,7 @@ impl WgpuRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) -> bool {
+        self.diagnostics_valid.set(false);
         // Bail out early if the surface has been unconfigured (e.g. during
         // Android background/rotation transitions).  Attempting to acquire
         // a texture from an unconfigured surface can block indefinitely on
@@ -3057,6 +3063,8 @@ impl WgpuRenderer {
         retain_outputs: bool,
         subtree_targets: &[wgpu::Texture],
     ) -> anyhow::Result<SceneEncoding> {
+        self.capture_diagnostics.set(Default::default());
+        self.diagnostics_valid.set(false);
         let mut encoded = self.encode_scene_inner(
             scene,
             target_texture,
@@ -3088,6 +3096,8 @@ impl WgpuRenderer {
                 capture.invalidate_encoding();
             }
         }
+        self.diagnostics_valid
+            .set(matches!(encoded, Ok(SceneEncoding::Complete)));
         encoded
     }
 
@@ -3408,6 +3418,9 @@ impl WgpuRenderer {
                                 .unwrap_or_else(|| &self.resources().subtree_textures[depth]);
                             let capture_view = texture.create_view(&Default::default());
                             let reuse = self.resources().subtree_cache.reuse(depth, layer);
+                            if captured.is_none() {
+                                self.record_capture_diagnostics(reuse);
+                            }
                             if captured.is_none()
                                 && !reuse
                                 && !self.encode_scene_batches(

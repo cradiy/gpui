@@ -1803,6 +1803,10 @@ impl PlatformWindow for X11Window {
         self.0.callbacks.borrow_mut().button_layout_changed = Some(callback);
     }
 
+    fn renderer_diagnostics(&self) -> Option<gpui::RendererDiagnostics> {
+        self.0.state.borrow().renderer.diagnostics()
+    }
+
     fn draw(&self, scene: &Scene) {
         let mut inner = self.0.state.borrow_mut();
 

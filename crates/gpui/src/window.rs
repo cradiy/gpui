@@ -51,6 +51,7 @@ use std::{
 
 pub(crate) mod a11y;
 mod color_svg;
+mod diagnostics;
 mod effects;
 mod element_id;
 mod focus;
@@ -65,6 +66,10 @@ mod raster;
 mod tests;
 
 pub use a11y::A11ySubtreeBuilder;
+pub use diagnostics::{
+    CacheDiagnostics, CaptureTextureDiagnostics, FrameDiagnostics, RendererDiagnostics,
+    ViewCacheMisses,
+};
 pub use element_id::ElementId;
 pub(crate) use focus::{AnyWindowFocusListener, FocusMap, WindowFocusEvent};
 pub use focus::{
@@ -613,6 +618,7 @@ pub struct Window {
     active: Rc<Cell<bool>>,
     hovered: Rc<Cell<bool>>,
     pub(crate) needs_present: Rc<Cell<bool>>,
+    frame_diagnostics: Option<diagnostics::FrameDiagnosticsTracker>,
     /// Tracks recent input event timestamps to determine if input is arriving at a high rate.
     /// Used to selectively enable VRR optimization only when input rate exceeds 60fps.
     pub(crate) input_rate_tracker: Rc<RefCell<InputRateTracker>>,
@@ -741,6 +747,14 @@ fn animation_frame_interval(
         Some(Duration::from_micros(16667))
     } else {
         None
+    }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        // Platform state may outlive this window during native teardown. Release the
+        // focused entity before handing that state back to the platform event loop.
+        self.platform_window.take_input_handler();
     }
 }
 
@@ -1207,6 +1221,7 @@ impl Window {
             active,
             hovered,
             needs_present,
+            frame_diagnostics: None,
             input_rate_tracker,
             #[cfg(feature = "input-latency-histogram")]
             input_latency_tracker: InputLatencyTracker::new()?,

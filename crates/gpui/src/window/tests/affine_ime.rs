@@ -8,6 +8,7 @@ use std::{cell::Cell, ops::Range, rc::Rc};
 #[derive(Clone)]
 struct TextHandler {
     composing: Rc<Cell<bool>>,
+    _owner: Option<Entity<()>>,
 }
 
 impl InputHandler for TextHandler {
@@ -206,7 +207,10 @@ fn check_ime_cache(cx: &mut TestAppContext, cache_across_transforms: bool) {
             MappedText {
                 text: cx.new(|_| TextView {
                     focus,
-                    handler: TextHandler { composing },
+                    handler: TextHandler {
+                        composing,
+                        _owner: None,
+                    },
                     renders,
                 }),
                 transform: PointerTransform::identity(),
@@ -309,4 +313,53 @@ fn check_ime_cache(cx: &mut TestAppContext, cache_across_transforms: bool) {
 
 fn rect((x, y, width, height): (f32, f32, f32, f32)) -> Bounds<Pixels> {
     Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+}
+
+#[crate::test]
+fn closing_window_releases_platform_input_owner(cx: &mut TestAppContext) {
+    check_input_owner_release(cx, false);
+}
+
+#[crate::test]
+fn shutdown_releases_platform_input_owner(cx: &mut TestAppContext) {
+    check_input_owner_release(cx, true);
+}
+
+fn check_input_owner_release(cx: &mut TestAppContext, shutdown: bool) {
+    let owner = cx.new(|_| ());
+    let weak_owner = owner.downgrade();
+    let handle = cx.add_window(move |window, cx| {
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        TextView {
+            focus,
+            handler: TextHandler {
+                composing: Rc::new(Cell::new(true)),
+                _owner: Some(owner),
+            },
+            renders: Default::default(),
+        }
+    });
+    cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+        .unwrap();
+    // Native platform state can outlive the GPUI window during asynchronous teardown.
+    let mut platform = cx.test_window(handle.into());
+    let input = platform
+        .take_input_handler()
+        .expect("focused input handler");
+    platform.set_input_handler(input);
+    if shutdown {
+        cx.update(|cx| cx.shutdown());
+    } else {
+        cx.update_window(handle.into(), |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    assert!(
+        platform.take_input_handler().is_none(),
+        "closed window retained its input handler"
+    );
+    assert!(
+        weak_owner.upgrade().is_none(),
+        "input owner survived window teardown"
+    );
 }

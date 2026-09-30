@@ -233,6 +233,20 @@ impl Window {
     /// The window's frame callback presents the new [`Scene`] separately.
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        let diagnostics_start = if !self.raster_budget_retrying {
+            self.frame_diagnostics.as_mut().map(|tracker| {
+                tracker.current = crate::FrameDiagnostics {
+                    sequence: tracker.current.sequence + 1,
+                    ..Default::default()
+                };
+                Instant::now()
+            })
+        } else {
+            None
+        };
+        if let Some(tracker) = &mut self.frame_diagnostics {
+            tracker.current.build_attempts += 1;
+        }
         // Drain unconditionally so a stale first-invalidation timestamp can't
         // leak into a later frame across enable/disable of frame tracing.
         let frame_dirty = self.invalidator.take_frame_dirty();
@@ -357,11 +371,17 @@ impl Window {
             self.refreshing = true;
             let result = self.draw(cx);
             self.raster_budget_retrying = false;
+            if let Some(start) = diagnostics_start {
+                self.finish_frame_diagnostics(start.elapsed());
+            }
             return result;
         }
         if upgrade_raster {
             self.refresh();
             self.on_next_frame(|window, _| window.refresh());
+        }
+        if let Some(start) = diagnostics_start {
+            self.finish_frame_diagnostics(start.elapsed());
         }
         ArenaClearNeeded::new(&cx.element_arena)
     }
@@ -390,7 +410,19 @@ impl Window {
 
     #[profiling::function]
     pub(in crate::window) fn present(&mut self) {
+        let started = self.frame_diagnostics.is_some().then(Instant::now);
         self.platform_window.draw(&self.rendered_frame.scene);
+        if let Some(started) = started {
+            let elapsed = started.elapsed();
+            let renderer = self.platform_window.renderer_diagnostics();
+            if let Some(tracker) = self.frame_diagnostics.as_mut()
+                && let Some(frame) = tracker.completed.as_mut()
+            {
+                frame.platform_draw_time = Some(elapsed);
+                frame.renderer = renderer;
+                tracker.submitted = Some(frame.clone());
+            }
+        }
         #[cfg(feature = "input-latency-histogram")]
         self.input_latency_tracker.record_frame_presented();
         self.needs_present.set(false);

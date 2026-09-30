@@ -715,6 +715,10 @@ impl PlatformWindow for WebWindow {
         self.inner.callbacks.borrow_mut().appearance_changed = Some(callback);
     }
 
+    fn renderer_diagnostics(&self) -> Option<gpui::RendererDiagnostics> {
+        self.inner.state.borrow().renderer.diagnostics()
+    }
+
     fn draw(&self, scene: &Scene) {
         if self.inner.state.borrow().renderer.device_lost() {
             return;

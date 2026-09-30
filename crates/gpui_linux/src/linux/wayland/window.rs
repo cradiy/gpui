@@ -2159,6 +2159,14 @@ impl PlatformWindow for WaylandWindow {
         self.0.callbacks.borrow_mut().button_layout_changed = Some(callback);
     }
 
+    fn renderer_diagnostics(&self) -> Option<gpui::RendererDiagnostics> {
+        let state = self.borrow();
+        state
+            .renderer_presented
+            .then(|| state.renderer.diagnostics())
+            .flatten()
+    }
+
     fn draw(&self, scene: &Scene) {
         let mut state = self.borrow_mut();
 

@@ -412,7 +412,6 @@ nonminimal_bool = "allow"
 [workspace.metadata.cargo-machete]
 ignored = [
   "bindgen",
-  "cbindgen",
   "prost_build",
   "serde",
   "component",

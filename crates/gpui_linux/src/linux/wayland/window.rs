@@ -963,6 +963,26 @@ impl WaylandWindow {
 }
 
 impl WaylandWindowStatePtr {
+    pub(crate) fn activate(&self) {
+        let state = self.state.borrow();
+        let Some(activation) = &state.globals.activation else {
+            return;
+        };
+        let token = activation.get_activation_token(
+            &state.globals.qh,
+            super::client::PendingActivation::Window(state.surface.id()),
+        );
+        if let Some(app_id) = &state.app_id {
+            token.set_app_id(app_id.clone());
+        }
+        let (serial, requesting_surface) = state.client.activation_context();
+        if serial != 0 {
+            token.set_serial(serial, &state.globals.seat);
+        }
+        token.set_surface(requesting_surface.as_ref().unwrap_or(&state.surface));
+        token.commit();
+    }
+
     pub fn handle(&self) -> AnyWindowHandle {
         self.state.borrow().handle
     }
@@ -1989,20 +2009,7 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn activate(&self) {
-        // Try to request an activation token. Even though the activation is likely going to be rejected,
-        // KWin and Mutter can use the app_id to visually indicate we're requesting attention.
-        let state = self.borrow();
-        if let (Some(activation), Some(app_id)) = (&state.globals.activation, state.app_id.clone())
-        {
-            state.client.set_pending_activation(state.surface.id());
-            let token = activation.get_activation_token(&state.globals.qh, ());
-            // The serial isn't exactly important here, since the activation is probably going to be rejected anyway.
-            let serial = state.client.get_serial(SerialKind::MousePress);
-            token.set_app_id(app_id);
-            token.set_serial(serial, &state.globals.seat);
-            token.set_surface(&state.surface);
-            token.commit();
-        }
+        self.0.activate();
     }
 
     fn is_active(&self) -> bool {

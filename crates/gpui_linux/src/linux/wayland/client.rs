@@ -400,6 +400,7 @@ pub(crate) struct WaylandClientState {
     button_pressed: Option<MouseButton>,
     mouse_focused_window: Option<WaylandWindowStatePtr>,
     keyboard_focused_window: Option<WaylandWindowStatePtr>,
+    activation_history: crate::linux::platform::ActivationHistory<ObjectId>,
     loop_handle: LoopHandle<'static, WaylandClientStatePtr>,
     cursor_style: Option<CursorStyle>,
     cursor_hidden_window: Option<WaylandWindowStatePtr>,
@@ -407,7 +408,6 @@ pub(crate) struct WaylandClientState {
     data_offers: Vec<DataOffer<WlDataOffer>>,
     primary_data_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
     cursor: Cursor,
-    pending_activation: Option<PendingActivation>,
     startup_activation_token: Option<String>,
     event_loop: Option<EventLoop<'static, WaylandClientStatePtr>>,
     pub common: LinuxCommon,
@@ -868,9 +868,16 @@ impl WaylandClientStatePtr {
         }
     }
 
-    pub fn set_pending_activation(&self, window: ObjectId) {
-        self.0.upgrade().unwrap().borrow_mut().pending_activation =
-            Some(PendingActivation::Window(window));
+    pub(crate) fn activation_context(&self) -> (u32, Option<wl_surface::WlSurface>) {
+        let client = self.get_client();
+        let state = client.borrow();
+        let serial = state.serial_tracker.get_latest_input();
+        let source = if serial == state.serial_tracker.get(SerialKind::KeyPress) {
+            state.keyboard_focused_window.as_ref()
+        } else {
+            state.mouse_focused_window.as_ref()
+        };
+        (serial, source.map(WaylandWindowStatePtr::surface))
     }
 
     pub fn enable_ime(&self) {
@@ -965,6 +972,7 @@ impl WaylandClientStatePtr {
         let client = self.get_client();
         let mut state = client.borrow_mut();
         let closed_window = state.windows.remove(surface_id).unwrap();
+        state.activation_history.closed(surface_id);
         if state
             .native_drag_source
             .as_ref()
@@ -1367,6 +1375,7 @@ impl WaylandClient {
             button_pressed: None,
             mouse_focused_window: None,
             keyboard_focused_window: None,
+            activation_history: Default::default(),
             loop_handle: handle.clone(),
             enter_token: None,
             cursor_style: None,
@@ -1375,7 +1384,6 @@ impl WaylandClient {
             data_offers: Vec::new(),
             primary_data_offer: None,
             cursor,
-            pending_activation: None,
             startup_activation_token,
             event_loop: Some(event_loop),
             ime_enabled: None,
@@ -1483,6 +1491,10 @@ impl LinuxClient for WaylandClient {
         let appearance = state.common.appearance;
         let compositor_gpu = state.compositor_gpu.take();
 
+        let activation_target = matches!(
+            params.kind,
+            WindowKind::Normal | WindowKind::Floating | WindowKind::Dialog
+        );
         let (window, surface_id) = WaylandWindow::new(
             handle,
             state.globals.clone(),
@@ -1498,6 +1510,9 @@ impl LinuxClient for WaylandClient {
         )?;
 
         if window.0.toplevel().is_some() {
+            if activation_target {
+                state.activation_history.opened(surface_id.clone());
+            }
             state.consume_startup_activation_token(&window.0.surface());
         }
         state.windows.insert(surface_id, window.0.clone());
@@ -1554,13 +1569,13 @@ impl LinuxClient for WaylandClient {
     }
 
     fn open_uri(&self, uri: &str) {
-        let mut state = self.0.borrow_mut();
+        let state = self.0.borrow();
         if let (Some(activation), Some(window)) = (
             state.globals.activation.clone(),
             state.mouse_focused_window.clone(),
         ) {
-            state.pending_activation = Some(PendingActivation::Uri(uri.to_string()));
-            let token = activation.get_activation_token(&state.globals.qh, ());
+            let token = activation
+                .get_activation_token(&state.globals.qh, PendingActivation::Uri(uri.to_string()));
             let serial = state.serial_tracker.get(SerialKind::MousePress);
             token.set_serial(serial, &state.wl_seat);
             token.set_surface(&window.surface());
@@ -1572,13 +1587,13 @@ impl LinuxClient for WaylandClient {
     }
 
     fn reveal_path(&self, path: PathBuf) {
-        let mut state = self.0.borrow_mut();
+        let state = self.0.borrow();
         if let (Some(activation), Some(window)) = (
             state.globals.activation.clone(),
             state.mouse_focused_window.clone(),
         ) {
-            state.pending_activation = Some(PendingActivation::Path(path));
-            let token = activation.get_activation_token(&state.globals.qh, ());
+            let token =
+                activation.get_activation_token(&state.globals.qh, PendingActivation::Path(path));
             let serial = state.serial_tracker.get(SerialKind::MousePress);
             token.set_serial(serial, &state.wl_seat);
             token.set_surface(&window.surface());
@@ -1665,6 +1680,20 @@ impl LinuxClient for WaylandClient {
             .keyboard_focused_window
             .as_ref()
             .map(|window| window.handle())
+    }
+
+    fn activate(&self) {
+        let window = {
+            let state = self.0.borrow();
+            state
+                .activation_history
+                .target()
+                .and_then(|id| state.windows.get(id))
+                .cloned()
+        };
+        if let Some(window) = window {
+            window.activate();
+        }
     }
 
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
@@ -2061,12 +2090,14 @@ impl Dispatch<xdg_wm_base::XdgWmBase, ()> for WaylandClientStatePtr {
     }
 }
 
-impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, ()> for WaylandClientStatePtr {
+impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, PendingActivation>
+    for WaylandClientStatePtr
+{
     fn event(
         this: &mut Self,
         token: &xdg_activation_token_v1::XdgActivationTokenV1,
         event: <xdg_activation_token_v1::XdgActivationTokenV1 as Proxy>::Event,
-        _: &(),
+        request: &PendingActivation,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -2075,19 +2106,18 @@ impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, ()> for WaylandClie
 
         if let xdg_activation_token_v1::Event::Done { token } = event {
             let executor = state.common.background_executor.clone();
-            match state.pending_activation.take() {
-                Some(PendingActivation::Uri(uri)) => open_uri_internal(executor, &uri, Some(token)),
-                Some(PendingActivation::Path(path)) => {
-                    reveal_path_internal(executor, path, Some(token))
+            match request {
+                PendingActivation::Uri(uri) => open_uri_internal(executor, uri, Some(token)),
+                PendingActivation::Path(path) => {
+                    reveal_path_internal(executor, path.clone(), Some(token))
                 }
-                Some(PendingActivation::Window(window)) => {
-                    let Some(window) = get_window(&mut state, &window) else {
-                        return;
-                    };
-                    let activation = state.globals.activation.as_ref().unwrap();
-                    activation.activate(token, &window.surface());
+                PendingActivation::Window(window) => {
+                    if let Some(window) = get_window(&mut state, window)
+                        && let Some(activation) = &state.globals.activation
+                    {
+                        activation.activate(token, &window.surface());
+                    }
                 }
-                None => log::error!("activation token received with no pending activation"),
             }
         }
 
@@ -2206,6 +2236,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 this.handle_keyboard_layout_change();
             }
             wl_keyboard::Event::Enter { surface, .. } => {
+                state.activation_history.focused(&surface.id());
                 state.keyboard_focused_window = get_window(&mut state, &surface.id());
                 state.enter_token = Some(());
 

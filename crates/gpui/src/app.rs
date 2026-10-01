@@ -1265,6 +1265,11 @@ impl App {
     }
 
     /// Instructs the platform to activate the application by bringing it to the foreground.
+    ///
+    /// On Linux, requests activation of the most recently used normal, floating,
+    /// or dialog window. With no eligible windows, this does nothing. Wayland
+    /// compositors may decline the request; `ignoring_other_apps` cannot override
+    /// their focus policy.
     pub fn activate(&self, ignoring_other_apps: bool) {
         self.platform.activate(ignoring_other_apps);
     }

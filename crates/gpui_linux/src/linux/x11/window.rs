@@ -1017,6 +1017,36 @@ impl X11Window {
 }
 
 impl X11WindowStatePtr {
+    pub(crate) fn activate(&self) {
+        let state = self.state.borrow();
+        if state.destroyed {
+            return;
+        }
+        let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
+        let message = xproto::ClientMessageEvent::new(
+            32,
+            self.x_window,
+            state.atoms._NET_ACTIVE_WINDOW,
+            data,
+        );
+        self.xcb
+            .send_event(
+                false,
+                state.x_root_window,
+                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+                message,
+            )
+            .log_err();
+        self.xcb
+            .set_input_focus(
+                xproto::InputFocus::POINTER_ROOT,
+                self.x_window,
+                xproto::Time::CURRENT_TIME,
+            )
+            .log_err();
+        xcb_flush(&self.xcb);
+    }
+
     pub fn should_close(&self) -> bool {
         let mut cb = self.callbacks.borrow_mut();
         if let Some(mut should_close) = cb.should_close.take() {
@@ -1544,31 +1574,7 @@ impl PlatformWindow for X11Window {
     }
 
     fn activate(&self) {
-        let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
-        let message = xproto::ClientMessageEvent::new(
-            32,
-            self.0.x_window,
-            self.0.state.borrow().atoms._NET_ACTIVE_WINDOW,
-            data,
-        );
-        self.0
-            .xcb
-            .send_event(
-                false,
-                self.0.state.borrow().x_root_window,
-                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
-                message,
-            )
-            .log_err();
-        self.0
-            .xcb
-            .set_input_focus(
-                xproto::InputFocus::POINTER_ROOT,
-                self.0.x_window,
-                xproto::Time::CURRENT_TIME,
-            )
-            .log_err();
-        xcb_flush(&self.0.xcb);
+        self.0.activate();
     }
 
     fn is_active(&self) -> bool {

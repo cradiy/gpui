@@ -24,17 +24,26 @@ impl SerialData {
 /// Helper for tracking of different serial kinds.
 pub(crate) struct SerialTracker {
     serials: HashMap<SerialKind, SerialData>,
+    latest_input: u32,
 }
 
 impl SerialTracker {
     pub fn new() -> Self {
         Self {
             serials: HashMap::default(),
+            latest_input: 0,
         }
     }
 
     pub fn update(&mut self, kind: SerialKind, value: u32) {
+        if matches!(kind, SerialKind::MousePress | SerialKind::KeyPress) {
+            self.latest_input = value;
+        }
         self.serials.insert(kind, SerialData::new(value));
+    }
+
+    pub(crate) fn get_latest_input(&self) -> u32 {
+        self.latest_input
     }
 
     /// Returns the latest tracked serial of the provided [`SerialKind`]
@@ -63,5 +72,24 @@ impl SerialTracker {
             .map(|serial_data| serial_data.serial)
             .max()
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activation_serial_tracks_input_order_including_wraparound() {
+        let mut tracker = SerialTracker::new();
+        assert_eq!(tracker.get_latest_input(), 0);
+        tracker.update(SerialKind::MousePress, u32::MAX - 1);
+        tracker.update(SerialKind::MouseEnter, u32::MAX);
+        assert_eq!(tracker.get_latest_input(), u32::MAX - 1);
+        tracker.update(SerialKind::KeyPress, 1);
+        tracker.update(SerialKind::DataDevice, 2);
+        assert_eq!(tracker.get_latest_input(), 1);
+        tracker.update(SerialKind::MousePress, 3);
+        assert_eq!(tracker.get_latest_input(), 3);
     }
 }

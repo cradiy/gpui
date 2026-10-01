@@ -1,4 +1,4 @@
-use crate::{Bounds, Pixels, Point, PointerMapping, Window};
+use crate::{Bounds, Hitbox, HitboxId, Pixels, Point, PointerMapping, Window};
 use collections::FxHashMap;
 use std::{ops::Range, rc::Rc};
 
@@ -68,6 +68,24 @@ impl ElementBounds {
         let position = entry.mapping.hit_position(position)?;
         (entry.bounds.contains(&position) && entry.clip.contains(&position)).then_some(position)
     }
+
+    pub(crate) fn unoccluded_hit_position(
+        &self,
+        position: Point<Pixels>,
+        window: &Window,
+    ) -> Option<Point<Pixels>> {
+        let source_position = self.hit_position(position, window)?;
+        let hitbox = self.geometry(window)?.hitbox?;
+        let frame = if window.invalidator.not_drawing() {
+            &window.rendered_frame
+        } else {
+            &window.next_frame
+        };
+        let hits = frame.hit_test(position);
+        hits.ids[..hits.hover_hitbox_count]
+            .contains(&hitbox)
+            .then_some(source_position)
+    }
 }
 
 #[derive(Clone)]
@@ -76,6 +94,7 @@ struct Registration {
     bounds: Bounds<Pixels>,
     clip: Bounds<Pixels>,
     mapping: PointerMapping,
+    hitbox: Option<HitboxId>,
 }
 
 #[derive(Default)]
@@ -141,6 +160,18 @@ impl Window {
             bounds,
             clip: self.content_mask().bounds,
             mapping: self.pointer_mapping.clone(),
+            hitbox: None,
+        });
+    }
+
+    pub(crate) fn track_element_hitbox(&mut self, handle: &ElementBounds, hitbox: &Hitbox) {
+        self.invalidator.debug_assert_prepaint();
+        self.next_frame.tracked_bounds.push(Registration {
+            handle: handle.clone(),
+            bounds: hitbox.bounds,
+            clip: hitbox.content_mask.bounds,
+            mapping: hitbox.pointer_mapping.clone(),
+            hitbox: Some(hitbox.id),
         });
     }
 }

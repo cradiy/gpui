@@ -2282,10 +2282,11 @@ impl Interactivity {
 
                             if self.tooltip_builder.is_some()
                                 && let Some(state) = element_state.as_mut()
+                                && let Some(hitbox) = hitbox.as_ref()
                             {
                                 let geometry =
                                     state.tooltip_geometry.get_or_insert_with(Default::default);
-                                window.track_element_bounds(geometry, bounds);
+                                window.track_element_hitbox(geometry, hitbox);
                             }
 
                             let scroll_offset =
@@ -3131,14 +3132,15 @@ impl Interactivity {
                 let build_tooltip = Rc::new(move |window: &mut Window, cx: &mut App| {
                     Some(((tooltip_builder.build)(window, cx), tooltip_is_hoverable))
                 });
-                // Use bounds instead of testing hitbox since this is called during prepaint.
                 let check_is_hovered_during_prepaint = Rc::new({
                     let pending_mouse_down = pending_mouse_down.clone();
                     let geometry = element_state.tooltip_geometry.clone().unwrap();
                     move |window: &Window| {
                         !window.last_input_was_keyboard()
                             && pending_mouse_down.borrow().is_none()
-                            && geometry.contains(window.raw_mouse_position(), window)
+                            && geometry
+                                .unoccluded_hit_position(window.raw_mouse_position(), window)
+                                .is_some()
                     }
                 });
                 let check_is_hovered = Rc::new({
@@ -3675,12 +3677,8 @@ pub(crate) fn register_tooltip_mouse_handlers(
 ///
 /// The mouse hovering logic also relies on being called from window prepaint in order to handle the
 /// case where the element the tooltip is on is not rendered - in that case its mouse listeners are
-/// also not registered. During window prepaint, the hitbox information is not available, so
-/// `check_is_hovered_during_prepaint` checks the element's current geometry and coordinate scope.
-///
-/// TODO: The geometry check during prepaint
-/// does not know if the hitbox is occluded. In the case where a tooltip gets displayed and then
-/// gets occluded after display, it will stick around until the mouse exits the hover bounds.
+/// also not registered. `check_is_hovered_during_prepaint` checks the current frame's geometry
+/// and hitboxes after the content and deferred overlays have prepainted.
 fn handle_tooltip_mouse_move(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     build_tooltip: &Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>>,

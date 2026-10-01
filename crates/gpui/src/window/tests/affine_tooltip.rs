@@ -4,6 +4,185 @@ use crate::{
 };
 use std::{cell::Cell, rc::Rc, time::Duration};
 
+struct OcclusionProbe {
+    covered: bool,
+    text: bool,
+    hoverable: bool,
+    deferred: bool,
+    behavior: crate::HitboxBehavior,
+    cover_hitbox: Rc<Cell<Option<crate::HitboxId>>>,
+}
+
+impl Render for OcclusionProbe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let target = if self.text {
+            crate::InteractiveText::new("target", crate::StyledText::new("Tooltip text"))
+                .tooltip(|_, _, cx| Some(cx.new(|_| Tip).into()))
+                .into_any_element()
+        } else if self.hoverable {
+            div()
+                .id("target")
+                .w(px(100.))
+                .h(px(50.))
+                .hoverable_tooltip(|_, cx| cx.new(|_| Tip).into())
+                .into_any_element()
+        } else {
+            div()
+                .id("target")
+                .w(px(100.))
+                .h(px(50.))
+                .tooltip(|_, cx| cx.new(|_| Tip).into())
+                .into_any_element()
+        };
+        let mut root = div().relative().size_full().child(target);
+        if self.covered {
+            let hitbox = self.cover_hitbox.clone();
+            let behavior = self.behavior;
+            let cover = canvas(
+                move |bounds, window, _| {
+                    hitbox.set(Some(window.insert_hitbox(bounds, behavior).id));
+                },
+                |bounds, _, window, _| window.paint_quad(crate::fill(bounds, crate::rgb(0xff0000))),
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .w(px(100.))
+            .h(px(50.));
+            root = if self.deferred {
+                root.child(crate::deferred(cover).with_priority(1))
+            } else {
+                root.child(cover)
+            };
+        }
+        root
+    }
+}
+
+#[crate::test]
+fn tooltips_hide_when_the_owner_is_occluded_without_mouse_motion(cx: &mut TestAppContext) {
+    for (text, hoverable) in [(false, false), (false, true), (true, false)] {
+        for (deferred, behavior) in [false, true].into_iter().flat_map(|deferred| {
+            [
+                crate::HitboxBehavior::BlockMouse,
+                crate::HitboxBehavior::BlockMouseExceptScroll,
+            ]
+            .map(|behavior| (deferred, behavior))
+        }) {
+            let cover_hitbox = Rc::new(Cell::new(None));
+            let handle = cx.open_window(size(px(400.), px(300.)), {
+                let cover_hitbox = cover_hitbox.clone();
+                move |_, _| OcclusionProbe {
+                    covered: true,
+                    text,
+                    hoverable,
+                    deferred,
+                    behavior,
+                    cover_hitbox,
+                }
+            });
+            let mut visual = VisualTestContext::from_window(handle.into(), cx);
+            visual.update(|window, cx| window.draw(cx).clear());
+            let pointer = point(px(10.), px(10.));
+            show(&mut visual, pointer);
+            visual.update(|window, _| {
+                assert!(
+                    window.tooltip_bounds.is_none(),
+                    "covered owner must not start a tooltip"
+                )
+            });
+            handle
+                .update(&mut visual.cx, |view, _, cx| {
+                    view.covered = false;
+                    cx.notify();
+                })
+                .unwrap();
+            visual.update(|window, cx| window.draw(cx).clear());
+            show(&mut visual, pointer);
+            visual.update(|window, _| assert!(window.tooltip_bounds.is_some()));
+            handle
+                .update(&mut visual.cx, |view, _, cx| {
+                    view.covered = true;
+                    view.behavior = crate::HitboxBehavior::Normal;
+                    cx.notify();
+                })
+                .unwrap();
+            visual.update(|window, cx| {
+                window.draw(cx).clear();
+                assert!(
+                    window.tooltip_bounds.is_some(),
+                    "nonblocking layers must preserve hover"
+                );
+            });
+            handle
+                .update(&mut visual.cx, |view, _, cx| {
+                    view.behavior = behavior;
+                    cx.notify();
+                })
+                .unwrap();
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    window.draw(cx).clear();
+                    let hits = window.rendered_frame.hit_test(pointer);
+                    assert_eq!(
+                        &hits.ids[..hits.hover_hitbox_count],
+                        &[cover_hitbox.get().unwrap()]
+                    );
+                    if !hoverable {
+                        assert!(
+                            window.tooltip_bounds.is_none(),
+                            "ordinary tooltips must hide in the first covered frame"
+                        );
+                    }
+                });
+                visual.cx.run_until_parked();
+                visual.cx.dispatcher.advance_clock(Duration::from_secs(1));
+            }
+            let stationary = visual.update(|window, _| window.tooltip_bounds.is_some());
+            assert!(
+                !stationary,
+                "occluded tooltip must hide without mouse motion: text={text}, hoverable={hoverable}, deferred={deferred}"
+            );
+            show(&mut visual, point(px(9.), px(10.)));
+            let moved_inside = visual.update(|window, _| window.tooltip_bounds.is_some());
+            assert!(!moved_inside, "covered owner must not restart its tooltip");
+            show(&mut visual, point(px(350.), px(250.)));
+            visual.cx.dispatcher.advance_clock(Duration::from_secs(1));
+            visual.cx.run_until_parked();
+            visual.update(|window, cx| window.draw(cx).clear());
+            let moved_outside = visual.update(|window, _| window.tooltip_bounds.is_some());
+            assert!(!moved_outside);
+            handle
+                .update(&mut visual.cx, |view, _, cx| {
+                    view.covered = false;
+                    cx.notify();
+                })
+                .unwrap();
+            visual.update(|window, cx| window.draw(cx).clear());
+            visual.simulate_mouse_move(pointer, None, Modifiers::default());
+            visual.cx.run_until_parked();
+            handle
+                .update(&mut visual.cx, |view, _, cx| {
+                    view.covered = true;
+                    cx.notify();
+                })
+                .unwrap();
+            visual.update(|window, cx| window.draw(cx).clear());
+            for _ in 0..2 {
+                visual.cx.dispatcher.advance_clock(Duration::from_secs(1));
+                visual.cx.run_until_parked();
+                visual.update(|window, cx| window.draw(cx).clear());
+            }
+            visual.update(|window, _| {
+                assert!(
+                    window.tooltip_bounds.is_none(),
+                    "covering during the show delay must suppress the tooltip"
+                )
+            });
+        }
+    }
+}
+
 struct Tip;
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {

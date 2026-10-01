@@ -466,22 +466,33 @@ impl MetalRenderer {
             "path_sprite_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
+        #[cfg(feature = "runtime_shaders")]
+        let sources = [
+            gpui_render::QUAD_MSL,
+            gpui_render::SHADOW_MSL,
+            gpui_render::UNDERLINE_MSL,
+        ];
+        #[cfg(not(feature = "runtime_shaders"))]
+        let sources: [&[u8]; 3] = [
+            include_bytes!(concat!(env!("OUT_DIR"), "/quads.metallib")),
+            include_bytes!(concat!(env!("OUT_DIR"), "/shadows.metallib")),
+            include_bytes!(concat!(env!("OUT_DIR"), "/underlines.metallib")),
+        ];
+        let [quad_library, shadow_library, underline_library] = sources.map(|source| {
+            #[cfg(feature = "runtime_shaders")]
+            let library = device.new_library_with_source(source, &metal::CompileOptions::new());
+            #[cfg(not(feature = "runtime_shaders"))]
+            let library = device.new_library_with_data(source);
+            library.expect("error loading shared primitive library")
+        });
         let shadows_pipeline_state = build_pipeline_state(
             &device,
-            &library,
+            &shadow_library,
             "shadows",
-            "shadow_vertex",
-            "shadow_fragment",
+            "vs_shadow",
+            "fs_shadow",
             MTLPixelFormat::BGRA8Unorm,
         );
-        #[cfg(feature = "runtime_shaders")]
-        let quad_library = device
-            .new_library_with_source(gpui_render::QUAD_MSL, &metal::CompileOptions::new())
-            .expect("error building shared quad library");
-        #[cfg(not(feature = "runtime_shaders"))]
-        let quad_library = device
-            .new_library_with_data(include_bytes!(concat!(env!("OUT_DIR"), "/quads.metallib")))
-            .expect("error loading shared quad library");
         let quads_pipeline_state = build_pipeline_state(
             &device,
             &quad_library,
@@ -492,10 +503,10 @@ impl MetalRenderer {
         );
         let underlines_pipeline_state = build_pipeline_state(
             &device,
-            &library,
+            &underline_library,
             "underlines",
-            "underline_vertex",
-            "underline_fragment",
+            "vs_underline",
+            "fs_underline",
             MTLPixelFormat::BGRA8Unorm,
         );
         let monochrome_sprites_pipeline_state = build_pipeline_state(
@@ -1415,94 +1426,73 @@ impl MetalRenderer {
 
     fn draw_shadows(
         &self,
-        shadows: &[Shadow],
+        primitives: &[Shadow],
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
-        if shadows.is_empty() {
-            return true;
-        }
-        align_offset(instance_offset);
-
-        command_encoder.set_render_pipeline_state(&self.shadows_pipeline_state);
-        command_encoder.set_vertex_buffer(
-            ShadowInputIndex::Vertices as u64,
-            Some(&self.unit_vertices),
-            0,
-        );
-        command_encoder.set_vertex_buffer(
-            ShadowInputIndex::Shadows as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-        command_encoder.set_fragment_buffer(
-            ShadowInputIndex::Shadows as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-
-        command_encoder.set_vertex_bytes(
-            ShadowInputIndex::ViewportSize as u64,
-            mem::size_of_val(&viewport_size) as u64,
-            &viewport_size as *const Size<DevicePixels> as *const _,
-        );
-
-        let shadow_bytes_len = mem::size_of_val(shadows);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + shadow_bytes_len;
-        if next_offset > instance_buffer.size {
-            return false;
-        }
-
-        unsafe {
-            ptr::copy_nonoverlapping(
-                shadows.as_ptr() as *const u8,
-                buffer_contents,
-                shadow_bytes_len,
-            );
-        }
-
-        command_encoder.draw_primitives_instanced(
-            metal::MTLPrimitiveType::Triangle,
-            0,
-            6,
-            shadows.len() as u64,
-        );
-        *instance_offset = next_offset;
-        true
+        self.draw_shared_primitives(
+            primitives,
+            &self.shadows_pipeline_state,
+            instance_buffer,
+            instance_offset,
+            viewport_size,
+            command_encoder,
+        )
     }
 
     fn draw_quads(
         &self,
-        quads: &[Quad],
+        primitives: &[Quad],
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
-        if quads.is_empty() {
+        self.draw_shared_primitives(
+            primitives,
+            &self.quads_pipeline_state,
+            instance_buffer,
+            instance_offset,
+            viewport_size,
+            command_encoder,
+        )
+    }
+
+    fn draw_shared_primitives<T>(
+        &self,
+        primitives: &[T],
+        pipeline: &metal::RenderPipelineStateRef,
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+        viewport_size: Size<DevicePixels>,
+        command_encoder: &metal::RenderCommandEncoderRef,
+    ) -> bool {
+        if primitives.is_empty() {
             return true;
         }
         align_offset(instance_offset);
 
-        command_encoder.set_render_pipeline_state(&self.quads_pipeline_state);
+        let bytes_len = mem::size_of_val(primitives);
+        let next_offset = *instance_offset + bytes_len;
+        if next_offset > instance_buffer.size {
+            return false;
+        }
+
+        command_encoder.set_render_pipeline_state(pipeline);
         command_encoder.set_vertex_buffer(
-            gpui_render::METAL_QUADS_SLOT,
+            gpui_render::METAL_INSTANCES_SLOT,
             Some(&instance_buffer.metal_buffer),
             *instance_offset as u64,
         );
         command_encoder.set_fragment_buffer(
-            gpui_render::METAL_QUADS_SLOT,
+            gpui_render::METAL_INSTANCES_SLOT,
             Some(&instance_buffer.metal_buffer),
             *instance_offset as u64,
         );
 
-        let quad_bytes_len = mem::size_of_val(quads);
-        let globals = gpui_render::QuadGlobals {
+        let globals = gpui_render::PrimitiveGlobals {
             viewport_size: [
                 i32::from(viewport_size.width) as f32,
                 i32::from(viewport_size.height) as f32,
@@ -1510,7 +1500,7 @@ impl MetalRenderer {
             ..Default::default()
         };
         let sizes =
-            [u32::try_from(quad_bytes_len).expect("quad buffer exceeds Metal address space")];
+            [u32::try_from(bytes_len).expect("primitive buffer exceeds Metal address space")];
         command_encoder.set_vertex_bytes(
             gpui_render::METAL_GLOBALS_SLOT,
             mem::size_of_val(&globals) as u64,
@@ -1534,20 +1524,15 @@ impl MetalRenderer {
         let buffer_contents =
             unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
 
-        let next_offset = *instance_offset + quad_bytes_len;
-        if next_offset > instance_buffer.size {
-            return false;
-        }
-
         unsafe {
-            ptr::copy_nonoverlapping(quads.as_ptr() as *const u8, buffer_contents, quad_bytes_len);
+            ptr::copy_nonoverlapping(primitives.as_ptr() as *const u8, buffer_contents, bytes_len);
         }
 
         command_encoder.draw_primitives_instanced(
             metal::MTLPrimitiveType::TriangleStrip,
             0,
             4,
-            quads.len() as u64,
+            primitives.len() as u64,
         );
         *instance_offset = next_offset;
         true
@@ -2015,65 +2000,20 @@ impl MetalRenderer {
 
     fn draw_underlines(
         &self,
-        underlines: &[Underline],
+        primitives: &[Underline],
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
-        if underlines.is_empty() {
-            return true;
-        }
-        align_offset(instance_offset);
-
-        command_encoder.set_render_pipeline_state(&self.underlines_pipeline_state);
-        command_encoder.set_vertex_buffer(
-            UnderlineInputIndex::Vertices as u64,
-            Some(&self.unit_vertices),
-            0,
-        );
-        command_encoder.set_vertex_buffer(
-            UnderlineInputIndex::Underlines as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-        command_encoder.set_fragment_buffer(
-            UnderlineInputIndex::Underlines as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-
-        command_encoder.set_vertex_bytes(
-            UnderlineInputIndex::ViewportSize as u64,
-            mem::size_of_val(&viewport_size) as u64,
-            &viewport_size as *const Size<DevicePixels> as *const _,
-        );
-
-        let underline_bytes_len = mem::size_of_val(underlines);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + underline_bytes_len;
-        if next_offset > instance_buffer.size {
-            return false;
-        }
-
-        unsafe {
-            ptr::copy_nonoverlapping(
-                underlines.as_ptr() as *const u8,
-                buffer_contents,
-                underline_bytes_len,
-            );
-        }
-
-        command_encoder.draw_primitives_instanced(
-            metal::MTLPrimitiveType::Triangle,
-            0,
-            6,
-            underlines.len() as u64,
-        );
-        *instance_offset = next_offset;
-        true
+        self.draw_shared_primitives(
+            primitives,
+            &self.underlines_pipeline_state,
+            instance_buffer,
+            instance_offset,
+            viewport_size,
+            command_encoder,
+        )
     }
 
     fn draw_monochrome_sprites(
@@ -3065,20 +3005,6 @@ fn build_path_rasterization_pipeline_state(
 // Align to multiples of 256 make Metal happy.
 fn align_offset(offset: &mut usize) {
     *offset = (*offset).div_ceil(256) * 256;
-}
-
-#[repr(C)]
-enum ShadowInputIndex {
-    Vertices = 0,
-    Shadows = 1,
-    ViewportSize = 2,
-}
-
-#[repr(C)]
-enum UnderlineInputIndex {
-    Vertices = 0,
-    Underlines = 1,
-    ViewportSize = 2,
 }
 
 #[repr(C)]

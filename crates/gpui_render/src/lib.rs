@@ -7,16 +7,34 @@ pub const QUAD_MSL: &str = include_str!(concat!(env!("OUT_DIR"), "/quads.metal")
 /// Native rectangle shader for Direct3D 11, generated from [`QUAD_WGSL`].
 pub const QUAD_HLSL: &str = include_str!(concat!(env!("OUT_DIR"), "/quads.hlsl"));
 
+/// Common definitions and shadow entry points in WGSL.
+pub const SHADOW_WGSL: &str = concat!(include_str!("common.wgsl"), include_str!("shadows.wgsl"));
+/// Native shadow shader for Metal.
+pub const SHADOW_MSL: &str = include_str!(concat!(env!("OUT_DIR"), "/shadows.metal"));
+/// Native shadow shader for Direct3D 11.
+pub const SHADOW_HLSL: &str = include_str!(concat!(env!("OUT_DIR"), "/shadows.hlsl"));
+/// Common definitions and underline entry points in WGSL.
+pub const UNDERLINE_WGSL: &str =
+    concat!(include_str!("common.wgsl"), include_str!("underlines.wgsl"));
+/// Native underline shader for Metal.
+pub const UNDERLINE_MSL: &str = include_str!(concat!(env!("OUT_DIR"), "/underlines.metal"));
+/// Native underline shader for Direct3D 11.
+pub const UNDERLINE_HLSL: &str = include_str!(concat!(env!("OUT_DIR"), "/underlines.hlsl"));
+
 /// Appends additional WGSL primitives to the shared definitions.
 pub fn compose_shader(primitives: &str) -> String {
-    format!("{QUAD_WGSL}\n{primitives}")
+    format!(
+        "{QUAD_WGSL}\n{}\n{}\n{primitives}",
+        include_str!("shadows.wgsl"),
+        include_str!("underlines.wgsl")
+    )
 }
 
-/// Uniforms for shared rectangle shaders. Native renderers use straight alpha
+/// Uniforms for shared primitive shaders. Native renderers use straight alpha
 /// and sRGB colors; WGPU selects alpha mode to match its render target.
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-pub struct QuadGlobals {
+pub struct PrimitiveGlobals {
     /// Render target dimensions in physical pixels.
     pub viewport_size: [f32; 2],
     /// Whether shader output must be premultiplied.
@@ -29,10 +47,10 @@ pub struct QuadGlobals {
     pub origin_pad: [u32; 2],
 }
 
-/// Metal buffer slot for [`QuadGlobals`].
+/// Metal buffer slot for [`PrimitiveGlobals`].
 pub const METAL_GLOBALS_SLOT: u64 = 0;
-/// Metal buffer slot for rectangle instances.
-pub const METAL_QUADS_SLOT: u64 = 1;
+/// Metal buffer slot for primitive instances.
+pub const METAL_INSTANCES_SLOT: u64 = 1;
 /// Metal buffer slot for Naga's runtime array lengths, expressed in bytes.
 pub const METAL_SIZES_SLOT: u64 = 3;
 

@@ -2,8 +2,8 @@ use super::*;
 use std::mem::{offset_of, size_of};
 
 #[test]
-fn quad_shader_matches_host_layout_and_resource_contract() {
-    let module = naga::front::wgsl::parse_str(QUAD_WGSL).unwrap();
+fn primitive_shaders_match_host_layout_and_resource_contract() {
+    let module = naga::front::wgsl::parse_str(&compose_shader("")).unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -13,13 +13,13 @@ fn quad_shader_matches_host_layout_and_resource_contract() {
     for (name, size, offsets) in [
         (
             "GlobalParams",
-            size_of::<QuadGlobals>(),
+            size_of::<PrimitiveGlobals>(),
             vec![
-                offset_of!(QuadGlobals, viewport_size),
-                offset_of!(QuadGlobals, premultiplied_alpha),
-                offset_of!(QuadGlobals, pad),
-                offset_of!(QuadGlobals, viewport_origin),
-                offset_of!(QuadGlobals, origin_pad),
+                offset_of!(PrimitiveGlobals, viewport_size),
+                offset_of!(PrimitiveGlobals, premultiplied_alpha),
+                offset_of!(PrimitiveGlobals, pad),
+                offset_of!(PrimitiveGlobals, viewport_origin),
+                offset_of!(PrimitiveGlobals, origin_pad),
             ],
         ),
         (
@@ -35,6 +35,35 @@ fn quad_shader_matches_host_layout_and_resource_contract() {
                 offset_of!(gpui::Quad, border_gradient),
                 offset_of!(gpui::Quad, corner_radii),
                 offset_of!(gpui::Quad, border_widths),
+            ],
+        ),
+        (
+            "Shadow",
+            size_of::<gpui::Shadow>(),
+            vec![
+                offset_of!(gpui::Shadow, order),
+                offset_of!(gpui::Shadow, blur_radius),
+                offset_of!(gpui::Shadow, bounds),
+                offset_of!(gpui::Shadow, corner_radii),
+                offset_of!(gpui::Shadow, content_mask),
+                offset_of!(gpui::Shadow, color),
+                offset_of!(gpui::Shadow, element_bounds),
+                offset_of!(gpui::Shadow, element_corner_radii),
+                offset_of!(gpui::Shadow, inset),
+                offset_of!(gpui::Shadow, pad),
+            ],
+        ),
+        (
+            "Underline",
+            size_of::<gpui::Underline>(),
+            vec![
+                offset_of!(gpui::Underline, order),
+                offset_of!(gpui::Underline, pad),
+                offset_of!(gpui::Underline, bounds),
+                offset_of!(gpui::Underline, content_mask),
+                offset_of!(gpui::Underline, color),
+                offset_of!(gpui::Underline, thickness),
+                offset_of!(gpui::Underline, wavy),
             ],
         ),
     ] {
@@ -70,7 +99,12 @@ fn quad_shader_matches_host_layout_and_resource_contract() {
         };
         assert_eq!(span as usize, size, "{name}");
     }
-    for (name, group, binding) in [("globals", 0, 0), ("b_quads", 1, 0)] {
+    for (name, group, binding) in [
+        ("globals", 0, 0),
+        ("b_quads", 1, 0),
+        ("b_shadows", 1, 0),
+        ("b_underlines", 1, 0),
+    ] {
         let (_, variable) = module
             .global_variables
             .iter()

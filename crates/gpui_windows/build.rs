@@ -48,18 +48,24 @@ mod shader_compilation {
                 .expect("Failed to remove existing Rust binding file");
         }
         for module in modules {
-            if module == "quad" {
-                let source = PathBuf::from(&out_dir).join("quads.hlsl");
-                fs::write(&source, gpui_render::QUAD_HLSL).unwrap();
+            let shared_source = match module {
+                "quad" => Some(gpui_render::QUAD_HLSL),
+                "shadow" => Some(gpui_render::SHADOW_HLSL),
+                "underline" => Some(gpui_render::UNDERLINE_HLSL),
+                _ => None,
+            };
+            if let Some(shared_source) = shared_source {
+                let source = PathBuf::from(&out_dir).join(format!("{module}.hlsl"));
+                fs::write(&source, shared_source).unwrap();
                 for (entry, profile, suffix, stage) in [
-                    ("vs_quad", "vs_4_1", "vs", "VERTEX"),
-                    ("fs_quad", "ps_4_1", "ps", "FRAGMENT"),
+                    (format!("vs_{module}"), "vs_4_1", "vs", "VERTEX"),
+                    (format!("fs_{module}"), "ps_4_1", "ps", "FRAGMENT"),
                 ] {
-                    let output = format!("{out_dir}/quad_{suffix}.h");
-                    let constant = format!("QUAD_{stage}_BYTES");
+                    let output = format!("{out_dir}/{module}_{suffix}.h");
+                    let constant = format!("{}_{stage}_BYTES", module.to_uppercase());
                     compile_shader_impl(
                         &fxc_path,
-                        entry,
+                        &entry,
                         &output,
                         &constant,
                         source.to_str().unwrap(),

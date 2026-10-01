@@ -600,7 +600,7 @@ impl DirectXRenderer {
                     .context("resources missing")?
                     .viewport,
             ),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             4,
             start as u32,
             len as u32,
@@ -1091,7 +1091,7 @@ impl DirectXRenderer {
             &devices.device,
             &devices.device_context,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             4,
             start as u32,
             len as u32,
@@ -1729,7 +1729,7 @@ struct GlobalParams {
     _pad: [u32; 3],
 }
 
-type EffectGlobalParams = gpui_render::QuadGlobals;
+type EffectGlobalParams = gpui_render::PrimitiveGlobals;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -1905,7 +1905,10 @@ impl<T> PipelineState<T> {
             let raw_shader = RawShaderBytes::new(shader_module, ShaderTarget::Fragment)?;
             create_fragment_shader(device, raw_shader.as_bytes())?
         };
-        let raw_instances = shader_module == ShaderModule::Quad;
+        let raw_instances = matches!(
+            shader_module,
+            ShaderModule::Quad | ShaderModule::Shadow | ShaderModule::Underline
+        );
         let buffer = if raw_instances {
             create_raw_buffer(device, std::mem::size_of::<T>() * buffer_size)?
         } else {
@@ -3112,11 +3115,17 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
-    fn shared_quads_compile_for_shader_model_4_1() {
-        compile_hlsl(gpui_render::QUAD_HLSL, "vs_quad", "vs_4_1")
-            .expect("shared rectangle vertex shader should compile");
-        compile_hlsl(gpui_render::QUAD_HLSL, "fs_quad", "ps_4_1")
-            .expect("shared rectangle fragment shader should compile");
+    fn shared_primitives_compile_for_shader_model_4_1() {
+        for (source, name) in [
+            (gpui_render::QUAD_HLSL, "quad"),
+            (gpui_render::SHADOW_HLSL, "shadow"),
+            (gpui_render::UNDERLINE_HLSL, "underline"),
+        ] {
+            compile_hlsl(source, &format!("vs_{name}"), "vs_4_1")
+                .unwrap_or_else(|error| panic!("{name} vertex shader: {error}"));
+            compile_hlsl(source, &format!("fs_{name}"), "ps_4_1")
+                .unwrap_or_else(|error| panic!("{name} fragment shader: {error}"));
+        }
     }
 
     fn shader_struct_span(module: &naga::Module, name: &str) -> u32 {
@@ -3299,12 +3308,20 @@ pub(crate) mod shader_resources {
 
     #[cfg(debug_assertions)]
     pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
-        if entry == ShaderModule::Quad {
+        let shared_shader = match entry {
+            ShaderModule::Quad => Some((gpui_render::QUAD_HLSL, "vs_quad", "fs_quad")),
+            ShaderModule::Shadow => Some((gpui_render::SHADOW_HLSL, "vs_shadow", "fs_shadow")),
+            ShaderModule::Underline => {
+                Some((gpui_render::UNDERLINE_HLSL, "vs_underline", "fs_underline"))
+            }
+            _ => None,
+        };
+        if let Some((source, vertex, fragment)) = shared_shader {
             return super::compile_hlsl(
-                gpui_render::QUAD_HLSL,
+                source,
                 match target {
-                    ShaderTarget::Vertex => "vs_quad",
-                    ShaderTarget::Fragment => "fs_quad",
+                    ShaderTarget::Vertex => vertex,
+                    ShaderTarget::Fragment => fragment,
                 },
                 match target {
                     ShaderTarget::Vertex => "vs_4_1",

@@ -71,7 +71,7 @@ struct FeedbackTextures {
     pending: Cell<Option<FeedbackSnapshot>>,
 }
 
-type GlobalParams = gpui_render::QuadGlobals;
+type GlobalParams = gpui_render::PrimitiveGlobals;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]

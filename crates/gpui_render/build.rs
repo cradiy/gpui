@@ -2,11 +2,17 @@ use std::{env, fs, path::PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=src/common.wgsl");
-    println!("cargo:rerun-if-changed=src/quads.wgsl");
+    for primitive in ["quads", "shadows", "underlines"] {
+        println!("cargo:rerun-if-changed=src/{primitive}.wgsl");
+        generate(primitive);
+    }
+}
+
+fn generate(primitive: &str) {
     let source = format!(
         "{}\n{}",
         fs::read_to_string("src/common.wgsl").unwrap(),
-        fs::read_to_string("src/quads.wgsl").unwrap()
+        fs::read_to_string(format!("src/{primitive}.wgsl")).unwrap()
     );
     assert_eq!(
         source.matches("const NATIVE_SRGB: bool = false;").count(),
@@ -53,7 +59,7 @@ fn main() {
         let slot = match (binding.group, binding.binding, variable.space) {
             (0, 0, naga::AddressSpace::Uniform) => 0,
             (1, 0, naga::AddressSpace::Storage { .. }) => 1,
-            _ => panic!("unexpected rectangle shader resource: {binding:?}"),
+            _ => panic!("unexpected {primitive} shader resource: {binding:?}"),
         };
         resources.resources.insert(
             binding,
@@ -80,10 +86,10 @@ fn main() {
     for (entry, name) in module.entry_points.iter().zip(reflection.entry_point_names) {
         assert_eq!(entry.name, name.unwrap(), "native entry point was renamed");
     }
-    fs::write(out.join("quads.metal"), source).unwrap();
+    fs::write(out.join(format!("{primitive}.metal")), source).unwrap();
     let mut source = String::new();
     naga::back::hlsl::Writer::new(&mut source, &hlsl, &Default::default())
         .write(&module, &info, None)
         .unwrap();
-    fs::write(out.join("quads.hlsl"), source).unwrap();
+    fs::write(out.join(format!("{primitive}.hlsl")), source).unwrap();
 }

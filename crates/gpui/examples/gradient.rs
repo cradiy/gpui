@@ -274,13 +274,19 @@ impl Render for GradientViewer {
                     .with_animation(
                         "background-gradient-flow",
                         Animation::new(Duration::from_secs(3)).repeat(),
-                        move |this, delta| this.bg(flowing_background.phase(delta)),
+                        {
+                            let background = flowing_background.clone();
+                            move |this, delta| this.bg(background.clone().phase(delta))
+                        },
                     ),
             )
             .child(div().h_2().rounded_full().with_animation(
                 "background-gradient-flow-thin",
                 Animation::new(Duration::from_secs(3)).repeat(),
-                move |this, delta| this.bg(flowing_background.phase(delta)),
+                {
+                    let background = flowing_background.clone();
+                    move |this, delta| this.bg(background.clone().phase(delta))
+                },
             ))
             .child(div().h_24().child(canvas(
                 move |_, _, _| {},

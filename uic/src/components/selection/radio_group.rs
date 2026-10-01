@@ -123,7 +123,7 @@ where
                 } else {
                     appearance.indicator_border
                 })
-                .bg(appearance.indicator)
+                .bg(appearance.indicator.clone())
                 .flex()
                 .items_center()
                 .justify_center()
@@ -132,7 +132,7 @@ where
                         div()
                             .size(appearance.dot_size)
                             .rounded_full()
-                            .bg(appearance.selected_dot),
+                            .bg(appearance.selected_dot.clone()),
                     )
                 });
             div()

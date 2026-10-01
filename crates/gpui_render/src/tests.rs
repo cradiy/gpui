@@ -106,6 +106,15 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
     .unwrap();
     for (name, size, offsets) in [
         (
+            "ExtendedColorStop",
+            size_of::<gpui::GpuGradientStop>(),
+            vec![
+                offset_of!(gpui::GpuGradientStop, color),
+                offset_of!(gpui::GpuGradientStop, position),
+                offset_of!(gpui::GpuGradientStop, midpoint),
+            ],
+        ),
+        (
             "PathRasterizationVertex",
             size_of::<gpui::PathRasterizationVertex>(),
             vec![
@@ -147,30 +156,33 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
         ),
         (
             "MonochromeSprite",
-            size_of::<gpui::MonochromeSprite>(),
+            size_of::<gpui::MonochromeSprite<gpui::GpuBackground>>(),
             vec![
-                offset_of!(gpui::MonochromeSprite, order),
-                offset_of!(gpui::MonochromeSprite, pad),
-                offset_of!(gpui::MonochromeSprite, bounds),
-                offset_of!(gpui::MonochromeSprite, content_mask),
-                offset_of!(gpui::MonochromeSprite, background),
-                offset_of!(gpui::MonochromeSprite, background_bounds),
-                offset_of!(gpui::MonochromeSprite, tile),
-                offset_of!(gpui::MonochromeSprite, transformation),
+                offset_of!(gpui::MonochromeSprite<gpui::GpuBackground>, order),
+                offset_of!(gpui::MonochromeSprite<gpui::GpuBackground>, pad),
+                offset_of!(gpui::MonochromeSprite<gpui::GpuBackground>, bounds),
+                offset_of!(gpui::MonochromeSprite<gpui::GpuBackground>, content_mask),
+                offset_of!(gpui::MonochromeSprite<gpui::GpuBackground>, background),
+                offset_of!(
+                    gpui::MonochromeSprite<gpui::GpuBackground>,
+                    background_bounds
+                ),
+                offset_of!(gpui::MonochromeSprite<gpui::GpuBackground>, tile),
+                offset_of!(gpui::MonochromeSprite<gpui::GpuBackground>, transformation),
             ],
         ),
         (
             "SubpixelSprite",
-            size_of::<gpui::SubpixelSprite>(),
+            size_of::<gpui::SubpixelSprite<gpui::GpuBackground>>(),
             vec![
-                offset_of!(gpui::SubpixelSprite, order),
-                offset_of!(gpui::SubpixelSprite, pad),
-                offset_of!(gpui::SubpixelSprite, bounds),
-                offset_of!(gpui::SubpixelSprite, content_mask),
-                offset_of!(gpui::SubpixelSprite, background),
-                offset_of!(gpui::SubpixelSprite, background_bounds),
-                offset_of!(gpui::SubpixelSprite, tile),
-                offset_of!(gpui::SubpixelSprite, transformation),
+                offset_of!(gpui::SubpixelSprite<gpui::GpuBackground>, order),
+                offset_of!(gpui::SubpixelSprite<gpui::GpuBackground>, pad),
+                offset_of!(gpui::SubpixelSprite<gpui::GpuBackground>, bounds),
+                offset_of!(gpui::SubpixelSprite<gpui::GpuBackground>, content_mask),
+                offset_of!(gpui::SubpixelSprite<gpui::GpuBackground>, background),
+                offset_of!(gpui::SubpixelSprite<gpui::GpuBackground>, background_bounds),
+                offset_of!(gpui::SubpixelSprite<gpui::GpuBackground>, tile),
+                offset_of!(gpui::SubpixelSprite<gpui::GpuBackground>, transformation),
             ],
         ),
         (
@@ -186,17 +198,17 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
         ),
         (
             "Quad",
-            size_of::<gpui::Quad>(),
+            size_of::<gpui::Quad<gpui::GpuBackground>>(),
             vec![
-                offset_of!(gpui::Quad, order),
-                offset_of!(gpui::Quad, border_style),
-                offset_of!(gpui::Quad, bounds),
-                offset_of!(gpui::Quad, content_mask),
-                offset_of!(gpui::Quad, background),
-                offset_of!(gpui::Quad, border_colors),
-                offset_of!(gpui::Quad, border_gradient),
-                offset_of!(gpui::Quad, corner_radii),
-                offset_of!(gpui::Quad, border_widths),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, order),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, border_style),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, bounds),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, content_mask),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, background),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, border_colors),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, border_gradient),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, corner_radii),
+                offset_of!(gpui::Quad<gpui::GpuBackground>, border_widths),
             ],
         ),
         (
@@ -264,7 +276,7 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
         );
     }
     for (name, size) in [
-        ("Background", size_of::<gpui::Background>()),
+        ("Background", size_of::<gpui::GpuBackground>()),
         ("BorderGradient", size_of::<gpui::BorderGradient>()),
     ] {
         let (_, ty) = module
@@ -278,6 +290,7 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
         assert_eq!(span as usize, size, "{name}");
     }
     for (name, group, binding) in [
+        ("gradient_stops", 2, 0),
         ("globals", 0, 0),
         ("gamma_params", 0, 1),
         ("b_quads", 1, 0),

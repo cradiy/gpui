@@ -5,6 +5,13 @@ use serde::{
     de::{self, Visitor},
 };
 use std::borrow::Cow;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
+mod gradient;
+pub use gradient::*;
 use std::{
     fmt::{self, Display, Formatter},
     hash::{Hash, Hasher},
@@ -892,21 +899,20 @@ impl Display for ColorSpace {
 }
 
 /// A background color, which can be either a solid color or a linear gradient.
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[repr(C)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Background {
     pub(crate) tag: BackgroundTag,
     pub(crate) color_space: ColorSpace,
     pub(crate) solid: Hsla,
     pub(crate) gradient_angle_or_pattern_height: f32,
-    pub(crate) colors: [LinearColorStop; 4],
+    pub(crate) colors: [LinearColorStop; 2],
     pub(crate) stop_count: u32,
     pub(crate) gradient_phase: f32,
     pub(crate) gradient_repeating: u32,
-    pub(crate) gradient_midpoints: [f32; 4],
+    pub(crate) gradient_midpoints: [f32; 2],
     pub(crate) angular_seam_width: f32,
-    /// Padding for alignment for repr(C) layout and containing GPU arrays.
-    pad: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extended: Option<Arc<ExtendedGradient>>,
 }
 
 impl std::fmt::Debug for Background {
@@ -921,7 +927,7 @@ impl std::fmt::Debug for Background {
                 "{:?}({}, {:?}, phase: {}, repeating: {})",
                 self.tag,
                 self.gradient_angle_or_pattern_height,
-                &self.colors[..self.stop_count as usize],
+                self.gradient_stops(),
                 self.gradient_phase,
                 self.gradient_repeating != 0,
             ),
@@ -947,13 +953,13 @@ impl Default for Background {
             solid: Hsla::default(),
             color_space: ColorSpace::default(),
             gradient_angle_or_pattern_height: 0.0,
-            colors: [LinearColorStop::default(); 4],
+            colors: [LinearColorStop::default(); 2],
             stop_count: 0,
             gradient_phase: 0.0,
             gradient_repeating: 0,
-            gradient_midpoints: [0.5; 4],
+            gradient_midpoints: [0.5; 2],
             angular_seam_width: 0.0,
-            pad: 0,
+            extended: None,
         }
     }
 }
@@ -1004,7 +1010,7 @@ pub fn linear_gradient(
 ) -> Background {
     let from = from.into();
     let to = to.into();
-    let mut colors = [LinearColorStop::default(); 4];
+    let mut colors = [LinearColorStop::default(); 2];
     if from.percentage <= to.percentage {
         colors[0] = from;
         colors[1] = to;
@@ -1069,19 +1075,20 @@ pub fn gradient_bottom_to_top(bottom: impl Into<Hsla>, top: impl Into<Hsla>) -> 
     )
 }
 
-/// Creates a linear gradient background with between two and four color stops.
+/// Creates a linear gradient background with at least two color stops.
 ///
 /// Stop percentages must be in the range `0.0..=1.0` and ordered from low to
 /// high. Equal adjacent percentages are allowed to create hard color edges.
-pub fn multi_linear_gradient<const N: usize>(
-    angle: f32,
-    stops: [LinearColorStop; N],
-) -> Background {
+/// Two stops are stored inline; longer gradients share immutable stop storage
+/// when cloned. The renderer's available storage-buffer capacity limits the
+/// total number of stops in a scene.
+pub fn multi_linear_gradient(angle: f32, stops: impl AsRef<[LinearColorStop]>) -> Background {
+    let stops = stops.as_ref();
     assert!(
-        (2..=4).contains(&N),
-        "linear gradients require 2 to 4 stops"
+        stops.len() >= 2,
+        "linear gradients require at least 2 stops"
     );
-    for stop in &stops {
+    for stop in stops {
         assert!(
             (0.0..=1.0).contains(&stop.percentage),
             "linear gradient stop percentages must be between 0 and 1"
@@ -1094,16 +1101,22 @@ pub fn multi_linear_gradient<const N: usize>(
         );
     }
 
-    let mut colors = [LinearColorStop::default(); 4];
+    let mut colors = [LinearColorStop::default(); 2];
     for (target, stop) in colors.iter_mut().zip(stops) {
-        *target = stop;
+        *target = *stop;
     }
 
     Background {
         tag: BackgroundTag::LinearGradient,
         gradient_angle_or_pattern_height: angle,
         colors,
-        stop_count: N as u32,
+        stop_count: u32::try_from(stops.len())
+            .expect("gradient stop count exceeds GPU address space"),
+        solid: Hsla {
+            a: 1.0,
+            ..Hsla::default()
+        },
+        extended: (stops.len() > 2).then(|| Arc::new(ExtendedGradient::new(stops))),
         ..Default::default()
     }
 }
@@ -1160,12 +1173,24 @@ impl Background {
     /// midpoint of 0.5 preserves linear interpolation. Periodic spline
     /// backgrounds ignore midpoints.
     pub fn gradient_midpoint(mut self, index: usize, midpoint: f32) -> Self {
-        assert!(index < 3, "gradient segment index must be less than 3");
+        assert!(
+            index < (self.stop_count as usize).saturating_sub(1),
+            "gradient segment index out of range"
+        );
         assert!(
             midpoint > 0.0 && midpoint < 1.0,
             "gradient midpoint must be between 0 and 1"
         );
-        self.gradient_midpoints[index] = midpoint;
+        if self.gradient_midpoint_at(index) == Some(midpoint) {
+            return self;
+        }
+        if let Some(stops) = &mut self.extended {
+            let stops = Arc::make_mut(stops);
+            stops.midpoints[index] = midpoint;
+            stops.revision = next_gradient_revision();
+        } else {
+            self.gradient_midpoints[index] = midpoint;
+        }
         self
     }
 
@@ -1218,7 +1243,12 @@ impl Background {
 
     /// Returns a new background color with the same hue, saturation, and lightness, but with a modified alpha value.
     pub fn opacity(&self, factor: f32) -> Self {
-        let mut background = *self;
+        let mut background = self.clone();
+        if background.extended.is_some() {
+            // Keep stop data shared when only the element opacity changes.
+            background.solid.a *= factor;
+            return background;
+        }
         background.solid = background.solid.opacity(factor);
         for color in &mut background.colors[..self.stop_count as usize] {
             *color = color.opacity(factor);
@@ -1233,9 +1263,12 @@ impl Background {
             BackgroundTag::LinearGradient
             | BackgroundTag::RadialGradient
             | BackgroundTag::AngularGradient
-            | BackgroundTag::DiamondGradient => self.colors[..self.stop_count as usize]
-                .iter()
-                .all(|c| c.color.is_transparent()),
+            | BackgroundTag::DiamondGradient => {
+                self.gradient_stops()
+                    .iter()
+                    .all(|c| c.color.is_transparent())
+                    || (self.extended.is_some() && self.solid.a == 0.0)
+            }
             BackgroundTag::PatternSlash => self.solid.is_transparent(),
             BackgroundTag::Checkerboard => self.solid.is_transparent(),
         }
@@ -1391,15 +1424,14 @@ mod tests {
 
         assert_eq!(background.tag, BackgroundTag::LinearGradient);
         assert_eq!(background.stop_count, 4);
-        assert_eq!(background.colors, stops);
+        assert_eq!(background.gradient_stops(), stops);
         assert_eq!(background.gradient_phase, 0.25);
         assert_eq!(background.gradient_repeating, 1);
         assert_eq!(background.color_space, ColorSpace::Oklab);
 
         let faded = background.opacity(0.5);
-        for (actual, expected) in faded.colors.iter().zip(stops) {
-            assert_eq!(*actual, expected.opacity(0.5));
-        }
+        assert_eq!(faded.gradient_stops(), stops);
+        assert_eq!(faded.solid.a, 0.5);
         assert!(!background.is_transparent());
         assert!(background.opacity(0.0).is_transparent());
     }

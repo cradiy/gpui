@@ -201,6 +201,7 @@ pub(super) fn sections(
                     Property {
                         label: "Background",
                         value: background
+                            .as_ref()
                             .map(|bg| {
                                 bg.as_solid()
                                     .map(color_hex)

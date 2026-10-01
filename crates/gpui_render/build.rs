@@ -80,6 +80,13 @@ fn generate(primitive: &str) {
             continue;
         };
         let (slot, target) = match (binding.group, binding.binding, variable.space) {
+            (2, 0, naga::AddressSpace::Storage { .. }) => (
+                5,
+                naga::back::msl::BindTarget {
+                    buffer: Some(4),
+                    ..Default::default()
+                },
+            ),
             (0, 0, naga::AddressSpace::Uniform) => (
                 0,
                 naga::back::msl::BindTarget {

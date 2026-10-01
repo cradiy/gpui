@@ -26,7 +26,7 @@ fn scene(
 ) -> Scene {
     let mut child = Scene::default();
     for quad in content {
-        child.insert_primitive(*quad);
+        child.insert_primitive(quad.clone());
     }
     let Primitive::SubtreeLayer(mut captured) = layer(child, region, 1.) else {
         unreachable!()
@@ -56,7 +56,7 @@ fn direct(content: &[Quad]) -> Scene {
     let mut scene = Scene::default();
     scene.insert_primitive(quad(bounds(0., 0., 80., 60.), 0x000000ff));
     for quad in content {
-        scene.insert_primitive(*quad);
+        scene.insert_primitive(quad.clone());
     }
     scene.finish();
     scene
@@ -81,30 +81,31 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
     let red = quad(red_bounds, 0xff2000ff);
     let blue = quad(blue_bounds, 0x20a0ffff);
     let mut feedback = frame();
-    let first_scene = scene(&feedback, &[red], region, false);
+    let first_scene = scene(&feedback, std::slice::from_ref(&red), region, false);
     let first = renderer.render_rgba(&first_scene)?;
     let replay = renderer.render_rgba(&first_scene)?;
     compare(&replay, &first);
     // A reference draw removes histories absent from that frame.
-    let reference = renderer.render_rgba(&direct(&[red]))?;
+    let reference = renderer.render_rgba(&direct(std::slice::from_ref(&red)))?;
     compare(&first, &reference);
     renderer.render_rgba(&first_scene)?;
 
     feedback.frame += 1;
     feedback.time = Duration::from_millis(100);
-    let second_scene = scene(&feedback, &[blue], region, false);
+    let second_scene = scene(&feedback, std::slice::from_ref(&blue), region, false);
     let second = renderer.render_rgba(&second_scene)?;
     let mut frozen = feedback.clone();
     frozen.capture = false;
     compare(
-        &renderer.render_rgba(&scene(&frozen, &[red], region, false))?,
+        &renderer.render_rgba(&scene(&frozen, std::slice::from_ref(&red), region, false))?,
         &second,
     );
 
     feedback.frame += 1;
     feedback.time = Duration::from_millis(200);
     feedback.capture = false;
-    let third = renderer.render_rgba(&scene(&feedback, &[red], region, false))?;
+    let third =
+        renderer.render_rgba(&scene(&feedback, std::slice::from_ref(&red), region, false))?;
     let expected = renderer.render_rgba(&direct(&[
         quad(red_bounds, 0xff200040),
         quad(blue_bounds, 0x20a0ff80),
@@ -113,7 +114,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
 
     feedback.capture = true;
     feedback.frame += 1;
-    renderer.render_rgba(&scene(&feedback, &[red], region, false))?;
+    renderer.render_rgba(&scene(&feedback, std::slice::from_ref(&red), region, false))?;
     feedback.capture = false;
     feedback.generation += 1;
     feedback.frame += 1;
@@ -124,7 +125,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
     // Removing a surface releases its history, even when its identity is reused later.
     feedback.capture = true;
     feedback.frame += 1;
-    renderer.render_rgba(&scene(&feedback, &[red], region, false))?;
+    renderer.render_rgba(&scene(&feedback, std::slice::from_ref(&red), region, false))?;
     renderer.render_rgba(&direct(&[]))?;
     feedback.capture = false;
     feedback.frame += 1;
@@ -143,7 +144,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         feedback.frame += 1;
         feedback.scale_factor = 1.;
         feedback.downsample = 1;
-        renderer.render_rgba(&scene(&feedback, &[red], region, false))?;
+        renderer.render_rgba(&scene(&feedback, std::slice::from_ref(&red), region, false))?;
         feedback.capture = false;
         feedback.frame += 1;
         feedback.scale_factor = scale;
@@ -155,7 +156,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
     }
     feedback.capture = true;
     feedback.frame += 1;
-    renderer.render_rgba(&scene(&feedback, &[red], region, false))?;
+    renderer.render_rgba(&scene(&feedback, std::slice::from_ref(&red), region, false))?;
     feedback.capture = false;
     feedback.frame += 1;
     renderer.resize(size(DevicePixels(65), DevicePixels(49)));
@@ -166,8 +167,8 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
     let mut left = frame();
     let mut right = frame();
     let pair_scene = |left: &SubtreeFeedbackPass, right: &SubtreeFeedbackPass| {
-        let a = scene(left, &[red], region, false);
-        let b = scene(right, &[blue], region, false);
+        let a = scene(left, std::slice::from_ref(&red), region, false);
+        let b = scene(right, std::slice::from_ref(&blue), region, false);
         let mut root = direct(&[]);
         root.insert_primitive(Primitive::SubtreeLayer(a.subtree_layers[0].clone()));
         root.insert_primitive(Primitive::SubtreeLayer(b.subtree_layers[0].clone()));
@@ -181,10 +182,13 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
     right.capture = false;
     right.frame += 1;
     let independent = renderer.render_rgba(&pair_scene(&left, &right))?;
-    compare(&independent, &renderer.render_rgba(&direct(&[blue]))?);
+    compare(
+        &independent,
+        &renderer.render_rgba(&direct(std::slice::from_ref(&blue)))?,
+    );
 
     let mut combined = frame();
-    let lit = renderer.render_rgba(&scene(&combined, &[red], region, true))?;
+    let lit = renderer.render_rgba(&scene(&combined, std::slice::from_ref(&red), region, true))?;
     combined.capture = false;
     combined.frame += 1;
     let held = renderer.render_rgba(&scene(&combined, &[], region, true))?;
@@ -194,7 +198,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         "bloom must extend beyond the retained shape"
     );
     let mut opacity_history = frame();
-    let mut dimmed = scene(&opacity_history, &[red], region, false);
+    let mut dimmed = scene(&opacity_history, std::slice::from_ref(&red), region, false);
     dimmed.subtree_layers[0].composite.opacity = 0.25;
     renderer.render_rgba(&dimmed)?;
     opacity_history.frame += 1;

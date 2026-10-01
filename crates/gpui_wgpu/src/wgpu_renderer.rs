@@ -3,9 +3,9 @@ use bytemuck::{Pod, Zeroable};
 use gpui::ShaderBounds as PodBounds;
 use gpui::{
     AtlasTextureId, BackdropBlur, BackdropShader, Bounds, DevicePixels, EffectQuad, EffectShader,
-    GpuSpecs, MonochromeSprite, Path, PathSprite, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledPixels, Scene, Shadow, Size, SubpixelSprite, SurfaceFormat, SurfaceFrame, SurfaceId,
-    Underline, WeakSurfaceHandle, get_gamma_correction_ratios,
+    GpuSpecs, Path, PathSprite, PolychromeSprite, PrimitiveBatch, ScaledPixels, Scene, Shadow,
+    Size, SurfaceFormat, SurfaceFrame, SurfaceId, Underline, WeakSurfaceHandle,
+    get_gamma_correction_ratios,
 };
 pub(super) use gpui::{BackdropInstance, EffectInstance};
 #[cfg(target_os = "linux")]
@@ -14,6 +14,9 @@ use gpui::{
     SurfaceFrameBacking, WeakDmaBufHandle,
 };
 use gpui_render::SurfaceParams;
+type Quad = gpui::Quad<gpui::GpuBackground>;
+type MonochromeSprite = gpui::MonochromeSprite<gpui::GpuBackground>;
+type SubpixelSprite = gpui::SubpixelSprite<gpui::GpuBackground>;
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -32,6 +35,7 @@ mod browser_surface;
 mod core_video;
 mod distance_field;
 mod fluid;
+mod gradients;
 mod memory;
 pub use memory::WgpuMemoryStats;
 mod particle_transition;
@@ -160,6 +164,7 @@ struct WgpuPipelines {
 }
 
 struct WgpuBindGroupLayouts {
+    gradients: wgpu::BindGroupLayout,
     globals: wgpu::BindGroupLayout,
     instances: wgpu::BindGroupLayout,
     instances_with_texture: wgpu::BindGroupLayout,
@@ -173,6 +178,9 @@ pub type GpuContext = Rc<RefCell<Option<WgpuContext>>>;
 
 /// GPU resources that must be dropped together during device recovery.
 struct WgpuResources {
+    gradients: Vec<gradients::GradientUpload>,
+    gradient_indices: HashMap<usize, usize>,
+    gradient_upload_bytes: u64,
     capture_context: WgpuContext,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -711,6 +719,9 @@ impl WgpuRenderer {
         });
 
         let resources = WgpuResources {
+            gradients: Vec::new(),
+            gradient_indices: HashMap::new(),
+            gradient_upload_bytes: 0,
             capture_context: context.clone(),
             device,
             queue,
@@ -1007,6 +1018,10 @@ impl WgpuRenderer {
         });
 
         WgpuBindGroupLayouts {
+            gradients: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("gradients"),
+                entries: &[storage_buffer_entry(0)],
+            }),
             globals,
             instances,
             instances_with_texture,
@@ -1407,9 +1422,16 @@ impl WgpuRenderer {
                                color_targets: &[Option<wgpu::ColorTargetState>],
                                sample_count: u32,
                                module: &wgpu::ShaderModule| {
+            let mut groups = vec![Some(globals_layout), Some(data_layout)];
+            if matches!(
+                fs_entry,
+                "fs_quad" | "fs_mono_sprite" | "fs_path_rasterization"
+            ) {
+                groups.push(Some(&layouts.gradients));
+            }
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(&format!("{name}_layout")),
-                bind_group_layouts: &[Some(globals_layout), Some(data_layout)],
+                bind_group_layouts: &groups,
                 immediate_size: 0,
             });
 
@@ -2836,6 +2858,7 @@ impl WgpuRenderer {
         retain_outputs: bool,
         subtree_targets: &[wgpu::Texture],
     ) -> anyhow::Result<SceneEncoding> {
+        self.prepare_gradients(scene)?;
         let mut has_scene3d = false;
         scene.visit(&mut |scene| {
             has_scene3d |= scene
@@ -3093,6 +3116,7 @@ impl WgpuRenderer {
             });
 
             for batch in scene.batches() {
+                pass.set_bind_group(2, self.gradient_bind_group(scene), &[]);
                 let ok = match batch {
                     PrimitiveBatch::SubtreeLayers(range) => {
                         drop(pass);
@@ -3579,8 +3603,12 @@ impl WgpuRenderer {
 
                         drop(pass);
 
-                        let did_draw =
-                            self.draw_paths_to_intermediate(encoder, paths, instance_offset);
+                        let did_draw = self.draw_paths_to_intermediate(
+                            encoder,
+                            paths,
+                            instance_offset,
+                            self.gradient_bind_group(scene),
+                        );
 
                         pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("main_pass_continued"),
@@ -5172,7 +5200,7 @@ impl WgpuRenderer {
 
     fn draw_paths_from_intermediate(
         &self,
-        paths: &[Path<ScaledPixels>],
+        paths: &[Path<ScaledPixels, gpui::GpuBackground>],
         instance_offset: &mut u64,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
@@ -5212,8 +5240,9 @@ impl WgpuRenderer {
     fn draw_paths_to_intermediate(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        paths: &[Path<ScaledPixels>],
+        paths: &[Path<ScaledPixels, gpui::GpuBackground>],
         instance_offset: &mut u64,
+        gradients: &wgpu::BindGroup,
     ) -> bool {
         let mut vertices = Vec::new();
         for path in paths {
@@ -5270,6 +5299,7 @@ impl WgpuRenderer {
             });
 
             pass.set_pipeline(&resources.pipelines.path_rasterization);
+            pass.set_bind_group(2, gradients, &[]);
             pass.set_bind_group(0, &resources.path_globals_bind_group, &[]);
             pass.set_bind_group(1, &data_bind_group, &[]);
             pass.draw(0..vertices.len() as u32, 0..1);

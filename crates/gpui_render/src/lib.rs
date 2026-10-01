@@ -127,6 +127,10 @@ pub const METAL_GLOBALS_SLOT: u64 = 0;
 pub const METAL_INSTANCES_SLOT: u64 = 1;
 /// Metal buffer slot for Naga's runtime array lengths, expressed in bytes.
 pub const METAL_SIZES_SLOT: u64 = 3;
+/// Metal fragment-buffer slot for long gradient stops.
+pub const METAL_GRADIENTS_SLOT: u64 = 4;
+/// Direct3D shader-resource slot for long gradient stops.
+pub const DX_GRADIENTS_SLOT: u32 = 5;
 /// Metal texture slot for sprite atlases and resolved path images.
 pub const METAL_TEXTURE_SLOT: u64 = 0;
 /// Metal texture slot for the interleaved chroma plane of an NV12 surface.

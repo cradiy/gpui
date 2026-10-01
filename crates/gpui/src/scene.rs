@@ -7,8 +7,8 @@ use smallvec::SmallVec;
 
 use crate::{
     AtlasTextureId, AtlasTile, BackdropShader, Background, BorderGradient, Bounds, ContentMask,
-    Corners, Edges, EffectShader, EffectUniforms, Hsla, Pixels, Point, Radians, ScaledPixels, Size,
-    SurfaceSource, bounds_tree::BoundsTree, point,
+    Corners, Edges, EffectShader, EffectUniforms, GpuBackground, GradientBuffer, Hsla, Pixels,
+    Point, Radians, ScaledPixels, Size, SurfaceSource, bounds_tree::BoundsTree, point,
 };
 use std::{
     fmt::Debug,
@@ -43,6 +43,8 @@ impl From<bool> for PaddedBool32 {
 #[derive(Default)]
 #[expect(missing_docs)]
 pub struct Scene {
+    /// Independent color-stop storage used by this scene's primitives.
+    pub gradients: GradientBuffer,
     /// Raster-density multiplier relative to the parent when used as a subtree input.
     /// `None` uses the parent's density. Set by `Window::with_subtree_raster_scale`.
     pub raster_scale: Option<f32>,
@@ -52,16 +54,16 @@ pub struct Scene {
     layer_stack: Vec<DrawOrder>,
     pub backdrop_blurs: Vec<BackdropBlur>,
     pub shadows: Vec<Shadow>,
-    pub quads: Vec<Quad>,
+    pub quads: Vec<Quad<GpuBackground>>,
     pub effects: Vec<EffectQuad>,
     pub particles: Vec<crate::ParticleDraw>,
     pub fluids: Vec<crate::FluidDraw>,
     pub subtree_layers: Vec<SubtreeLayer>,
     pending_subtrees: Vec<PendingSubtree>,
-    pub paths: Vec<Path<ScaledPixels>>,
+    pub paths: Vec<Path<ScaledPixels, GpuBackground>>,
     pub underlines: Vec<Underline>,
-    pub monochrome_sprites: Vec<MonochromeSprite>,
-    pub subpixel_sprites: Vec<SubpixelSprite>,
+    pub monochrome_sprites: Vec<MonochromeSprite<GpuBackground>>,
+    pub subpixel_sprites: Vec<SubpixelSprite<GpuBackground>>,
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
 }
@@ -84,6 +86,7 @@ struct PendingSubtree {
 #[expect(missing_docs)]
 impl Scene {
     pub fn clear(&mut self) {
+        self.gradients.clear();
         self.raster_scale = None;
         self.raster_region = None;
         self.paint_operations.clear();
@@ -164,7 +167,7 @@ impl Scene {
             }
             Primitive::Quad(quad) => {
                 quad.order = order;
-                self.quads.push(*quad);
+                self.quads.push(quad.to_gpu(&mut self.gradients));
             }
             Primitive::Effect(effect) => {
                 effect.order = order;
@@ -185,7 +188,7 @@ impl Scene {
             Primitive::Path(path) => {
                 path.order = order;
                 path.id = PathId(self.paths.len());
-                self.paths.push(path.clone());
+                self.paths.push(path.to_gpu(&mut self.gradients));
             }
             Primitive::Underline(underline) => {
                 underline.order = order;
@@ -193,11 +196,13 @@ impl Scene {
             }
             Primitive::MonochromeSprite(sprite) => {
                 sprite.order = order;
-                self.monochrome_sprites.push(*sprite);
+                self.monochrome_sprites
+                    .push(sprite.to_gpu(&mut self.gradients));
             }
             Primitive::SubpixelSprite(sprite) => {
                 sprite.order = order;
-                self.subpixel_sprites.push(*sprite);
+                self.subpixel_sprites
+                    .push(sprite.to_gpu(&mut self.gradients));
             }
             Primitive::PolychromeSprite(sprite) => {
                 sprite.order = order;
@@ -241,6 +246,7 @@ impl Scene {
     }
 
     pub fn finish(&mut self) {
+        self.gradients.finish();
         self.backdrop_blurs.sort_by_key(|backdrop| backdrop.order);
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
@@ -580,7 +586,7 @@ struct BatchIterator<'a> {
     shadows_start: usize,
     shadows_iter: Peekable<slice::Iter<'a, Shadow>>,
     quads_start: usize,
-    quads_iter: Peekable<slice::Iter<'a, Quad>>,
+    quads_iter: Peekable<slice::Iter<'a, Quad<GpuBackground>>>,
     effects_start: usize,
     effects_iter: Peekable<slice::Iter<'a, EffectQuad>>,
     particles_start: usize,
@@ -590,13 +596,13 @@ struct BatchIterator<'a> {
     subtree_layers_start: usize,
     subtree_layers_iter: Peekable<slice::Iter<'a, SubtreeLayer>>,
     paths_start: usize,
-    paths_iter: Peekable<slice::Iter<'a, Path<ScaledPixels>>>,
+    paths_iter: Peekable<slice::Iter<'a, Path<ScaledPixels, GpuBackground>>>,
     underlines_start: usize,
     underlines_iter: Peekable<slice::Iter<'a, Underline>>,
     monochrome_sprites_start: usize,
-    monochrome_sprites_iter: Peekable<slice::Iter<'a, MonochromeSprite>>,
+    monochrome_sprites_iter: Peekable<slice::Iter<'a, MonochromeSprite<GpuBackground>>>,
     subpixel_sprites_start: usize,
-    subpixel_sprites_iter: Peekable<slice::Iter<'a, SubpixelSprite>>,
+    subpixel_sprites_iter: Peekable<slice::Iter<'a, SubpixelSprite<GpuBackground>>>,
     polychrome_sprites_start: usize,
     polychrome_sprites_iter: Peekable<slice::Iter<'a, PolychromeSprite>>,
     surfaces_start: usize,
@@ -914,12 +920,12 @@ impl From<BackdropBlur> for Primitive {
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 #[repr(C)]
 #[expect(missing_docs)]
-pub struct Quad {
+pub struct Quad<B = Background> {
     pub order: DrawOrder,
     pub border_style: BorderStyle,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub background: Background,
+    pub background: B,
     pub border_colors: Edges<Hsla>,
     pub border_gradient: BorderGradient,
     pub corner_radii: Corners<ScaledPixels>,
@@ -1267,12 +1273,12 @@ impl Default for TransformationMatrix {
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
 #[expect(missing_docs)]
-pub struct MonochromeSprite {
+pub struct MonochromeSprite<B = Background> {
     pub order: DrawOrder,
     pub pad: u32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub background: Background,
+    pub background: B,
     pub background_bounds: Bounds<ScaledPixels>,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
@@ -1287,12 +1293,12 @@ impl From<MonochromeSprite> for Primitive {
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
 #[expect(missing_docs)]
-pub struct SubpixelSprite {
+pub struct SubpixelSprite<B = Background> {
     pub order: DrawOrder,
     pub pad: u32, // align to 8 bytes
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub background: Background,
+    pub background: B,
     pub background_bounds: Bounds<ScaledPixels>,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
@@ -1351,13 +1357,13 @@ pub struct PathId(pub usize);
 /// A line made up of a series of vertices and control points.
 #[derive(Clone, Debug)]
 #[expect(missing_docs)]
-pub struct Path<P: Clone + Debug + Default + PartialEq> {
+pub struct Path<P: Clone + Debug + Default + PartialEq, B = Background> {
     pub id: PathId,
     pub order: DrawOrder,
     pub bounds: Bounds<P>,
     pub content_mask: ContentMask<P>,
     pub vertices: Vec<PathVertex<P>>,
-    pub color: Background,
+    pub color: B,
     start: Point<P>,
     current: Point<P>,
     contour_count: usize,
@@ -1397,7 +1403,7 @@ impl Path<Pixels> {
             start: self.start.map(|start| start.scale(factor)),
             current: self.current.scale(factor),
             contour_count: self.contour_count,
-            color: self.color,
+            color: self.color.clone(),
         }
     }
 
@@ -1476,7 +1482,7 @@ impl Path<Pixels> {
     }
 }
 
-impl<T> Path<T>
+impl<T, B> Path<T, B>
 where
     T: Clone + Debug + Default + PartialEq + PartialOrd + Add<T, Output = T> + Sub<Output = T>,
 {
@@ -1496,7 +1502,7 @@ pub struct PathRasterizationVertex {
     /// Curve coordinates used to compute analytic coverage.
     pub st_position: Point<f32>,
     /// The path's fill.
-    pub color: Background,
+    pub color: GpuBackground,
     /// Intersection of the path bounds and content mask.
     pub bounds: Bounds<ScaledPixels>,
 }
@@ -1509,7 +1515,7 @@ pub struct PathSprite {
     pub bounds: Bounds<ScaledPixels>,
 }
 
-impl Path<ScaledPixels> {
+impl Path<ScaledPixels, GpuBackground> {
     /// Produces shader vertices with a shared fill and clipping rectangle, without allocation.
     pub fn rasterization_vertices(
         &self,
@@ -1520,7 +1526,7 @@ impl Path<ScaledPixels> {
             .map(move |vertex| PathRasterizationVertex {
                 xy_position: vertex.xy_position,
                 st_position: vertex.st_position,
-                color: self.color,
+                color: self.color.clone(),
                 bounds,
             })
     }
@@ -1870,6 +1876,68 @@ impl PathVertex<Pixels> {
             xy_position: self.xy_position.scale(factor),
             st_position: self.st_position,
             content_mask: self.content_mask.scale(factor),
+        }
+    }
+}
+
+impl Quad {
+    fn to_gpu(&self, gradients: &mut GradientBuffer) -> Quad<GpuBackground> {
+        Quad {
+            order: self.order,
+            border_style: self.border_style,
+            bounds: self.bounds,
+            content_mask: self.content_mask,
+            background: gradients.background(&self.background),
+            border_colors: self.border_colors,
+            border_gradient: self.border_gradient,
+            corner_radii: self.corner_radii,
+            border_widths: self.border_widths,
+        }
+    }
+}
+
+impl MonochromeSprite {
+    fn to_gpu(&self, gradients: &mut GradientBuffer) -> MonochromeSprite<GpuBackground> {
+        MonochromeSprite {
+            order: self.order,
+            pad: self.pad,
+            bounds: self.bounds,
+            content_mask: self.content_mask,
+            background: gradients.background(&self.background),
+            background_bounds: self.background_bounds,
+            tile: self.tile,
+            transformation: self.transformation,
+        }
+    }
+}
+
+impl SubpixelSprite {
+    fn to_gpu(&self, gradients: &mut GradientBuffer) -> SubpixelSprite<GpuBackground> {
+        SubpixelSprite {
+            order: self.order,
+            pad: self.pad,
+            bounds: self.bounds,
+            content_mask: self.content_mask,
+            background: gradients.background(&self.background),
+            background_bounds: self.background_bounds,
+            tile: self.tile,
+            transformation: self.transformation,
+        }
+    }
+}
+
+impl Path<ScaledPixels> {
+    fn to_gpu(&self, gradients: &mut GradientBuffer) -> Path<ScaledPixels, GpuBackground> {
+        Path {
+            id: self.id,
+            order: self.order,
+            bounds: self.bounds,
+            content_mask: self.content_mask,
+            vertices: self.vertices.clone(),
+            color: gradients.background(&self.color),
+            start: self.start,
+            current: self.current,
+            contour_count: self.contour_count,
         }
     }
 }

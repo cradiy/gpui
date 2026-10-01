@@ -41,7 +41,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         let background = quad(viewport, 0x203040ff);
         let scene = |kind, progress, opacity| {
             let mut scene = Scene::default();
-            scene.insert_primitive(background);
+            scene.insert_primitive(background.clone());
             scene.insert_primitive(pair(
                 input(region, 0xff000080),
                 input(region, 0x0000ff40),
@@ -60,7 +60,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         ] {
             for (progress, color) in [(0., 0xff000080), (1., 0x0000ff40)] {
                 let mut expected = Scene::default();
-                expected.insert_primitive(background);
+                expected.insert_primitive(background.clone());
                 expected.insert_primitive(layer(input(region, color), region, 1.));
                 expected.finish();
                 assert_eq!(
@@ -71,7 +71,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         }
         for opacity in [0.5, 1.] {
             let mut expected = Scene::default();
-            expected.insert_primitive(background);
+            expected.insert_primitive(background.clone());
             let mut mixed = quad(region, 0x00000000);
             mixed.background = gpui::Rgba {
                 r: 2. / 3.,
@@ -104,7 +104,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         ));
         nested.finish();
         let mut outer = Scene::default();
-        outer.insert_primitive(background);
+        outer.insert_primitive(background.clone());
         outer.insert_primitive(pair(
             input(region, 0xff0000ff),
             nested,
@@ -116,7 +116,7 @@ pub(super) fn check(renderer: &mut WgpuOffscreenRenderer) -> anyhow::Result<()> 
         outer.finish();
         assert_eq!(outer.subtree_target_count(), 4);
         let mut expected = Scene::default();
-        expected.insert_primitive(background);
+        expected.insert_primitive(background.clone());
         expected.insert_primitive(quad(region, 0x00ff00ff));
         expected.finish();
         assert_eq!(

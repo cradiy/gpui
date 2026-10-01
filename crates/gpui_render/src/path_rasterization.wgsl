@@ -51,12 +51,7 @@ fn fs_path_rasterization(input: PathRasterizationVarying) -> @location(0) vec4<f
         let distance = f / length(gradient);
         alpha = saturate(0.5 - distance);
     }
-    let prepared_gradient = prepare_gradient_color(
-        background.tag,
-        background.color_space,
-        background.solid,
-        background.colors,
-    );
+    let prepared_gradient = prepare_gradient_color(background);
     let color = gradient_color(
         background,
         (input.position.xy + globals.viewport_origin),

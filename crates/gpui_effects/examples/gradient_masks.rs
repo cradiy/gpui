@@ -55,13 +55,16 @@ impl Render for GradientMasksExample {
             .gap_10()
             .bg(rgb(0x101218))
             .child(
-                gradient_text("One continuous gradient across every glyph", flowing)
-                    .text_size(px(54.0))
-                    .with_animation(
-                        "gradient-text-flow",
-                        Animation::new(Duration::from_secs(5)).repeat(),
-                        |text, time| text.phase(time),
-                    ),
+                gradient_text(
+                    "One continuous gradient across every glyph",
+                    flowing.clone(),
+                )
+                .text_size(px(54.0))
+                .with_animation(
+                    "gradient-text-flow",
+                    Animation::new(Duration::from_secs(5)).repeat(),
+                    |text, time| text.phase(time),
+                ),
             )
             .child(
                 gradient_svg("gradient-mark.svg", flowing)

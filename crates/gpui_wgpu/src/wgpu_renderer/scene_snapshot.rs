@@ -39,6 +39,7 @@ fn same_scene(a: &Rc<Scene>, b: &Rc<Scene>) -> bool {
             continue;
         }
         if a.raster_scale != b.raster_scale
+            || a.gradients.stops() != b.gradients.stops()
             || a.quads != b.quads
             || a.shadows != b.shadows
             || a.underlines != b.underlines
@@ -80,6 +81,47 @@ fn same_scene(a: &Rc<Scene>, b: &Rc<Scene>) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod gradient_tests {
+    use super::*;
+    use gpui::{
+        Bounds, ContentMask, Quad, ScaledPixels, linear_color_stop, multi_linear_gradient, point,
+        rgb, size,
+    };
+
+    #[test]
+    fn editing_external_stops_invalidates_identical_primitive_records() {
+        let snapshot = |last| {
+            let mut scene = Scene::default();
+            let bounds = Bounds::new(
+                point(ScaledPixels(0.), ScaledPixels(0.)),
+                size(ScaledPixels(100.), ScaledPixels(100.)),
+            );
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: multi_linear_gradient(
+                    90.,
+                    [
+                        linear_color_stop(rgb(0xff0000), 0.),
+                        linear_color_stop(rgb(0xff0000), 0.5),
+                        linear_color_stop(rgb(last), 1.),
+                    ],
+                ),
+                ..Default::default()
+            });
+            scene.finish();
+            SceneSnapshot::new(&Rc::new(scene), |_| None).unwrap()
+        };
+        let original = snapshot(0xff0000);
+        let same = snapshot(0xff0000);
+        let edited = snapshot(0x0000ff);
+        assert_eq!(original.scene.quads, edited.scene.quads);
+        assert!(original.matches(&same));
+        assert!(!original.matches(&edited));
+    }
 }
 
 fn same_items<T>(a: &[T], b: &[T], mut same: impl FnMut(&T, &T) -> bool) -> bool {

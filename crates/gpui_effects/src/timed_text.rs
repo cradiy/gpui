@@ -486,20 +486,24 @@ impl Element for TimedText {
                             bounds: completed_clip,
                         }),
                         |window| {
-                            window.with_masked_fill(fill_bounds, self.active_fill, |window| {
-                                layout
-                                    .line
-                                    .paint_with_transforms(
-                                        layout.content_bounds.origin,
-                                        layout.line_height,
-                                        align,
-                                        Some(align_width),
-                                        transforms,
-                                        window,
-                                        cx,
-                                    )
-                                    .ok();
-                            });
+                            window.with_masked_fill(
+                                fill_bounds,
+                                self.active_fill.clone(),
+                                |window| {
+                                    layout
+                                        .line
+                                        .paint_with_transforms(
+                                            layout.content_bounds.origin,
+                                            layout.line_height,
+                                            align,
+                                            Some(align_width),
+                                            transforms,
+                                            window,
+                                            cx,
+                                        )
+                                        .ok();
+                                },
+                            );
                         },
                     );
                 }

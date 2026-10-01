@@ -25,6 +25,9 @@ use windows::{
 use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
 use crate::*;
 use gpui::*;
+type Quad = gpui::Quad<GpuBackground>;
+type MonochromeSprite = gpui::MonochromeSprite<GpuBackground>;
+type SubpixelSprite = gpui::SubpixelSprite<GpuBackground>;
 
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
 const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -81,6 +84,8 @@ pub(crate) struct DirectXRendererDevices {
 }
 
 struct DirectXResources {
+    gradient_buffer: Option<(ID3D11Buffer, Option<ID3D11ShaderResourceView>, usize)>,
+    gradient_data: Vec<GpuGradientStop>,
     // Direct3D rendering objects
     swap_chain: IDXGISwapChain1,
     render_target: Option<ID3D11Texture2D>,
@@ -495,6 +500,57 @@ impl DirectXRenderer {
 
     fn upload_scene_buffers(&mut self, scene: &Scene) -> Result<()> {
         let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_mut().context("resources missing")?;
+        let data = scene.gradients.stops();
+        let bytes = mem::size_of_val(data).max(mem::size_of::<GpuGradientStop>());
+        if resources
+            .gradient_buffer
+            .as_ref()
+            .is_none_or(|(_, _, capacity)| *capacity < bytes)
+        {
+            let capacity = bytes.next_power_of_two();
+            let desc = D3D11_BUFFER_DESC {
+                ByteWidth: u32::try_from(capacity)?,
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                MiscFlags: D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS.0 as u32,
+                ..Default::default()
+            };
+            let mut buffer = None;
+            unsafe { devices.device.CreateBuffer(&desc, None, Some(&mut buffer)) }?;
+            let buffer = buffer.unwrap();
+            let view = create_raw_buffer_view(&devices.device, &buffer, 0, capacity as u32)?;
+            resources.gradient_buffer = Some((buffer, view, capacity));
+            resources.gradient_data.clear();
+        }
+        let (buffer, view, _) = resources.gradient_buffer.as_ref().unwrap();
+        if let Some(range) = gradient_changed_range(&resources.gradient_data, data) {
+            let region = D3D11_BOX {
+                left: (range.start * mem::size_of::<GpuGradientStop>()) as u32,
+                right: (range.end * mem::size_of::<GpuGradientStop>()) as u32,
+                top: 0,
+                bottom: 1,
+                front: 0,
+                back: 1,
+            };
+            unsafe {
+                devices.device_context.UpdateSubresource(
+                    buffer,
+                    0,
+                    Some(&region),
+                    data.as_ptr().add(range.start) as _,
+                    0,
+                    0,
+                );
+            }
+        }
+        resources.gradient_data.clear();
+        resources.gradient_data.extend_from_slice(data);
+        unsafe {
+            devices
+                .device_context
+                .PSSetShaderResources(gpui_render::DX_GRADIENTS_SLOT, Some(slice::from_ref(view)));
+        }
 
         if !scene.shadows.is_empty() {
             self.pipelines.shadow_pipeline.update_buffer(
@@ -932,7 +988,10 @@ impl DirectXRenderer {
         Ok(())
     }
 
-    fn draw_paths_to_intermediate(&mut self, paths: &[Path<ScaledPixels>]) -> Result<()> {
+    fn draw_paths_to_intermediate(
+        &mut self,
+        paths: &[Path<ScaledPixels, GpuBackground>],
+    ) -> Result<()> {
         if paths.is_empty() {
             return Ok(());
         }
@@ -992,7 +1051,10 @@ impl DirectXRenderer {
         Ok(())
     }
 
-    fn draw_paths_from_intermediate(&mut self, paths: &[Path<ScaledPixels>]) -> Result<()> {
+    fn draw_paths_from_intermediate(
+        &mut self,
+        paths: &[Path<ScaledPixels, GpuBackground>],
+    ) -> Result<()> {
         let Some(first_path) = paths.first() else {
             return Ok(());
         };
@@ -1414,6 +1476,8 @@ impl DirectXResources {
 
         Ok(Self {
             swap_chain,
+            gradient_buffer: None,
+            gradient_data: Vec::new(),
             render_target: Some(render_target),
             render_target_view,
             path_intermediate_texture,

@@ -606,9 +606,7 @@ fn subtree_capture_cache_100_quad_transform_benchmark() -> anyhow::Result<()> {
         .map(|i| {
             let mut scene = Scene::default();
             let mut copy = Scene::default();
-            for quad in &source.quads {
-                copy.insert_primitive(*quad);
-            }
+            copy.replay(0..source.len(), &source);
             copy.finish();
             let mut layer = layer(copy, (i % 10) as f32);
             let viewport = bounds(0., 0., 1024., 1024.);

@@ -29,8 +29,6 @@ struct QuadVarying {
     @location(10) @interpolate(flat) background_solid: vec4<f32>,
     @location(11) @interpolate(flat) background_color0: vec4<f32>,
     @location(12) @interpolate(flat) background_color1: vec4<f32>,
-    @location(13) @interpolate(flat) background_color2: vec4<f32>,
-    @location(14) @interpolate(flat) background_color3: vec4<f32>,
 }
 
 @vertex
@@ -41,17 +39,10 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     var out = QuadVarying();
     out.position = to_device_position(unit_vertex, quad.bounds);
 
-    let gradient = prepare_gradient_color(
-        quad.background.tag,
-        quad.background.color_space,
-        quad.background.solid,
-        quad.background.colors
-    );
+    let gradient = prepare_gradient_color(quad.background);
     out.background_solid = gradient.solid;
     out.background_color0 = gradient.colors[0];
     out.background_color1 = gradient.colors[1];
-    out.background_color2 = gradient.colors[2];
-    out.background_color3 = gradient.colors[3];
     out.border_color_top = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.top));
     out.border_color_right = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.right));
     out.border_color_bottom = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.bottom));
@@ -173,8 +164,6 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         array(
             input.background_color0,
             input.background_color1,
-            input.background_color2,
-            input.background_color3,
         ),
     );
 

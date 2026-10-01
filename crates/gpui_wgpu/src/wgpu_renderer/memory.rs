@@ -9,6 +9,10 @@ use crate::WgpuAtlasMemoryStats;
 pub struct WgpuMemoryStats {
     pub atlas: WgpuAtlasMemoryStats,
     pub instance_buffer_bytes: u64,
+    /// Allocated storage for long gradient stops, including nested renderers.
+    pub gradient_buffer_bytes: u64,
+    /// Stop bytes uploaded during the most recent encoding in each renderer.
+    pub gradient_upload_bytes: u64,
     pub path_texture_bytes: u64,
     pub backdrop_texture_bytes: u64,
     pub subtree_texture_bytes: u64,
@@ -33,6 +37,12 @@ impl WgpuRenderer {
             return;
         };
         stats.instance_buffer_bytes += resources.instance_buffer.size();
+        stats.gradient_buffer_bytes += resources
+            .gradients
+            .iter()
+            .map(|gradient| gradient.buffer.size())
+            .sum::<u64>();
+        stats.gradient_upload_bytes += resources.gradient_upload_bytes;
         for texture in [
             &resources.path_intermediate_texture,
             &resources.path_msaa_texture,

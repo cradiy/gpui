@@ -101,6 +101,45 @@ fn shared_monochrome_coverage_opacity_and_transformed_clip() -> anyhow::Result<(
 }
 
 #[test]
+#[ignore = "requires a GPU adapter"]
+fn monochrome_external_gradient_updates_without_replacing_glyph() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(80), DevicePixels(48)))?;
+    let tile = glyph_tile(&renderer, false, &[255, 255, 255])?;
+    let bounds = bounds(0., 0., 80., 48.);
+    let mut background = gpui::multi_linear_gradient(
+        90.,
+        [
+            gpui::linear_color_stop(gpui::rgb(0xff0000), 0.),
+            gpui::linear_color_stop(gpui::rgb(0xff0000), 0.5),
+            gpui::linear_color_stop(gpui::rgb(0xff0000), 1.),
+        ],
+    );
+    let mut scene = Scene::default();
+    for blue in [false, true] {
+        if blue {
+            background.set_gradient_stop(1, gpui::linear_color_stop(gpui::rgb(0x0000ff), 0.5));
+        }
+        scene.clear();
+        scene.insert_primitive(MonochromeSprite {
+            order: 0,
+            pad: 0,
+            bounds,
+            content_mask: ContentMask { bounds },
+            background: background.clone(),
+            background_bounds: bounds,
+            tile,
+            transformation: TransformationMatrix::unit(),
+        });
+        scene.finish();
+        let pixels = renderer.render_rgba(&scene)?;
+        let pixel = &pixels[(24 * 80 + 40) * 4..][..4];
+        assert!(pixel[if blue { 2 } else { 0 }] > 235, "{pixel:?}");
+        assert!(pixel[if blue { 0 } else { 2 }] < 35, "{pixel:?}");
+    }
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires a GPU adapter with dual-source blending"]
 fn shared_subpixel_rgb_bgr_and_clip() -> anyhow::Result<()> {
     let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(80), DevicePixels(48)))?;

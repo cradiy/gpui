@@ -160,21 +160,21 @@ impl Render for TimedTextExample {
                         "timed-text-chinese",
                         CHINESE_LINE,
                         CHINESE_PIECES,
-                        fill,
+                        fill.clone(),
                     ))
                     .child(timed_row(
                         "EN",
                         "timed-text-english",
                         ENGLISH_LINE,
                         ENGLISH_PIECES,
-                        fill,
+                        fill.clone(),
                     ))
                     .child(timed_row(
                         "混合",
                         "timed-text-mixed",
                         MIXED_LINE,
                         MIXED_PIECES,
-                        fill,
+                        fill.clone(),
                     )),
             )
     }

@@ -155,6 +155,13 @@ struct LinearColorStop {
     percentage: f32,
 }
 
+struct ExtendedColorStop {
+    color: Hsla,
+    position: f32,
+    midpoint: f32,
+}
+@group(2) @binding(0) var<storage, read> gradient_stops: array<ExtendedColorStop>;
+
 struct Background {
     // 0u is Solid
     // 1u is LinearGradient
@@ -166,13 +173,13 @@ struct Background {
     color_space: u32,
     solid: Hsla,
     gradient_angle_or_pattern_height: f32,
-    colors: array<LinearColorStop, 4>,
+    colors: array<LinearColorStop, 2>,
     stop_count: u32,
     gradient_phase: f32,
     gradient_repeating: u32,
-    gradient_midpoints: array<f32, 4>,
+    gradient_midpoints: array<f32, 2>,
     angular_seam_width: f32,
-    pad: u32,
+    stop_offset: u32,
 }
 
 struct AtlasTextureId {
@@ -433,17 +440,21 @@ fn blend_color(color: vec4<f32>, alpha_factor: f32) -> vec4<f32> {
 
 struct GradientColor {
     solid: vec4<f32>,
-    colors: array<vec4<f32>, 4>,
+    colors: array<vec4<f32>, 2>,
 }
 
-fn prepare_gradient_color(tag: u32, color_space: u32,
-    solid: Hsla, colors: array<LinearColorStop, 4>) -> GradientColor {
+fn prepare_gradient_color(background: Background) -> GradientColor {
     var result = GradientColor();
+    if (background.stop_offset != 0u) { return result; }
+    let tag = background.tag;
+    let color_space = background.color_space;
+    let solid = background.solid;
+    let colors = background.colors;
 
     if (tag == 0u || tag == 2u || tag == 3u) {
         result.solid = hsla_to_rgba(solid);
     } else if (tag == 1u || (tag >= 4u && tag <= 6u)) {
-        for (var ix = 0u; ix < 4u; ix += 1u) {
+        for (var ix = 0u; ix < 2u; ix += 1u) {
             // hsla_to_rgba returns a linear sRGB color.
             let color = hsla_to_rgba(colors[ix].color);
             if (color_space == 0u) {
@@ -460,63 +471,59 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
 fn sample_gradient_stops(
     background: Background,
     position: f32,
-    colors: array<vec4<f32>, 4>,
+    colors: array<vec4<f32>, 2>,
 ) -> vec4<f32> {
     let count = max(background.stop_count, 2u);
     var sample_position = clamp(position, 0.0, 1.0);
     var left_ix = 0u;
     var right_ix = 0u;
-    var left_position = background.colors[0].percentage;
+    var left_position = gradient_stop_position(background, 0u);
     var right_position = left_position;
 
     if (background.gradient_repeating != 0u) {
         sample_position = fract(position + background.gradient_phase);
         left_ix = count - 1u;
         right_ix = 0u;
-        left_position = background.colors[left_ix].percentage;
-        right_position = background.colors[0].percentage + 1.0;
+        left_position = gradient_stop_position(background, left_ix);
+        right_position = gradient_stop_position(background, 0) + 1.0;
 
-        for (var ix = 0u; ix + 1u < count; ix += 1u) {
-            if (sample_position >= background.colors[ix].percentage
-                && sample_position < background.colors[ix + 1u].percentage) {
-                left_ix = ix;
-                right_ix = ix + 1u;
-                left_position = background.colors[left_ix].percentage;
-                right_position = background.colors[right_ix].percentage;
-            }
+        if (sample_position >= gradient_stop_position(background, 0u)
+            && sample_position < left_position) {
+            left_ix = gradient_segment_index(background, sample_position, count);
+            right_ix = left_ix + 1u;
+            left_position = gradient_stop_position(background, left_ix);
+            right_position = gradient_stop_position(background, right_ix);
         }
-        if (right_ix == 0u && sample_position < background.colors[0].percentage) {
+        if (right_ix == 0u && sample_position < gradient_stop_position(background, 0)) {
             sample_position += 1.0;
         }
-    } else if (sample_position <= background.colors[0].percentage) {
+    } else if (sample_position <= gradient_stop_position(background, 0)) {
         left_ix = 0u;
         right_ix = 0u;
-    } else if (sample_position >= background.colors[count - 1u].percentage) {
+    } else if (sample_position >= gradient_stop_position(background, count - 1u)) {
         left_ix = count - 1u;
         right_ix = count - 1u;
-        left_position = background.colors[left_ix].percentage;
+        left_position = gradient_stop_position(background, left_ix);
         right_position = left_position;
     } else {
-        for (var ix = 0u; ix + 1u < count; ix += 1u) {
-            if (sample_position >= background.colors[ix].percentage
-                && sample_position < background.colors[ix + 1u].percentage) {
-                left_ix = ix;
-                right_ix = ix + 1u;
-                left_position = background.colors[left_ix].percentage;
-                right_position = background.colors[right_ix].percentage;
-            }
-        }
+        left_ix = gradient_segment_index(background, sample_position, count);
+        right_ix = left_ix + 1u;
+        left_position = gradient_stop_position(background, left_ix);
+        right_position = gradient_stop_position(background, right_ix);
     }
 
     let segment = max(right_position - left_position, 0.000001);
     let t = clamp((sample_position - left_position) / segment, 0.0, 1.0);
     // CSS color-hint interpolation: the segment midpoint is a 50% mix.
-    let midpoint = background.gradient_midpoints[left_ix];
+    var midpoint = background.gradient_midpoints[min(left_ix, 1u)];
+    if (background.stop_offset != 0u) {
+        midpoint = gradient_stops[background.stop_offset - 1u + left_ix].midpoint;
+    }
     var weight = t;
     if (midpoint != 0.5 && t > 0.0 && t < 1.0) {
         weight = pow(t, log(0.5) / log(midpoint));
     }
-    var color = mix(colors[left_ix], colors[right_ix], weight);
+    var color = mix(gradient_stop_color(background, colors, left_ix), gradient_stop_color(background, colors, right_ix), weight);
     if (background.gradient_repeating != 0u) {
         var before_ix = count - 1u;
         if (left_ix > 0u) {
@@ -537,16 +544,46 @@ fn sample_gradient_stops(
         let weight1 = (3.0 * t3 - 6.0 * t2 + 4.0) / 6.0;
         let weight2 = (-3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0) / 6.0;
         let weight3 = t3 / 6.0;
-        color = weight0 * colors[before_ix]
-            + weight1 * colors[left_ix]
-            + weight2 * colors[right_ix]
-            + weight3 * colors[after_ix];
+        color = weight0 * gradient_stop_color(background, colors, before_ix)
+            + weight1 * gradient_stop_color(background, colors, left_ix)
+            + weight2 * gradient_stop_color(background, colors, right_ix)
+            + weight3 * gradient_stop_color(background, colors, after_ix);
     }
     return color;
 }
 
+// Upper-bound search preserves equal-position hard edges without a linear scan.
+fn gradient_segment_index(background: Background, position: f32, count: u32) -> u32 {
+    var low = 0u;
+    var high = count - 1u;
+    while (low + 1u < high) {
+        let middle = low + (high - low) / 2u;
+        if (position < gradient_stop_position(background, middle)) {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    return low;
+}
+
+fn gradient_stop_position(background: Background, index: u32) -> f32 {
+    if (background.stop_offset != 0u) {
+        return gradient_stops[background.stop_offset - 1u + index].position;
+    }
+    return background.colors[index].percentage;
+}
+
+fn gradient_stop_color(background: Background, colors: array<vec4<f32>, 2>, index: u32) -> vec4<f32> {
+    if (background.stop_offset == 0u) { return colors[index]; }
+    var color = hsla_to_rgba(gradient_stops[background.stop_offset - 1u + index].color);
+    color.a *= background.solid.a;
+    if (background.color_space == 1u) { return linear_srgb_to_oklab(color); }
+    return linear_to_srgba(color);
+}
+
 fn sample_linear_gradient(background: Background, position: f32,
-    colors: array<vec4<f32>, 4>) -> vec4<f32> {
+    colors: array<vec4<f32>, 2>) -> vec4<f32> {
     var color = sample_gradient_stops(background, position, colors);
     let width = background.angular_seam_width;
     let half_width = width * 0.5;
@@ -564,7 +601,7 @@ fn sample_linear_gradient(background: Background, position: f32,
 }
 
 fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
-    solid_color: vec4<f32>, colors: array<vec4<f32>, 4>) -> vec4<f32> {
+    solid_color: vec4<f32>, colors: array<vec4<f32>, 2>) -> vec4<f32> {
     var background_color = vec4<f32>(0.0);
 
     switch (background.tag) {

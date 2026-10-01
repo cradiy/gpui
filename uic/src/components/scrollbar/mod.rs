@@ -438,11 +438,11 @@ impl Element for ScrollbarInteraction {
         let geometry = geometry_for(&source, orientation, bounds, min_thumb);
         let show_thumb = geometry.is_some() && (!self.auto_hide || hovered || dragging);
         let thumb_background = if dragging {
-            self.appearance.dragging_thumb
+            self.appearance.dragging_thumb.clone()
         } else if hovered {
-            self.appearance.hover_thumb
+            self.appearance.hover_thumb.clone()
         } else {
-            self.appearance.thumb
+            self.appearance.thumb.clone()
         };
         let thumb_radius = self.appearance.thumb_radius;
 

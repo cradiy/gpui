@@ -361,7 +361,7 @@ impl Render for PaintingViewer {
                                     window.paint_quad(quad(
                                         *bounds,
                                         px(0.),
-                                        *color,
+                                        color.clone(),
                                         px(0.),
                                         gpui::transparent_black(),
                                         Default::default(),

@@ -108,6 +108,7 @@ fn shared_paths_preserve_curves_gradients_opacity_and_clipping() -> anyhow::Resu
             90.,
             [
                 linear_color_stop(rgb(0xff0000), 0.),
+                linear_color_stop(rgb(0xff0000), 0.),
                 linear_color_stop(rgb(0x0000ff), 1.),
             ],
         )

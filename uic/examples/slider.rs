@@ -51,7 +51,7 @@ impl Render for RangeControlsExample {
                 linear_color_stop(rgb(0xf472b6), 1.0),
             ],
         );
-        let progress_appearance = ProgressAppearance::default().fill(accent);
+        let progress_appearance = ProgressAppearance::default().fill(accent.clone());
         let volume_slider = SliderAppearance::default().h(px(4.)).rounded_full();
         let custom_slider = SliderAppearance::default()
             .active_track(accent)
@@ -104,14 +104,14 @@ impl Render for RangeControlsExample {
                                 Progress::new("download-progress", 0.58)
                                     .label("Download progress")
                                     .secondary_value(0.78)
-                                    .appearance(progress_appearance)
+                                    .appearance(progress_appearance.clone())
                                     .h(px(10.))
                                     .bg(rgba(0xffffff12)),
                             )
                             .child(
                                 Progress::indeterminate("loading-progress")
                                     .label("Background task")
-                                    .appearance(progress_appearance)
+                                    .appearance(progress_appearance.clone())
                                     .h(px(5.))
                                     .bg(rgba(0xffffff12)),
                             ),

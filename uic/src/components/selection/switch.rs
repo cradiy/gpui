@@ -106,7 +106,7 @@ impl RenderOnce for Switch {
             self.checked,
             self.animation_duration,
             self.appearance.on_track,
-            self.appearance.off_track,
+            self.appearance.off_track.clone(),
             self.appearance.hover_on_track,
             self.appearance.hover_off_track,
             self.appearance.thumb_size,
@@ -294,28 +294,33 @@ fn switch_track(
         .absolute()
         .inset_0()
         .rounded_full()
-        .bg(off_background)
-        .when(!disabled, move |layer| {
+        .bg(off_background.clone())
+        .when(!disabled, |layer| {
+            let hover_off_background = hover_off_background.clone();
             layer.group_hover(group_name, move |style| {
                 style
-                    .bg(hover_off_background)
+                    .bg(hover_off_background.clone())
                     // This transparent border is a paint-time hover marker. The layer has no
                     // border width, so it does not alter the switch's geometry or appearance.
                     .border_color(transparent_black())
             })
         });
     let paint_progress = move |layer: gpui::Div, progress: f32| {
+        let on_background = on_background.clone();
+        let off_background = off_background.clone();
+        let hover_on_background = hover_on_background.clone();
+        let hover_off_background = hover_off_background.clone();
         layer.on_paint_before_children(move |bounds, style, window, _| {
             let hovered = style.border_color.is_some();
             let on_background = if hovered {
-                hover_on_background
+                hover_on_background.clone()
             } else {
-                on_background
+                on_background.clone()
             };
             let off_background = if hovered {
-                hover_off_background
+                hover_off_background.clone()
             } else {
-                off_background
+                off_background.clone()
             };
             let radius = bounds.size.height / 2.;
             let inset = ((bounds.size.height - thumb_size) / 2.).max(Pixels::ZERO);
@@ -383,7 +388,7 @@ fn switch_motion(
                     .w(thumb_size + stretch)
                     .h(thumb_size)
                     .rounded_full()
-                    .bg(thumb)
+                    .bg(thumb.clone())
                     .shadow_sm(),
             )
             .child(

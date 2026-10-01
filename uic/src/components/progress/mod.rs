@@ -9,7 +9,7 @@ use gpui::{
 use super::range::NumericRange;
 
 /// Semantic colors for the internal progress layers.
-#[derive(Clone, Copy, Debug, uic_macros::Chainable)]
+#[derive(Clone, Debug, uic_macros::Chainable)]
 pub struct ProgressAppearance {
     pub fill: Background,
     pub secondary_fill: Background,

@@ -182,7 +182,7 @@ fn check_bloom_spread_and_highlight_contrast(
     let render_scene = |content: &[Quad], options: gpui_effects::BloomOptions| {
         let mut source = Scene::default();
         for quad in content {
-            source.insert_primitive(*quad);
+            source.insert_primitive(quad.clone());
         }
         let Primitive::SubtreeLayer(mut captured) = layer(source, region, 1.) else {
             unreachable!()
@@ -451,8 +451,8 @@ fn check_builtin_neutral_states(renderer: &mut WgpuOffscreenRenderer) -> anyhow:
     let content = quad(bounds(12., 10., 24., 22.), 0xe84060a0);
     let background = quad(bounds(0., 0., 64., 48.), 0x203050ff);
     let mut direct = Scene::default();
-    direct.insert_primitive(background);
-    direct.insert_primitive(content);
+    direct.insert_primitive(background.clone());
+    direct.insert_primitive(content.clone());
     direct.finish();
     let visible = renderer.render_rgba(&direct)?;
 
@@ -462,7 +462,7 @@ fn check_builtin_neutral_states(renderer: &mut WgpuOffscreenRenderer) -> anyhow:
         (subtree_color_adjust_shader(), [1.; 4], [0.; 4]),
     ] {
         let mut child = Scene::default();
-        child.insert_primitive(content);
+        child.insert_primitive(content.clone());
         let Primitive::SubtreeLayer(mut captured) = layer(child, region, 1.) else {
             unreachable!()
         };
@@ -472,7 +472,7 @@ fn check_builtin_neutral_states(renderer: &mut WgpuOffscreenRenderer) -> anyhow:
             .with_slot(1, slot1);
         captured.composite.time = 2.5;
         let mut scene = Scene::default();
-        scene.insert_primitive(background);
+        scene.insert_primitive(background.clone());
         scene.insert_primitive(Primitive::SubtreeLayer(captured));
         scene.finish();
         let actual = renderer.render_rgba(&scene)?;

@@ -21,8 +21,6 @@ struct MonoSpriteVarying {
     @location(4) @interpolate(flat) background_solid: vec4<f32>,
     @location(5) @interpolate(flat) background_color0: vec4<f32>,
     @location(6) @interpolate(flat) background_color1: vec4<f32>,
-    @location(7) @interpolate(flat) background_color2: vec4<f32>,
-    @location(8) @interpolate(flat) background_color3: vec4<f32>,
 }
 
 @vertex
@@ -37,17 +35,10 @@ fn vs_mono_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     out.sprite_id = instance_id;
     out.local_position = unit_vertex * sprite.bounds.size + sprite.bounds.origin;
     out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
-    let gradient = prepare_gradient_color(
-        sprite.background.tag,
-        sprite.background.color_space,
-        sprite.background.solid,
-        sprite.background.colors,
-    );
+    let gradient = prepare_gradient_color(sprite.background);
     out.background_solid = gradient.solid;
     out.background_color0 = gradient.colors[0];
     out.background_color1 = gradient.colors[1];
-    out.background_color2 = gradient.colors[2];
-    out.background_color3 = gradient.colors[3];
     return out;
 }
 
@@ -59,11 +50,9 @@ fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
         input.local_position,
         sprite.background_bounds,
         input.background_solid,
-        array<vec4<f32>, 4>(
+        array<vec4<f32>, 2>(
             input.background_color0,
             input.background_color1,
-            input.background_color2,
-            input.background_color3,
         ),
     );
     let sample = textureSample(t_sprite, s_sprite, input.tile_position).r;

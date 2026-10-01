@@ -154,7 +154,7 @@ impl<E: Element> Element for MaskedFill<E> {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let background = self.background;
+        let background = self.background.clone();
         window.with_masked_fill(bounds, background, |window| {
             self.element.paint(
                 id,

@@ -9,12 +9,13 @@ use cocoa::{
 };
 use gpui::{
     AtlasTextureId, BackdropBlur, BackdropShader, Bounds, ColorRange, DevicePixels, EffectQuad,
-    EffectShader, MonochromeSprite, PaintSurface, Path, PathSprite, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, SurfaceColorInfo, SurfaceFormat,
-    SurfaceFrame, SurfaceFrameBacking, SurfaceId, Underline, WeakSurfaceHandle, YuvMatrix, point,
-    size,
+    EffectShader, PaintSurface, Path, PathSprite, PolychromeSprite, PrimitiveBatch, ScaledPixels,
+    Scene, Shadow, Size, SurfaceColorInfo, SurfaceFormat, SurfaceFrame, SurfaceFrameBacking,
+    SurfaceId, Underline, WeakSurfaceHandle, YuvMatrix, point, size,
 };
 use gpui::{BackdropInstance, EffectInstance};
+type Quad = gpui::Quad<gpui::GpuBackground>;
+type MonochromeSprite = gpui::MonochromeSprite<gpui::GpuBackground>;
 use gpui_render::SurfaceParams;
 use image::RgbaImage;
 
@@ -87,7 +88,7 @@ pub(crate) unsafe fn new_renderer(
 
 pub(crate) struct InstanceBufferPool {
     buffer_size: usize,
-    buffers: Vec<metal::Buffer>,
+    buffers: Vec<InstanceBuffer>,
     scene_context: Option<gpui_wgpu::WgpuContext>,
 }
 
@@ -104,6 +105,8 @@ impl Default for InstanceBufferPool {
 pub(crate) struct InstanceBuffer {
     metal_buffer: metal::Buffer,
     size: usize,
+    gradients: Option<metal::Buffer>,
+    gradient_data: Vec<gpui::GpuGradientStop>,
 }
 
 impl InstanceBufferPool {
@@ -124,7 +127,10 @@ impl InstanceBufferPool {
         device: &metal::Device,
         unified_memory: bool,
     ) -> InstanceBuffer {
-        let buffer = self.buffers.pop().unwrap_or_else(|| {
+        if let Some(buffer) = self.buffers.pop() {
+            return buffer;
+        }
+        let buffer = {
             let options = if unified_memory {
                 MTLResourceOptions::StorageModeShared
                     // Buffers are write only which can benefit from the combined cache
@@ -135,16 +141,18 @@ impl InstanceBufferPool {
             };
 
             device.new_buffer(self.buffer_size as u64, options)
-        });
+        };
         InstanceBuffer {
             metal_buffer: buffer,
             size: self.buffer_size,
+            gradients: None,
+            gradient_data: Vec::new(),
         }
     }
 
     pub(crate) fn release(&mut self, buffer: InstanceBuffer) {
         if buffer.size == self.buffer_size {
-            self.buffers.push(buffer.metal_buffer)
+            self.buffers.push(buffer)
         }
     }
 }
@@ -965,6 +973,41 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
+        let data = scene.gradients.stops();
+        let bytes = std::mem::size_of_val(data).max(std::mem::size_of::<gpui::GpuGradientStop>());
+        let limit = (self.device.max_buffer_length() as usize).min(u32::MAX as usize);
+        anyhow::ensure!(
+            bytes <= limit,
+            "gradient stop buffer requires {bytes} bytes, device limit is {limit} bytes"
+        );
+        if instance_buffer
+            .gradients
+            .as_ref()
+            .is_none_or(|buffer| buffer.length() < bytes as u64)
+        {
+            let capacity = bytes
+                .checked_next_power_of_two()
+                .unwrap_or(bytes)
+                .min(limit);
+            instance_buffer.gradients = Some(
+                self.device
+                    .new_buffer(capacity as u64, MTLResourceOptions::StorageModeShared),
+            );
+            instance_buffer.gradient_data.clear();
+        }
+        if let Some(range) = gpui::gradient_changed_range(&instance_buffer.gradient_data, data) {
+            let target = instance_buffer.gradients.as_ref().unwrap().contents()
+                as *mut gpui::GpuGradientStop;
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    data.as_ptr().add(range.start),
+                    target.add(range.start),
+                    range.len(),
+                );
+            }
+        }
+        instance_buffer.gradient_data.clear();
+        instance_buffer.gradient_data.extend_from_slice(data);
         if scene.paths.is_empty() {
             self.unused_path_frames = self.unused_path_frames.saturating_add(1);
             if self.unused_path_frames >= 120 {
@@ -1171,7 +1214,7 @@ impl MetalRenderer {
 
     fn draw_paths_to_intermediate(
         &self,
-        paths: &[Path<ScaledPixels>],
+        paths: &[Path<ScaledPixels, gpui::GpuBackground>],
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         viewport_size: Size<DevicePixels>,
@@ -1217,6 +1260,7 @@ impl MetalRenderer {
         }
         Self::bind_shared_primitives(
             instance_buffer,
+            true,
             *instance_offset,
             vertices_bytes_len,
             viewport_size,
@@ -1253,6 +1297,7 @@ impl MetalRenderer {
         self.draw_shared_primitives(
             primitives,
             &self.shadows_pipeline_state,
+            false,
             instance_buffer,
             instance_offset,
             viewport_size,
@@ -1271,6 +1316,7 @@ impl MetalRenderer {
         self.draw_shared_primitives(
             primitives,
             &self.quads_pipeline_state,
+            true,
             instance_buffer,
             instance_offset,
             viewport_size,
@@ -1280,11 +1326,17 @@ impl MetalRenderer {
 
     fn bind_shared_primitives(
         instance_buffer: &InstanceBuffer,
+        uses_gradients: bool,
         instance_offset: usize,
         bytes_len: usize,
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) {
+        command_encoder.set_fragment_buffer(
+            gpui_render::METAL_GRADIENTS_SLOT,
+            instance_buffer.gradients.as_deref(),
+            0,
+        );
         command_encoder.set_vertex_buffer(
             gpui_render::METAL_INSTANCES_SLOT,
             Some(&instance_buffer.metal_buffer),
@@ -1303,8 +1355,17 @@ impl MetalRenderer {
             ],
             ..Default::default()
         };
-        let sizes =
-            [u32::try_from(bytes_len).expect("primitive buffer exceeds Metal address space")];
+        let primitive_size =
+            u32::try_from(bytes_len).expect("primitive buffer exceeds Metal address space");
+        let gradient_size = instance_buffer
+            .gradients
+            .as_ref()
+            .map_or(0, |buffer| buffer.length() as u32);
+        let sizes = if uses_gradients {
+            [gradient_size, primitive_size]
+        } else {
+            [primitive_size, 0]
+        };
         command_encoder.set_vertex_bytes(
             gpui_render::METAL_GLOBALS_SLOT,
             mem::size_of_val(&globals) as u64,
@@ -1331,6 +1392,7 @@ impl MetalRenderer {
         &self,
         primitives: &[T],
         pipeline: &metal::RenderPipelineStateRef,
+        uses_gradients: bool,
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         viewport_size: Size<DevicePixels>,
@@ -1350,6 +1412,7 @@ impl MetalRenderer {
         command_encoder.set_render_pipeline_state(pipeline);
         Self::bind_shared_primitives(
             instance_buffer,
+            uses_gradients,
             *instance_offset,
             bytes_len,
             viewport_size,
@@ -1744,7 +1807,7 @@ impl MetalRenderer {
 
     fn draw_paths_from_intermediate(
         &self,
-        paths: &[Path<ScaledPixels>],
+        paths: &[Path<ScaledPixels, gpui::GpuBackground>],
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         viewport_size: Size<DevicePixels>,
@@ -1787,6 +1850,7 @@ impl MetalRenderer {
         self.draw_shared_primitives(
             &sprites,
             &self.path_sprites_pipeline_state,
+            false,
             instance_buffer,
             instance_offset,
             viewport_size,
@@ -1805,6 +1869,7 @@ impl MetalRenderer {
         self.draw_shared_primitives(
             primitives,
             &self.underlines_pipeline_state,
+            false,
             instance_buffer,
             instance_offset,
             viewport_size,
@@ -1837,6 +1902,7 @@ impl MetalRenderer {
         self.draw_shared_primitives(
             sprites,
             &self.monochrome_sprites_pipeline_state,
+            true,
             instance_buffer,
             instance_offset,
             viewport_size,
@@ -1863,6 +1929,7 @@ impl MetalRenderer {
         self.draw_shared_primitives(
             sprites,
             &self.polychrome_sprites_pipeline_state,
+            false,
             instance_buffer,
             instance_offset,
             viewport_size,

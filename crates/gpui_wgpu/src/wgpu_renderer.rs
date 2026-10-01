@@ -1,8 +1,8 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
-    AtlasTextureId, BackdropBlur, BackdropShader, Background, Bounds, DevicePixels, EffectQuad,
-    EffectShader, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    AtlasTextureId, BackdropBlur, BackdropShader, Bounds, DevicePixels, EffectQuad, EffectShader,
+    GpuSpecs, MonochromeSprite, Path, PathSprite, PolychromeSprite, PrimitiveBatch, Quad,
     ScaledPixels, Scene, Shadow, Size, SubpixelSprite, SurfaceFormat, SurfaceFrame, SurfaceId,
     Underline, WeakSurfaceHandle, get_gamma_correction_ratios,
 };
@@ -283,21 +283,6 @@ impl From<&BackdropBlur> for BackdropInstance {
             uniforms: *backdrop.uniforms.slots(),
         }
     }
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-struct PathSprite {
-    bounds: Bounds<ScaledPixels>,
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-pub(super) struct PathRasterizationVertex {
-    pub(super) xy_position: Point<ScaledPixels>,
-    pub(super) st_position: Point<f32>,
-    pub(super) color: Background,
-    pub(super) bounds: Bounds<ScaledPixels>,
 }
 
 pub struct WgpuSurfaceConfig {
@@ -5385,13 +5370,7 @@ impl WgpuRenderer {
     ) -> bool {
         let mut vertices = Vec::new();
         for path in paths {
-            let bounds = path.clipped_bounds();
-            vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
-                xy_position: v.xy_position,
-                st_position: v.st_position,
-                color: path.color,
-                bounds,
-            }));
+            vertices.extend(path.rasterization_vertices());
         }
 
         if vertices.is_empty() {

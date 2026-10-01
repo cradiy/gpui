@@ -130,7 +130,7 @@ struct DirectXResources {
 struct DirectXRenderPipelines {
     shadow_pipeline: PipelineState<Shadow>,
     quad_pipeline: PipelineState<Quad>,
-    path_rasterization_pipeline: PipelineState<PathRasterizationSprite>,
+    path_rasterization_pipeline: PipelineState<PathRasterizationVertex>,
     path_sprite_pipeline: PipelineState<PathSprite>,
     underline_pipeline: PipelineState<Underline>,
     mono_sprites: PipelineState<MonochromeSprite>,
@@ -981,12 +981,7 @@ impl DirectXRenderer {
         let mut vertices = Vec::new();
 
         for path in paths {
-            vertices.extend(path.vertices.iter().map(|v| PathRasterizationSprite {
-                xy_position: v.xy_position,
-                st_position: v.st_position,
-                color: path.color,
-                bounds: path.clipped_bounds(),
-            }));
+            vertices.extend(path.rasterization_vertices());
         }
 
         self.pipelines.path_rasterization_pipeline.update_buffer(
@@ -2526,21 +2521,6 @@ fn create_raw_buffer<T>(
     Ok((buffer, view))
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct PathRasterizationSprite {
-    xy_position: Point<ScaledPixels>,
-    st_position: Point<f32>,
-    color: Background,
-    bounds: Bounds<ScaledPixels>,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct PathSprite {
-    bounds: Bounds<ScaledPixels>,
-}
-
 impl Drop for DirectXRenderer {
     fn drop(&mut self) {
         #[cfg(debug_assertions)]
@@ -3055,33 +3035,6 @@ unsafe fn unbind_backdrop_shader_resources(device_context: &ID3D11DeviceContext)
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[::core::prelude::v1::test]
-    fn shared_path_shader_matches_host_layout() {
-        use std::mem::{offset_of, size_of};
-        let module = naga::front::wgsl::parse_str(gpui_render::PATH_RASTERIZATION_WGSL).unwrap();
-        let (_, ty) = module
-            .types
-            .iter()
-            .find(|(_, ty)| ty.name.as_deref() == Some("PathRasterizationVertex"))
-            .unwrap();
-        let naga::TypeInner::Struct { members, span } = &ty.inner else {
-            panic!("expected path vertex struct")
-        };
-        assert_eq!(*span as usize, size_of::<PathRasterizationSprite>());
-        assert_eq!(
-            members
-                .iter()
-                .map(|member| member.offset as usize)
-                .collect::<Vec<_>>(),
-            vec![
-                offset_of!(PathRasterizationSprite, xy_position),
-                offset_of!(PathRasterizationSprite, st_position),
-                offset_of!(PathRasterizationSprite, color),
-                offset_of!(PathRasterizationSprite, bounds),
-            ]
-        );
-    }
 
     #[::core::prelude::v1::test]
     fn shared_primitives_compile_for_shader_model_4_1() {

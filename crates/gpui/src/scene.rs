@@ -1487,6 +1487,45 @@ where
     }
 }
 
+/// A vertex with the paint and clipping data consumed by path rasterization shaders.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct PathRasterizationVertex {
+    /// Position in physical window pixels.
+    pub xy_position: Point<ScaledPixels>,
+    /// Curve coordinates used to compute analytic coverage.
+    pub st_position: Point<f32>,
+    /// The path's fill.
+    pub color: Background,
+    /// Intersection of the path bounds and content mask.
+    pub bounds: Bounds<ScaledPixels>,
+}
+
+/// A rectangle copied from the resolved path texture during composition.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct PathSprite {
+    /// Destination rectangle in physical window pixels.
+    pub bounds: Bounds<ScaledPixels>,
+}
+
+impl Path<ScaledPixels> {
+    /// Produces shader vertices with a shared fill and clipping rectangle, without allocation.
+    pub fn rasterization_vertices(
+        &self,
+    ) -> impl ExactSizeIterator<Item = PathRasterizationVertex> + '_ {
+        let bounds = self.clipped_bounds();
+        self.vertices
+            .iter()
+            .map(move |vertex| PathRasterizationVertex {
+                xy_position: vertex.xy_position,
+                st_position: vertex.st_position,
+                color: self.color,
+                bounds,
+            })
+    }
+}
+
 impl From<Path<ScaledPixels>> for Primitive {
     fn from(path: Path<ScaledPixels>) -> Self {
         Primitive::Path(path)

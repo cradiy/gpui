@@ -7,8 +7,8 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use gpui::{
-    AtlasTextureId, BackdropBlur, BackdropShader, Background, Bounds, ColorRange, DevicePixels,
-    EffectQuad, EffectShader, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
+    AtlasTextureId, BackdropBlur, BackdropShader, Bounds, ColorRange, DevicePixels, EffectQuad,
+    EffectShader, MonochromeSprite, PaintSurface, Path, PathSprite, PolychromeSprite,
     PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, SurfaceColorInfo, SurfaceFormat,
     SurfaceFrame, SurfaceFrameBacking, SurfaceId, TransformationMatrix, Underline,
     WeakSurfaceHandle, YuvMatrix, point, size,
@@ -189,14 +189,6 @@ pub(crate) struct MetalRenderer {
     /// rendering headlessly without reading pixels back.
     #[cfg(any(test, feature = "test-support"))]
     headless_render_target: Option<metal::Texture>,
-}
-
-#[repr(C)]
-pub struct PathRasterizationVertex {
-    pub xy_position: Point<ScaledPixels>,
-    pub st_position: Point<f32>,
-    pub color: Background,
-    pub bounds: Bounds<ScaledPixels>,
 }
 
 #[derive(Clone, Copy)]
@@ -1365,12 +1357,7 @@ impl MetalRenderer {
         align_offset(instance_offset);
         let mut vertices = Vec::new();
         for path in paths {
-            vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
-                xy_position: v.xy_position,
-                st_position: v.st_position,
-                color: path.color,
-                bounds: path.bounds.intersect(&path.content_mask.bounds),
-            }));
+            vertices.extend(path.rasterization_vertices());
         }
         let vertices_bytes_len = mem::size_of_val(vertices.as_slice());
         let next_offset = *instance_offset + vertices_bytes_len;
@@ -2817,12 +2804,6 @@ fn align_offset(offset: &mut usize) {
     *offset = (*offset).div_ceil(256) * 256;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[repr(C)]
-pub struct PathSprite {
-    pub bounds: Bounds<ScaledPixels>,
-}
-
 #[cfg(any(test, feature = "test-support"))]
 pub struct MetalHeadlessRenderer {
     renderer: MetalRenderer,
@@ -2856,38 +2837,10 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "runtime_shaders"))]
 mod tests {
     use super::*;
 
-    #[test]
-    fn shared_path_shader_matches_host_layout() {
-        use std::mem::{offset_of, size_of};
-        let module = naga::front::wgsl::parse_str(gpui_render::PATH_RASTERIZATION_WGSL).unwrap();
-        let (_, ty) = module
-            .types
-            .iter()
-            .find(|(_, ty)| ty.name.as_deref() == Some("PathRasterizationVertex"))
-            .unwrap();
-        let naga::TypeInner::Struct { members, span } = &ty.inner else {
-            panic!("expected path vertex struct")
-        };
-        assert_eq!(*span as usize, size_of::<PathRasterizationVertex>());
-        assert_eq!(
-            members
-                .iter()
-                .map(|member| member.offset as usize)
-                .collect::<Vec<_>>(),
-            vec![
-                offset_of!(PathRasterizationVertex, xy_position),
-                offset_of!(PathRasterizationVertex, st_position),
-                offset_of!(PathRasterizationVertex, color),
-                offset_of!(PathRasterizationVertex, bounds),
-            ]
-        );
-    }
-
-    #[cfg(feature = "runtime_shaders")]
     #[test]
     fn surface_shaders_compile_at_runtime() {
         let _renderer = MetalHeadlessRenderer::new();

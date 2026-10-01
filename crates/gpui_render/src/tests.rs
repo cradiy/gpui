@@ -16,6 +16,21 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
     .unwrap();
     for (name, size, offsets) in [
         (
+            "PathRasterizationVertex",
+            size_of::<gpui::PathRasterizationVertex>(),
+            vec![
+                offset_of!(gpui::PathRasterizationVertex, xy_position),
+                offset_of!(gpui::PathRasterizationVertex, st_position),
+                offset_of!(gpui::PathRasterizationVertex, color),
+                offset_of!(gpui::PathRasterizationVertex, bounds),
+            ],
+        ),
+        (
+            "PathSprite",
+            size_of::<gpui::PathSprite>(),
+            vec![offset_of!(gpui::PathSprite, bounds)],
+        ),
+        (
             "SurfaceParams",
             size_of::<SurfaceParams>(),
             vec![

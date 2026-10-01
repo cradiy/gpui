@@ -294,7 +294,7 @@ impl RenderOnce for Popover {
 
                     let outside_state = self.state.clone();
                     let overlay = resolve_overlay(move |window, _| {
-                        let bounds = trigger_bounds.bounds()?;
+                        let bounds = trigger_bounds.bounds(window)?;
                         let (position, anchor) = placement(bounds, self.placement, self.gap);
                         let positioned =
                             anchored().position(position).anchor(anchor).child(surface);

@@ -89,7 +89,7 @@ impl RenderOnce for Dropdown {
                 .overflow_y_scroll()
                 .occlude()
                 .on_mouse_down_out(move |event, window, cx| {
-                    if !outside_trigger.contains(event.position) {
+                    if !outside_trigger.contains(event.position, window) {
                         outside_state.update(cx, |state, cx| state.close(window, cx));
                     }
                 })
@@ -97,8 +97,8 @@ impl RenderOnce for Dropdown {
                 .children(self.menu);
             positioned.style().refine(&menu_style);
             let trigger = trigger_bounds.clone();
-            deferred(resolve_overlay(move |_, _| {
-                let bounds = trigger.bounds()?;
+            deferred(resolve_overlay(move |window, _| {
+                let bounds = trigger.bounds(window)?;
                 let (position, anchor) = match self.placement {
                     DropdownPlacement::BottomStart => (
                         point(bounds.left(), bounds.bottom() + menu_gap),

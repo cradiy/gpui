@@ -1,37 +1,24 @@
-use std::{cell::RefCell, rc::Rc};
-
 use gpui::{
-    AnyElement, App, Bounds, IntoElement, Pixels, Point, PointerMapping, Window, canvas, prelude::*,
+    AnyElement, App, Bounds, ElementBounds, IntoElement, Pixels, Point, Window, canvas, prelude::*,
 };
 
 #[derive(Clone, Default)]
-pub(super) struct TriggerAnchor(Rc<RefCell<Option<(Bounds<Pixels>, PointerMapping)>>>);
+pub(super) struct TriggerAnchor(ElementBounds);
 
 impl TriggerAnchor {
-    pub fn bounds(&self) -> Option<Bounds<Pixels>> {
-        self.0
-            .borrow()
-            .as_ref()
-            .map(|(bounds, mapping)| mapping.bounds_to_display(*bounds).unwrap_or(*bounds))
+    pub fn bounds(&self, window: &Window) -> Option<Bounds<Pixels>> {
+        self.0.bounds(window)
     }
 
-    pub fn contains(&self, position: Point<Pixels>) -> bool {
-        self.0.borrow().as_ref().is_some_and(|(bounds, mapping)| {
-            mapping
-                .hit_position(position)
-                .is_some_and(|point| bounds.contains(&point))
-        })
-    }
-
-    pub fn same_trigger(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+    pub fn contains(&self, position: Point<Pixels>, window: &Window) -> bool {
+        self.0.contains(position, window)
     }
 
     pub fn tracker(&self) -> impl IntoElement + use<> {
         let tracker = self.clone();
         canvas(
             move |bounds, window, _| {
-                *tracker.0.borrow_mut() = Some((bounds, window.pointer_mapping().clone()));
+                window.track_element_bounds(&tracker.0, bounds);
             },
             |_, _, _, _| {},
         )

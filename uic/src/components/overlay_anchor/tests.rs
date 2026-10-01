@@ -22,6 +22,7 @@ enum Kind {
 
 #[derive(Clone, Default)]
 struct Geometry {
+    renders: Rc<Cell<usize>>,
     popup: Rc<Cell<Option<Bounds<Pixels>>>>,
     submenu: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -42,6 +43,7 @@ struct Controls {
 
 impl Render for Controls {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.geometry.renders.set(self.geometry.renders.get() + 1);
         let clicks = self.clicks.clone();
         let popover_clicks = self.clicks.clone();
         let geometry = self.geometry.clone();
@@ -101,6 +103,56 @@ impl Render for Controls {
                 .child(trigger),
         )
     }
+}
+
+#[gpui::test]
+fn tracked_menu_zoom_reuses_trigger_content(cx: &mut TestAppContext) {
+    let (handle, mut visual, _, geometry) = open(cx, Kind::Menu);
+    click(&mut visual, point(px(180.), px(140.)));
+    visual.simulate_mouse_move(point(px(740.), px(550.)), None, Modifiers::default());
+    draw(&mut visual);
+    let initial_renders = geometry.renders.get();
+    let initial_size = geometry.popup.get().unwrap().size;
+    for step in 0..60 {
+        let scale = 1.2 + step as f32 * 0.01;
+        handle
+            .update(&mut visual.cx, |view, _, cx| {
+                view.matrix = matrix(scale, 20., 30.);
+                cx.notify();
+            })
+            .unwrap();
+        draw(&mut visual);
+        let bounds = geometry.popup.get().unwrap();
+        assert!(
+            (bounds.left() - px(30. * scale + 20.)).abs() <= px(1.),
+            "step {step}: {bounds:?}"
+        );
+        assert!(
+            (bounds.top() - px(70. * scale + 36.)).abs() <= px(1.),
+            "step {step}: {bounds:?}"
+        );
+        assert_eq!(bounds.size, initial_size);
+    }
+    assert_eq!(
+        geometry.renders.get() - initial_renders,
+        0,
+        "zoom should reuse trigger content while repositioning the menu"
+    );
+    click(&mut visual, point(px(740.), px(550.)));
+    assert!(!is_open(handle, &mut visual));
+    handle
+        .update(&mut visual.cx, |view, _, cx| {
+            view.matrix = matrix(1.5, 70., 50.);
+            cx.notify();
+        })
+        .unwrap();
+    draw(&mut visual);
+    click(&mut visual, point(px(190.), px(132.5)));
+    assert!(is_open(handle, &mut visual));
+    assert_eq!(
+        geometry.popup.get().unwrap().origin,
+        point(px(115.), px(161.))
+    );
 }
 
 fn menu(geometry: Geometry) -> ContextMenu {
@@ -313,7 +365,7 @@ fn rotated_triggers_anchor_to_displayed_edges_with_unscaled_gap(cx: &mut TestApp
 
 #[gpui::test]
 fn overlay_collision_fits_after_mapping_to_window(cx: &mut TestAppContext) {
-    for kind in [Kind::Dropdown, Kind::Popover] {
+    for kind in [Kind::Dropdown, Kind::Popover, Kind::Menu] {
         let (handle, mut visual, clicks, geometry) = open(cx, kind);
         visual.simulate_resize(size(px(400.), px(300.)));
         draw(&mut visual);
@@ -328,8 +380,10 @@ fn overlay_collision_fits_after_mapping_to_window(cx: &mut TestAppContext) {
         let popup = geometry.popup.get().unwrap();
         assert!(popup.left() >= px(0.) && popup.right() <= px(400.));
         assert!(popup.top() >= px(0.) && popup.bottom() <= px(300.));
-        click(&mut visual, popup.center());
-        assert_eq!(clicks.get(), 1);
-        assert!(is_open(handle, &mut visual));
+        if !matches!(kind, Kind::Menu) {
+            click(&mut visual, popup.center());
+            assert_eq!(clicks.get(), 1);
+            assert!(is_open(handle, &mut visual));
+        }
     }
 }

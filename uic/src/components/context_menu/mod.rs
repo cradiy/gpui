@@ -85,18 +85,12 @@ impl ContextMenuTrigger {
 }
 
 impl RenderOnce for ContextMenuTrigger {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let trigger_bounds = window.with_global_id(self.id.clone(), |id, window| {
             window.with_element_state(id, |state: Option<TriggerAnchor>, _| {
                 let state = state.unwrap_or_default();
                 (state.clone(), state)
             })
-        });
-        let tracking = layer(cx).read(cx).active.as_ref().is_some_and(|active| {
-            active
-                .trigger
-                .as_ref()
-                .is_some_and(|(trigger, _, _)| trigger.same_trigger(&trigger_bounds))
         });
         let bounds_for_click = trigger_bounds.clone();
         let build = self.build;
@@ -107,7 +101,7 @@ impl RenderOnce for ContextMenuTrigger {
             .id(self.id)
             .relative()
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                let Some(bounds) = bounds_for_click.bounds() else {
+                let Some(bounds) = bounds_for_click.bounds(window) else {
                     return;
                 };
                 let menu = (build)(window, cx);
@@ -127,9 +121,6 @@ impl RenderOnce for ContextMenuTrigger {
             })
             .child(self.trigger)
             .child(trigger_bounds.tracker())
-            // A tracked trigger must prepaint again when its affine scope changes,
-            // including inside views that opt into cache_across_transforms.
-            .when(tracking, |this| this.child(deferred(div().absolute())))
     }
 }
 
@@ -744,9 +735,9 @@ impl ContextMenuLayer {
         let gap = active.submenu_gap;
         let margin = active.viewport_margin;
         let fallback = (level.position, level.anchor);
-        deferred(resolve_overlay(move |_, _| {
+        deferred(resolve_overlay(move |window, _| {
             let (position, anchor) = if let Some((trigger, alignment, gap)) = trigger {
-                below_menu_anchor(trigger.bounds()?, alignment, gap)
+                below_menu_anchor(trigger.bounds(window)?, alignment, gap)
             } else if let Some(bounds) = parent_row.and_then(|row| row.get()) {
                 match placement {
                     ContextMenuPlacement::Left => {

@@ -43,6 +43,7 @@ pub(crate) struct DeferredDraw {
 }
 
 pub(crate) struct Frame {
+    pub(super) tracked_bounds: super::element_bounds::TrackedBounds,
     pub(crate) focus: Option<FocusId>,
     pub(crate) window_active: bool,
     pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
@@ -80,6 +81,7 @@ struct PrepaintReuse {
 
 #[derive(Clone, Default)]
 pub(crate) struct PrepaintStateIndex {
+    tracked_bounds_index: usize,
     pub(super) a11y_index: usize,
     pub(super) a11y_actions_index: usize,
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -109,6 +111,7 @@ pub(crate) struct PaintIndex {
 impl Frame {
     pub(crate) fn new(dispatch_tree: DispatchTree) -> Self {
         Frame {
+            tracked_bounds: Default::default(),
             focus: None,
             window_active: false,
             element_states: FxHashMap::default(),
@@ -142,6 +145,7 @@ impl Frame {
     }
 
     pub(crate) fn clear(&mut self) {
+        self.tracked_bounds.clear();
         self.element_states.clear();
         self.accessed_element_states.clear();
         self.mouse_listeners.clear();
@@ -812,6 +816,7 @@ impl Window {
 
     pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
         PrepaintStateIndex {
+            tracked_bounds_index: self.next_frame.tracked_bounds.len(),
             a11y_index: self.a11y.prepaint_index(),
             a11y_actions_index: self.a11y.paint_index(),
             #[cfg(any(feature = "inspector", debug_assertions))]
@@ -833,6 +838,10 @@ impl Window {
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+        self.next_frame.tracked_bounds.reuse(
+            &self.rendered_frame.tracked_bounds,
+            range.start.tracked_bounds_index..range.end.tracked_bounds_index,
+        );
         let dispatch_start = self.next_frame.dispatch_tree.len();
         let tooltips_start = self.next_frame.tooltip_requests.len();
         self.a11y
@@ -910,6 +919,10 @@ impl Window {
         let previous_position = mapping.hit_position(self.mouse_position);
         let next_position = self.pointer_mapping.hit_position(self.mouse_position);
         prepaint.start.deferred_draws_index == prepaint.end.deferred_draws_index
+            && self.rendered_frame.tracked_bounds.can_remap(
+                prepaint.start.tracked_bounds_index..prepaint.end.tracked_bounds_index,
+                mapping,
+            )
             && self
                 .a11y
                 .can_remap(prepaint.start.a11y_index..prepaint.end.a11y_index, mapping)
@@ -940,6 +953,10 @@ impl Window {
     }
 
     pub(crate) fn remap_reused_prepaint(&mut self, range: &Range<PrepaintStateIndex>) {
+        self.next_frame.tracked_bounds.remap(
+            range.start.tracked_bounds_index..range.end.tracked_bounds_index,
+            &self.pointer_mapping,
+        );
         self.a11y.remap_prepaint(
             range.start.a11y_index..range.end.a11y_index,
             &self.pointer_mapping,
@@ -1102,6 +1119,9 @@ impl Window {
         let result = f(self);
         self.next_frame.prepaint_transaction_depth -= 1;
         if result.is_err() {
+            self.next_frame
+                .tracked_bounds
+                .truncate(index.tracked_bounds_index);
             self.next_frame.focus = focus;
             for reused in self.next_frame.prepaint_reuses.drain(reuses_start..).rev() {
                 self.next_frame.dispatch_tree.return_reused_subtree(

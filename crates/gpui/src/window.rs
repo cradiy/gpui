@@ -53,6 +53,7 @@ pub(crate) mod a11y;
 mod color_svg;
 mod diagnostics;
 mod effects;
+mod element_bounds;
 mod element_id;
 mod focus;
 mod frame;
@@ -70,6 +71,7 @@ pub use diagnostics::{
     CacheDiagnostics, CaptureTextureDiagnostics, FrameDiagnostics, RendererDiagnostics,
     ViewCacheMisses,
 };
+pub use element_bounds::ElementBounds;
 pub use element_id::ElementId;
 pub(crate) use focus::{AnyWindowFocusListener, FocusMap, WindowFocusEvent};
 pub use focus::{

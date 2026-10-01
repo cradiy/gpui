@@ -393,10 +393,10 @@ struct PathSprite {
 #[derive(Clone, Debug)]
 #[repr(C)]
 pub(super) struct PathRasterizationVertex {
-    xy_position: Point<ScaledPixels>,
-    st_position: Point<f32>,
-    color: Background,
-    bounds: Bounds<ScaledPixels>,
+    pub(super) xy_position: Point<ScaledPixels>,
+    pub(super) st_position: Point<f32>,
+    pub(super) color: Background,
+    pub(super) bounds: Bounds<ScaledPixels>,
 }
 
 pub struct WgpuSurfaceConfig {

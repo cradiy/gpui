@@ -21,12 +21,25 @@ pub const UNDERLINE_MSL: &str = include_str!(concat!(env!("OUT_DIR"), "/underlin
 /// Native underline shader for Direct3D 11.
 pub const UNDERLINE_HLSL: &str = include_str!(concat!(env!("OUT_DIR"), "/underlines.hlsl"));
 
+/// Common definitions and path rasterization entry points in WGSL.
+pub const PATH_RASTERIZATION_WGSL: &str = concat!(
+    include_str!("common.wgsl"),
+    include_str!("path_rasterization.wgsl")
+);
+/// Native path rasterization shader for Metal.
+pub const PATH_RASTERIZATION_MSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/path_rasterization.metal"));
+/// Native path rasterization shader for Direct3D 11.
+pub const PATH_RASTERIZATION_HLSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/path_rasterization.hlsl"));
+
 /// Appends additional WGSL primitives to the shared definitions.
 pub fn compose_shader(primitives: &str) -> String {
     format!(
-        "{QUAD_WGSL}\n{}\n{}\n{primitives}",
+        "{QUAD_WGSL}\n{}\n{}\n{}\n{primitives}",
         include_str!("shadows.wgsl"),
-        include_str!("underlines.wgsl")
+        include_str!("underlines.wgsl"),
+        include_str!("path_rasterization.wgsl")
     )
 }
 

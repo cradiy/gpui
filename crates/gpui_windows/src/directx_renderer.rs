@@ -1011,7 +1011,7 @@ impl DirectXRenderer {
         self.pipelines.path_rasterization_pipeline.draw(
             &devices.device_context,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             vertices.len() as u32,
             1,
@@ -1907,7 +1907,10 @@ impl<T> PipelineState<T> {
         };
         let raw_instances = matches!(
             shader_module,
-            ShaderModule::Quad | ShaderModule::Shadow | ShaderModule::Underline
+            ShaderModule::Quad
+                | ShaderModule::Shadow
+                | ShaderModule::Underline
+                | ShaderModule::PathRasterization
         );
         let buffer = if raw_instances {
             create_raw_buffer(device, std::mem::size_of::<T>() * buffer_size)?
@@ -3115,11 +3118,39 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
+    fn shared_path_shader_matches_host_layout() {
+        use std::mem::{offset_of, size_of};
+        let module = naga::front::wgsl::parse_str(gpui_render::PATH_RASTERIZATION_WGSL).unwrap();
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some("PathRasterizationVertex"))
+            .unwrap();
+        let naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("expected path vertex struct")
+        };
+        assert_eq!(*span as usize, size_of::<PathRasterizationSprite>());
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member.offset as usize)
+                .collect::<Vec<_>>(),
+            vec![
+                offset_of!(PathRasterizationSprite, xy_position),
+                offset_of!(PathRasterizationSprite, st_position),
+                offset_of!(PathRasterizationSprite, color),
+                offset_of!(PathRasterizationSprite, bounds),
+            ]
+        );
+    }
+
+    #[::core::prelude::v1::test]
     fn shared_primitives_compile_for_shader_model_4_1() {
         for (source, name) in [
             (gpui_render::QUAD_HLSL, "quad"),
             (gpui_render::SHADOW_HLSL, "shadow"),
             (gpui_render::UNDERLINE_HLSL, "underline"),
+            (gpui_render::PATH_RASTERIZATION_HLSL, "path_rasterization"),
         ] {
             compile_hlsl(source, &format!("vs_{name}"), "vs_4_1")
                 .unwrap_or_else(|error| panic!("{name} vertex shader: {error}"));
@@ -3314,6 +3345,11 @@ pub(crate) mod shader_resources {
             ShaderModule::Underline => {
                 Some((gpui_render::UNDERLINE_HLSL, "vs_underline", "fs_underline"))
             }
+            ShaderModule::PathRasterization => Some((
+                gpui_render::PATH_RASTERIZATION_HLSL,
+                "vs_path_rasterization",
+                "fs_path_rasterization",
+            )),
             _ => None,
         };
         if let Some((source, vertex, fragment)) = shared_shader {

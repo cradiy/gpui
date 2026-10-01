@@ -482,6 +482,24 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
             shader_struct_span(&module, "PathRasterizationVertex") as usize,
             std::mem::size_of::<super::wgpu_renderer::PathRasterizationVertex>()
         );
+        {
+            use super::wgpu_renderer::PathRasterizationVertex as Vertex;
+            assert_eq!(
+                shader_struct_offsets(&module, "PathRasterizationVertex"),
+                vec![
+                    (
+                        "xy_position".into(),
+                        std::mem::offset_of!(Vertex, xy_position) as u32
+                    ),
+                    (
+                        "st_position".into(),
+                        std::mem::offset_of!(Vertex, st_position) as u32
+                    ),
+                    ("color".into(), std::mem::offset_of!(Vertex, color) as u32),
+                    ("bounds".into(), std::mem::offset_of!(Vertex, bounds) as u32),
+                ]
+            );
+        }
         assert_eq!(
             shader_struct_span(&module, "SurfaceParams") as usize,
             std::mem::size_of::<super::wgpu_renderer::SurfaceParams>()

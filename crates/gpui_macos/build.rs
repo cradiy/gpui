@@ -49,7 +49,6 @@ mod macos_build {
             "ContentMask".into(),
             "Uniforms".into(),
             "AtlasTile".into(),
-            "PathRasterizationInputIndex".into(),
             "PathVertex_ScaledPixels".into(),
             "PathRasterizationVertex".into(),
             "Shadow".into(),
@@ -128,6 +127,7 @@ mod macos_build {
             ("quads", gpui_render::QUAD_MSL),
             ("shadows", gpui_render::SHADOW_MSL),
             ("underlines", gpui_render::UNDERLINE_MSL),
+            ("path_rasterization", gpui_render::PATH_RASTERIZATION_MSL),
         ] {
             let source = out.join(format!("{name}.metal"));
             let air = out.join(format!("{name}.air"));

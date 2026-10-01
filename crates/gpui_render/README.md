@@ -1,8 +1,9 @@
 # GPUI render contracts
 
 `gpui_render` owns the shared WGSL definitions and shaders for rectangles,
-background fills, rounded corners, borders, shadows and underlines. WGPU composes
-these definitions with its other primitive shaders. The build script generates
+background fills, rounded corners, borders, shadows, underlines and path
+rasterization. WGPU composes these definitions with its other primitive shaders.
+The build script generates
 standalone MSL and HLSL primitive shaders for the native Metal and Direct3D renderers.
 
 `PrimitiveGlobals` defines the shared uniform layout. Instances retain their

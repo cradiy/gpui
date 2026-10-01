@@ -449,15 +449,6 @@ impl MetalRenderer {
             },
         );
 
-        let paths_rasterization_pipeline_state = build_path_rasterization_pipeline_state(
-            &device,
-            &library,
-            "paths_rasterization",
-            "path_rasterization_vertex",
-            "path_rasterization_fragment",
-            MTLPixelFormat::BGRA8Unorm,
-            PATH_SAMPLE_COUNT,
-        );
         let path_sprites_pipeline_state = build_path_sprite_pipeline_state(
             &device,
             &library,
@@ -471,14 +462,21 @@ impl MetalRenderer {
             gpui_render::QUAD_MSL,
             gpui_render::SHADOW_MSL,
             gpui_render::UNDERLINE_MSL,
+            gpui_render::PATH_RASTERIZATION_MSL,
         ];
         #[cfg(not(feature = "runtime_shaders"))]
-        let sources: [&[u8]; 3] = [
+        let sources: [&[u8]; 4] = [
             include_bytes!(concat!(env!("OUT_DIR"), "/quads.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/shadows.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/underlines.metallib")),
+            include_bytes!(concat!(env!("OUT_DIR"), "/path_rasterization.metallib")),
         ];
-        let [quad_library, shadow_library, underline_library] = sources.map(|source| {
+        let [
+            quad_library,
+            shadow_library,
+            underline_library,
+            path_library,
+        ] = sources.map(|source| {
             #[cfg(feature = "runtime_shaders")]
             let library = device.new_library_with_source(source, &metal::CompileOptions::new());
             #[cfg(not(feature = "runtime_shaders"))]
@@ -492,6 +490,15 @@ impl MetalRenderer {
             "vs_shadow",
             "fs_shadow",
             MTLPixelFormat::BGRA8Unorm,
+        );
+        let paths_rasterization_pipeline_state = build_path_rasterization_pipeline_state(
+            &device,
+            &path_library,
+            "paths_rasterization",
+            "vs_path_rasterization",
+            "fs_path_rasterization",
+            MTLPixelFormat::BGRA8Unorm,
+            PATH_SAMPLE_COUNT,
         );
         let quads_pipeline_state = build_pipeline_state(
             &device,
@@ -1389,20 +1396,12 @@ impl MetalRenderer {
             command_encoder.end_encoding();
             return false;
         }
-        command_encoder.set_vertex_buffer(
-            PathRasterizationInputIndex::Vertices as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-        command_encoder.set_vertex_bytes(
-            PathRasterizationInputIndex::ViewportSize as u64,
-            mem::size_of_val(&viewport_size) as u64,
-            &viewport_size as *const Size<DevicePixels> as *const _,
-        );
-        command_encoder.set_fragment_buffer(
-            PathRasterizationInputIndex::Vertices as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
+        Self::bind_shared_primitives(
+            instance_buffer,
+            *instance_offset,
+            vertices_bytes_len,
+            viewport_size,
+            command_encoder,
         );
         let buffer_contents =
             unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
@@ -1460,36 +1459,22 @@ impl MetalRenderer {
         )
     }
 
-    fn draw_shared_primitives<T>(
-        &self,
-        primitives: &[T],
-        pipeline: &metal::RenderPipelineStateRef,
-        instance_buffer: &mut InstanceBuffer,
-        instance_offset: &mut usize,
+    fn bind_shared_primitives(
+        instance_buffer: &InstanceBuffer,
+        instance_offset: usize,
+        bytes_len: usize,
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
-    ) -> bool {
-        if primitives.is_empty() {
-            return true;
-        }
-        align_offset(instance_offset);
-
-        let bytes_len = mem::size_of_val(primitives);
-        let next_offset = *instance_offset + bytes_len;
-        if next_offset > instance_buffer.size {
-            return false;
-        }
-
-        command_encoder.set_render_pipeline_state(pipeline);
+    ) {
         command_encoder.set_vertex_buffer(
             gpui_render::METAL_INSTANCES_SLOT,
             Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
+            instance_offset as u64,
         );
         command_encoder.set_fragment_buffer(
             gpui_render::METAL_INSTANCES_SLOT,
             Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
+            instance_offset as u64,
         );
 
         let globals = gpui_render::PrimitiveGlobals {
@@ -1520,6 +1505,36 @@ impl MetalRenderer {
             gpui_render::METAL_SIZES_SLOT,
             mem::size_of_val(&sizes) as u64,
             sizes.as_ptr() as _,
+        );
+    }
+
+    fn draw_shared_primitives<T>(
+        &self,
+        primitives: &[T],
+        pipeline: &metal::RenderPipelineStateRef,
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+        viewport_size: Size<DevicePixels>,
+        command_encoder: &metal::RenderCommandEncoderRef,
+    ) -> bool {
+        if primitives.is_empty() {
+            return true;
+        }
+        align_offset(instance_offset);
+
+        let bytes_len = mem::size_of_val(primitives);
+        let next_offset = *instance_offset + bytes_len;
+        if next_offset > instance_buffer.size {
+            return false;
+        }
+
+        command_encoder.set_render_pipeline_state(pipeline);
+        Self::bind_shared_primitives(
+            instance_buffer,
+            *instance_offset,
+            bytes_len,
+            viewport_size,
+            command_encoder,
         );
         let buffer_contents =
             unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
@@ -3025,12 +3040,6 @@ enum SurfaceInputIndex {
     CbCrTexture = 5,
 }
 
-#[repr(C)]
-enum PathRasterizationInputIndex {
-    Vertices = 0,
-    ViewportSize = 1,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct PathSprite {
@@ -3088,6 +3097,32 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
 mod tests {
     use super::*;
 
+    #[test]
+    fn shared_path_shader_matches_host_layout() {
+        use std::mem::{offset_of, size_of};
+        let module = naga::front::wgsl::parse_str(gpui_render::PATH_RASTERIZATION_WGSL).unwrap();
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some("PathRasterizationVertex"))
+            .unwrap();
+        let naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("expected path vertex struct")
+        };
+        assert_eq!(*span as usize, size_of::<PathRasterizationVertex>());
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member.offset as usize)
+                .collect::<Vec<_>>(),
+            vec![
+                offset_of!(PathRasterizationVertex, xy_position),
+                offset_of!(PathRasterizationVertex, st_position),
+                offset_of!(PathRasterizationVertex, color),
+                offset_of!(PathRasterizationVertex, bounds),
+            ]
+        );
+    }
     #[test]
     fn full_range_yuv_matrix_maps_neutral_black_and_white() {
         let rows = yuv_to_rgb_rows(SurfaceColorInfo {

@@ -2,7 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=src/common.wgsl");
-    for primitive in ["quads", "shadows", "underlines"] {
+    for primitive in ["quads", "shadows", "underlines", "path_rasterization"] {
         println!("cargo:rerun-if-changed=src/{primitive}.wgsl");
         generate(primitive);
     }

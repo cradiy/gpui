@@ -52,6 +52,7 @@ mod shader_compilation {
                 "quad" => Some(gpui_render::QUAD_HLSL),
                 "shadow" => Some(gpui_render::SHADOW_HLSL),
                 "underline" => Some(gpui_render::UNDERLINE_HLSL),
+                "path_rasterization" => Some(gpui_render::PATH_RASTERIZATION_HLSL),
                 _ => None,
             };
             if let Some(shared_source) = shared_source {

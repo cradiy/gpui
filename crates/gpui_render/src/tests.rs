@@ -16,6 +16,20 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
     .unwrap();
     for (name, size, offsets) in [
         (
+            "SurfaceParams",
+            size_of::<SurfaceParams>(),
+            vec![
+                offset_of!(SurfaceParams, bounds),
+                offset_of!(SurfaceParams, clip_bounds),
+                offset_of!(SurfaceParams, content_mask),
+                offset_of!(SurfaceParams, uv_bounds),
+                offset_of!(SurfaceParams, corner_radii),
+                offset_of!(SurfaceParams, color_rows),
+                offset_of!(SurfaceParams, opacity),
+                offset_of!(SurfaceParams, _pad),
+            ],
+        ),
+        (
             "GammaParams",
             size_of::<GammaParams>(),
             vec![

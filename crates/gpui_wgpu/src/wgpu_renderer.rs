@@ -11,6 +11,7 @@ use gpui::{
     DRM_FORMAT_NV12, DmaBufHandle, DmaBufId, DmaBufImage, DmaBufPlane, DrmDevice,
     SurfaceFrameBacking, WeakDmaBufHandle,
 };
+use gpui_render::SurfaceParams;
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -86,19 +87,6 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
             size: [bounds.size.width.0, bounds.size.height.0],
         }
     }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub(super) struct SurfaceParams {
-    bounds: PodBounds,
-    clip_bounds: PodBounds,
-    content_mask: PodBounds,
-    uv_bounds: PodBounds,
-    corner_radii: [f32; 4],
-    color_rows: [[f32; 4]; 3],
-    opacity: f32,
-    _pad: [f32; 3],
 }
 
 enum CachedSurfaceTextures {
@@ -4697,14 +4685,19 @@ impl WgpuRenderer {
             };
 
             let uv = frame.normalized_visible_rect();
+            let rect = |bounds: Bounds<ScaledPixels>| {
+                [
+                    bounds.origin.x.0,
+                    bounds.origin.y.0,
+                    bounds.size.width.0,
+                    bounds.size.height.0,
+                ]
+            };
             let params = SurfaceParams {
-                bounds: surface.bounds.into(),
-                clip_bounds: surface.clip_bounds.into(),
-                content_mask: surface.content_mask.bounds.into(),
-                uv_bounds: PodBounds {
-                    origin: [uv.origin.x, uv.origin.y],
-                    size: [uv.size.width, uv.size.height],
-                },
+                bounds: rect(surface.bounds),
+                clip_bounds: rect(surface.clip_bounds),
+                content_mask: rect(surface.content_mask.bounds),
+                uv_bounds: [uv.origin.x, uv.origin.y, uv.size.width, uv.size.height],
                 corner_radii: [
                     surface.corner_radii.top_left.0,
                     surface.corner_radii.top_right.0,

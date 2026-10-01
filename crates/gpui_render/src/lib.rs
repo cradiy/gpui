@@ -135,6 +135,29 @@ pub struct GammaParams {
     pub _pad: u32,
 }
 
+/// Parameters for RGBA and NV12 surface shaders.
+/// Rectangles store `[origin_x, origin_y, width, height]`.
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct SurfaceParams {
+    /// Surface rectangle in physical window pixels.
+    pub bounds: [f32; 4],
+    /// Rectangle used for rounded clipping, in physical window pixels.
+    pub clip_bounds: [f32; 4],
+    /// Content clipping rectangle in physical window pixels.
+    pub content_mask: [f32; 4],
+    /// Visible rectangle in normalized texture coordinates.
+    pub uv_bounds: [f32; 4],
+    /// Corner radii in top-left, top-right, bottom-right, bottom-left order.
+    pub corner_radii: [f32; 4],
+    /// Matrix rows converting `[Y, Cb, Cr, 1]` to RGB.
+    pub color_rows: [[f32; 4]; 3],
+    /// Opacity multiplier.
+    pub opacity: f32,
+    /// Reserved, must be zero.
+    pub _pad: [f32; 3],
+}
+
 /// Metal buffer slot for font coverage correction parameters.
 pub const METAL_GAMMA_SLOT: u64 = 2;
 

@@ -497,10 +497,6 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
             );
         }
         assert_eq!(
-            shader_struct_span(&module, "SurfaceParams") as usize,
-            std::mem::size_of::<super::wgpu_renderer::SurfaceParams>()
-        );
-        assert_eq!(
             shader_struct_offsets(&module, "PolychromeSprite"),
             vec![
                 (

@@ -7,12 +7,13 @@ use cocoa::{
     quartzcore::AutoresizingMask,
 };
 use gpui::{
-    AtlasTextureId, BackdropBlur, BackdropShader, Background, Bounds, ColorRange, ContentMask,
-    DevicePixels, EffectQuad, EffectShader, MonochromeSprite, PaintSurface, Path, Point,
-    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, SurfaceColorInfo,
-    SurfaceFormat, SurfaceFrame, SurfaceFrameBacking, SurfaceId, TransformationMatrix, Underline,
+    AtlasTextureId, BackdropBlur, BackdropShader, Background, Bounds, ColorRange, DevicePixels,
+    EffectQuad, EffectShader, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite,
+    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, SurfaceColorInfo, SurfaceFormat,
+    SurfaceFrame, SurfaceFrameBacking, SurfaceId, TransformationMatrix, Underline,
     WeakSurfaceHandle, YuvMatrix, point, size,
 };
+use gpui_render::SurfaceParams;
 use image::RgbaImage;
 
 use core_foundation::base::TCFType;
@@ -2279,7 +2280,7 @@ impl MetalRenderer {
 
     fn draw_core_video_surface(
         &self,
-        params: SurfaceBounds,
+        params: SurfaceParams,
         textures: &CoreVideoTextures,
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
@@ -2317,7 +2318,7 @@ impl MetalRenderer {
     #[allow(clippy::too_many_arguments)]
     fn draw_surface_textures(
         &self,
-        params: SurfaceBounds,
+        params: SurfaceParams,
         first_texture: &metal::TextureRef,
         second_texture: &metal::TextureRef,
         nv12: bool,
@@ -2326,7 +2327,7 @@ impl MetalRenderer {
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
         align_offset(instance_offset);
-        let next_offset = *instance_offset + mem::size_of::<SurfaceBounds>();
+        let next_offset = *instance_offset + mem::size_of::<SurfaceParams>();
         if next_offset > instance_buffer.size {
             return false;
         }
@@ -2356,7 +2357,7 @@ impl MetalRenderer {
 
         unsafe {
             let buffer_contents = (instance_buffer.metal_buffer.contents() as *mut u8)
-                .add(*instance_offset) as *mut SurfaceBounds;
+                .add(*instance_offset) as *mut SurfaceParams;
             ptr::write(buffer_contents, params);
         }
 
@@ -2404,7 +2405,7 @@ fn upload_surface(textures: &CachedSurfaceTextures, frame: &SurfaceFrame) {
     }
 }
 
-fn surface_bounds(surface: &PaintSurface, frame: Option<&SurfaceFrame>) -> SurfaceBounds {
+fn surface_bounds(surface: &PaintSurface, frame: Option<&SurfaceFrame>) -> SurfaceParams {
     let (uv, color) = frame.map_or(
         (
             Bounds::new(point(0.0, 0.0), size(1.0, 1.0)),
@@ -2416,13 +2417,25 @@ fn surface_bounds(surface: &PaintSurface, frame: Option<&SurfaceFrame>) -> Surfa
         |frame| (frame.normalized_visible_rect(), frame.color()),
     );
 
-    SurfaceBounds {
-        bounds: surface.bounds,
-        clip_bounds: surface.clip_bounds,
-        content_mask: surface.content_mask,
-        corner_radii: surface.corner_radii,
-        uv_origin: [uv.origin.x, uv.origin.y],
-        uv_size: [uv.size.width, uv.size.height],
+    let rect = |bounds: Bounds<ScaledPixels>| {
+        [
+            bounds.origin.x.0,
+            bounds.origin.y.0,
+            bounds.size.width.0,
+            bounds.size.height.0,
+        ]
+    };
+    SurfaceParams {
+        bounds: rect(surface.bounds),
+        clip_bounds: rect(surface.clip_bounds),
+        content_mask: rect(surface.content_mask.bounds),
+        corner_radii: [
+            surface.corner_radii.top_left.0,
+            surface.corner_radii.top_right.0,
+            surface.corner_radii.bottom_right.0,
+            surface.corner_radii.bottom_left.0,
+        ],
+        uv_bounds: [uv.origin.x, uv.origin.y, uv.size.width, uv.size.height],
         color_rows: color.yuv_to_rgb_matrix(),
         opacity: surface.opacity,
         _pad: [0.0; 3],
@@ -2810,20 +2823,6 @@ pub struct PathSprite {
     pub bounds: Bounds<ScaledPixels>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(C)]
-pub struct SurfaceBounds {
-    pub bounds: Bounds<ScaledPixels>,
-    pub clip_bounds: Bounds<ScaledPixels>,
-    pub content_mask: ContentMask<ScaledPixels>,
-    pub uv_origin: [f32; 2],
-    pub uv_size: [f32; 2],
-    pub corner_radii: gpui::Corners<ScaledPixels>,
-    pub color_rows: [[f32; 4]; 3],
-    pub opacity: f32,
-    pub _pad: [f32; 3],
-}
-
 #[cfg(any(test, feature = "test-support"))]
 pub struct MetalHeadlessRenderer {
     renderer: MetalRenderer,
@@ -2860,37 +2859,6 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shared_surface_shader_matches_host_layout() {
-        use std::mem::{offset_of, size_of};
-        let module = naga::front::wgsl::parse_str(gpui_render::SURFACE_WGSL).unwrap();
-        let (_, ty) = module
-            .types
-            .iter()
-            .find(|(_, ty)| ty.name.as_deref() == Some("SurfaceParams"))
-            .unwrap();
-        let naga::TypeInner::Struct { members, span } = &ty.inner else {
-            panic!("expected surface struct")
-        };
-        assert_eq!(*span as usize, size_of::<SurfaceBounds>());
-        assert_eq!(
-            members
-                .iter()
-                .map(|member| member.offset as usize)
-                .collect::<Vec<_>>(),
-            vec![
-                offset_of!(SurfaceBounds, bounds),
-                offset_of!(SurfaceBounds, clip_bounds),
-                offset_of!(SurfaceBounds, content_mask),
-                offset_of!(SurfaceBounds, uv_origin),
-                offset_of!(SurfaceBounds, corner_radii),
-                offset_of!(SurfaceBounds, color_rows),
-                offset_of!(SurfaceBounds, opacity),
-                offset_of!(SurfaceBounds, _pad)
-            ]
-        );
-    }
 
     #[test]
     fn shared_path_shader_matches_host_layout() {

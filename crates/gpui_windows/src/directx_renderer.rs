@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use gpui_render::SurfaceParams;
 use gpui_util::ResultExt;
 use windows::{
     Win32::{
@@ -135,21 +136,8 @@ struct DirectXRenderPipelines {
     mono_sprites: PipelineState<MonochromeSprite>,
     subpixel_sprites: PipelineState<SubpixelSprite>,
     poly_sprites: PipelineState<PolychromeSprite>,
-    surface_rgba: PipelineState<SurfaceInstance>,
-    surface_nv12: PipelineState<SurfaceInstance>,
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-struct SurfaceInstance {
-    bounds: Bounds<ScaledPixels>,
-    clip_bounds: Bounds<ScaledPixels>,
-    content_mask: Bounds<ScaledPixels>,
-    uv_bounds: Bounds<f32>,
-    corner_radii: Corners<ScaledPixels>,
-    color_rows: [[f32; 4]; 3],
-    opacity: f32,
-    _pad: [f32; 3],
+    surface_rgba: PipelineState<SurfaceParams>,
+    surface_nv12: PipelineState<SurfaceParams>,
 }
 
 struct DirectXSurfacePlane {
@@ -1299,13 +1287,27 @@ impl DirectXRenderer {
     }
 }
 
-fn surface_instance(surface: &PaintSurface, frame: &SurfaceFrame) -> SurfaceInstance {
-    SurfaceInstance {
-        bounds: surface.bounds,
-        clip_bounds: surface.clip_bounds,
-        content_mask: surface.content_mask.bounds,
-        uv_bounds: frame.normalized_visible_rect(),
-        corner_radii: surface.corner_radii,
+fn surface_instance(surface: &PaintSurface, frame: &SurfaceFrame) -> SurfaceParams {
+    let uv = frame.normalized_visible_rect();
+    let rect = |bounds: Bounds<ScaledPixels>| {
+        [
+            bounds.origin.x.0,
+            bounds.origin.y.0,
+            bounds.size.width.0,
+            bounds.size.height.0,
+        ]
+    };
+    SurfaceParams {
+        bounds: rect(surface.bounds),
+        clip_bounds: rect(surface.clip_bounds),
+        content_mask: rect(surface.content_mask.bounds),
+        uv_bounds: [uv.origin.x, uv.origin.y, uv.size.width, uv.size.height],
+        corner_radii: [
+            surface.corner_radii.top_left.0,
+            surface.corner_radii.top_right.0,
+            surface.corner_radii.bottom_right.0,
+            surface.corner_radii.bottom_left.0,
+        ],
         color_rows: frame.color().yuv_to_rgb_matrix(),
         opacity: surface.opacity,
         _pad: [0.0; 3],
@@ -3053,37 +3055,6 @@ unsafe fn unbind_backdrop_shader_resources(device_context: &ID3D11DeviceContext)
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[::core::prelude::v1::test]
-    fn shared_surface_shader_matches_host_layout() {
-        use std::mem::{offset_of, size_of};
-        let module = naga::front::wgsl::parse_str(gpui_render::SURFACE_WGSL).unwrap();
-        let (_, ty) = module
-            .types
-            .iter()
-            .find(|(_, ty)| ty.name.as_deref() == Some("SurfaceParams"))
-            .unwrap();
-        let naga::TypeInner::Struct { members, span } = &ty.inner else {
-            panic!("expected surface struct")
-        };
-        assert_eq!(*span as usize, size_of::<SurfaceInstance>());
-        assert_eq!(
-            members
-                .iter()
-                .map(|member| member.offset as usize)
-                .collect::<Vec<_>>(),
-            vec![
-                offset_of!(SurfaceInstance, bounds),
-                offset_of!(SurfaceInstance, clip_bounds),
-                offset_of!(SurfaceInstance, content_mask),
-                offset_of!(SurfaceInstance, uv_bounds),
-                offset_of!(SurfaceInstance, corner_radii),
-                offset_of!(SurfaceInstance, color_rows),
-                offset_of!(SurfaceInstance, opacity),
-                offset_of!(SurfaceInstance, _pad)
-            ]
-        );
-    }
 
     #[::core::prelude::v1::test]
     fn shared_path_shader_matches_host_layout() {

@@ -980,6 +980,7 @@ pub struct InteractiveTextState {
     mouse_down_index: Rc<Cell<Option<usize>>>,
     hovered_index: Rc<Cell<Option<usize>>>,
     active_tooltip: Rc<RefCell<Option<ActiveTooltip>>>,
+    tooltip_geometry: Option<crate::ElementBounds>,
 }
 
 /// InteractiveTest is a wrapper around StyledText that adds mouse interactions.
@@ -1083,6 +1084,10 @@ impl Element for InteractiveText {
 
                 if let Some(interactive_state) = interactive_state.as_mut() {
                     if self.tooltip_builder.is_some() {
+                        let geometry = interactive_state
+                            .tooltip_geometry
+                            .get_or_insert_with(Default::default);
+                        window.track_element_bounds(geometry, bounds);
                         self.tooltip_id =
                             set_tooltip_on_window(&interactive_state.active_tooltip, window);
                     } else {
@@ -1193,9 +1198,12 @@ impl Element for InteractiveText {
                     let build_tooltip = Rc::new({
                         let tooltip_is_hoverable = false;
                         let text_layout = text_layout.clone();
+                        let geometry = interactive_state.tooltip_geometry.clone().unwrap();
                         move |window: &mut Window, cx: &mut App| {
+                            let position =
+                                geometry.hit_position(window.raw_mouse_position(), window)?;
                             text_layout
-                                .index_for_position(window.mouse_position())
+                                .index_for_position(position)
                                 .ok()
                                 .and_then(|position| tooltip_builder(position, window, cx))
                                 .map(|view| (view, tooltip_is_hoverable))
@@ -1204,14 +1212,15 @@ impl Element for InteractiveText {
 
                     // Use bounds instead of testing hitbox since this is called during prepaint.
                     let check_is_hovered_during_prepaint = Rc::new({
-                        let source_bounds = hitbox.bounds;
+                        let geometry = interactive_state.tooltip_geometry.clone().unwrap();
                         let text_layout = text_layout.clone();
                         let pending_mouse_down = interactive_state.mouse_down_index.clone();
                         move |window: &Window| {
-                            text_layout
-                                .index_for_position(window.mouse_position())
-                                .is_ok()
-                                && source_bounds.contains(&window.mouse_position())
+                            geometry
+                                .hit_position(window.raw_mouse_position(), window)
+                                .is_some_and(|position| {
+                                    text_layout.index_for_position(position).is_ok()
+                                })
                                 && pending_mouse_down.get().is_none()
                         }
                     });

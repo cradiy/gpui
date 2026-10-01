@@ -475,3 +475,60 @@ fn overlay_collision_fits_after_mapping_to_window(cx: &mut TestAppContext) {
         }
     }
 }
+
+#[gpui::test]
+fn fully_clipped_triggers_hide_surfaces_and_submenus_until_visible(cx: &mut TestAppContext) {
+    for kind in [
+        Kind::Dropdown,
+        Kind::InlineDropdown,
+        Kind::Popover,
+        Kind::Menu,
+    ] {
+        let (handle, mut visual, clicks, geometry) = open(cx, kind);
+        click(&mut visual, point(px(180.), px(140.)));
+        if matches!(kind, Kind::Menu) {
+            visual.simulate_keystrokes("down right");
+            draw(&mut visual);
+            assert!(geometry.submenu.get().is_some());
+        }
+        geometry.popup.set(None);
+        geometry.submenu.set(None);
+        handle
+            .update(&mut visual.cx, |view, _, cx| {
+                view.matrix = matrix(1., 900., 0.);
+                cx.notify();
+            })
+            .unwrap();
+        draw(&mut visual);
+        assert!(geometry.popup.get().is_none());
+        assert!(geometry.submenu.get().is_none());
+        visual.simulate_keystrokes("enter");
+        draw(&mut visual);
+        assert!(
+            is_open(handle, &mut visual),
+            "hidden menu items must not activate"
+        );
+        assert_eq!(clicks.get(), 0);
+        handle
+            .update(&mut visual.cx, |view, _, cx| {
+                view.matrix = matrix(1.5, 70., 50.);
+                cx.notify();
+            })
+            .unwrap();
+        draw(&mut visual);
+        assert_eq!(
+            geometry.popup.get().unwrap().origin,
+            point(px(115.), px(161.))
+        );
+        if matches!(kind, Kind::Menu) {
+            assert!(geometry.submenu.get().is_some());
+        }
+        visual.simulate_keystrokes("escape");
+        draw(&mut visual);
+        // Escape closes the top submenu before the root menu.
+        if is_open(handle, &mut visual) {
+            visual.simulate_keystrokes("escape");
+        }
+        assert!(!is_open(handle, &mut visual));
+    }
+}

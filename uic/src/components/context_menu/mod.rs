@@ -727,7 +727,7 @@ impl ContextMenuLayer {
             ));
         }
 
-        let trigger = (depth == 0).then(|| active.trigger.clone()).flatten();
+        let trigger = active.trigger.clone();
         let parent_row = level
             .parent_item
             .map(|index| active.levels[depth - 1].item_bounds[index].clone());
@@ -736,9 +736,14 @@ impl ContextMenuLayer {
         let margin = active.viewport_margin;
         let fallback = (level.position, level.anchor);
         deferred(resolve_overlay(move |window, _| {
-            let (position, anchor) = if let Some((trigger, alignment, gap)) = trigger {
-                below_menu_anchor(trigger.bounds(window)?, alignment, gap)
-            } else if let Some(bounds) = parent_row.and_then(|row| row.get()) {
+            let trigger_position = match trigger {
+                Some((trigger, alignment, gap)) => {
+                    Some(below_menu_anchor(trigger.bounds(window)?, alignment, gap))
+                }
+                None => None,
+            };
+            let (position, anchor) = if let Some(row) = parent_row {
+                let bounds = row.get()?;
                 match placement {
                     ContextMenuPlacement::Left => {
                         (point(bounds.left() - gap, bounds.top()), Anchor::TopRight)
@@ -746,7 +751,7 @@ impl ContextMenuLayer {
                     _ => (point(bounds.right() + gap, bounds.top()), Anchor::TopLeft),
                 }
             } else {
-                fallback
+                trigger_position.unwrap_or(fallback)
             };
             Some(
                 anchored()
@@ -770,6 +775,12 @@ impl Render for ContextMenuLayer {
         if active.window_id != window.window_handle().window_id() {
             return div().into_any_element();
         }
+        for level in &active.levels {
+            level.bounds.set(None);
+            for row in &level.item_bounds {
+                row.set(None);
+            }
+        }
         let levels = active
             .levels
             .iter()
@@ -781,9 +792,20 @@ impl Render for ContextMenuLayer {
             .absolute()
             .inset_0()
             .track_focus(&self.focus_handle)
-            .capture_key_down(cx.listener(|layer, event, window, cx| {
-                layer.handle_key(event, window, cx);
-            }))
+            .capture_key_down(
+                cx.listener(|layer, event: &gpui::KeyDownEvent, window, cx| {
+                    if event.keystroke.key != "escape"
+                        && layer
+                            .active
+                            .as_ref()
+                            .and_then(|active| active.trigger.as_ref())
+                            .is_some_and(|(anchor, _, _)| anchor.bounds(window).is_none())
+                    {
+                        return;
+                    }
+                    layer.handle_key(event, window, cx);
+                }),
+            )
             .children(levels)
             .into_any_element()
     }

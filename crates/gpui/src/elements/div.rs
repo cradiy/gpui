@@ -2280,6 +2280,14 @@ impl Interactivity {
                                 None
                             };
 
+                            if self.tooltip_builder.is_some()
+                                && let Some(state) = element_state.as_mut()
+                            {
+                                let geometry =
+                                    state.tooltip_geometry.get_or_insert_with(Default::default);
+                                window.track_element_bounds(geometry, bounds);
+                            }
+
                             let scroll_offset =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
                             #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3126,11 +3134,11 @@ impl Interactivity {
                 // Use bounds instead of testing hitbox since this is called during prepaint.
                 let check_is_hovered_during_prepaint = Rc::new({
                     let pending_mouse_down = pending_mouse_down.clone();
-                    let source_bounds = hitbox.bounds;
+                    let geometry = element_state.tooltip_geometry.clone().unwrap();
                     move |window: &Window| {
                         !window.last_input_was_keyboard()
                             && pending_mouse_down.borrow().is_none()
-                            && source_bounds.contains(&window.mouse_position())
+                            && geometry.contains(window.raw_mouse_position(), window)
                     }
                 });
                 let check_is_hovered = Rc::new({
@@ -3526,6 +3534,7 @@ pub struct InteractiveElementState {
     pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
+    tooltip_geometry: Option<crate::ElementBounds>,
 }
 
 /// Whether or not the element or a group that contains it is clicked by the mouse.
@@ -3667,10 +3676,9 @@ pub(crate) fn register_tooltip_mouse_handlers(
 /// The mouse hovering logic also relies on being called from window prepaint in order to handle the
 /// case where the element the tooltip is on is not rendered - in that case its mouse listeners are
 /// also not registered. During window prepaint, the hitbox information is not available, so
-/// `check_is_hovered_during_prepaint` is used which bases the check off of the absolute bounds of
-/// the element.
+/// `check_is_hovered_during_prepaint` checks the element's current geometry and coordinate scope.
 ///
-/// TODO: There's a minor bug due to the use of absolute bounds while checking during prepaint - it
+/// TODO: The geometry check during prepaint
 /// does not know if the hitbox is occluded. In the case where a tooltip gets displayed and then
 /// gets occluded after display, it will stick around until the mouse exits the hover bounds.
 fn handle_tooltip_mouse_move(
@@ -3757,7 +3765,7 @@ fn handle_tooltip_mouse_move(
                                 ActiveTooltip::Visible {
                                     tooltip: AnyTooltip {
                                         view,
-                                        mouse_position: window.mouse_position(),
+                                        mouse_position: window.raw_mouse_position(),
                                         check_visible_and_update: Rc::new(
                                             move |tooltip_bounds, window, cx| {
                                                 let Some(active_tooltip) =
@@ -3816,7 +3824,7 @@ fn handle_tooltip_check_visible_and_update(
     }
 
     let is_hovered = check_is_hovered(window)
-        || (tooltip_is_hoverable && tooltip_bounds.contains(&window.mouse_position()));
+        || (tooltip_is_hoverable && tooltip_bounds.contains(&window.raw_mouse_position()));
     let action = match active_tooltip.borrow().as_ref() {
         Some(ActiveTooltip::Visible { tooltip, .. }) => {
             if is_hovered {

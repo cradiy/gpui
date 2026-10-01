@@ -247,6 +247,7 @@ mod affine_a11y;
 mod affine_cache;
 mod affine_deferred;
 mod affine_ime;
+mod affine_tooltip;
 mod cached_a11y;
 mod deferred_overlay;
 mod element_bounds;

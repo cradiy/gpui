@@ -38,15 +38,35 @@ impl ElementBounds {
         })
     }
 
+    /// Returns the visible portion's axis-aligned window bounds, or `None` when
+    /// fully clipped. Affine scopes preserve polygon clipping through rotation.
+    /// Scopes without a forward map use source geometry. Occlusion by other
+    /// elements is not considered.
+    pub fn visible_bounds(&self, window: &Window) -> Option<Bounds<Pixels>> {
+        let entry = self.geometry(window)?;
+        entry.mapping.visible_bounds_to_display(
+            entry.bounds.intersect(&entry.clip),
+            Bounds::new(Point::default(), window.viewport_size()),
+        )
+    }
+
     /// Tests a window-space point against the source rectangle through the inverse
-    /// mapping. This accounts for rotation, but not clipping or occluding elements.
+    /// mapping, respecting clipping and the viewport, but not other elements' occlusion.
     pub fn contains(&self, position: Point<Pixels>, window: &Window) -> bool {
-        self.geometry(window).is_some_and(|entry| {
-            entry
-                .mapping
-                .hit_position(position)
-                .is_some_and(|position| entry.bounds.contains(&position))
-        })
+        self.hit_position(position, window).is_some()
+    }
+
+    pub(crate) fn hit_position(
+        &self,
+        position: Point<Pixels>,
+        window: &Window,
+    ) -> Option<Point<Pixels>> {
+        if !Bounds::new(Point::default(), window.viewport_size()).contains(&position) {
+            return None;
+        }
+        let entry = self.geometry(window)?;
+        let position = entry.mapping.hit_position(position)?;
+        (entry.bounds.contains(&position) && entry.clip.contains(&position)).then_some(position)
     }
 }
 
@@ -54,6 +74,7 @@ impl ElementBounds {
 struct Registration {
     handle: ElementBounds,
     bounds: Bounds<Pixels>,
+    clip: Bounds<Pixels>,
     mapping: PointerMapping,
 }
 
@@ -118,6 +139,7 @@ impl Window {
         self.next_frame.tracked_bounds.push(Registration {
             handle: handle.clone(),
             bounds,
+            clip: self.content_mask().bounds,
             mapping: self.pointer_mapping.clone(),
         });
     }

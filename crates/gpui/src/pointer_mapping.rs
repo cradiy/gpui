@@ -1,4 +1,5 @@
 use crate::{Bounds, Pixels, Point, TransformationMatrix};
+use smallvec::{SmallVec, smallvec};
 use std::{fmt, rc::Rc};
 
 /// Maps a displayed point back to source coordinates within a paint region.
@@ -466,6 +467,57 @@ impl PointerMapping {
         Some(matrix)
     }
 
+    pub(crate) fn visible_bounds_to_display(
+        &self,
+        bounds: Bounds<Pixels>,
+        viewport: Bounds<Pixels>,
+    ) -> Option<Bounds<Pixels>> {
+        if bounds.size.width <= crate::px(0.) || bounds.size.height <= crate::px(0.) {
+            return None;
+        }
+        let mut polygon: SmallVec<[Point<Pixels>; 8]> = smallvec![
+            bounds.origin,
+            bounds.top_right(),
+            bounds.bottom_right(),
+            bounds.bottom_left(),
+        ];
+        let mut scope = self;
+        while let Some(node) = &scope.0 {
+            clip_polygon(&mut polygon, node.bounds.intersect(&node.clip));
+            for point in &mut polygon {
+                *point = node.transform.source_to_display(*point).unwrap_or(*point);
+            }
+            clip_polygon(&mut polygon, node.bounds.intersect(&node.clip));
+            scope = &node.parent;
+        }
+        clip_polygon(&mut polygon, viewport);
+        let mut min = *polygon.first()?;
+        let mut max = min;
+        let origin = min;
+        let area: f64 = polygon
+            .windows(2)
+            .map(|pair| {
+                let a = pair[0] - origin;
+                let b = pair[1] - origin;
+                f64::from(f32::from(a.x)) * f64::from(f32::from(b.y))
+                    - f64::from(f32::from(a.y)) * f64::from(f32::from(b.x))
+            })
+            .sum();
+        if area.abs() <= f64::EPSILON {
+            return None;
+        }
+        for point in polygon {
+            if !f32::from(point.x).is_finite() || !f32::from(point.y).is_finite() {
+                return None;
+            }
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+        (max.x > min.x && max.y > min.y).then(|| Bounds::from_corners(min, max))
+    }
+
     /// Maps a displayed pointer position into source coordinates, respecting each scope's clip.
     pub fn hit_position(&self, position: Point<Pixels>) -> Option<Point<Pixels>> {
         let Some(node) = &self.0 else {
@@ -477,5 +529,122 @@ impl PointerMapping {
         }
         node.transform
             .hit_position(position, node.bounds, node.scale_factor)
+    }
+}
+
+fn clip_polygon(polygon: &mut SmallVec<[Point<Pixels>; 8]>, clip: Bounds<Pixels>) {
+    if clip.size.width <= crate::px(0.) || clip.size.height <= crate::px(0.) {
+        polygon.clear();
+        return;
+    }
+    for (axis, edge, minimum) in [
+        (0, clip.left(), true),
+        (0, clip.right(), false),
+        (1, clip.top(), true),
+        (1, clip.bottom(), false),
+    ] {
+        let input = std::mem::take(polygon);
+        let Some(mut previous) = input.last().copied() else {
+            return;
+        };
+        let coordinate = |point: Point<Pixels>| if axis == 0 { point.x } else { point.y };
+        let inside = |value: Pixels| {
+            if minimum {
+                value >= edge
+            } else {
+                value <= edge
+            }
+        };
+        for current in input {
+            let previous_value = coordinate(previous);
+            let current_value = coordinate(current);
+            if inside(previous_value) != inside(current_value) {
+                let t =
+                    f32::from(edge - previous_value) / f32::from(current_value - previous_value);
+                polygon.push(previous + (current - previous) * t);
+            }
+            if inside(current_value) {
+                polygon.push(current);
+            }
+            previous = current;
+        }
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use crate::{point, px, size};
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(y)), size(px(w), px(h)))
+    }
+
+    #[test]
+    fn clipped_rotated_geometry_rejects_empty_corners_and_keeps_partial_visibility() {
+        let scope = rect(0., 0., 100., 100.);
+        let mapping = PointerMapping::default().then(
+            scope,
+            scope,
+            1.,
+            PointerTransform::affine(TransformationMatrix {
+                rotation_scale: [[1., -1.], [1., 1.]],
+                translation: [20., 10.],
+            })
+            .unwrap(),
+        );
+        let source = rect(0., 0., 10., 10.);
+        assert!(
+            mapping
+                .bounds_to_display(source)
+                .unwrap()
+                .intersects(&rect(10., 10., 4., 4.))
+        );
+        assert_eq!(
+            mapping.visible_bounds_to_display(source, rect(10., 10., 4., 4.)),
+            None
+        );
+        assert_eq!(
+            mapping.visible_bounds_to_display(source, rect(10., 10., 5., 5.)),
+            None
+        );
+        assert_eq!(
+            mapping.visible_bounds_to_display(source, rect(20., 10., 10., 10.)),
+            Some(rect(20., 10., 10., 10.))
+        );
+    }
+
+    #[test]
+    fn nested_scopes_keep_inner_clipping_before_outer_translation() {
+        let viewport = rect(0., 0., 400., 300.);
+        let inner_bounds = rect(0., 0., 100., 100.);
+        let outer = PointerMapping::default().then(
+            viewport,
+            viewport,
+            1.,
+            PointerTransform::affine(TransformationMatrix {
+                translation: [150., 0.],
+                ..TransformationMatrix::unit()
+            })
+            .unwrap(),
+        );
+        let inner = outer.then(
+            inner_bounds,
+            inner_bounds,
+            1.,
+            PointerTransform::affine(TransformationMatrix {
+                translation: [80., 0.],
+                ..TransformationMatrix::unit()
+            })
+            .unwrap(),
+        );
+        assert_eq!(
+            inner.visible_bounds_to_display(rect(0., 0., 50., 50.), viewport),
+            Some(rect(230., 0., 20., 50.))
+        );
+        assert_eq!(
+            inner.visible_bounds_to_display(rect(30., 0., 20., 20.), viewport),
+            None
+        );
     }
 }

@@ -532,7 +532,7 @@ impl TooltipId {
             .as_ref()
             .is_some_and(|tooltip_bounds| {
                 tooltip_bounds.id == *self
-                    && tooltip_bounds.bounds.contains(&window.mouse_position())
+                    && tooltip_bounds.bounds.contains(&window.raw_mouse_position())
             })
     }
 }

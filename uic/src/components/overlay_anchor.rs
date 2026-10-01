@@ -7,6 +7,7 @@ pub(super) struct TriggerAnchor(ElementBounds);
 
 impl TriggerAnchor {
     pub fn bounds(&self, window: &Window) -> Option<Bounds<Pixels>> {
+        self.0.visible_bounds(window)?;
         self.0.bounds(window)
     }
 

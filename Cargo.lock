@@ -2817,6 +2817,7 @@ dependencies = [
  "semver",
  "smallvec",
  "strum",
+ "tempfile",
  "uuid",
  "zed-font-kit",
 ]

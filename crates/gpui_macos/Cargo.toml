@@ -67,6 +67,10 @@ uuid.workspace = true
 [target.'cfg(target_os = "macos")'.build-dependencies]
 gpui_render.workspace = true
 
+[dev-dependencies]
+naga.workspace = true
+tempfile.workspace = true
+
 # When this crate is itself being tested (cargo test -p gpui_macos), its own
 # cfg(test) flag enables impls of test-only traits like PlatformHeadlessRenderer
 # and PlatformWindow::render_to_image. Those traits/methods only exist in gpui

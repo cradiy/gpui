@@ -1,7 +1,12 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 
+#[cfg(all(target_os = "macos", not(feature = "runtime_shaders")))]
+#[path = "src/shader_programs.rs"]
+mod shader_programs;
+
 fn main() {
     println!("cargo:rerun-if-changed=src/shaders.metal");
+    println!("cargo:rerun-if-changed=src/shader_programs.rs");
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rustc-link-lib=framework=MetalPerformanceShaders");
@@ -12,6 +17,7 @@ fn main() {
 
 #[cfg(all(target_os = "macos", not(feature = "runtime_shaders")))]
 mod macos_build {
+    use crate::shader_programs::{ShaderLibrary, compiled_library_dispatch};
     use std::{
         env,
         path::{Path, PathBuf},
@@ -20,21 +26,13 @@ mod macos_build {
 
     pub fn compile_shaders() {
         let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-        compile_shader("shaders", Path::new("src/shaders.metal"), &out);
-        for (name, shader) in [
-            ("quads", gpui_render::QUAD_MSL),
-            ("shadows", gpui_render::SHADOW_MSL),
-            ("underlines", gpui_render::UNDERLINE_MSL),
-            ("path_rasterization", gpui_render::PATH_RASTERIZATION_MSL),
-            ("paths", gpui_render::PATH_MSL),
-            ("polychrome_sprites", gpui_render::POLYCHROME_MSL),
-            ("monochrome_sprites", gpui_render::MONOCHROME_MSL),
-            ("surfaces", gpui_render::SURFACE_MSL),
-        ] {
+        for library in ShaderLibrary::ALL {
+            let name = library.name();
             let source = out.join(format!("{name}.metal"));
-            std::fs::write(&source, shader).unwrap();
+            std::fs::write(&source, library.source()).unwrap();
             compile_shader(name, &source, &out);
         }
+        std::fs::write(out.join("shader_libraries.rs"), compiled_library_dispatch()).unwrap();
     }
 
     fn compile_shader(name: &str, source: &Path, out: &Path) {

@@ -1,4 +1,5 @@
 use crate::metal_atlas::MetalAtlas;
+use crate::shader_programs::{ShaderLibrary, ShaderProgram};
 use anyhow::Result;
 use block::ConcreteBlock;
 use cocoa::{
@@ -41,9 +42,7 @@ use std::{
 };
 
 #[cfg(not(feature = "runtime_shaders"))]
-const SHADERS_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders.metallib"));
-#[cfg(feature = "runtime_shaders")]
-const SHADERS_SOURCE_FILE: &str = include_str!("shaders.metal");
+include!(concat!(env!("OUT_DIR"), "/shader_libraries.rs"));
 // Use 4x MSAA, all devices support it.
 // https://developer.apple.com/documentation/metal/mtldevice/1433355-supportstexturesamplecount
 const PATH_SAMPLE_COUNT: u32 = 4;
@@ -293,15 +292,6 @@ impl MetalRenderer {
         if let Some(layer) = &layer {
             layer.set_device(&device);
         }
-        #[cfg(feature = "runtime_shaders")]
-        let library = device
-            .new_library_with_source(&SHADERS_SOURCE_FILE, &metal::CompileOptions::new())
-            .expect("error building metal library");
-        #[cfg(not(feature = "runtime_shaders"))]
-        let library = device
-            .new_library_with_data(SHADERS_METALLIB)
-            .expect("error building metal library");
-
         // Shared memory can be used only if CPU and GPU share the same memory space.
         // https://developer.apple.com/documentation/metal/setting-resource-storage-modes
         let is_unified_memory = device.has_unified_memory();
@@ -311,119 +301,80 @@ impl MetalRenderer {
         // https://developer.apple.com/documentation/metal/mtlgpufamily
         let is_apple_gpu = device.supports_family(MTLGPUFamily::Apple1);
 
-        #[cfg(feature = "runtime_shaders")]
-        let sources = [
-            gpui_render::QUAD_MSL,
-            gpui_render::SHADOW_MSL,
-            gpui_render::UNDERLINE_MSL,
-            gpui_render::PATH_RASTERIZATION_MSL,
-            gpui_render::PATH_MSL,
-            gpui_render::POLYCHROME_MSL,
-            gpui_render::MONOCHROME_MSL,
-            gpui_render::SURFACE_MSL,
-        ];
-        #[cfg(not(feature = "runtime_shaders"))]
-        let sources: [&[u8]; 8] = [
-            include_bytes!(concat!(env!("OUT_DIR"), "/quads.metallib")),
-            include_bytes!(concat!(env!("OUT_DIR"), "/shadows.metallib")),
-            include_bytes!(concat!(env!("OUT_DIR"), "/underlines.metallib")),
-            include_bytes!(concat!(env!("OUT_DIR"), "/path_rasterization.metallib")),
-            include_bytes!(concat!(env!("OUT_DIR"), "/paths.metallib")),
-            include_bytes!(concat!(env!("OUT_DIR"), "/polychrome_sprites.metallib")),
-            include_bytes!(concat!(env!("OUT_DIR"), "/monochrome_sprites.metallib")),
-            include_bytes!(concat!(env!("OUT_DIR"), "/surfaces.metallib")),
-        ];
-        let [
-            quad_library,
-            shadow_library,
-            underline_library,
-            path_library,
-            path_sprite_library,
-            polychrome_library,
-            monochrome_library,
-            surface_library,
-        ] = sources.map(|source| {
-            #[cfg(feature = "runtime_shaders")]
-            let library = device.new_library_with_source(source, &metal::CompileOptions::new());
-            #[cfg(not(feature = "runtime_shaders"))]
-            let library = device.new_library_with_data(source);
-            library.expect("error loading shared primitive library")
-        });
+        let libraries: HashMap<_, _> = ShaderLibrary::ALL
+            .iter()
+            .map(|&shader| {
+                #[cfg(feature = "runtime_shaders")]
+                let library =
+                    device.new_library_with_source(shader.source(), &metal::CompileOptions::new());
+                #[cfg(not(feature = "runtime_shaders"))]
+                let library = device.new_library_with_data(compiled_library_bytes(shader));
+                let library = library.unwrap_or_else(|error| {
+                    panic!("error loading Metal library {}: {error}", shader.name())
+                });
+                (shader, library)
+            })
+            .collect();
         let path_sprites_pipeline_state = build_path_sprite_pipeline_state(
             &device,
-            &path_sprite_library,
-            "path_sprites",
-            "vs_path",
-            "fs_path",
+            &libraries,
+            ShaderProgram::PathSprite,
             MTLPixelFormat::BGRA8Unorm,
         );
         let shadows_pipeline_state = build_pipeline_state(
             &device,
-            &shadow_library,
-            "shadows",
-            "vs_shadow",
-            "fs_shadow",
+            &libraries,
+            ShaderProgram::Shadow,
             MTLPixelFormat::BGRA8Unorm,
         );
         let paths_rasterization_pipeline_state = build_path_rasterization_pipeline_state(
             &device,
-            &path_library,
-            "paths_rasterization",
-            "vs_path_rasterization",
-            "fs_path_rasterization",
+            &libraries,
+            ShaderProgram::PathRasterization,
             MTLPixelFormat::BGRA8Unorm,
             PATH_SAMPLE_COUNT,
         );
         let quads_pipeline_state = build_pipeline_state(
             &device,
-            &quad_library,
-            "quads",
-            "vs_quad",
-            "fs_quad",
+            &libraries,
+            ShaderProgram::Quad,
             MTLPixelFormat::BGRA8Unorm,
         );
         let underlines_pipeline_state = build_pipeline_state(
             &device,
-            &underline_library,
-            "underlines",
-            "vs_underline",
-            "fs_underline",
+            &libraries,
+            ShaderProgram::Underline,
             MTLPixelFormat::BGRA8Unorm,
         );
         let monochrome_sprites_pipeline_state = build_pipeline_state(
             &device,
-            &monochrome_library,
-            "monochrome_sprites",
-            "vs_mono_sprite",
-            "fs_mono_sprite",
+            &libraries,
+            ShaderProgram::MonochromeSprite,
             MTLPixelFormat::BGRA8Unorm,
         );
         let polychrome_sprites_pipeline_state = build_pipeline_state(
             &device,
-            &polychrome_library,
-            "polychrome_sprites",
-            "vs_poly_sprite",
-            "fs_poly_sprite",
+            &libraries,
+            ShaderProgram::PolychromeSprite,
             MTLPixelFormat::BGRA8Unorm,
         );
         let surfaces_rgba_pipeline_state = build_pipeline_state(
             &device,
-            &surface_library,
-            "surfaces_rgba",
-            "vs_surface",
-            "fs_surface_rgba",
+            &libraries,
+            ShaderProgram::SurfaceRgba,
             MTLPixelFormat::BGRA8Unorm,
         );
         let surfaces_nv12_pipeline_state = build_pipeline_state(
             &device,
-            &surface_library,
-            "surfaces_nv12",
-            "vs_surface",
-            "fs_surface_yuv",
+            &libraries,
+            ShaderProgram::SurfaceNv12,
             MTLPixelFormat::BGRA8Unorm,
         );
 
-        let subtree_pipeline_state = crate::metal_scene::composite_pipeline(&device, &library);
+        let subtree_pipeline_state = crate::metal_scene::composite_pipeline(
+            &device,
+            &libraries[&ShaderProgram::Subtree.program().library],
+        );
         let command_queue = scene_renderer.as_ref().map_or_else(
             || device.new_command_queue(),
             |renderer| renderer.command_queue(),
@@ -2593,21 +2544,21 @@ fn try_build_effect_pipeline_state(
 
 fn build_pipeline_state(
     device: &metal::DeviceRef,
-    library: &metal::LibraryRef,
-    label: &str,
-    vertex_fn_name: &str,
-    fragment_fn_name: &str,
+    libraries: &HashMap<ShaderLibrary, metal::Library>,
+    program: ShaderProgram,
     pixel_format: metal::MTLPixelFormat,
 ) -> metal::RenderPipelineState {
+    let program = program.program();
+    let library = &libraries[&program.library];
     let vertex_fn = library
-        .get_function(vertex_fn_name, None)
+        .get_function(program.vertex, None)
         .expect("error locating vertex function");
     let fragment_fn = library
-        .get_function(fragment_fn_name, None)
+        .get_function(program.fragment, None)
         .expect("error locating fragment function");
 
     let descriptor = metal::RenderPipelineDescriptor::new();
-    descriptor.set_label(label);
+    descriptor.set_label(program.label);
     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
     let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
@@ -2627,21 +2578,21 @@ fn build_pipeline_state(
 
 fn build_path_sprite_pipeline_state(
     device: &metal::DeviceRef,
-    library: &metal::LibraryRef,
-    label: &str,
-    vertex_fn_name: &str,
-    fragment_fn_name: &str,
+    libraries: &HashMap<ShaderLibrary, metal::Library>,
+    program: ShaderProgram,
     pixel_format: metal::MTLPixelFormat,
 ) -> metal::RenderPipelineState {
+    let program = program.program();
+    let library = &libraries[&program.library];
     let vertex_fn = library
-        .get_function(vertex_fn_name, None)
+        .get_function(program.vertex, None)
         .expect("error locating vertex function");
     let fragment_fn = library
-        .get_function(fragment_fn_name, None)
+        .get_function(program.fragment, None)
         .expect("error locating fragment function");
 
     let descriptor = metal::RenderPipelineDescriptor::new();
-    descriptor.set_label(label);
+    descriptor.set_label(program.label);
     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
     let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
@@ -2661,22 +2612,22 @@ fn build_path_sprite_pipeline_state(
 
 fn build_path_rasterization_pipeline_state(
     device: &metal::DeviceRef,
-    library: &metal::LibraryRef,
-    label: &str,
-    vertex_fn_name: &str,
-    fragment_fn_name: &str,
+    libraries: &HashMap<ShaderLibrary, metal::Library>,
+    program: ShaderProgram,
     pixel_format: metal::MTLPixelFormat,
     path_sample_count: u32,
 ) -> metal::RenderPipelineState {
+    let program = program.program();
+    let library = &libraries[&program.library];
     let vertex_fn = library
-        .get_function(vertex_fn_name, None)
+        .get_function(program.vertex, None)
         .expect("error locating vertex function");
     let fragment_fn = library
-        .get_function(fragment_fn_name, None)
+        .get_function(program.fragment, None)
         .expect("error locating fragment function");
 
     let descriptor = metal::RenderPipelineDescriptor::new();
-    descriptor.set_label(label);
+    descriptor.set_label(program.label);
     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
     if path_sample_count > 1 {

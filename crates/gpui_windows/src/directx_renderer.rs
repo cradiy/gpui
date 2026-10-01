@@ -1300,90 +1300,16 @@ impl DirectXRenderer {
 }
 
 fn surface_instance(surface: &PaintSurface, frame: &SurfaceFrame) -> SurfaceInstance {
-    let coded_size = frame.coded_size();
-    let visible_rect = frame.visible_rect();
     SurfaceInstance {
         bounds: surface.bounds,
         clip_bounds: surface.clip_bounds,
         content_mask: surface.content_mask.bounds,
-        uv_bounds: Bounds {
-            origin: Point {
-                x: visible_rect.origin.x.0 as f32 / coded_size.width.0 as f32,
-                y: visible_rect.origin.y.0 as f32 / coded_size.height.0 as f32,
-            },
-            size: Size {
-                width: visible_rect.size.width.0 as f32 / coded_size.width.0 as f32,
-                height: visible_rect.size.height.0 as f32 / coded_size.height.0 as f32,
-            },
-        },
+        uv_bounds: frame.normalized_visible_rect(),
         corner_radii: surface.corner_radii,
-        color_rows: yuv_to_rgb_rows(frame.color()),
+        color_rows: frame.color().yuv_to_rgb_matrix(),
         opacity: surface.opacity,
         _pad: [0.0; 3],
     }
-}
-
-fn yuv_to_rgb_rows(color: SurfaceColorInfo) -> [[f32; 4]; 3] {
-    let (y_scale, y_offset, chroma_center, r_cr, g_cb, g_cr, b_cb) =
-        match (color.matrix, color.range) {
-            (YuvMatrix::Bt601, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.596_027,
-                -0.391_762,
-                -0.812_968,
-                2.017_232,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.792_741,
-                -0.213_249,
-                -0.532_909,
-                2.112_402,
-            ),
-            (YuvMatrix::Bt601, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.402,
-                -0.344_136,
-                -0.714_136,
-                1.772,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.5748,
-                -0.187_324,
-                -0.468_124,
-                1.8556,
-            ),
-        };
-
-    [
-        [
-            y_scale,
-            0.0,
-            r_cr,
-            -y_scale * y_offset - r_cr * chroma_center,
-        ],
-        [
-            y_scale,
-            g_cb,
-            g_cr,
-            -y_scale * y_offset - (g_cb + g_cr) * chroma_center,
-        ],
-        [
-            y_scale,
-            b_cb,
-            0.0,
-            -y_scale * y_offset - b_cb * chroma_center,
-        ],
-    ]
 }
 
 fn create_surface_textures(

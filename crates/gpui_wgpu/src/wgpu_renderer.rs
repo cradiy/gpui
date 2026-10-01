@@ -1,11 +1,10 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use bytemuck::{Pod, Zeroable};
 use gpui::{
-    AtlasTextureId, BackdropBlur, BackdropShader, Background, Bounds, ColorRange, DevicePixels,
-    EffectQuad, EffectShader, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, SubpixelSprite, SurfaceColorInfo,
-    SurfaceFormat, SurfaceFrame, SurfaceId, Underline, WeakSurfaceHandle, YuvMatrix,
-    get_gamma_correction_ratios,
+    AtlasTextureId, BackdropBlur, BackdropShader, Background, Bounds, DevicePixels, EffectQuad,
+    EffectShader, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, SubpixelSprite, SurfaceFormat, SurfaceFrame, SurfaceId,
+    Underline, WeakSurfaceHandle, get_gamma_correction_ratios,
 };
 #[cfg(target_os = "linux")]
 use gpui::{
@@ -102,69 +101,6 @@ pub(super) struct SurfaceParams {
     _pad: [f32; 3],
 }
 
-pub(super) fn yuv_to_rgb_rows(color: SurfaceColorInfo) -> [[f32; 4]; 3] {
-    let (y_scale, y_offset, chroma_center, r_cr, g_cb, g_cr, b_cb) =
-        match (color.matrix, color.range) {
-            (YuvMatrix::Bt601, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.596_027,
-                -0.391_762,
-                -0.812_968,
-                2.017_232,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.792_741,
-                -0.213_249,
-                -0.532_909,
-                2.112_402,
-            ),
-            (YuvMatrix::Bt601, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.402,
-                -0.344_136,
-                -0.714_136,
-                1.772,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.5748,
-                -0.187_324,
-                -0.468_124,
-                1.8556,
-            ),
-        };
-
-    [
-        [
-            y_scale,
-            0.0,
-            r_cr,
-            -y_scale * y_offset - r_cr * chroma_center,
-        ],
-        [
-            y_scale,
-            g_cb,
-            g_cr,
-            -y_scale * y_offset - (g_cb + g_cr) * chroma_center,
-        ],
-        [
-            y_scale,
-            b_cb,
-            0.0,
-            -y_scale * y_offset - b_cb * chroma_center,
-        ],
-    ]
-}
-
 enum CachedSurfaceTextures {
     Rgba {
         _texture: wgpu::Texture,
@@ -218,21 +154,6 @@ pub(super) fn surface_cache_action(
     } else {
         SurfaceCacheAction::Reuse
     }
-}
-
-pub(super) fn surface_uv_bounds(frame: &SurfaceFrame) -> ([f32; 2], [f32; 2]) {
-    let coded_size = frame.coded_size();
-    let visible_rect = frame.visible_rect();
-    (
-        [
-            visible_rect.origin.x.0 as f32 / coded_size.width.0 as f32,
-            visible_rect.origin.y.0 as f32 / coded_size.height.0 as f32,
-        ],
-        [
-            visible_rect.size.width.0 as f32 / coded_size.width.0 as f32,
-            visible_rect.size.height.0 as f32 / coded_size.height.0 as f32,
-        ],
-    )
 }
 
 type GammaParams = gpui_render::GammaParams;
@@ -4775,14 +4696,14 @@ impl WgpuRenderer {
                 continue;
             };
 
-            let (uv_origin, uv_size) = surface_uv_bounds(frame);
+            let uv = frame.normalized_visible_rect();
             let params = SurfaceParams {
                 bounds: surface.bounds.into(),
                 clip_bounds: surface.clip_bounds.into(),
                 content_mask: surface.content_mask.bounds.into(),
                 uv_bounds: PodBounds {
-                    origin: uv_origin,
-                    size: uv_size,
+                    origin: [uv.origin.x, uv.origin.y],
+                    size: [uv.size.width, uv.size.height],
                 },
                 corner_radii: [
                     surface.corner_radii.top_left.0,
@@ -4790,7 +4711,7 @@ impl WgpuRenderer {
                     surface.corner_radii.bottom_right.0,
                     surface.corner_radii.bottom_left.0,
                 ],
-                color_rows: yuv_to_rgb_rows(frame.color()),
+                color_rows: frame.color().yuv_to_rgb_matrix(),
                 opacity: surface.opacity,
                 _pad: [0.0; 3],
             };

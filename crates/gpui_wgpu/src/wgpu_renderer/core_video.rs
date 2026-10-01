@@ -6,7 +6,7 @@ use ::core_video::{
 };
 use core_foundation::base::TCFType;
 use foreign_types::ForeignTypeRef;
-use gpui::{CoreVideoHandle, SurfaceHandle, SurfaceSource};
+use gpui::{CoreVideoHandle, SurfaceColorInfo, SurfaceHandle, SurfaceSource};
 
 #[derive(Default)]
 pub(super) struct CoreVideoSurfaces {

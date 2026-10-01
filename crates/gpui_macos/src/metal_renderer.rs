@@ -2405,30 +2405,15 @@ fn upload_surface(textures: &CachedSurfaceTextures, frame: &SurfaceFrame) {
 }
 
 fn surface_bounds(surface: &PaintSurface, frame: Option<&SurfaceFrame>) -> SurfaceBounds {
-    let (uv_origin, uv_size, color) = frame.map_or(
+    let (uv, color) = frame.map_or(
         (
-            [0.0, 0.0],
-            [1.0, 1.0],
+            Bounds::new(point(0.0, 0.0), size(1.0, 1.0)),
             SurfaceColorInfo {
                 matrix: YuvMatrix::Bt601,
                 range: ColorRange::Full,
             },
         ),
-        |frame| {
-            let coded_size = frame.coded_size();
-            let visible_rect = frame.visible_rect();
-            (
-                [
-                    visible_rect.origin.x.0 as f32 / coded_size.width.0 as f32,
-                    visible_rect.origin.y.0 as f32 / coded_size.height.0 as f32,
-                ],
-                [
-                    visible_rect.size.width.0 as f32 / coded_size.width.0 as f32,
-                    visible_rect.size.height.0 as f32 / coded_size.height.0 as f32,
-                ],
-                frame.color(),
-            )
-        },
+        |frame| (frame.normalized_visible_rect(), frame.color()),
     );
 
     SurfaceBounds {
@@ -2436,75 +2421,12 @@ fn surface_bounds(surface: &PaintSurface, frame: Option<&SurfaceFrame>) -> Surfa
         clip_bounds: surface.clip_bounds,
         content_mask: surface.content_mask,
         corner_radii: surface.corner_radii,
-        uv_origin,
-        uv_size,
-        color_rows: yuv_to_rgb_rows(color),
+        uv_origin: [uv.origin.x, uv.origin.y],
+        uv_size: [uv.size.width, uv.size.height],
+        color_rows: color.yuv_to_rgb_matrix(),
         opacity: surface.opacity,
         _pad: [0.0; 3],
     }
-}
-
-fn yuv_to_rgb_rows(color: SurfaceColorInfo) -> [[f32; 4]; 3] {
-    let (y_scale, y_offset, chroma_center, r_cr, g_cb, g_cr, b_cb) =
-        match (color.matrix, color.range) {
-            (YuvMatrix::Bt601, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.596_027,
-                -0.391_762,
-                -0.812_968,
-                2.017_232,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.792_741,
-                -0.213_249,
-                -0.532_909,
-                2.112_402,
-            ),
-            (YuvMatrix::Bt601, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.402,
-                -0.344_136,
-                -0.714_136,
-                1.772,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.5748,
-                -0.187_324,
-                -0.468_124,
-                1.8556,
-            ),
-        };
-
-    [
-        [
-            y_scale,
-            0.0,
-            r_cr,
-            -y_scale * y_offset - r_cr * chroma_center,
-        ],
-        [
-            y_scale,
-            g_cb,
-            g_cr,
-            -y_scale * y_offset - (g_cb + g_cr) * chroma_center,
-        ],
-        [
-            y_scale,
-            b_cb,
-            0.0,
-            -y_scale * y_offset - b_cb * chroma_center,
-        ],
-    ]
 }
 
 fn new_command_encoder_for_texture<'a>(
@@ -2994,25 +2916,6 @@ mod tests {
                 offset_of!(PathRasterizationVertex, color),
                 offset_of!(PathRasterizationVertex, bounds),
             ]
-        );
-    }
-    #[test]
-    fn full_range_yuv_matrix_maps_neutral_black_and_white() {
-        let rows = yuv_to_rgb_rows(SurfaceColorInfo {
-            matrix: YuvMatrix::Bt709,
-            range: ColorRange::Full,
-        });
-        let convert = |y: f32, cb: f32, cr: f32| {
-            rows.map(|row| row[0] * y + row[1] * cb + row[2] * cr + row[3])
-        };
-
-        let black = convert(0.0, 128.0 / 255.0, 128.0 / 255.0);
-        let white = convert(1.0, 128.0 / 255.0, 128.0 / 255.0);
-        assert!(black.into_iter().all(|channel| channel.abs() < 1e-6));
-        assert!(
-            white
-                .into_iter()
-                .all(|channel| (channel - 1.0).abs() < 1e-6)
         );
     }
 

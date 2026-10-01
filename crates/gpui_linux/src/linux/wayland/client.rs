@@ -74,20 +74,19 @@ use wayland_protocols::{
 };
 use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
-use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
-use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
+use xkbcommon::xkb;
 
 use super::{
     display::WaylandDisplay,
+    keyboard::{load_keymap, translate_key, update_modifiers},
     window::{ImeInput, WaylandDragIcon, WaylandWindowStatePtr},
 };
 
 use crate::linux::{
     DOUBLE_CLICK_INTERVAL, LinuxClient, LinuxCommon, LinuxKeyboardLayout, PIPE_READ_TIMEOUT,
-    SCROLL_LINES, capslock_from_xkb, cursor_style_to_icon_names, dispatch_tray_message,
-    get_xkb_compose_state, is_within_click_distance, keystroke_from_xkb,
-    keystroke_underlying_dead_key, modifiers_from_xkb, open_uri_internal, read_fd_with_timeout,
-    reveal_path_internal,
+    SCROLL_LINES, cursor_style_to_icon_names, dispatch_tray_message, get_xkb_compose_state,
+    is_within_click_distance, keystroke_underlying_dead_key, open_uri_internal,
+    read_fd_with_timeout, reveal_path_internal,
     wayland::{
         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
         cursor::Cursor,
@@ -110,9 +109,6 @@ use gpui_wgpu::{CompositorGpuHint, GpuContext};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
 };
-
-/// Used to convert evdev scancode to xkb scancode
-const MIN_KEYCODE: u32 = 8;
 
 const UNKNOWN_KEYBOARD_LAYOUT_NAME: SharedString = SharedString::new_static("unknown");
 const XDG_ACTIVATION_TOKEN_ENV_VAR: &str = "XDG_ACTIVATION_TOKEN";
@@ -2207,30 +2203,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 state.repeat.delay = Duration::from_millis(delay as u64);
             }
             wl_keyboard::Event::Keymap {
-                format: WEnum::Value(format),
-                fd,
-                size,
-                ..
+                format, fd, size, ..
             } => {
-                if format != wl_keyboard::KeymapFormat::XkbV1 {
-                    log::error!("Received keymap format {:?}, expected XkbV1", format);
-                    return;
-                }
                 let xkb_context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
-                let keymap = unsafe {
-                    xkb::Keymap::new_from_fd(
-                        &xkb_context,
-                        fd,
-                        size as usize,
-                        XKB_KEYMAP_FORMAT_TEXT_V1,
-                        KEYMAP_COMPILE_NO_FLAGS,
-                    )
-                    .log_err()
-                    .flatten()
-                    .expect("Failed to create keymap")
-                };
-                state.keymap_state = Some(xkb::State::new(&keymap));
-                state.compose_state = get_xkb_compose_state(&xkb_context);
+                state.keymap_state = load_keymap(&xkb_context, format, fd, size).log_err();
+                state.compose_state = state
+                    .keymap_state
+                    .as_ref()
+                    .and_then(|_| get_xkb_compose_state(&xkb_context));
+                state.repeat.current_id += 1;
+                state.repeat.current_keycode = None;
                 drop(state);
 
                 this.handle_keyboard_layout_change();
@@ -2272,13 +2254,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
             } => {
                 let focused_window = state.keyboard_focused_window.clone();
 
-                let keymap_state = state.keymap_state.as_mut().unwrap();
-                let old_layout =
-                    keymap_state.serialize_layout(xkbcommon::xkb::STATE_LAYOUT_EFFECTIVE);
-                keymap_state.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
-                state.modifiers = modifiers_from_xkb(keymap_state);
-                let keymap_state = state.keymap_state.as_mut().unwrap();
-                state.capslock = capslock_from_xkb(keymap_state);
+                let Some((old_layout, modifiers, capslock)) = update_modifiers(
+                    state.keymap_state.as_mut(),
+                    mods_depressed,
+                    mods_latched,
+                    mods_locked,
+                    group,
+                ) else {
+                    return;
+                };
+                state.modifiers = modifiers;
+                state.capslock = capslock;
 
                 let input = PlatformInput::ModifiersChanged(ModifiersChangedEvent {
                     modifiers: state.modifiers,
@@ -2307,14 +2293,14 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                     return;
                 };
 
-                let keymap_state = state.keymap_state.as_ref().unwrap();
-                let keycode = Keycode::from(key + MIN_KEYCODE);
-                let keysym = keymap_state.key_get_one_sym(keycode);
+                let Some((keycode, keysym, mut keystroke)) =
+                    translate_key(state.keymap_state.as_ref(), state.modifiers, key)
+                else {
+                    return;
+                };
 
                 match key_state {
                     wl_keyboard::KeyState::Pressed if !keysym.is_modifier_key() => {
-                        let mut keystroke =
-                            keystroke_from_xkb(keymap_state, state.modifiers, keycode);
                         if let Some(mut compose) = state.compose_state.take() {
                             compose.feed(keysym);
                             match compose.status() {
@@ -2402,9 +2388,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                         focused_window.handle_input(input);
                     }
                     wl_keyboard::KeyState::Released if !keysym.is_modifier_key() => {
-                        let input = PlatformInput::KeyUp(KeyUpEvent {
-                            keystroke: keystroke_from_xkb(keymap_state, state.modifiers, keycode),
-                        });
+                        let input = PlatformInput::KeyUp(KeyUpEvent { keystroke });
 
                         if state.repeat.current_keycode == Some(keycode) {
                             state.repeat.current_keycode = None;

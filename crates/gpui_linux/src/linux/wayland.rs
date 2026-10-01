@@ -5,6 +5,7 @@ mod cursor;
 mod display;
 mod external_surface;
 mod frame_callback;
+mod keyboard;
 mod popup;
 mod serial;
 mod window;

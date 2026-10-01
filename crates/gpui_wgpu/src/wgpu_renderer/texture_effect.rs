@@ -1,7 +1,8 @@
-use super::{EffectInstance, GlobalParams, PodBounds, PodTransformationMatrix};
+use super::{EffectInstance, GlobalParams, PodBounds};
 use crate::{WgpuContext, WgpuResource};
 use anyhow::{Context as _, Result, ensure};
 use bytemuck::Zeroable as _;
+use gpui::ShaderTransformation as PodTransformationMatrix;
 use gpui::{EffectShader, EffectTextureOptions, EffectUniforms};
 use wgpu::util::DeviceExt as _;
 

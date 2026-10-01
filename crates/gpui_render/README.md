@@ -33,6 +33,10 @@ Surface shaders sample the visible UV region, apply the supplied YUV conversion
 matrix, and compose opacity, rounded corners and content masks. Frame import,
 texture upload and stream caching are backend responsibilities.
 
+Effect and backdrop instances use GPUI's shared GPU layouts. WGPU and Direct3D
+share the separable blur shader, with hardware linear sampling on WGPU and manual
+bilinear sampling on Direct3D. Metal uses Metal Performance Shaders for blur.
+
 `cargo test -p gpui_render` checks the host layout and shader resource contract.
 MSL and HLSL generation is validated on every build. Native shader compilation
 uses the platform SDK: Metal on macOS and FXC on Windows.

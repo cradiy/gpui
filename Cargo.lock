@@ -2528,6 +2528,7 @@ dependencies = [
  "backtrace",
  "bitflags 2.10.0",
  "block",
+ "bytemuck",
  "chrono",
  "cocoa 0.26.0",
  "cocoa-foundation 0.2.0",

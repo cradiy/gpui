@@ -1,11 +1,13 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use bytemuck::{Pod, Zeroable};
+use gpui::ShaderBounds as PodBounds;
 use gpui::{
     AtlasTextureId, BackdropBlur, BackdropShader, Bounds, DevicePixels, EffectQuad, EffectShader,
     GpuSpecs, MonochromeSprite, Path, PathSprite, PolychromeSprite, PrimitiveBatch, Quad,
     ScaledPixels, Scene, Shadow, Size, SubpixelSprite, SurfaceFormat, SurfaceFrame, SurfaceId,
     Underline, WeakSurfaceHandle, get_gamma_correction_ratios,
 };
+pub(super) use gpui::{BackdropInstance, EffectInstance};
 #[cfg(target_os = "linux")]
 use gpui::{
     DRM_FORMAT_NV12, DmaBufHandle, DmaBufId, DmaBufImage, DmaBufPlane, DrmDevice,
@@ -73,22 +75,6 @@ struct FeedbackTextures {
 
 type GlobalParams = gpui_render::PrimitiveGlobals;
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct PodBounds {
-    origin: [f32; 2],
-    size: [f32; 2],
-}
-
-impl From<Bounds<ScaledPixels>> for PodBounds {
-    fn from(bounds: Bounds<ScaledPixels>) -> Self {
-        Self {
-            origin: [bounds.origin.x.0, bounds.origin.y.0],
-            size: [bounds.size.width.0, bounds.size.height.0],
-        }
-    }
-}
-
 enum CachedSurfaceTextures {
     Rgba {
         _texture: wgpu::Texture,
@@ -145,145 +131,6 @@ pub(super) fn surface_cache_action(
 }
 
 type GammaParams = gpui_render::GammaParams;
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct PodTransformationMatrix {
-    rotation_scale: [[f32; 2]; 2],
-    translation: [f32; 2],
-}
-
-impl From<gpui::TransformationMatrix> for PodTransformationMatrix {
-    fn from(value: gpui::TransformationMatrix) -> Self {
-        Self {
-            rotation_scale: value.rotation_scale,
-            translation: value.translation,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub(super) struct EffectInstance {
-    bounds: PodBounds,
-    effect_bounds: PodBounds,
-    transformation: PodTransformationMatrix,
-    content_mask: PodBounds,
-    corner_radii: [f32; 4],
-    image_bounds: PodBounds,
-    second_image_bounds: PodBounds,
-    third_image_bounds: PodBounds,
-    fourth_image_bounds: PodBounds,
-    opacity: f32,
-    time: f32,
-    pad: [f32; 2],
-    alignment_pad: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl From<&EffectQuad> for EffectInstance {
-    fn from(effect: &EffectQuad) -> Self {
-        Self {
-            bounds: effect.bounds.into(),
-            effect_bounds: effect.effect_bounds.into(),
-            transformation: effect.transformation.into(),
-            content_mask: effect.content_mask.bounds.into(),
-            corner_radii: [
-                effect.corner_radii.top_left.0,
-                effect.corner_radii.top_right.0,
-                effect.corner_radii.bottom_right.0,
-                effect.corner_radii.bottom_left.0,
-            ],
-            image_bounds: effect
-                .image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
-                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
-            second_image_bounds: effect
-                .second_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
-                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
-            third_image_bounds: effect
-                .third_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
-                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
-            fourth_image_bounds: effect
-                .fourth_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
-                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
-            opacity: effect.opacity,
-            time: effect.time,
-            pad: [0.0; 2],
-            alignment_pad: [0.0; 2],
-            uniforms: *effect.uniforms.slots(),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub(super) struct BackdropInstance {
-    bounds: PodBounds,
-    content_mask: PodBounds,
-    corner_radii: [f32; 4],
-    blur_radius: f32,
-    opacity: f32,
-    time: f32,
-    pointer_active: f32,
-    direction: [f32; 2],
-    pointer: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl BackdropInstance {
-    fn blur(
-        viewport_size: [f32; 2],
-        render_size: [f32; 2],
-        blur_radius: f32,
-        direction: [f32; 2],
-    ) -> Self {
-        let viewport = PodBounds {
-            origin: [0.0, 0.0],
-            size: viewport_size,
-        };
-        Self {
-            bounds: viewport,
-            content_mask: PodBounds {
-                origin: [0.0, 0.0],
-                size: render_size,
-            },
-            corner_radii: [0.0; 4],
-            blur_radius,
-            opacity: 1.0,
-            time: 0.0,
-            pointer_active: 0.0,
-            direction,
-            pointer: [0.5; 2],
-            uniforms: [[0.0; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-        }
-    }
-}
-
-impl From<&BackdropBlur> for BackdropInstance {
-    fn from(backdrop: &BackdropBlur) -> Self {
-        Self {
-            bounds: backdrop.bounds.into(),
-            content_mask: backdrop.content_mask.bounds.into(),
-            corner_radii: [
-                backdrop.corner_radii.top_left.0,
-                backdrop.corner_radii.top_right.0,
-                backdrop.corner_radii.bottom_right.0,
-                backdrop.corner_radii.bottom_left.0,
-            ],
-            blur_radius: backdrop.blur_radius.0,
-            opacity: backdrop.opacity,
-            time: backdrop.time,
-            pointer_active: u32::from(backdrop.pointer_active) as f32,
-            direction: [0.0; 2],
-            pointer: [backdrop.pointer.x, backdrop.pointer.y],
-            uniforms: *backdrop.uniforms.slots(),
-        }
-    }
-}
 
 pub struct WgpuSurfaceConfig {
     pub size: Size<DevicePixels>,
@@ -1520,9 +1367,9 @@ impl WgpuRenderer {
         });
         let backdrop_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_backdrop_blur_shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "backdrop_blur.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                gpui_render::BACKDROP_BLUR_WGSL,
+            )),
         });
 
         let subpixel_shader_source = gpui_render::SUBPIXEL_WGSL;

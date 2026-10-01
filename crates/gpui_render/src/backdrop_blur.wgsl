@@ -30,29 +30,6 @@ struct BackdropInstance {
 @group(1) @binding(0) var<storage, read> b_backdrops: array<BackdropInstance>;
 @group(1) @binding(1) var t_backdrop: texture_2d<f32>;
 
-fn sample_backdrop(uv: vec2<f32>) -> vec4<f32> {
-    let dimensions = vec2<f32>(textureDimensions(t_backdrop));
-    let position = clamp(
-        uv * dimensions - vec2<f32>(0.5),
-        vec2<f32>(0.0),
-        dimensions - vec2<f32>(1.0),
-    );
-    let low = vec2<i32>(floor(position));
-    let high = min(low + vec2<i32>(1), vec2<i32>(dimensions) - vec2<i32>(1));
-    let factor = fract(position);
-    let top = mix(
-        textureLoad(t_backdrop, low, 0),
-        textureLoad(t_backdrop, vec2<i32>(high.x, low.y), 0),
-        factor.x,
-    );
-    let bottom = mix(
-        textureLoad(t_backdrop, vec2<i32>(low.x, high.y), 0),
-        textureLoad(t_backdrop, high, 0),
-        factor.x,
-    );
-    return mix(top, bottom, factor.y);
-}
-
 struct BackdropVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) instance_id: u32,
@@ -97,4 +74,43 @@ fn fs_blur(input: BackdropVarying) -> @location(0) vec4<f32> {
     color += sample_backdrop(uv + step * 4.0) * 0.016216;
     color += sample_backdrop(uv - step * 4.0) * 0.016216;
     return color;
+}
+
+fn corner_radius(point: vec2<f32>, radii: vec4<f32>) -> f32 {
+    if (point.x < 0.0) {
+        return select(radii.w, radii.x, point.y < 0.0);
+    }
+    return select(radii.z, radii.y, point.y < 0.0);
+}
+
+fn rounded_rect_distance(position: vec2<f32>, bounds: Bounds, radii: vec4<f32>) -> f32 {
+    let half_size = bounds.size * 0.5;
+    let centered = position - (bounds.origin + half_size);
+    let radius = corner_radius(centered, radii);
+    let corner = abs(centered) - half_size + radius;
+    return length(max(corner, vec2<f32>(0.0)))
+        + min(max(corner.x, corner.y), 0.0)
+        - radius;
+}
+
+@fragment
+fn fs_backdrop(input: BackdropVarying) -> @location(0) vec4<f32> {
+    let instance = b_backdrops[input.instance_id];
+    let position = input.position.xy;
+    let mask_end = instance.content_mask.origin + instance.content_mask.size;
+    if (any(position < instance.content_mask.origin) || any(position > mask_end)) {
+        discard;
+    }
+
+    let distance = rounded_rect_distance(position, instance.bounds, instance.corner_radii);
+    let coverage = 1.0 - smoothstep(-0.5, 0.5, distance);
+    let factor = coverage * instance.opacity;
+    let sampled = sample_backdrop(
+        position / max(globals.viewport_size, vec2<f32>(1.0)),
+    );
+
+    if (globals.premultiplied_alpha != 0u) {
+        return vec4<f32>(sampled.rgb * factor, sampled.a * factor);
+    }
+    return vec4<f32>(sampled.rgb, sampled.a * factor);
 }

@@ -1,5 +1,17 @@
 //! Shared primitive shaders and their native resource contracts.
 
+/// Separable backdrop blur and composition using a hardware linear sampler.
+pub const BACKDROP_BLUR_WGSL: &str = concat!(
+    include_str!("backdrop_blur.wgsl"),
+    include_str!("backdrop_sampling.wgsl")
+);
+/// Backdrop blur and composition using texture loads for bilinear interpolation.
+/// This variant requires no sampler binding.
+pub const BACKDROP_BLUR_MANUAL_WGSL: &str = concat!(
+    include_str!("backdrop_blur.wgsl"),
+    include_str!("backdrop_sampling_manual.wgsl")
+);
+
 /// Common types, color functions and rectangle entry points in WGSL.
 pub const QUAD_WGSL: &str = concat!(include_str!("common.wgsl"), include_str!("quads.wgsl"));
 /// Native rectangle shader for Metal, generated from [`QUAD_WGSL`].

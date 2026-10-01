@@ -10,9 +10,10 @@ use gpui::{
     AtlasTextureId, BackdropBlur, BackdropShader, Bounds, ColorRange, DevicePixels, EffectQuad,
     EffectShader, MonochromeSprite, PaintSurface, Path, PathSprite, PolychromeSprite,
     PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, SurfaceColorInfo, SurfaceFormat,
-    SurfaceFrame, SurfaceFrameBacking, SurfaceId, TransformationMatrix, Underline,
-    WeakSurfaceHandle, YuvMatrix, point, size,
+    SurfaceFrame, SurfaceFrameBacking, SurfaceId, Underline, WeakSurfaceHandle, YuvMatrix, point,
+    size,
 };
+use gpui::{BackdropInstance, EffectInstance};
 use gpui_render::SurfaceParams;
 use image::RgbaImage;
 
@@ -191,109 +192,7 @@ pub(crate) struct MetalRenderer {
     headless_render_target: Option<metal::Texture>,
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct EffectInstance {
-    bounds: Bounds<ScaledPixels>,
-    effect_bounds: Bounds<ScaledPixels>,
-    transformation: TransformationMatrix,
-    content_mask: Bounds<ScaledPixels>,
-    corner_radii: [f32; 4],
-    image_bounds: Bounds<ScaledPixels>,
-    second_image_bounds: Bounds<ScaledPixels>,
-    third_image_bounds: Bounds<ScaledPixels>,
-    fourth_image_bounds: Bounds<ScaledPixels>,
-    opacity: f32,
-    time: f32,
-    pad: [f32; 2],
-    alignment_pad: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl From<&EffectQuad> for EffectInstance {
-    fn from(effect: &EffectQuad) -> Self {
-        Self {
-            bounds: effect.bounds,
-            effect_bounds: effect.effect_bounds,
-            transformation: effect.transformation,
-            content_mask: effect.content_mask.bounds,
-            corner_radii: [
-                effect.corner_radii.top_left.0,
-                effect.corner_radii.top_right.0,
-                effect.corner_radii.bottom_right.0,
-                effect.corner_radii.bottom_left.0,
-            ],
-            image_bounds: effect
-                .image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            second_image_bounds: effect
-                .second_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            third_image_bounds: effect
-                .third_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            fourth_image_bounds: effect
-                .fourth_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            opacity: effect.opacity,
-            time: effect.time,
-            pad: [0.0; 2],
-            alignment_pad: [0.0; 2],
-            uniforms: *effect.uniforms.slots(),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct EffectGlobalParams {
-    viewport_size: [f32; 2],
-    premultiplied_alpha: u32,
-    pad: u32,
-    viewport_origin: [f32; 2],
-    origin_pad: [u32; 2],
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct BackdropInstance {
-    bounds: Bounds<ScaledPixels>,
-    content_mask: Bounds<ScaledPixels>,
-    corner_radii: [f32; 4],
-    blur_radius: f32,
-    opacity: f32,
-    time: f32,
-    pointer_active: f32,
-    direction: [f32; 2],
-    pointer: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl From<&BackdropBlur> for BackdropInstance {
-    fn from(backdrop: &BackdropBlur) -> Self {
-        Self {
-            bounds: backdrop.bounds,
-            content_mask: backdrop.content_mask.bounds,
-            corner_radii: [
-                backdrop.corner_radii.top_left.0,
-                backdrop.corner_radii.top_right.0,
-                backdrop.corner_radii.bottom_right.0,
-                backdrop.corner_radii.bottom_left.0,
-            ],
-            blur_radius: backdrop.blur_radius.0,
-            opacity: backdrop.opacity,
-            time: backdrop.time,
-            pointer_active: u32::from(backdrop.pointer_active) as f32,
-            direction: [0.0; 2],
-            pointer: [backdrop.pointer.x, backdrop.pointer.y],
-            uniforms: *backdrop.uniforms.slots(),
-        }
-    }
-}
+type EffectGlobalParams = gpui_render::PrimitiveGlobals;
 
 const DEFAULT_BACKDROP_EFFECT: &str = r#"
 fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {

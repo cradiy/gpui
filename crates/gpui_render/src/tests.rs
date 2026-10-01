@@ -2,6 +2,135 @@ use super::*;
 use std::mem::{offset_of, size_of};
 
 #[test]
+fn manual_backdrop_blur_translates_without_sampler_bindings() {
+    let module = naga::front::wgsl::parse_str(BACKDROP_BLUR_MANUAL_WGSL).unwrap();
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap();
+    let mut options = naga::back::hlsl::Options {
+        shader_model: naga::back::hlsl::ShaderModel::V5_0,
+        fake_missing_bindings: false,
+        ..Default::default()
+    };
+    for (group, binding, register) in [(0, 0, 0), (1, 0, 1), (1, 1, 0)] {
+        options.binding_map.insert(
+            naga::ResourceBinding { group, binding },
+            naga::back::hlsl::BindTarget {
+                space: 0,
+                register,
+                ..Default::default()
+            },
+        );
+    }
+    let pipeline_options = naga::back::hlsl::PipelineOptions::default();
+    let mut output = String::new();
+    let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline_options)
+        .write(&module, &info, None)
+        .unwrap();
+    let entries = reflection
+        .entry_point_names
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(entries.iter().any(|entry| entry == "vs_backdrop"));
+    assert!(entries.iter().any(|entry| entry == "fs_blur"));
+    assert!(!output.contains("SamplerState"));
+}
+
+#[test]
+fn effect_shaders_match_shared_instance_layouts() {
+    let effect = gpui::compose_effect_wgsl(
+        "fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return vec4<f32>(input.uv, 0.0, 1.0); }",
+    );
+    let backdrop = gpui::compose_backdrop_shader_wgsl(&gpui::BackdropShader::wgsl(
+        "fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> { return sample_blurred_backdrop(input, vec2<f32>(0.0)); }",
+    ));
+    let effect_offsets = vec![
+        offset_of!(gpui::EffectInstance, bounds),
+        offset_of!(gpui::EffectInstance, effect_bounds),
+        offset_of!(gpui::EffectInstance, transformation),
+        offset_of!(gpui::EffectInstance, content_mask),
+        offset_of!(gpui::EffectInstance, corner_radii),
+        offset_of!(gpui::EffectInstance, image_bounds),
+        offset_of!(gpui::EffectInstance, second_image_bounds),
+        offset_of!(gpui::EffectInstance, third_image_bounds),
+        offset_of!(gpui::EffectInstance, fourth_image_bounds),
+        offset_of!(gpui::EffectInstance, opacity),
+        offset_of!(gpui::EffectInstance, time),
+        offset_of!(gpui::EffectInstance, pad),
+        offset_of!(gpui::EffectInstance, alignment_pad),
+        offset_of!(gpui::EffectInstance, uniforms),
+    ];
+    let backdrop_offsets = vec![
+        offset_of!(gpui::BackdropInstance, bounds),
+        offset_of!(gpui::BackdropInstance, content_mask),
+        offset_of!(gpui::BackdropInstance, corner_radii),
+        offset_of!(gpui::BackdropInstance, blur_radius),
+        offset_of!(gpui::BackdropInstance, opacity),
+        offset_of!(gpui::BackdropInstance, time),
+        offset_of!(gpui::BackdropInstance, pointer_active),
+        offset_of!(gpui::BackdropInstance, direction),
+        offset_of!(gpui::BackdropInstance, pointer),
+        offset_of!(gpui::BackdropInstance, uniforms),
+    ];
+    for (source, name, size, offsets) in [
+        (
+            effect.as_str(),
+            "EffectInstance",
+            size_of::<gpui::EffectInstance>(),
+            &effect_offsets,
+        ),
+        (
+            backdrop.as_str(),
+            "BackdropInstance",
+            size_of::<gpui::BackdropInstance>(),
+            &backdrop_offsets,
+        ),
+        (
+            BACKDROP_BLUR_WGSL,
+            "BackdropInstance",
+            size_of::<gpui::BackdropInstance>(),
+            &backdrop_offsets,
+        ),
+        (
+            BACKDROP_BLUR_MANUAL_WGSL,
+            "BackdropInstance",
+            size_of::<gpui::BackdropInstance>(),
+            &backdrop_offsets,
+        ),
+    ] {
+        let module = naga::front::wgsl::parse_str(source).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+        let ty = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some(name))
+            .unwrap()
+            .1;
+        let naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("not a struct")
+        };
+        assert_eq!(*span as usize, size, "{name} size");
+        assert_eq!(
+            &members
+                .iter()
+                .map(|member| member.offset as usize)
+                .collect::<Vec<_>>(),
+            offsets,
+            "{name} offsets"
+        );
+    }
+}
+
+#[test]
 fn primitive_shaders_match_host_layout_and_resource_contract() {
     let module = naga::front::wgsl::parse_str(&format!(
         "enable dual_source_blending;\n{}\n{SUBPIXEL_WGSL}",

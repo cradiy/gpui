@@ -1649,134 +1649,6 @@ impl DirectXGlobalElements {
 
 type EffectGlobalParams = gpui_render::PrimitiveGlobals;
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct EffectInstance {
-    bounds: Bounds<ScaledPixels>,
-    effect_bounds: Bounds<ScaledPixels>,
-    transformation: TransformationMatrix,
-    content_mask: Bounds<ScaledPixels>,
-    corner_radii: [f32; 4],
-    image_bounds: Bounds<ScaledPixels>,
-    second_image_bounds: Bounds<ScaledPixels>,
-    third_image_bounds: Bounds<ScaledPixels>,
-    fourth_image_bounds: Bounds<ScaledPixels>,
-    opacity: f32,
-    time: f32,
-    pad: [f32; 2],
-    alignment_pad: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl From<&EffectQuad> for EffectInstance {
-    fn from(effect: &EffectQuad) -> Self {
-        Self {
-            bounds: effect.bounds,
-            effect_bounds: effect.effect_bounds,
-            transformation: effect.transformation,
-            content_mask: effect.content_mask.bounds,
-            corner_radii: [
-                effect.corner_radii.top_left.0,
-                effect.corner_radii.top_right.0,
-                effect.corner_radii.bottom_right.0,
-                effect.corner_radii.bottom_left.0,
-            ],
-            image_bounds: effect
-                .image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            second_image_bounds: effect
-                .second_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            third_image_bounds: effect
-                .third_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            fourth_image_bounds: effect
-                .fourth_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            opacity: effect.opacity,
-            time: effect.time,
-            pad: [0.0; 2],
-            alignment_pad: [0.0; 2],
-            uniforms: *effect.uniforms.slots(),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct BackdropInstance {
-    bounds: Bounds<ScaledPixels>,
-    content_mask: Bounds<ScaledPixels>,
-    corner_radii: [f32; 4],
-    blur_radius: f32,
-    opacity: f32,
-    time: f32,
-    pointer_active: f32,
-    direction: [f32; 2],
-    pointer: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl BackdropInstance {
-    fn blur(
-        viewport_size: [f32; 2],
-        render_size: [f32; 2],
-        blur_radius: f32,
-        direction: [f32; 2],
-    ) -> Self {
-        Self {
-            bounds: Bounds {
-                origin: Point::default(),
-                size: Size {
-                    width: ScaledPixels(viewport_size[0]),
-                    height: ScaledPixels(viewport_size[1]),
-                },
-            },
-            content_mask: Bounds {
-                origin: Point::default(),
-                size: Size {
-                    width: ScaledPixels(render_size[0]),
-                    height: ScaledPixels(render_size[1]),
-                },
-            },
-            corner_radii: [0.0; 4],
-            blur_radius,
-            opacity: 1.0,
-            time: 0.0,
-            pointer_active: 0.0,
-            direction,
-            pointer: [0.5; 2],
-            uniforms: [[0.0; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-        }
-    }
-}
-
-impl From<&BackdropBlur> for BackdropInstance {
-    fn from(backdrop: &BackdropBlur) -> Self {
-        Self {
-            bounds: backdrop.bounds,
-            content_mask: backdrop.content_mask.bounds,
-            corner_radii: [
-                backdrop.corner_radii.top_left.0,
-                backdrop.corner_radii.top_right.0,
-                backdrop.corner_radii.bottom_right.0,
-                backdrop.corner_radii.bottom_left.0,
-            ],
-            blur_radius: backdrop.blur_radius.0,
-            opacity: backdrop.opacity,
-            time: backdrop.time,
-            pointer_active: u32::from(backdrop.pointer_active) as f32,
-            direction: [0.0; 2],
-            pointer: [backdrop.pointer.x, backdrop.pointer.y],
-            uniforms: *backdrop.uniforms.slots(),
-        }
-    }
-}
-
 struct EffectPipeline {
     vertex: ID3D11VertexShader,
     fragment: ID3D11PixelShader,
@@ -2324,7 +2196,8 @@ fn translate_effect_to_hlsl(shader: &EffectShader) -> Result<String> {
 fn create_builtin_backdrop_pipelines(
     device: &ID3D11Device,
 ) -> Result<(BackdropPipeline, BackdropPipeline)> {
-    let blur_source = translate_backdrop_wgsl_to_hlsl(include_str!("backdrop_blur.wgsl"), false)?;
+    let blur_source =
+        translate_backdrop_wgsl_to_hlsl(gpui_render::BACKDROP_BLUR_MANUAL_WGSL, false)?;
     let blur = BackdropPipeline::new(device, &blur_source, "fs_blur", false)?;
 
     let default_shader = BackdropShader::wgsl(DEFAULT_BACKDROP_EFFECT);
@@ -3056,7 +2929,7 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn backdrop_blur_shader_matches_windows_instance_layout() {
-        let source = include_str!("backdrop_blur.wgsl");
+        let source = gpui_render::BACKDROP_BLUR_MANUAL_WGSL;
         let module = naga::front::wgsl::parse_str(source).expect("backdrop blur should parse");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),

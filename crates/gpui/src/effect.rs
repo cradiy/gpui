@@ -1,4 +1,7 @@
+mod instance;
+
 use crate::{Bounds, Corners, Pixels, RenderImage};
+pub use instance::{BackdropInstance, EffectInstance, ShaderBounds, ShaderTransformation};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},

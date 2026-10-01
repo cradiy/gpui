@@ -235,15 +235,7 @@ pub(super) fn surface_uv_bounds(frame: &SurfaceFrame) -> ([f32; 2], [f32; 2]) {
     )
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, PartialEq, Pod, Zeroable)]
-struct GammaParams {
-    gamma_ratios: [f32; 4],
-    grayscale_enhanced_contrast: f32,
-    subpixel_enhanced_contrast: f32,
-    is_bgr: u32,
-    _pad: u32,
-}
+type GammaParams = gpui_render::GammaParams;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -1627,7 +1619,7 @@ impl WgpuRenderer {
         }
         let dual_source_blending = dual_source_blending && device_has_feature;
 
-        let base_shader_source = gpui_render::compose_shader(include_str!("shaders.wgsl"));
+        let base_shader_source = gpui_render::compose_shader("");
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_shaders"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(&base_shader_source)),
@@ -1639,7 +1631,7 @@ impl WgpuRenderer {
             ))),
         });
 
-        let subpixel_shader_source = include_str!("shaders_subpixel.wgsl");
+        let subpixel_shader_source = gpui_render::SUBPIXEL_WGSL;
         let subpixel_shader_module = if dual_source_blending {
             let combined = format!(
                 "enable dual_source_blending;\n{base_shader_source}\n{subpixel_shader_source}"
@@ -1896,7 +1888,7 @@ impl WgpuRenderer {
         let surfaces_nv12 = create_pipeline(
             "surfaces_nv12",
             "vs_surface",
-            "fs_surface_nv12",
+            "fs_surface_yuv",
             &layouts.globals,
             &layouts.surfaces,
             wgpu::PrimitiveTopology::TriangleStrip,

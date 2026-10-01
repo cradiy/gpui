@@ -19,11 +19,7 @@ mod shader_compilation {
     };
 
     pub fn compile_shaders() {
-        let shader_path =
-            PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("src/shaders.hlsl");
         let out_dir = std::env::var("OUT_DIR").unwrap();
-
-        println!("cargo:rerun-if-changed={}", shader_path.display());
 
         // Check if fxc.exe is available
         let fxc_path = find_fxc_compiler();
@@ -49,47 +45,51 @@ mod shader_compilation {
         }
         for module in modules {
             let shared_source = match module {
-                "quad" => Some(gpui_render::QUAD_HLSL),
-                "shadow" => Some(gpui_render::SHADOW_HLSL),
-                "underline" => Some(gpui_render::UNDERLINE_HLSL),
-                "path_rasterization" => Some(gpui_render::PATH_RASTERIZATION_HLSL),
-                "path_sprite" => Some(gpui_render::PATH_HLSL),
-                "polychrome_sprite" => Some(gpui_render::POLYCHROME_HLSL),
-                _ => None,
+                "quad" => gpui_render::QUAD_HLSL,
+                "shadow" => gpui_render::SHADOW_HLSL,
+                "underline" => gpui_render::UNDERLINE_HLSL,
+                "path_rasterization" => gpui_render::PATH_RASTERIZATION_HLSL,
+                "path_sprite" => gpui_render::PATH_HLSL,
+                "polychrome_sprite" => gpui_render::POLYCHROME_HLSL,
+                "monochrome_sprite" => gpui_render::MONOCHROME_HLSL,
+                "subpixel_sprite" => gpui_render::SUBPIXEL_HLSL,
+                "surface_rgba" | "surface_nv12" => gpui_render::SURFACE_HLSL,
+                _ => panic!("unknown shared shader: {module}"),
             };
-            if let Some(shared_source) = shared_source {
-                let source = PathBuf::from(&out_dir).join(format!("{module}.hlsl"));
-                fs::write(&source, shared_source).unwrap();
-                let entry_name = match module {
-                    "path_sprite" => "path",
-                    "polychrome_sprite" => "poly_sprite",
-                    _ => module,
-                };
-                for (entry, profile, suffix, stage) in [
-                    (format!("vs_{entry_name}"), "vs_4_1", "vs", "VERTEX"),
-                    (format!("fs_{entry_name}"), "ps_4_1", "ps", "FRAGMENT"),
-                ] {
-                    let output = format!("{out_dir}/{module}_{suffix}.h");
-                    let constant = format!("{}_{stage}_BYTES", module.to_uppercase());
-                    compile_shader_impl(
-                        &fxc_path,
-                        &entry,
-                        &output,
-                        &constant,
-                        source.to_str().unwrap(),
-                        profile,
-                    );
-                    generate_rust_binding(&constant, &output, &rust_binding_path);
-                }
-                continue;
+            let source = PathBuf::from(&out_dir).join(format!("{module}.hlsl"));
+            fs::write(&source, shared_source).unwrap();
+            let entry_name = match module {
+                "path_sprite" => "path",
+                "polychrome_sprite" => "poly_sprite",
+                "monochrome_sprite" => "mono_sprite",
+                _ => module,
+            };
+            let vertex = if module.starts_with("surface_") {
+                "vs_surface".to_string()
+            } else {
+                format!("vs_{entry_name}")
+            };
+            let fragment = if module == "surface_nv12" {
+                "fs_surface_yuv".to_string()
+            } else {
+                format!("fs_{entry_name}")
+            };
+            for (entry, profile, suffix, stage) in [
+                (vertex, "vs_4_1", "vs", "VERTEX"),
+                (fragment, "ps_4_1", "ps", "FRAGMENT"),
+            ] {
+                let output = format!("{out_dir}/{module}_{suffix}.h");
+                let constant = format!("{}_{stage}_BYTES", module.to_uppercase());
+                compile_shader_impl(
+                    &fxc_path,
+                    &entry,
+                    &output,
+                    &constant,
+                    source.to_str().unwrap(),
+                    profile,
+                );
+                generate_rust_binding(&constant, &output, &rust_binding_path);
             }
-            compile_shader_for_module(
-                module,
-                &out_dir,
-                &fxc_path,
-                shader_path.to_str().unwrap(),
-                &rust_binding_path,
-            );
         }
 
         {

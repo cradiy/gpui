@@ -5,6 +5,9 @@ use gpui::{DevicePixels, Scene, Size};
 
 use crate::{WgpuContext, WgpuExternalRendererConfig, WgpuRenderer, wgpu};
 
+#[cfg(test)]
+mod tests;
+
 /// Renders GPUI scenes into CPU-readable RGBA pixels without a native window.
 pub struct WgpuOffscreenRenderer {
     context: WgpuContext,

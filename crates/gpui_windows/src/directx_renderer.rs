@@ -174,8 +174,8 @@ struct CachedSurface {
 }
 
 struct DirectXGlobalElements {
-    global_params_buffer: Option<ID3D11Buffer>,
     effect_global_params_buffer: Option<ID3D11Buffer>,
+    gamma_params_buffer: Option<ID3D11Buffer>,
     sampler: Option<ID3D11SamplerState>,
 }
 
@@ -288,18 +288,6 @@ impl DirectXRenderer {
             .device_context;
         update_buffer(
             device_context,
-            self.globals.global_params_buffer.as_ref().unwrap(),
-            &[GlobalParams {
-                gamma_ratios: self.font_info.gamma_ratios,
-                viewport_size: [resources.viewport.Width, resources.viewport.Height],
-                grayscale_enhanced_contrast: self.font_info.grayscale_enhanced_contrast,
-                subpixel_enhanced_contrast: self.font_info.subpixel_enhanced_contrast,
-                is_bgr: self.font_info.is_bgr as u32,
-                _pad: [0; 3],
-            }],
-        )?;
-        update_buffer(
-            device_context,
             self.globals.effect_global_params_buffer.as_ref().unwrap(),
             &[EffectGlobalParams {
                 viewport_size: [resources.viewport.Width, resources.viewport.Height],
@@ -307,6 +295,17 @@ impl DirectXRenderer {
                 pad: 0,
                 viewport_origin: [0.; 2],
                 origin_pad: [0; 2],
+            }],
+        )?;
+        update_buffer(
+            device_context,
+            self.globals.gamma_params_buffer.as_ref().unwrap(),
+            &[gpui_render::GammaParams {
+                gamma_ratios: self.font_info.gamma_ratios,
+                grayscale_enhanced_contrast: self.font_info.grayscale_enhanced_contrast,
+                subpixel_enhanced_contrast: self.font_info.subpixel_enhanced_contrast,
+                is_bgr: self.font_info.is_bgr as u32,
+                _pad: 0,
             }],
         )?;
         unsafe {
@@ -1115,7 +1114,10 @@ impl DirectXRenderer {
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &[
+                self.globals.effect_global_params_buffer.clone(),
+                self.globals.gamma_params_buffer.clone(),
+            ],
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -1139,7 +1141,10 @@ impl DirectXRenderer {
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &[
+                self.globals.effect_global_params_buffer.clone(),
+                self.globals.gamma_params_buffer.clone(),
+            ],
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -1225,7 +1230,7 @@ impl DirectXRenderer {
                     slice::from_ref(&texture.view),
                     None,
                     slice::from_ref(&resources.viewport),
-                    slice::from_ref(&self.globals.global_params_buffer),
+                    slice::from_ref(&self.globals.effect_global_params_buffer),
                     slice::from_ref(&self.globals.sampler),
                 )?,
                 DirectXSurfaceTextures::Nv12 { y, uv } => pipeline.draw_surface(
@@ -1233,7 +1238,7 @@ impl DirectXRenderer {
                     slice::from_ref(&y.view),
                     Some(slice::from_ref(&uv.view)),
                     slice::from_ref(&resources.viewport),
-                    slice::from_ref(&self.globals.global_params_buffer),
+                    slice::from_ref(&self.globals.effect_global_params_buffer),
                     slice::from_ref(&self.globals.sampler),
                 )?,
             }
@@ -1667,9 +1672,9 @@ impl DirectComposition {
 
 impl DirectXGlobalElements {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        let global_params_buffer = unsafe {
+        let effect_global_params_buffer = unsafe {
             let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                ByteWidth: std::mem::size_of::<EffectGlobalParams>() as u32,
                 Usage: D3D11_USAGE_DYNAMIC,
                 BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
                 CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -1679,9 +1684,10 @@ impl DirectXGlobalElements {
             device.CreateBuffer(&desc, None, Some(&mut buffer))?;
             buffer
         };
-        let effect_global_params_buffer = unsafe {
+
+        let gamma_params_buffer = unsafe {
             let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<EffectGlobalParams>() as u32,
+                ByteWidth: std::mem::size_of::<gpui_render::GammaParams>() as u32,
                 Usage: D3D11_USAGE_DYNAMIC,
                 BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
                 CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -1711,22 +1717,11 @@ impl DirectXGlobalElements {
         };
 
         Ok(Self {
-            global_params_buffer,
             effect_global_params_buffer,
+            gamma_params_buffer,
             sampler,
         })
     }
-}
-
-#[derive(Debug, Default)]
-#[repr(C)]
-struct GlobalParams {
-    gamma_ratios: [f32; 4],
-    viewport_size: [f32; 2],
-    grayscale_enhanced_contrast: f32,
-    subpixel_enhanced_contrast: f32,
-    is_bgr: u32,
-    _pad: [u32; 3],
 }
 
 type EffectGlobalParams = gpui_render::PrimitiveGlobals;
@@ -1913,6 +1908,10 @@ impl<T> PipelineState<T> {
                 | ShaderModule::PathRasterization
                 | ShaderModule::PathSprite
                 | ShaderModule::PolychromeSprite
+                | ShaderModule::MonochromeSprite
+                | ShaderModule::SubpixelSprite
+                | ShaderModule::SurfaceRgba
+                | ShaderModule::SurfaceNv12
         );
         let buffer = if raw_instances {
             create_raw_buffer(device, std::mem::size_of::<T>() * buffer_size)?
@@ -3130,6 +3129,37 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
+    fn shared_surface_shader_matches_host_layout() {
+        use std::mem::{offset_of, size_of};
+        let module = naga::front::wgsl::parse_str(gpui_render::SURFACE_WGSL).unwrap();
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some("SurfaceParams"))
+            .unwrap();
+        let naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("expected surface struct")
+        };
+        assert_eq!(*span as usize, size_of::<SurfaceInstance>());
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member.offset as usize)
+                .collect::<Vec<_>>(),
+            vec![
+                offset_of!(SurfaceInstance, bounds),
+                offset_of!(SurfaceInstance, clip_bounds),
+                offset_of!(SurfaceInstance, content_mask),
+                offset_of!(SurfaceInstance, uv_bounds),
+                offset_of!(SurfaceInstance, corner_radii),
+                offset_of!(SurfaceInstance, color_rows),
+                offset_of!(SurfaceInstance, opacity),
+                offset_of!(SurfaceInstance, _pad)
+            ]
+        );
+    }
+
+    #[::core::prelude::v1::test]
     fn shared_path_shader_matches_host_layout() {
         use std::mem::{offset_of, size_of};
         let module = naga::front::wgsl::parse_str(gpui_render::PATH_RASTERIZATION_WGSL).unwrap();
@@ -3158,6 +3188,9 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn shared_primitives_compile_for_shader_model_4_1() {
+        compile_hlsl(gpui_render::SURFACE_HLSL, "vs_surface", "vs_4_1").unwrap();
+        compile_hlsl(gpui_render::SURFACE_HLSL, "fs_surface_rgba", "ps_4_1").unwrap();
+        compile_hlsl(gpui_render::SURFACE_HLSL, "fs_surface_yuv", "ps_4_1").unwrap();
         for (source, name) in [
             (gpui_render::QUAD_HLSL, "quad"),
             (gpui_render::SHADOW_HLSL, "shadow"),
@@ -3165,6 +3198,8 @@ mod tests {
             (gpui_render::PATH_RASTERIZATION_HLSL, "path_rasterization"),
             (gpui_render::PATH_HLSL, "path"),
             (gpui_render::POLYCHROME_HLSL, "poly_sprite"),
+            (gpui_render::MONOCHROME_HLSL, "mono_sprite"),
+            (gpui_render::SUBPIXEL_HLSL, "subpixel_sprite"),
         ] {
             compile_hlsl(source, &format!("vs_{name}"), "vs_4_1")
                 .unwrap_or_else(|error| panic!("{name} vertex shader: {error}"));
@@ -3370,7 +3405,23 @@ pub(crate) mod shader_resources {
                 "vs_poly_sprite",
                 "fs_poly_sprite",
             )),
-            _ => None,
+            ShaderModule::MonochromeSprite => Some((
+                gpui_render::MONOCHROME_HLSL,
+                "vs_mono_sprite",
+                "fs_mono_sprite",
+            )),
+            ShaderModule::SubpixelSprite => Some((
+                gpui_render::SUBPIXEL_HLSL,
+                "vs_subpixel_sprite",
+                "fs_subpixel_sprite",
+            )),
+            ShaderModule::SurfaceRgba => {
+                Some((gpui_render::SURFACE_HLSL, "vs_surface", "fs_surface_rgba"))
+            }
+            ShaderModule::SurfaceNv12 => {
+                Some((gpui_render::SURFACE_HLSL, "vs_surface", "fs_surface_yuv"))
+            }
+            ShaderModule::EmojiRasterization => None,
         };
         if let Some((source, vertex, fragment)) = shared_shader {
             return super::compile_hlsl(
@@ -3390,11 +3441,7 @@ pub(crate) mod shader_resources {
                 Direct3D::ID3DInclude, Hlsl::D3D_COMPILE_STANDARD_FILE_INCLUDE,
             };
 
-            let shader_name = if matches!(entry, ShaderModule::EmojiRasterization) {
-                "color_text_raster.hlsl"
-            } else {
-                "shaders.hlsl"
-            };
+            let shader_name = "color_text_raster.hlsl";
 
             let entry = format!(
                 "{}_{}\0",

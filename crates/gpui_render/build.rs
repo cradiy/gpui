@@ -9,6 +9,9 @@ fn main() {
         "path_rasterization",
         "paths",
         "polychrome_sprites",
+        "monochrome_sprites",
+        "subpixel_sprites",
+        "surfaces",
     ] {
         println!("cargo:rerun-if-changed=src/{primitive}.wgsl");
         generate(primitive);
@@ -17,7 +20,12 @@ fn main() {
 
 fn generate(primitive: &str) {
     let source = format!(
-        "{}\n{}",
+        "{}{}\n{}",
+        if primitive == "subpixel_sprites" {
+            "enable dual_source_blending;\n"
+        } else {
+            ""
+        },
         fs::read_to_string("src/common.wgsl").unwrap(),
         fs::read_to_string(format!("src/{primitive}.wgsl")).unwrap()
     );
@@ -79,6 +87,13 @@ fn generate(primitive: &str) {
                     ..Default::default()
                 },
             ),
+            (0, 1, naga::AddressSpace::Uniform) => (
+                1,
+                naga::back::msl::BindTarget {
+                    buffer: Some(2),
+                    ..Default::default()
+                },
+            ),
             (1, 0, naga::AddressSpace::Storage { .. }) => (
                 1,
                 naga::back::msl::BindTarget {
@@ -93,7 +108,14 @@ fn generate(primitive: &str) {
                     ..Default::default()
                 },
             ),
-            (1, 2, naga::AddressSpace::Handle) => (
+            (1, 2, naga::AddressSpace::Handle) if primitive == "surfaces" => (
+                2,
+                naga::back::msl::BindTarget {
+                    texture: Some(1),
+                    ..Default::default()
+                },
+            ),
+            (1, 2 | 3, naga::AddressSpace::Handle) => (
                 0,
                 naga::back::msl::BindTarget {
                     sampler: Some(naga::back::msl::BindSamplerTarget::Resource(0)),
@@ -126,33 +148,36 @@ fn generate(primitive: &str) {
     naga::back::hlsl::Writer::new(&mut source, &hlsl, &Default::default())
         .write(&module, &info, None)
         .unwrap();
-    if module.global_variables.iter().any(|(_, variable)| {
+    if let Some((_, sampler)) = module.global_variables.iter().find(|(_, variable)| {
         matches!(
             module.types[variable.ty].inner,
             naga::TypeInner::Sampler { .. }
         )
     }) {
-        source = directx11_sprite_sampler(source);
+        source = directx11_sampler(source, sampler.name.as_deref().unwrap());
     }
     fs::write(out.join(format!("{primitive}.hlsl")), source).unwrap();
 }
 
-// Naga 30 emits D3D12 sampler heaps. Shared sprites have one statically bound
+// Naga 30 emits D3D12 sampler heaps. Each primitive has one statically bound
 // sampler, so D3D11 can use the same sample operations with a direct s0 binding.
 // Reject a changed Naga interface rather than emitting an incompatible shader.
-fn directx11_sprite_sampler(source: String) -> String {
-    const HEAP: &str = concat!(
-        "SamplerState nagaSamplerHeap[2048]: register(s0, space0);\n",
-        "SamplerComparisonState nagaComparisonSamplerHeap[2048]: register(s0, space1);\n",
-        "StructuredBuffer<uint> nagaGroup1SamplerIndexArray : register(t2, space0);\n",
-        "static const SamplerState s_sprite = nagaSamplerHeap[nagaGroup1SamplerIndexArray[0]];\n",
+fn directx11_sampler(source: String, name: &str) -> String {
+    let heap = format!(
+        concat!(
+            "SamplerState nagaSamplerHeap[2048]: register(s0, space0);\n",
+            "SamplerComparisonState nagaComparisonSamplerHeap[2048]: register(s0, space1);\n",
+            "StructuredBuffer<uint> nagaGroup1SamplerIndexArray : register(t2, space0);\n",
+            "static const SamplerState {} = nagaSamplerHeap[nagaGroup1SamplerIndexArray[0]];\n",
+        ),
+        name
     );
     assert_eq!(
-        source.matches(HEAP).count(),
+        source.matches(&heap).count(),
         1,
         "Naga static sampler interface changed"
     );
-    let source = source.replace(HEAP, "SamplerState s_sprite : register(s0);\n");
+    let source = source.replace(&heap, &format!("SamplerState {name} : register(s0);\n"));
     assert!(
         !source.contains("SamplerHeap") && !source.contains("SamplerIndexArray"),
         "unsupported dynamic sampler access"

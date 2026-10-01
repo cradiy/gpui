@@ -38,9 +38,6 @@ use std::{
     sync::Arc,
 };
 
-// Exported to metal
-pub(crate) type PointF = gpui::Point<f32>;
-
 #[cfg(not(feature = "runtime_shaders"))]
 const SHADERS_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders.metallib"));
 #[cfg(feature = "runtime_shaders")]
@@ -177,7 +174,6 @@ pub(crate) struct MetalRenderer {
     surfaces_rgba_pipeline_state: metal::RenderPipelineState,
     surfaces_nv12_pipeline_state: metal::RenderPipelineState,
     surfaces: HashMap<SurfaceId, CachedSurface>,
-    unit_vertices: metal::Buffer,
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
     sprite_atlas: Arc<MetalAtlas>,
@@ -414,13 +410,6 @@ impl MetalRenderer {
             .new_library_with_data(SHADERS_METALLIB)
             .expect("error building metal library");
 
-        fn to_float2_bits(point: PointF) -> u64 {
-            let mut output = point.y.to_bits() as u64;
-            output <<= 32;
-            output |= point.x.to_bits() as u64;
-            output
-        }
-
         // Shared memory can be used only if CPU and GPU share the same memory space.
         // https://developer.apple.com/documentation/metal/setting-resource-storage-modes
         let is_unified_memory = device.has_unified_memory();
@@ -430,25 +419,6 @@ impl MetalRenderer {
         // https://developer.apple.com/documentation/metal/mtlgpufamily
         let is_apple_gpu = device.supports_family(MTLGPUFamily::Apple1);
 
-        let unit_vertices = [
-            to_float2_bits(point(0., 0.)),
-            to_float2_bits(point(1., 0.)),
-            to_float2_bits(point(0., 1.)),
-            to_float2_bits(point(0., 1.)),
-            to_float2_bits(point(1., 0.)),
-            to_float2_bits(point(1., 1.)),
-        ];
-        let unit_vertices = device.new_buffer_with_data(
-            unit_vertices.as_ptr() as *const c_void,
-            mem::size_of_val(&unit_vertices) as u64,
-            if is_unified_memory {
-                MTLResourceOptions::StorageModeShared
-                    | MTLResourceOptions::CPUCacheModeWriteCombined
-            } else {
-                MTLResourceOptions::StorageModeManaged
-            },
-        );
-
         #[cfg(feature = "runtime_shaders")]
         let sources = [
             gpui_render::QUAD_MSL,
@@ -457,15 +427,19 @@ impl MetalRenderer {
             gpui_render::PATH_RASTERIZATION_MSL,
             gpui_render::PATH_MSL,
             gpui_render::POLYCHROME_MSL,
+            gpui_render::MONOCHROME_MSL,
+            gpui_render::SURFACE_MSL,
         ];
         #[cfg(not(feature = "runtime_shaders"))]
-        let sources: [&[u8]; 6] = [
+        let sources: [&[u8]; 8] = [
             include_bytes!(concat!(env!("OUT_DIR"), "/quads.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/shadows.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/underlines.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/path_rasterization.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/paths.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/polychrome_sprites.metallib")),
+            include_bytes!(concat!(env!("OUT_DIR"), "/monochrome_sprites.metallib")),
+            include_bytes!(concat!(env!("OUT_DIR"), "/surfaces.metallib")),
         ];
         let [
             quad_library,
@@ -474,6 +448,8 @@ impl MetalRenderer {
             path_library,
             path_sprite_library,
             polychrome_library,
+            monochrome_library,
+            surface_library,
         ] = sources.map(|source| {
             #[cfg(feature = "runtime_shaders")]
             let library = device.new_library_with_source(source, &metal::CompileOptions::new());
@@ -524,10 +500,10 @@ impl MetalRenderer {
         );
         let monochrome_sprites_pipeline_state = build_pipeline_state(
             &device,
-            &library,
+            &monochrome_library,
             "monochrome_sprites",
-            "monochrome_sprite_vertex",
-            "monochrome_sprite_fragment",
+            "vs_mono_sprite",
+            "fs_mono_sprite",
             MTLPixelFormat::BGRA8Unorm,
         );
         let polychrome_sprites_pipeline_state = build_pipeline_state(
@@ -540,18 +516,18 @@ impl MetalRenderer {
         );
         let surfaces_rgba_pipeline_state = build_pipeline_state(
             &device,
-            &library,
+            &surface_library,
             "surfaces_rgba",
-            "surface_vertex",
-            "surface_rgba_fragment",
+            "vs_surface",
+            "fs_surface_rgba",
             MTLPixelFormat::BGRA8Unorm,
         );
         let surfaces_nv12_pipeline_state = build_pipeline_state(
             &device,
-            &library,
+            &surface_library,
             "surfaces_nv12",
-            "surface_vertex",
-            "surface_nv12_fragment",
+            "vs_surface",
+            "fs_surface_yuv",
             MTLPixelFormat::BGRA8Unorm,
         );
 
@@ -603,7 +579,6 @@ impl MetalRenderer {
             surfaces_rgba_pipeline_state,
             surfaces_nv12_pipeline_state,
             surfaces: HashMap::default(),
-            unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
             core_video_texture_cache,
@@ -2008,69 +1983,27 @@ impl MetalRenderer {
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
-        if sprites.is_empty() {
-            return true;
-        }
-        align_offset(instance_offset);
-
-        let sprite_bytes_len = mem::size_of_val(sprites);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + sprite_bytes_len;
-        if next_offset > instance_buffer.size {
-            return false;
-        }
-
         let texture = self.sprite_atlas.metal_texture(texture_id);
-        let texture_size = size(
-            DevicePixels(texture.width() as i32),
-            DevicePixels(texture.height() as i32),
+        command_encoder.set_vertex_texture(gpui_render::METAL_TEXTURE_SLOT, Some(&texture));
+        command_encoder.set_fragment_texture(gpui_render::METAL_TEXTURE_SLOT, Some(&texture));
+        command_encoder.set_fragment_sampler_state(
+            gpui_render::METAL_SAMPLER_SLOT,
+            Some(&self.effect_sampler),
         );
-        command_encoder.set_render_pipeline_state(&self.monochrome_sprites_pipeline_state);
-        command_encoder.set_vertex_buffer(
-            SpriteInputIndex::Vertices as u64,
-            Some(&self.unit_vertices),
-            0,
+        let gamma = gpui_render::GammaParams::default();
+        command_encoder.set_fragment_bytes(
+            gpui_render::METAL_GAMMA_SLOT,
+            mem::size_of_val(&gamma) as u64,
+            &gamma as *const _ as *const _,
         );
-        command_encoder.set_vertex_buffer(
-            SpriteInputIndex::Sprites as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-        command_encoder.set_vertex_bytes(
-            SpriteInputIndex::ViewportSize as u64,
-            mem::size_of_val(&viewport_size) as u64,
-            &viewport_size as *const Size<DevicePixels> as *const _,
-        );
-        command_encoder.set_vertex_bytes(
-            SpriteInputIndex::AtlasTextureSize as u64,
-            mem::size_of_val(&texture_size) as u64,
-            &texture_size as *const Size<DevicePixels> as *const _,
-        );
-        command_encoder.set_fragment_buffer(
-            SpriteInputIndex::Sprites as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-        command_encoder.set_fragment_texture(SpriteInputIndex::AtlasTexture as u64, Some(&texture));
-
-        unsafe {
-            ptr::copy_nonoverlapping(
-                sprites.as_ptr() as *const u8,
-                buffer_contents,
-                sprite_bytes_len,
-            );
-        }
-
-        command_encoder.draw_primitives_instanced(
-            metal::MTLPrimitiveType::Triangle,
-            0,
-            6,
-            sprites.len() as u64,
-        );
-        *instance_offset = next_offset;
-        true
+        self.draw_shared_primitives(
+            sprites,
+            &self.monochrome_sprites_pipeline_state,
+            instance_buffer,
+            instance_offset,
+            viewport_size,
+            command_encoder,
+        )
     }
 
     fn draw_polychrome_sprites(
@@ -2108,15 +2041,19 @@ impl MetalRenderer {
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
         self.surfaces.retain(|_, cached| cached.owner.is_alive());
-        command_encoder.set_vertex_buffer(
-            SurfaceInputIndex::Vertices as u64,
-            Some(&self.unit_vertices),
-            0,
-        );
+        let globals = gpui_render::PrimitiveGlobals {
+            viewport_size: [viewport_size.width.0 as f32, viewport_size.height.0 as f32],
+            ..Default::default()
+        };
         command_encoder.set_vertex_bytes(
-            SurfaceInputIndex::ViewportSize as u64,
-            mem::size_of_val(&viewport_size) as u64,
-            &viewport_size as *const Size<DevicePixels> as *const _,
+            gpui_render::METAL_GLOBALS_SLOT,
+            mem::size_of_val(&globals) as u64,
+            &globals as *const _ as *const _,
+        );
+        command_encoder.set_fragment_bytes(
+            gpui_render::METAL_GLOBALS_SLOT,
+            mem::size_of_val(&globals) as u64,
+            &globals as *const _ as *const _,
         );
 
         for surface in surfaces {
@@ -2400,19 +2337,22 @@ impl MetalRenderer {
             &self.surfaces_rgba_pipeline_state
         });
         command_encoder.set_vertex_buffer(
-            SurfaceInputIndex::Surfaces as u64,
+            gpui_render::METAL_INSTANCES_SLOT,
             Some(&instance_buffer.metal_buffer),
             *instance_offset as u64,
         );
         command_encoder.set_fragment_buffer(
-            SurfaceInputIndex::Surfaces as u64,
+            gpui_render::METAL_INSTANCES_SLOT,
             Some(&instance_buffer.metal_buffer),
             *instance_offset as u64,
         );
+        command_encoder.set_fragment_texture(gpui_render::METAL_TEXTURE_SLOT, Some(first_texture));
         command_encoder
-            .set_fragment_texture(SurfaceInputIndex::YTexture as u64, Some(first_texture));
-        command_encoder
-            .set_fragment_texture(SurfaceInputIndex::CbCrTexture as u64, Some(second_texture));
+            .set_fragment_texture(gpui_render::METAL_CHROMA_TEXTURE_SLOT, Some(second_texture));
+        command_encoder.set_fragment_sampler_state(
+            gpui_render::METAL_SAMPLER_SLOT,
+            Some(&self.effect_sampler),
+        );
 
         unsafe {
             let buffer_contents = (instance_buffer.metal_buffer.contents() as *mut u8)
@@ -2420,7 +2360,7 @@ impl MetalRenderer {
             ptr::write(buffer_contents, params);
         }
 
-        command_encoder.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 6);
+        command_encoder.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
         *instance_offset = next_offset;
         true
     }
@@ -2942,24 +2882,6 @@ fn align_offset(offset: &mut usize) {
     *offset = (*offset).div_ceil(256) * 256;
 }
 
-#[repr(C)]
-enum SpriteInputIndex {
-    Vertices = 0,
-    Sprites = 1,
-    ViewportSize = 2,
-    AtlasTextureSize = 3,
-    AtlasTexture = 4,
-}
-
-#[repr(C)]
-enum SurfaceInputIndex {
-    Vertices = 0,
-    Surfaces = 1,
-    ViewportSize = 2,
-    YTexture = 4,
-    CbCrTexture = 5,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct PathSprite {
@@ -2972,9 +2894,9 @@ pub struct SurfaceBounds {
     pub bounds: Bounds<ScaledPixels>,
     pub clip_bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub corner_radii: gpui::Corners<ScaledPixels>,
     pub uv_origin: [f32; 2],
     pub uv_size: [f32; 2],
+    pub corner_radii: gpui::Corners<ScaledPixels>,
     pub color_rows: [[f32; 4]; 3],
     pub opacity: f32,
     pub _pad: [f32; 3],
@@ -3016,6 +2938,37 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_surface_shader_matches_host_layout() {
+        use std::mem::{offset_of, size_of};
+        let module = naga::front::wgsl::parse_str(gpui_render::SURFACE_WGSL).unwrap();
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some("SurfaceParams"))
+            .unwrap();
+        let naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("expected surface struct")
+        };
+        assert_eq!(*span as usize, size_of::<SurfaceBounds>());
+        assert_eq!(
+            members
+                .iter()
+                .map(|member| member.offset as usize)
+                .collect::<Vec<_>>(),
+            vec![
+                offset_of!(SurfaceBounds, bounds),
+                offset_of!(SurfaceBounds, clip_bounds),
+                offset_of!(SurfaceBounds, content_mask),
+                offset_of!(SurfaceBounds, uv_origin),
+                offset_of!(SurfaceBounds, corner_radii),
+                offset_of!(SurfaceBounds, color_rows),
+                offset_of!(SurfaceBounds, opacity),
+                offset_of!(SurfaceBounds, _pad)
+            ]
+        );
+    }
 
     #[test]
     fn shared_path_shader_matches_host_layout() {

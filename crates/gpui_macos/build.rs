@@ -44,7 +44,6 @@ mod macos_build {
             "Edges".into(),
             "Size".into(),
             "Pixels".into(),
-            "PointF".into(),
             "Hsla".into(),
             "ContentMask".into(),
             "Uniforms".into(),
@@ -55,11 +54,9 @@ mod macos_build {
             "Underline".into(),
             "Quad".into(),
             "BorderStyle".into(),
-            "SpriteInputIndex".into(),
             "MonochromeSprite".into(),
             "PolychromeSprite".into(),
             "PathSprite".into(),
-            "SurfaceInputIndex".into(),
             "SurfaceBounds".into(),
             "TransformationMatrix".into(),
         ]);
@@ -130,6 +127,8 @@ mod macos_build {
             ("path_rasterization", gpui_render::PATH_RASTERIZATION_MSL),
             ("paths", gpui_render::PATH_MSL),
             ("polychrome_sprites", gpui_render::POLYCHROME_MSL),
+            ("monochrome_sprites", gpui_render::MONOCHROME_MSL),
+            ("surfaces", gpui_render::SURFACE_MSL),
         ] {
             let source = out.join(format!("{name}.metal"));
             let air = out.join(format!("{name}.air"));

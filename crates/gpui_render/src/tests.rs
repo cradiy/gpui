@@ -3,7 +3,11 @@ use std::mem::{offset_of, size_of};
 
 #[test]
 fn primitive_shaders_match_host_layout_and_resource_contract() {
-    let module = naga::front::wgsl::parse_str(&compose_shader("")).unwrap();
+    let module = naga::front::wgsl::parse_str(&format!(
+        "enable dual_source_blending;\n{}\n{SUBPIXEL_WGSL}",
+        compose_shader("")
+    ))
+    .unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -11,6 +15,45 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
     .validate(&module)
     .unwrap();
     for (name, size, offsets) in [
+        (
+            "GammaParams",
+            size_of::<GammaParams>(),
+            vec![
+                offset_of!(GammaParams, gamma_ratios),
+                offset_of!(GammaParams, grayscale_enhanced_contrast),
+                offset_of!(GammaParams, subpixel_enhanced_contrast),
+                offset_of!(GammaParams, is_bgr),
+                offset_of!(GammaParams, _pad),
+            ],
+        ),
+        (
+            "MonochromeSprite",
+            size_of::<gpui::MonochromeSprite>(),
+            vec![
+                offset_of!(gpui::MonochromeSprite, order),
+                offset_of!(gpui::MonochromeSprite, pad),
+                offset_of!(gpui::MonochromeSprite, bounds),
+                offset_of!(gpui::MonochromeSprite, content_mask),
+                offset_of!(gpui::MonochromeSprite, background),
+                offset_of!(gpui::MonochromeSprite, background_bounds),
+                offset_of!(gpui::MonochromeSprite, tile),
+                offset_of!(gpui::MonochromeSprite, transformation),
+            ],
+        ),
+        (
+            "SubpixelSprite",
+            size_of::<gpui::SubpixelSprite>(),
+            vec![
+                offset_of!(gpui::SubpixelSprite, order),
+                offset_of!(gpui::SubpixelSprite, pad),
+                offset_of!(gpui::SubpixelSprite, bounds),
+                offset_of!(gpui::SubpixelSprite, content_mask),
+                offset_of!(gpui::SubpixelSprite, background),
+                offset_of!(gpui::SubpixelSprite, background_bounds),
+                offset_of!(gpui::SubpixelSprite, tile),
+                offset_of!(gpui::SubpixelSprite, transformation),
+            ],
+        ),
         (
             "GlobalParams",
             size_of::<PrimitiveGlobals>(),
@@ -117,12 +160,19 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
     }
     for (name, group, binding) in [
         ("globals", 0, 0),
+        ("gamma_params", 0, 1),
         ("b_quads", 1, 0),
         ("b_shadows", 1, 0),
         ("b_underlines", 1, 0),
         ("b_path_vertices", 1, 0),
         ("b_path_sprites", 1, 0),
         ("b_poly_sprites", 1, 0),
+        ("b_mono_sprites", 1, 0),
+        ("b_subpixel_sprites", 1, 0),
+        ("surface_locals", 1, 0),
+        ("t_surface_0", 1, 1),
+        ("t_surface_1", 1, 2),
+        ("s_surface", 1, 3),
         ("t_sprite", 1, 1),
         ("s_sprite", 1, 2),
     ] {

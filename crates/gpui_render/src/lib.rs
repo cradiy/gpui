@@ -52,15 +52,40 @@ pub const POLYCHROME_MSL: &str =
 pub const POLYCHROME_HLSL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/polychrome_sprites.hlsl"));
 
+/// Common definitions and grayscale text and mask entry points.
+pub const MONOCHROME_WGSL: &str = concat!(
+    include_str!("common.wgsl"),
+    include_str!("monochrome_sprites.wgsl")
+);
+/// Native grayscale text and mask shader for Metal.
+pub const MONOCHROME_MSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/monochrome_sprites.metal"));
+/// Native grayscale text and mask shader for Direct3D 11.
+pub const MONOCHROME_HLSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/monochrome_sprites.hlsl"));
+/// Subpixel entry points appended after shared definitions with dual-source blending enabled.
+pub const SUBPIXEL_WGSL: &str = include_str!("subpixel_sprites.wgsl");
+/// Native subpixel text shader for Direct3D 11.
+pub const SUBPIXEL_HLSL: &str = include_str!(concat!(env!("OUT_DIR"), "/subpixel_sprites.hlsl"));
+
+/// Common definitions and RGBA/NV12 surface entry points.
+pub const SURFACE_WGSL: &str = concat!(include_str!("common.wgsl"), include_str!("surfaces.wgsl"));
+/// Native RGBA and NV12 surface shader for Metal.
+pub const SURFACE_MSL: &str = include_str!(concat!(env!("OUT_DIR"), "/surfaces.metal"));
+/// Native RGBA and NV12 surface shader for Direct3D 11.
+pub const SURFACE_HLSL: &str = include_str!(concat!(env!("OUT_DIR"), "/surfaces.hlsl"));
+
 /// Appends additional WGSL primitives to the shared definitions.
 pub fn compose_shader(primitives: &str) -> String {
     format!(
-        "{QUAD_WGSL}\n{}\n{}\n{}\n{}\n{}\n{primitives}",
+        "{QUAD_WGSL}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{primitives}",
         include_str!("shadows.wgsl"),
         include_str!("underlines.wgsl"),
         include_str!("path_rasterization.wgsl"),
         include_str!("paths.wgsl"),
-        include_str!("polychrome_sprites.wgsl")
+        include_str!("polychrome_sprites.wgsl"),
+        include_str!("monochrome_sprites.wgsl"),
+        include_str!("surfaces.wgsl")
     )
 }
 
@@ -89,8 +114,29 @@ pub const METAL_INSTANCES_SLOT: u64 = 1;
 pub const METAL_SIZES_SLOT: u64 = 3;
 /// Metal texture slot for sprite atlases and resolved path images.
 pub const METAL_TEXTURE_SLOT: u64 = 0;
+/// Metal texture slot for the interleaved chroma plane of an NV12 surface.
+pub const METAL_CHROMA_TEXTURE_SLOT: u64 = 1;
 /// Metal sampler slot for filtered sprite atlas reads.
 pub const METAL_SAMPLER_SLOT: u64 = 0;
+
+/// Font coverage correction parameters. Zero values preserve uncorrected coverage.
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct GammaParams {
+    /// Polynomial coefficients for coverage correction.
+    pub gamma_ratios: [f32; 4],
+    /// Contrast adjustment for grayscale glyphs.
+    pub grayscale_enhanced_contrast: f32,
+    /// Contrast adjustment for subpixel glyphs.
+    pub subpixel_enhanced_contrast: f32,
+    /// Nonzero when the display uses BGR subpixel order.
+    pub is_bgr: u32,
+    /// Reserved, must be zero.
+    pub _pad: u32,
+}
+
+/// Metal buffer slot for font coverage correction parameters.
+pub const METAL_GAMMA_SLOT: u64 = 2;
 
 #[cfg(test)]
 mod tests;

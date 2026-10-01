@@ -35,31 +35,6 @@ fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
     return sample_blurred_backdrop(input, vec2<f32>(0.0));
 }
 "#;
-const DIRECTX_BACKDROP_BILINEAR_SUPPORT: &str = r#"
-fn backdrop_sample_bilinear(texture: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
-    let dimensions = vec2<f32>(textureDimensions(texture));
-    let position = clamp(
-        uv * dimensions - vec2<f32>(0.5),
-        vec2<f32>(0.0),
-        dimensions - vec2<f32>(1.0),
-    );
-    let low = vec2<i32>(floor(position));
-    let high = min(low + vec2<i32>(1), vec2<i32>(dimensions) - vec2<i32>(1));
-    let factor = fract(position);
-    let top = mix(
-        textureLoad(texture, low, 0),
-        textureLoad(texture, vec2<i32>(high.x, low.y), 0),
-        factor.x,
-    );
-    let bottom = mix(
-        textureLoad(texture, vec2<i32>(low.x, high.y), 0),
-        textureLoad(texture, high, 0),
-        factor.x,
-    );
-    return mix(top, bottom, factor.y);
-}
-
-"#;
 
 pub(crate) struct FontInfo {
     pub gamma_ratios: [f32; 4],
@@ -2099,98 +2074,12 @@ impl BackdropPipeline {
 }
 
 fn translate_effect_to_hlsl(shader: &EffectShader) -> Result<String> {
-    let source = gpui::compose_effect_shader_wgsl(shader);
-    let module = naga::front::wgsl::parse_str(&source)
-        .map_err(|error| anyhow::anyhow!("WGSL parse error: {error}"))?;
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
+    gpui_render::native::to_hlsl(
+        &gpui::compose_effect_shader_wgsl(shader),
+        gpui_render::native::ShaderKind::Effect {
+            image_count: shader.image_count(),
+        },
     )
-    .validate(&module)
-    .map_err(|error| anyhow::anyhow!("WGSL validation error: {error}"))?;
-    let mut options = naga::back::hlsl::Options {
-        shader_model: naga::back::hlsl::ShaderModel::V5_0,
-        fake_missing_bindings: false,
-        ..Default::default()
-    };
-    options.binding_map.insert(
-        naga::ResourceBinding {
-            group: 0,
-            binding: 0,
-        },
-        naga::back::hlsl::BindTarget {
-            space: 0,
-            register: 0,
-            ..Default::default()
-        },
-    );
-    if shader.uses_image() {
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 1,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 0,
-                ..Default::default()
-            },
-        );
-    }
-    if shader.image_count() >= 2 {
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 3,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 2,
-                ..Default::default()
-            },
-        );
-    }
-    if shader.image_count() >= 4 {
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 4,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 3,
-                ..Default::default()
-            },
-        );
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 5,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 4,
-                ..Default::default()
-            },
-        );
-    }
-    options.binding_map.insert(
-        naga::ResourceBinding {
-            group: 1,
-            binding: 0,
-        },
-        naga::back::hlsl::BindTarget {
-            space: 0,
-            register: 1,
-            ..Default::default()
-        },
-    );
-    let pipeline_options = naga::back::hlsl::PipelineOptions::default();
-    let mut output = String::new();
-    naga::back::hlsl::Writer::new(&mut output, &options, &pipeline_options)
-        .write(&module, &info, None)
-        .map_err(|error| anyhow::anyhow!("HLSL generation error: {error}"))?;
-    Ok(output)
 }
 
 fn create_builtin_backdrop_pipelines(
@@ -2207,104 +2096,20 @@ fn create_builtin_backdrop_pipelines(
 }
 
 fn translate_backdrop_to_hlsl(shader: &BackdropShader) -> Result<String> {
-    let source = compose_directx_backdrop_shader_wgsl(shader)?;
+    let source =
+        gpui::compose_backdrop_shader_wgsl_with_sampling(shader, gpui::BackdropSampling::Manual);
     translate_backdrop_wgsl_to_hlsl(&source, true)
 }
 
-fn compose_directx_backdrop_shader_wgsl(shader: &BackdropShader) -> Result<String> {
-    const SAMPLER_DECLARATION: &str = "@group(1) @binding(2) var s_backdrop: sampler;\n";
-    const RAW_SAMPLE: &str = r#"textureSample(
-        t_raw_backdrop,
-        s_backdrop,
-        backdrop_sample_uv(input, displacement_pixels),
-    )"#;
-    const BLURRED_SAMPLE: &str = r#"textureSample(
-        t_blurred_backdrop,
-        s_backdrop,
-        backdrop_sample_uv(input, displacement_pixels),
-    )"#;
-
-    let mut source = gpui::compose_backdrop_shader_wgsl(shader).replace("\r\n", "\n");
-    if !source.contains(SAMPLER_DECLARATION)
-        || !source.contains(RAW_SAMPLE)
-        || !source.contains(BLURRED_SAMPLE)
-    {
-        anyhow::bail!("backdrop shader contract changed without updating the DirectX composer");
-    }
-    source = source.replace(SAMPLER_DECLARATION, "");
-    source = source.replacen(
-        "fn backdrop_straight_color",
-        &format!("{DIRECTX_BACKDROP_BILINEAR_SUPPORT}fn backdrop_straight_color"),
-        1,
-    );
-    source = source.replace(
-        RAW_SAMPLE,
-        "backdrop_sample_bilinear(t_raw_backdrop, backdrop_sample_uv(input, displacement_pixels))",
-    );
-    source = source.replace(
-        BLURRED_SAMPLE,
-        "backdrop_sample_bilinear(t_blurred_backdrop, backdrop_sample_uv(input, displacement_pixels))",
-    );
-    Ok(source)
-}
-
 fn translate_backdrop_wgsl_to_hlsl(source: &str, has_blurred_texture: bool) -> Result<String> {
-    let module = naga::front::wgsl::parse_str(source)
-        .map_err(|error| anyhow::anyhow!("WGSL parse error: {error}"))?;
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
+    gpui_render::native::to_hlsl(
+        source,
+        if has_blurred_texture {
+            gpui_render::native::ShaderKind::Backdrop
+        } else {
+            gpui_render::native::ShaderKind::BackdropBlur
+        },
     )
-    .validate(&module)
-    .map_err(|error| anyhow::anyhow!("WGSL validation error: {error}"))?;
-    let mut options = naga::back::hlsl::Options {
-        shader_model: naga::back::hlsl::ShaderModel::V5_0,
-        fake_missing_bindings: false,
-        ..Default::default()
-    };
-    for (binding, register) in [(0, 1), (1, 0)] {
-        options.binding_map.insert(
-            naga::ResourceBinding { group: 1, binding },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register,
-                ..Default::default()
-            },
-        );
-    }
-    options.binding_map.insert(
-        naga::ResourceBinding {
-            group: 0,
-            binding: 0,
-        },
-        naga::back::hlsl::BindTarget {
-            space: 0,
-            register: 0,
-            ..Default::default()
-        },
-    );
-    if has_blurred_texture {
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 3,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 2,
-                ..Default::default()
-            },
-        );
-    }
-    let pipeline_options = naga::back::hlsl::PipelineOptions::default();
-    let mut output = String::new();
-    let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline_options)
-        .write(&module, &info, None)
-        .map_err(|error| anyhow::anyhow!("HLSL generation error: {error}"))?;
-    for entry in reflection.entry_point_names {
-        entry.map_err(|error| anyhow::anyhow!("HLSL entry-point generation error: {error}"))?;
-    }
-    Ok(output)
 }
 
 fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<ID3DBlob> {

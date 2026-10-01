@@ -2,45 +2,6 @@ use super::*;
 use std::mem::{offset_of, size_of};
 
 #[test]
-fn manual_backdrop_blur_translates_without_sampler_bindings() {
-    let module = naga::front::wgsl::parse_str(BACKDROP_BLUR_MANUAL_WGSL).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(&module)
-    .unwrap();
-    let mut options = naga::back::hlsl::Options {
-        shader_model: naga::back::hlsl::ShaderModel::V5_0,
-        fake_missing_bindings: false,
-        ..Default::default()
-    };
-    for (group, binding, register) in [(0, 0, 0), (1, 0, 1), (1, 1, 0)] {
-        options.binding_map.insert(
-            naga::ResourceBinding { group, binding },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register,
-                ..Default::default()
-            },
-        );
-    }
-    let pipeline_options = naga::back::hlsl::PipelineOptions::default();
-    let mut output = String::new();
-    let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline_options)
-        .write(&module, &info, None)
-        .unwrap();
-    let entries = reflection
-        .entry_point_names
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert!(entries.iter().any(|entry| entry == "vs_backdrop"));
-    assert!(entries.iter().any(|entry| entry == "fs_blur"));
-    assert!(!output.contains("SamplerState"));
-}
-
-#[test]
 fn effect_shaders_match_shared_instance_layouts() {
     let effect = gpui::compose_effect_wgsl(
         "fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return vec4<f32>(input.uv, 0.0, 1.0); }",

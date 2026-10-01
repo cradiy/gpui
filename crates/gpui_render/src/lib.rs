@@ -1,5 +1,8 @@
 //! Shared primitive shaders and their native resource contracts.
 
+#[cfg(feature = "native-shaders")]
+pub mod native;
+
 /// Separable backdrop blur and composition using a hardware linear sampler.
 pub const BACKDROP_BLUR_WGSL: &str = concat!(
     include_str!("backdrop_blur.wgsl"),

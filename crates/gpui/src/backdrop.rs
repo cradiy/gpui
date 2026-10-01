@@ -6,11 +6,37 @@ use std::{
 };
 
 const BACKDROP_SOURCE_MARKER: &str = "// __GPUI_BACKDROP_SOURCE__";
+const BACKDROP_SAMPLING_MARKER: &str = "// __GPUI_BACKDROP_SAMPLING__";
+
+/// Sampling implementation used by a renderer's backdrop shader.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum BackdropSampling {
+    /// Linear filtering through sampler binding 2.
+    Hardware,
+    /// Bilinear interpolation through texture loads, without a sampler binding.
+    Manual,
+}
 
 /// Composes a complete portable WGSL module around a backdrop effect function.
 #[doc(hidden)]
 pub fn compose_backdrop_shader_wgsl(shader: &BackdropShader) -> String {
-    include_str!("backdrop.wgsl").replace(BACKDROP_SOURCE_MARKER, shader.wgsl_source())
+    compose_backdrop_shader_wgsl_with_sampling(shader, BackdropSampling::Hardware)
+}
+
+/// Composes a backdrop module with the renderer's sampling implementation.
+#[doc(hidden)]
+pub fn compose_backdrop_shader_wgsl_with_sampling(
+    shader: &BackdropShader,
+    sampling: BackdropSampling,
+) -> String {
+    let sampling = match sampling {
+        BackdropSampling::Hardware => include_str!("backdrop_sampling.wgsl"),
+        BackdropSampling::Manual => include_str!("backdrop_sampling_manual.wgsl"),
+    };
+    include_str!("backdrop.wgsl")
+        .replace(BACKDROP_SAMPLING_MARKER, sampling)
+        .replace(BACKDROP_SOURCE_MARKER, shader.wgsl_source())
 }
 
 /// Stable identifier derived from a backdrop shader's source.

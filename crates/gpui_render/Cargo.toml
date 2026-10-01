@@ -10,6 +10,11 @@ workspace = true
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
+anyhow = { workspace = true, optional = true }
+naga = { workspace = true, optional = true }
+
+[features]
+native-shaders = ["dep:anyhow", "dep:naga"]
 
 [build-dependencies]
 naga.workspace = true

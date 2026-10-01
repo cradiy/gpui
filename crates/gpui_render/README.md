@@ -37,6 +37,12 @@ Effect and backdrop instances use GPUI's shared GPU layouts. WGPU and Direct3D
 share the separable blur shader, with hardware linear sampling on WGPU and manual
 bilinear sampling on Direct3D. Metal uses Metal Performance Shaders for blur.
 
+The `native-shaders` feature provides dynamic effect translation to MSL and HLSL.
+Its resource contracts cover image effects, masks, backdrop effects and blur
+passes. Backdrop composition selects hardware or manual sampling explicitly.
+`cargo test -p gpui_render --features native-shaders` checks both translations
+without requiring a native graphics device.
+
 `cargo test -p gpui_render` checks the host layout and shader resource contract.
 MSL and HLSL generation is validated on every build. Native shader compilation
 uses the platform SDK: Metal on macOS and FXC on Windows.

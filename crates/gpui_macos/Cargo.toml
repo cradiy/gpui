@@ -23,6 +23,7 @@ gpui.workspace = true
 gpui_render.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+gpui_render = { workspace = true, features = ["native-shaders"] }
 accesskit.workspace = true
 accesskit_macos.workspace = true
 anyhow.workspace = true
@@ -51,7 +52,6 @@ libc.workspace = true
 log.workspace = true
 mach2.workspace = true
 metal.workspace = true
-naga.workspace = true
 objc.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true

@@ -21,6 +21,7 @@ gpui.workspace = true
 gpui_render.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
+gpui_render = { workspace = true, features = ["native-shaders"] }
 accesskit.workspace = true
 accesskit_windows.workspace = true
 anyhow.workspace = true
@@ -33,7 +34,6 @@ gpui_wgpu.workspace = true
 image.workspace = true
 itertools.workspace = true
 log.workspace = true
-naga.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 raw-window-handle = "0.6"

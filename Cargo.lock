@@ -2904,6 +2904,7 @@ dependencies = [
 name = "gpui_render"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bytemuck",
  "gpui",
  "naga",

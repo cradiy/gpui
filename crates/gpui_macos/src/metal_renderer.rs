@@ -456,14 +456,16 @@ impl MetalRenderer {
             gpui_render::UNDERLINE_MSL,
             gpui_render::PATH_RASTERIZATION_MSL,
             gpui_render::PATH_MSL,
+            gpui_render::POLYCHROME_MSL,
         ];
         #[cfg(not(feature = "runtime_shaders"))]
-        let sources: [&[u8]; 5] = [
+        let sources: [&[u8]; 6] = [
             include_bytes!(concat!(env!("OUT_DIR"), "/quads.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/shadows.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/underlines.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/path_rasterization.metallib")),
             include_bytes!(concat!(env!("OUT_DIR"), "/paths.metallib")),
+            include_bytes!(concat!(env!("OUT_DIR"), "/polychrome_sprites.metallib")),
         ];
         let [
             quad_library,
@@ -471,6 +473,7 @@ impl MetalRenderer {
             underline_library,
             path_library,
             path_sprite_library,
+            polychrome_library,
         ] = sources.map(|source| {
             #[cfg(feature = "runtime_shaders")]
             let library = device.new_library_with_source(source, &metal::CompileOptions::new());
@@ -529,10 +532,10 @@ impl MetalRenderer {
         );
         let polychrome_sprites_pipeline_state = build_pipeline_state(
             &device,
-            &library,
+            &polychrome_library,
             "polychrome_sprites",
-            "polychrome_sprite_vertex",
-            "polychrome_sprite_fragment",
+            "vs_poly_sprite",
+            "fs_poly_sprite",
             MTLPixelFormat::BGRA8Unorm,
         );
         let surfaces_rgba_pipeline_state = build_pipeline_state(
@@ -1942,10 +1945,8 @@ impl MetalRenderer {
             return false;
         };
 
-        command_encoder.set_fragment_texture(
-            gpui_render::METAL_PATH_TEXTURE_SLOT,
-            Some(intermediate_texture),
-        );
+        command_encoder
+            .set_fragment_texture(gpui_render::METAL_TEXTURE_SLOT, Some(intermediate_texture));
 
         // When copying paths from the intermediate texture to the drawable,
         // each pixel must only be copied once, in case of transparent paths.
@@ -2081,69 +2082,21 @@ impl MetalRenderer {
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
-        if sprites.is_empty() {
-            return true;
-        }
-        align_offset(instance_offset);
-
         let texture = self.sprite_atlas.metal_texture(texture_id);
-        let texture_size = size(
-            DevicePixels(texture.width() as i32),
-            DevicePixels(texture.height() as i32),
+        command_encoder.set_vertex_texture(gpui_render::METAL_TEXTURE_SLOT, Some(&texture));
+        command_encoder.set_fragment_texture(gpui_render::METAL_TEXTURE_SLOT, Some(&texture));
+        command_encoder.set_fragment_sampler_state(
+            gpui_render::METAL_SAMPLER_SLOT,
+            Some(&self.effect_sampler),
         );
-        command_encoder.set_render_pipeline_state(&self.polychrome_sprites_pipeline_state);
-        command_encoder.set_vertex_buffer(
-            SpriteInputIndex::Vertices as u64,
-            Some(&self.unit_vertices),
-            0,
-        );
-        command_encoder.set_vertex_buffer(
-            SpriteInputIndex::Sprites as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-        command_encoder.set_vertex_bytes(
-            SpriteInputIndex::ViewportSize as u64,
-            mem::size_of_val(&viewport_size) as u64,
-            &viewport_size as *const Size<DevicePixels> as *const _,
-        );
-        command_encoder.set_vertex_bytes(
-            SpriteInputIndex::AtlasTextureSize as u64,
-            mem::size_of_val(&texture_size) as u64,
-            &texture_size as *const Size<DevicePixels> as *const _,
-        );
-        command_encoder.set_fragment_buffer(
-            SpriteInputIndex::Sprites as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-        command_encoder.set_fragment_texture(SpriteInputIndex::AtlasTexture as u64, Some(&texture));
-
-        let sprite_bytes_len = mem::size_of_val(sprites);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + sprite_bytes_len;
-        if next_offset > instance_buffer.size {
-            return false;
-        }
-
-        unsafe {
-            ptr::copy_nonoverlapping(
-                sprites.as_ptr() as *const u8,
-                buffer_contents,
-                sprite_bytes_len,
-            );
-        }
-
-        command_encoder.draw_primitives_instanced(
-            metal::MTLPrimitiveType::Triangle,
-            0,
-            6,
-            sprites.len() as u64,
-        );
-        *instance_offset = next_offset;
-        true
+        self.draw_shared_primitives(
+            sprites,
+            &self.polychrome_sprites_pipeline_state,
+            instance_buffer,
+            instance_offset,
+            viewport_size,
+            command_encoder,
+        )
     }
 
     fn draw_surfaces(

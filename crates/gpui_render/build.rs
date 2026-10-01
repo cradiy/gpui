@@ -8,6 +8,7 @@ fn main() {
         "underlines",
         "path_rasterization",
         "paths",
+        "polychrome_sprites",
     ] {
         println!("cargo:rerun-if-changed=src/{primitive}.wgsl");
         generate(primitive);
@@ -58,6 +59,14 @@ fn generate(primitive: &str) {
         fake_missing_bindings: false,
         ..Default::default()
     };
+    hlsl.sampler_buffer_binding_map.insert(
+        naga::back::hlsl::SamplerIndexBufferKey { group: 1 },
+        naga::back::hlsl::BindTarget {
+            space: 0,
+            register: 2,
+            ..Default::default()
+        },
+    );
     for (_, variable) in module.global_variables.iter() {
         let Some(binding) = variable.binding else {
             continue;
@@ -81,6 +90,13 @@ fn generate(primitive: &str) {
                 0,
                 naga::back::msl::BindTarget {
                     texture: Some(0),
+                    ..Default::default()
+                },
+            ),
+            (1, 2, naga::AddressSpace::Handle) => (
+                0,
+                naga::back::msl::BindTarget {
+                    sampler: Some(naga::back::msl::BindSamplerTarget::Resource(0)),
                     ..Default::default()
                 },
             ),
@@ -110,5 +126,36 @@ fn generate(primitive: &str) {
     naga::back::hlsl::Writer::new(&mut source, &hlsl, &Default::default())
         .write(&module, &info, None)
         .unwrap();
+    if module.global_variables.iter().any(|(_, variable)| {
+        matches!(
+            module.types[variable.ty].inner,
+            naga::TypeInner::Sampler { .. }
+        )
+    }) {
+        source = directx11_sprite_sampler(source);
+    }
     fs::write(out.join(format!("{primitive}.hlsl")), source).unwrap();
+}
+
+// Naga 30 emits D3D12 sampler heaps. Shared sprites have one statically bound
+// sampler, so D3D11 can use the same sample operations with a direct s0 binding.
+// Reject a changed Naga interface rather than emitting an incompatible shader.
+fn directx11_sprite_sampler(source: String) -> String {
+    const HEAP: &str = concat!(
+        "SamplerState nagaSamplerHeap[2048]: register(s0, space0);\n",
+        "SamplerComparisonState nagaComparisonSamplerHeap[2048]: register(s0, space1);\n",
+        "StructuredBuffer<uint> nagaGroup1SamplerIndexArray : register(t2, space0);\n",
+        "static const SamplerState s_sprite = nagaSamplerHeap[nagaGroup1SamplerIndexArray[0]];\n",
+    );
+    assert_eq!(
+        source.matches(HEAP).count(),
+        1,
+        "Naga static sampler interface changed"
+    );
+    let source = source.replace(HEAP, "SamplerState s_sprite : register(s0);\n");
+    assert!(
+        !source.contains("SamplerHeap") && !source.contains("SamplerIndexArray"),
+        "unsupported dynamic sampler access"
+    );
+    source
 }

@@ -66,6 +66,22 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
                 offset_of!(gpui::Underline, wavy),
             ],
         ),
+        (
+            "PolychromeSprite",
+            size_of::<gpui::PolychromeSprite>(),
+            vec![
+                offset_of!(gpui::PolychromeSprite, order),
+                offset_of!(gpui::PolychromeSprite, pad),
+                offset_of!(gpui::PolychromeSprite, grayscale),
+                offset_of!(gpui::PolychromeSprite, opacity),
+                offset_of!(gpui::PolychromeSprite, bounds),
+                offset_of!(gpui::PolychromeSprite, clip_bounds),
+                offset_of!(gpui::PolychromeSprite, content_mask),
+                offset_of!(gpui::PolychromeSprite, corner_radii),
+                offset_of!(gpui::PolychromeSprite, tile),
+                offset_of!(gpui::PolychromeSprite, transformation),
+            ],
+        ),
     ] {
         let (_, ty) = module
             .types
@@ -106,7 +122,9 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
         ("b_underlines", 1, 0),
         ("b_path_vertices", 1, 0),
         ("b_path_sprites", 1, 0),
+        ("b_poly_sprites", 1, 0),
         ("t_sprite", 1, 1),
+        ("s_sprite", 1, 2),
     ] {
         let (_, variable) = module
             .global_variables

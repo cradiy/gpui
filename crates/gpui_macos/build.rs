@@ -129,6 +129,7 @@ mod macos_build {
             ("underlines", gpui_render::UNDERLINE_MSL),
             ("path_rasterization", gpui_render::PATH_RASTERIZATION_MSL),
             ("paths", gpui_render::PATH_MSL),
+            ("polychrome_sprites", gpui_render::POLYCHROME_MSL),
         ] {
             let source = out.join(format!("{name}.metal"));
             let air = out.join(format!("{name}.air"));

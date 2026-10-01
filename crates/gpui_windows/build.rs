@@ -54,15 +54,16 @@ mod shader_compilation {
                 "underline" => Some(gpui_render::UNDERLINE_HLSL),
                 "path_rasterization" => Some(gpui_render::PATH_RASTERIZATION_HLSL),
                 "path_sprite" => Some(gpui_render::PATH_HLSL),
+                "polychrome_sprite" => Some(gpui_render::POLYCHROME_HLSL),
                 _ => None,
             };
             if let Some(shared_source) = shared_source {
                 let source = PathBuf::from(&out_dir).join(format!("{module}.hlsl"));
                 fs::write(&source, shared_source).unwrap();
-                let entry_name = if module == "path_sprite" {
-                    "path"
-                } else {
-                    module
+                let entry_name = match module {
+                    "path_sprite" => "path",
+                    "polychrome_sprite" => "poly_sprite",
+                    _ => module,
                 };
                 for (entry, profile, suffix, stage) in [
                     (format!("vs_{entry_name}"), "vs_4_1", "vs", "VERTEX"),

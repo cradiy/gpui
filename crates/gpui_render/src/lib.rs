@@ -40,14 +40,27 @@ pub const PATH_MSL: &str = include_str!(concat!(env!("OUT_DIR"), "/paths.metal")
 /// Native path composition shader for Direct3D 11.
 pub const PATH_HLSL: &str = include_str!(concat!(env!("OUT_DIR"), "/paths.hlsl"));
 
+/// Common definitions and color sprite entry points in WGSL.
+pub const POLYCHROME_WGSL: &str = concat!(
+    include_str!("common.wgsl"),
+    include_str!("polychrome_sprites.wgsl")
+);
+/// Native color sprite shader for Metal.
+pub const POLYCHROME_MSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/polychrome_sprites.metal"));
+/// Native color sprite shader for Direct3D 11.
+pub const POLYCHROME_HLSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/polychrome_sprites.hlsl"));
+
 /// Appends additional WGSL primitives to the shared definitions.
 pub fn compose_shader(primitives: &str) -> String {
     format!(
-        "{QUAD_WGSL}\n{}\n{}\n{}\n{}\n{primitives}",
+        "{QUAD_WGSL}\n{}\n{}\n{}\n{}\n{}\n{primitives}",
         include_str!("shadows.wgsl"),
         include_str!("underlines.wgsl"),
         include_str!("path_rasterization.wgsl"),
-        include_str!("paths.wgsl")
+        include_str!("paths.wgsl"),
+        include_str!("polychrome_sprites.wgsl")
     )
 }
 
@@ -74,8 +87,10 @@ pub const METAL_GLOBALS_SLOT: u64 = 0;
 pub const METAL_INSTANCES_SLOT: u64 = 1;
 /// Metal buffer slot for Naga's runtime array lengths, expressed in bytes.
 pub const METAL_SIZES_SLOT: u64 = 3;
-/// Metal texture slot for the resolved path image.
-pub const METAL_PATH_TEXTURE_SLOT: u64 = 0;
+/// Metal texture slot for sprite atlases and resolved path images.
+pub const METAL_TEXTURE_SLOT: u64 = 0;
+/// Metal sampler slot for filtered sprite atlas reads.
+pub const METAL_SAMPLER_SLOT: u64 = 0;
 
 #[cfg(test)]
 mod tests;

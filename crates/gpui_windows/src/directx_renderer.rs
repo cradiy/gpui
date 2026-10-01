@@ -1163,7 +1163,7 @@ impl DirectXRenderer {
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -1912,6 +1912,7 @@ impl<T> PipelineState<T> {
                 | ShaderModule::Underline
                 | ShaderModule::PathRasterization
                 | ShaderModule::PathSprite
+                | ShaderModule::PolychromeSprite
         );
         let buffer = if raw_instances {
             create_raw_buffer(device, std::mem::size_of::<T>() * buffer_size)?
@@ -2110,7 +2111,17 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
-        let view = create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?;
+        let view = if self.raw_instances {
+            let stride = std::mem::size_of::<T>() as u32;
+            create_raw_buffer_view(
+                device,
+                &self.buffer,
+                first_instance * stride,
+                instance_count * stride,
+            )?
+        } else {
+            create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?
+        };
         set_pipeline_state(
             device_context,
             slice::from_ref(&view),
@@ -3153,6 +3164,7 @@ mod tests {
             (gpui_render::UNDERLINE_HLSL, "underline"),
             (gpui_render::PATH_RASTERIZATION_HLSL, "path_rasterization"),
             (gpui_render::PATH_HLSL, "path"),
+            (gpui_render::POLYCHROME_HLSL, "poly_sprite"),
         ] {
             compile_hlsl(source, &format!("vs_{name}"), "vs_4_1")
                 .unwrap_or_else(|error| panic!("{name} vertex shader: {error}"));
@@ -3353,6 +3365,11 @@ pub(crate) mod shader_resources {
                 "fs_path_rasterization",
             )),
             ShaderModule::PathSprite => Some((gpui_render::PATH_HLSL, "vs_path", "fs_path")),
+            ShaderModule::PolychromeSprite => Some((
+                gpui_render::POLYCHROME_HLSL,
+                "vs_poly_sprite",
+                "fs_poly_sprite",
+            )),
             _ => None,
         };
         if let Some((source, vertex, fragment)) = shared_shader {

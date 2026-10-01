@@ -1,17 +1,19 @@
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use bytemuck::{Pod, Zeroable};
+use gpui::ShaderBounds as PodBounds;
 use gpui::{
-    AtlasTextureId, BackdropBlur, BackdropShader, Background, Bounds, ColorRange, DevicePixels,
-    EffectQuad, EffectShader, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, SubpixelSprite, SurfaceColorInfo,
-    SurfaceFormat, SurfaceFrame, SurfaceId, Underline, WeakSurfaceHandle, YuvMatrix,
-    get_gamma_correction_ratios,
+    AtlasTextureId, BackdropBlur, BackdropShader, Bounds, DevicePixels, EffectQuad, EffectShader,
+    GpuSpecs, MonochromeSprite, Path, PathSprite, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, SubpixelSprite, SurfaceFormat, SurfaceFrame, SurfaceId,
+    Underline, WeakSurfaceHandle, get_gamma_correction_ratios,
 };
+pub(super) use gpui::{BackdropInstance, EffectInstance};
 #[cfg(target_os = "linux")]
 use gpui::{
     DRM_FORMAT_NV12, DmaBufHandle, DmaBufId, DmaBufImage, DmaBufPlane, DrmDevice,
     SurfaceFrameBacking, WeakDmaBufHandle,
 };
+use gpui_render::SurfaceParams;
 use log::warn;
 #[cfg(not(target_family = "wasm"))]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -71,107 +73,7 @@ struct FeedbackTextures {
     pending: Cell<Option<FeedbackSnapshot>>,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GlobalParams {
-    viewport_size: [f32; 2],
-    premultiplied_alpha: u32,
-    pad: u32,
-    viewport_origin: [f32; 2],
-    origin_pad: [u32; 2],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct PodBounds {
-    origin: [f32; 2],
-    size: [f32; 2],
-}
-
-impl From<Bounds<ScaledPixels>> for PodBounds {
-    fn from(bounds: Bounds<ScaledPixels>) -> Self {
-        Self {
-            origin: [bounds.origin.x.0, bounds.origin.y.0],
-            size: [bounds.size.width.0, bounds.size.height.0],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub(super) struct SurfaceParams {
-    bounds: PodBounds,
-    clip_bounds: PodBounds,
-    content_mask: PodBounds,
-    uv_bounds: PodBounds,
-    corner_radii: [f32; 4],
-    color_rows: [[f32; 4]; 3],
-    opacity: f32,
-    _pad: [f32; 3],
-}
-
-pub(super) fn yuv_to_rgb_rows(color: SurfaceColorInfo) -> [[f32; 4]; 3] {
-    let (y_scale, y_offset, chroma_center, r_cr, g_cb, g_cr, b_cb) =
-        match (color.matrix, color.range) {
-            (YuvMatrix::Bt601, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.596_027,
-                -0.391_762,
-                -0.812_968,
-                2.017_232,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.792_741,
-                -0.213_249,
-                -0.532_909,
-                2.112_402,
-            ),
-            (YuvMatrix::Bt601, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.402,
-                -0.344_136,
-                -0.714_136,
-                1.772,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.5748,
-                -0.187_324,
-                -0.468_124,
-                1.8556,
-            ),
-        };
-
-    [
-        [
-            y_scale,
-            0.0,
-            r_cr,
-            -y_scale * y_offset - r_cr * chroma_center,
-        ],
-        [
-            y_scale,
-            g_cb,
-            g_cr,
-            -y_scale * y_offset - (g_cb + g_cr) * chroma_center,
-        ],
-        [
-            y_scale,
-            b_cb,
-            0.0,
-            -y_scale * y_offset - b_cb * chroma_center,
-        ],
-    ]
-}
+type GlobalParams = gpui_render::PrimitiveGlobals;
 
 enum CachedSurfaceTextures {
     Rgba {
@@ -228,184 +130,7 @@ pub(super) fn surface_cache_action(
     }
 }
 
-pub(super) fn surface_uv_bounds(frame: &SurfaceFrame) -> ([f32; 2], [f32; 2]) {
-    let coded_size = frame.coded_size();
-    let visible_rect = frame.visible_rect();
-    (
-        [
-            visible_rect.origin.x.0 as f32 / coded_size.width.0 as f32,
-            visible_rect.origin.y.0 as f32 / coded_size.height.0 as f32,
-        ],
-        [
-            visible_rect.size.width.0 as f32 / coded_size.width.0 as f32,
-            visible_rect.size.height.0 as f32 / coded_size.height.0 as f32,
-        ],
-    )
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, PartialEq, Pod, Zeroable)]
-struct GammaParams {
-    gamma_ratios: [f32; 4],
-    grayscale_enhanced_contrast: f32,
-    subpixel_enhanced_contrast: f32,
-    is_bgr: u32,
-    _pad: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct PodTransformationMatrix {
-    rotation_scale: [[f32; 2]; 2],
-    translation: [f32; 2],
-}
-
-impl From<gpui::TransformationMatrix> for PodTransformationMatrix {
-    fn from(value: gpui::TransformationMatrix) -> Self {
-        Self {
-            rotation_scale: value.rotation_scale,
-            translation: value.translation,
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub(super) struct EffectInstance {
-    bounds: PodBounds,
-    effect_bounds: PodBounds,
-    transformation: PodTransformationMatrix,
-    content_mask: PodBounds,
-    corner_radii: [f32; 4],
-    image_bounds: PodBounds,
-    second_image_bounds: PodBounds,
-    third_image_bounds: PodBounds,
-    fourth_image_bounds: PodBounds,
-    opacity: f32,
-    time: f32,
-    pad: [f32; 2],
-    alignment_pad: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl From<&EffectQuad> for EffectInstance {
-    fn from(effect: &EffectQuad) -> Self {
-        Self {
-            bounds: effect.bounds.into(),
-            effect_bounds: effect.effect_bounds.into(),
-            transformation: effect.transformation.into(),
-            content_mask: effect.content_mask.bounds.into(),
-            corner_radii: [
-                effect.corner_radii.top_left.0,
-                effect.corner_radii.top_right.0,
-                effect.corner_radii.bottom_right.0,
-                effect.corner_radii.bottom_left.0,
-            ],
-            image_bounds: effect
-                .image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
-                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
-            second_image_bounds: effect
-                .second_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
-                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
-            third_image_bounds: effect
-                .third_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
-                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
-            fourth_image_bounds: effect
-                .fourth_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)).into())
-                .unwrap_or_else(|| Bounds::<ScaledPixels>::default().into()),
-            opacity: effect.opacity,
-            time: effect.time,
-            pad: [0.0; 2],
-            alignment_pad: [0.0; 2],
-            uniforms: *effect.uniforms.slots(),
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub(super) struct BackdropInstance {
-    bounds: PodBounds,
-    content_mask: PodBounds,
-    corner_radii: [f32; 4],
-    blur_radius: f32,
-    opacity: f32,
-    time: f32,
-    pointer_active: f32,
-    direction: [f32; 2],
-    pointer: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl BackdropInstance {
-    fn blur(
-        viewport_size: [f32; 2],
-        render_size: [f32; 2],
-        blur_radius: f32,
-        direction: [f32; 2],
-    ) -> Self {
-        let viewport = PodBounds {
-            origin: [0.0, 0.0],
-            size: viewport_size,
-        };
-        Self {
-            bounds: viewport,
-            content_mask: PodBounds {
-                origin: [0.0, 0.0],
-                size: render_size,
-            },
-            corner_radii: [0.0; 4],
-            blur_radius,
-            opacity: 1.0,
-            time: 0.0,
-            pointer_active: 0.0,
-            direction,
-            pointer: [0.5; 2],
-            uniforms: [[0.0; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-        }
-    }
-}
-
-impl From<&BackdropBlur> for BackdropInstance {
-    fn from(backdrop: &BackdropBlur) -> Self {
-        Self {
-            bounds: backdrop.bounds.into(),
-            content_mask: backdrop.content_mask.bounds.into(),
-            corner_radii: [
-                backdrop.corner_radii.top_left.0,
-                backdrop.corner_radii.top_right.0,
-                backdrop.corner_radii.bottom_right.0,
-                backdrop.corner_radii.bottom_left.0,
-            ],
-            blur_radius: backdrop.blur_radius.0,
-            opacity: backdrop.opacity,
-            time: backdrop.time,
-            pointer_active: u32::from(backdrop.pointer_active) as f32,
-            direction: [0.0; 2],
-            pointer: [backdrop.pointer.x, backdrop.pointer.y],
-            uniforms: *backdrop.uniforms.slots(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-struct PathSprite {
-    bounds: Bounds<ScaledPixels>,
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-pub(super) struct PathRasterizationVertex {
-    xy_position: Point<ScaledPixels>,
-    st_position: Point<f32>,
-    color: Background,
-    bounds: Bounds<ScaledPixels>,
-}
+type GammaParams = gpui_render::GammaParams;
 
 pub struct WgpuSurfaceConfig {
     pub size: Size<DevicePixels>,
@@ -1635,19 +1360,19 @@ impl WgpuRenderer {
         }
         let dual_source_blending = dual_source_blending && device_has_feature;
 
-        let base_shader_source = include_str!("shaders.wgsl");
+        let base_shader_source = gpui_render::compose_shader("");
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_shaders"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(base_shader_source)),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(&base_shader_source)),
         });
         let backdrop_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_backdrop_blur_shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "backdrop_blur.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                gpui_render::BACKDROP_BLUR_WGSL,
+            )),
         });
 
-        let subpixel_shader_source = include_str!("shaders_subpixel.wgsl");
+        let subpixel_shader_source = gpui_render::SUBPIXEL_WGSL;
         let subpixel_shader_module = if dual_source_blending {
             let combined = format!(
                 "enable dual_source_blending;\n{base_shader_source}\n{subpixel_shader_source}"
@@ -1904,7 +1629,7 @@ impl WgpuRenderer {
         let surfaces_nv12 = create_pipeline(
             "surfaces_nv12",
             "vs_surface",
-            "fs_surface_nv12",
+            "fs_surface_yuv",
             &layouts.globals,
             &layouts.surfaces,
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -4791,22 +4516,27 @@ impl WgpuRenderer {
                 continue;
             };
 
-            let (uv_origin, uv_size) = surface_uv_bounds(frame);
+            let uv = frame.normalized_visible_rect();
+            let rect = |bounds: Bounds<ScaledPixels>| {
+                [
+                    bounds.origin.x.0,
+                    bounds.origin.y.0,
+                    bounds.size.width.0,
+                    bounds.size.height.0,
+                ]
+            };
             let params = SurfaceParams {
-                bounds: surface.bounds.into(),
-                clip_bounds: surface.clip_bounds.into(),
-                content_mask: surface.content_mask.bounds.into(),
-                uv_bounds: PodBounds {
-                    origin: uv_origin,
-                    size: uv_size,
-                },
+                bounds: rect(surface.bounds),
+                clip_bounds: rect(surface.clip_bounds),
+                content_mask: rect(surface.content_mask.bounds),
+                uv_bounds: [uv.origin.x, uv.origin.y, uv.size.width, uv.size.height],
                 corner_radii: [
                     surface.corner_radii.top_left.0,
                     surface.corner_radii.top_right.0,
                     surface.corner_radii.bottom_right.0,
                     surface.corner_radii.bottom_left.0,
                 ],
-                color_rows: yuv_to_rgb_rows(frame.color()),
+                color_rows: frame.color().yuv_to_rgb_matrix(),
                 opacity: surface.opacity,
                 _pad: [0.0; 3],
             };
@@ -5487,13 +5217,7 @@ impl WgpuRenderer {
     ) -> bool {
         let mut vertices = Vec::new();
         for path in paths {
-            let bounds = path.clipped_bounds();
-            vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
-                xy_position: v.xy_position,
-                st_position: v.st_position,
-                color: path.color,
-                bounds,
-            }));
+            vertices.extend(path.rasterization_vertices());
         }
 
         if vertices.is_empty() {

@@ -20,8 +20,10 @@ screen-capture = ["gpui/screen-capture"]
 
 [dependencies]
 gpui.workspace = true
+gpui_render.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+gpui_render = { workspace = true, features = ["native-shaders"] }
 accesskit.workspace = true
 accesskit_macos.workspace = true
 anyhow.workspace = true
@@ -50,7 +52,6 @@ libc.workspace = true
 log.workspace = true
 mach2.workspace = true
 metal.workspace = true
-naga.workspace = true
 objc.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true
@@ -64,8 +65,11 @@ strum.workspace = true
 uuid.workspace = true
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
-cbindgen = { version = "0.28.0", default-features = false }
-gpui.workspace = true
+gpui_render.workspace = true
+
+[dev-dependencies]
+naga.workspace = true
+tempfile.workspace = true
 
 # When this crate is itself being tested (cargo test -p gpui_macos), its own
 # cfg(test) flag enables impls of test-only traits like PlatformHeadlessRenderer

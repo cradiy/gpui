@@ -81,3 +81,90 @@ fn enlarged_image_edges_do_not_sample_neighboring_atlas_pixels() -> anyhow::Resu
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn color_sprites_preserve_filtering_alpha_and_transformed_clipping() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(96), DevicePixels(80)))?;
+    let viewport = bounds(0., 0., 96., 80.);
+    // BGRA: opaque black/white for filtering, then translucent green for blending.
+    for (id, pixels, grayscale, opacity) in [
+        (2, vec![0, 0, 0, 255, 255, 255, 255, 255], false, 1.),
+        (3, vec![0, 255, 0, 128, 0, 255, 0, 128], true, 0.5),
+    ] {
+        let tile = renderer
+            .sprite_atlas()
+            .get_or_insert_with(
+                &RenderImageParams {
+                    image_id: ImageId(id),
+                    frame_index: 0,
+                }
+                .into(),
+                &mut || {
+                    Ok(Some((
+                        size(DevicePixels(2), DevicePixels(1)),
+                        Cow::Borrowed(&pixels),
+                    )))
+                },
+            )?
+            .unwrap();
+        let mut scene = Scene::default();
+        scene.insert_primitive(Quad {
+            bounds: viewport,
+            content_mask: ContentMask { bounds: viewport },
+            background: rgba(0x000000ff).into(),
+            ..Default::default()
+        });
+        scene.insert_primitive(PolychromeSprite {
+            order: 0,
+            pad: 0,
+            grayscale: grayscale.into(),
+            opacity,
+            bounds: bounds(0., 0., 32., 24.),
+            clip_bounds: bounds(0., 0., 32., 24.),
+            content_mask: ContentMask {
+                bounds: bounds(24., 0., 48., 80.),
+            },
+            corner_radii: gpui::Corners::all(ScaledPixels(4.)),
+            tile,
+            transformation: gpui::TransformationMatrix {
+                rotation_scale: [[2., 0.], [0., 2.]],
+                translation: [16., 16.],
+            },
+        });
+        scene.finish();
+        let result = renderer.render_rgba(&scene)?;
+        let pixel = |x: usize, y: usize| &result[(y * 96 + x) * 4..(y * 96 + x + 1) * 4];
+        for (x, y) in [(8, 32), (20, 32), (76, 32), (48, 8), (48, 70)] {
+            assert_eq!(
+                pixel(x, y),
+                [0, 0, 0, 255],
+                "outside transformed clip {x},{y}"
+            );
+        }
+        if grayscale {
+            // Luminance 0.7152, texel alpha 128/255 and opacity 0.5, over black.
+            let expected = ((1.055 * (0.7152_f32 * (128. / 255.) * 0.5).powf(1. / 2.4) - 0.055)
+                * 255.)
+                .round() as i16;
+            for channel in &pixel(48, 32)[..3] {
+                assert!(
+                    (*channel as i16 - expected).abs() <= 2,
+                    "blended grayscale: {:?}",
+                    pixel(48, 32)
+                );
+            }
+        } else {
+            assert_eq!(pixel(24, 32), [0, 0, 0, 255]);
+            assert_eq!(pixel(71, 32), [255, 255, 255, 255]);
+            let center = pixel(48, 32);
+            assert!(
+                (186..=192).contains(&center[0]),
+                "linear filtering: {center:?}"
+            );
+            assert_eq!(center[0], center[1]);
+            assert_eq!(center[1], center[2]);
+        }
+    }
+    Ok(())
+}

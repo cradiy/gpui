@@ -38,8 +38,9 @@ struct BackdropInstance {
 @group(0) @binding(0) var<uniform> globals: GlobalParams;
 @group(1) @binding(0) var<storage, read> b_backdrops: array<BackdropInstance>;
 @group(1) @binding(1) var t_raw_backdrop: texture_2d<f32>;
-@group(1) @binding(2) var s_backdrop: sampler;
 @group(1) @binding(3) var t_blurred_backdrop: texture_2d<f32>;
+
+// __GPUI_BACKDROP_SAMPLING__
 
 fn backdrop_straight_color(color: vec4<f32>) -> vec4<f32> {
     if (globals.premultiplied_alpha != 0u && color.a > 0.00001) {
@@ -57,17 +58,15 @@ fn backdrop_sample_uv(input: BackdropInput, displacement_pixels: vec2<f32>) -> v
 }
 
 fn sample_raw_backdrop(input: BackdropInput, displacement_pixels: vec2<f32>) -> vec4<f32> {
-    return backdrop_straight_color(textureSample(
+    return backdrop_straight_color(backdrop_sample_texture(
         t_raw_backdrop,
-        s_backdrop,
         backdrop_sample_uv(input, displacement_pixels),
     ));
 }
 
 fn sample_blurred_backdrop(input: BackdropInput, displacement_pixels: vec2<f32>) -> vec4<f32> {
-    return backdrop_straight_color(textureSample(
+    return backdrop_straight_color(backdrop_sample_texture(
         t_blurred_backdrop,
-        s_backdrop,
         backdrop_sample_uv(input, displacement_pixels),
     ));
 }

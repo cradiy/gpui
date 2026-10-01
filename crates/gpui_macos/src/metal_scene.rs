@@ -162,12 +162,11 @@ pub(crate) fn metal_texture(texture: &wgpu::Texture) -> Result<metal::Texture> {
 }
 
 fn composite_pipeline_descriptor(library: &metal::LibraryRef) -> metal::RenderPipelineDescriptor {
+    let program = crate::shader_programs::ShaderProgram::Subtree.program();
     let descriptor = metal::RenderPipelineDescriptor::new();
-    descriptor.set_label("gpui.subtree_composite");
-    descriptor.set_vertex_function(Some(&library.get_function("subtree_vertex", None).unwrap()));
-    descriptor.set_fragment_function(Some(
-        &library.get_function("subtree_fragment", None).unwrap(),
-    ));
+    descriptor.set_label(program.label);
+    descriptor.set_vertex_function(Some(&library.get_function(program.vertex, None).unwrap()));
+    descriptor.set_fragment_function(Some(&library.get_function(program.fragment, None).unwrap()));
     let color = descriptor.color_attachments().object_at(0).unwrap();
     color.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
     color.set_blending_enabled(true);

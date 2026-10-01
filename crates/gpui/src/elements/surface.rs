@@ -665,6 +665,58 @@ pub struct SurfaceColorInfo {
     pub range: ColorRange,
 }
 
+impl SurfaceColorInfo {
+    /// Returns matrix rows converting normalized 8-bit `[Y, Cb, Cr, 1]` samples to RGB.
+    /// Includes range offsets without clamping or applying a transfer function.
+    pub fn yuv_to_rgb_matrix(self) -> [[f32; 4]; 3] {
+        let (y_scale, y_offset, r_cr, g_cb, g_cr, b_cb) = match (self.matrix, self.range) {
+            (YuvMatrix::Bt601, ColorRange::Limited) => (
+                255.0 / 219.0,
+                16.0 / 255.0,
+                1.596_027,
+                -0.391_762,
+                -0.812_968,
+                2.017_232,
+            ),
+            (YuvMatrix::Bt709, ColorRange::Limited) => (
+                255.0 / 219.0,
+                16.0 / 255.0,
+                1.792_741,
+                -0.213_249,
+                -0.532_909,
+                2.112_402,
+            ),
+            (YuvMatrix::Bt601, ColorRange::Full) => {
+                (1.0, 0.0, 1.402, -0.344_136, -0.714_136, 1.772)
+            }
+            (YuvMatrix::Bt709, ColorRange::Full) => {
+                (1.0, 0.0, 1.5748, -0.187_324, -0.468_124, 1.8556)
+            }
+        };
+        let chroma_center = 128.0 / 255.0;
+        [
+            [
+                y_scale,
+                0.0,
+                r_cr,
+                -y_scale * y_offset - r_cr * chroma_center,
+            ],
+            [
+                y_scale,
+                g_cb,
+                g_cr,
+                -y_scale * y_offset - (g_cb + g_cr) * chroma_center,
+            ],
+            [
+                y_scale,
+                b_cb,
+                0.0,
+                -y_scale * y_offset - b_cb * chroma_center,
+            ],
+        ]
+    }
+}
+
 /// One CPU-backed image plane.
 #[derive(Clone)]
 pub struct SurfacePlane {
@@ -1235,6 +1287,22 @@ impl SurfaceFrame {
         self.visible_rect
     }
 
+    /// Returns the visible portion in normalized texture coordinates relative to the coded size.
+    pub fn normalized_visible_rect(&self) -> Bounds<f32> {
+        let width = self.coded_size.width.0 as f32;
+        let height = self.coded_size.height.0 as f32;
+        Bounds::new(
+            crate::point(
+                self.visible_rect.origin.x.0 as f32 / width,
+                self.visible_rect.origin.y.0 as f32 / height,
+            ),
+            crate::size(
+                self.visible_rect.size.width.0 as f32 / width,
+                self.visible_rect.size.height.0 as f32 / height,
+            ),
+        )
+    }
+
     /// Returns the intended display size used for aspect-ratio calculations.
     pub fn display_size(&self) -> Size<DevicePixels> {
         self.display_size
@@ -1761,6 +1829,81 @@ impl InteractiveElement for Surface {
 mod tests {
     use super::*;
     use crate::{bounds, point, size};
+
+    #[test]
+    fn yuv_matrix_matches_reference_conversion() {
+        for matrix in [YuvMatrix::Bt601, YuvMatrix::Bt709] {
+            let (kr, kb) = match matrix {
+                YuvMatrix::Bt601 => (0.299, 0.114),
+                YuvMatrix::Bt709 => (0.2126, 0.0722),
+            };
+            let kg = 1.0 - kr - kb;
+            for range in [ColorRange::Limited, ColorRange::Full] {
+                let rows = SurfaceColorInfo { matrix, range }.yuv_to_rgb_matrix();
+                let (black, white) = match range {
+                    ColorRange::Limited => (16.0, 235.0),
+                    ColorRange::Full => (0.0, 255.0),
+                };
+                for (y, cb, cr) in [
+                    (black, 128.0, 128.0),
+                    (white, 128.0, 128.0),
+                    (81.0, 90.0, 240.0),
+                    (145.0, 54.0, 34.0),
+                    (41.0, 240.0, 110.0),
+                ] {
+                    let actual =
+                        rows.map(|row| (row[0] * y + row[1] * cb + row[2] * cr) / 255.0 + row[3]);
+                    let chroma_range = match range {
+                        ColorRange::Limited => 224.0,
+                        ColorRange::Full => 255.0,
+                    };
+                    let luma = (y - black) / (white - black);
+                    let blue_difference = (cb - 128.0) / chroma_range;
+                    let red_difference = (cr - 128.0) / chroma_range;
+                    let red = luma + 2.0 * (1.0 - kr) * red_difference;
+                    let blue = luma + 2.0 * (1.0 - kb) * blue_difference;
+                    let green = (luma - kr * red - kb * blue) / kg;
+                    for (actual, expected) in actual.into_iter().zip([red, green, blue]) {
+                        assert!(
+                            (actual - expected).abs() < 1e-5,
+                            "{matrix:?} {range:?} at ({y}, {cb}, {cr}): {actual} != {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn visible_rect_is_normalized_to_coded_size() {
+        let coded_size = size(DevicePixels(8), DevicePixels(4));
+        let full =
+            SurfaceFrame::rgba(SurfaceHandle::new(), 0, coded_size, vec![0; 128], 32).unwrap();
+        assert_eq!(
+            full.normalized_visible_rect(),
+            bounds(point(0.0, 0.0), size(1.0, 1.0))
+        );
+
+        let cropped = SurfaceFrame::new(
+            SurfaceHandle::new(),
+            0,
+            coded_size,
+            bounds(
+                point(DevicePixels(2), DevicePixels(1)),
+                size(DevicePixels(4), DevicePixels(2)),
+            ),
+            // Display scaling must not affect sampling coordinates.
+            size(DevicePixels(16), DevicePixels(8)),
+            SurfaceFormat::Rgba8,
+            [SurfacePlane::new(vec![0; 128], 32)],
+            SurfaceColorInfo::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            cropped.normalized_visible_rect(),
+            bounds(point(0.25, 0.25), size(0.5, 0.5))
+        );
+    }
 
     #[test]
     fn validates_bgra_stride_and_length() {

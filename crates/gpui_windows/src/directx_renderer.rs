@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use gpui_render::SurfaceParams;
 use gpui_util::ResultExt;
 use windows::{
     Win32::{
@@ -33,31 +34,6 @@ const DEFAULT_BACKDROP_EFFECT: &str = r#"
 fn backdrop_effect(input: BackdropInput, params: BackdropParams) -> vec4<f32> {
     return sample_blurred_backdrop(input, vec2<f32>(0.0));
 }
-"#;
-const DIRECTX_BACKDROP_BILINEAR_SUPPORT: &str = r#"
-fn backdrop_sample_bilinear(texture: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
-    let dimensions = vec2<f32>(textureDimensions(texture));
-    let position = clamp(
-        uv * dimensions - vec2<f32>(0.5),
-        vec2<f32>(0.0),
-        dimensions - vec2<f32>(1.0),
-    );
-    let low = vec2<i32>(floor(position));
-    let high = min(low + vec2<i32>(1), vec2<i32>(dimensions) - vec2<i32>(1));
-    let factor = fract(position);
-    let top = mix(
-        textureLoad(texture, low, 0),
-        textureLoad(texture, vec2<i32>(high.x, low.y), 0),
-        factor.x,
-    );
-    let bottom = mix(
-        textureLoad(texture, vec2<i32>(low.x, high.y), 0),
-        textureLoad(texture, high, 0),
-        factor.x,
-    );
-    return mix(top, bottom, factor.y);
-}
-
 "#;
 
 pub(crate) struct FontInfo {
@@ -129,27 +105,14 @@ struct DirectXResources {
 struct DirectXRenderPipelines {
     shadow_pipeline: PipelineState<Shadow>,
     quad_pipeline: PipelineState<Quad>,
-    path_rasterization_pipeline: PipelineState<PathRasterizationSprite>,
+    path_rasterization_pipeline: PipelineState<PathRasterizationVertex>,
     path_sprite_pipeline: PipelineState<PathSprite>,
     underline_pipeline: PipelineState<Underline>,
     mono_sprites: PipelineState<MonochromeSprite>,
     subpixel_sprites: PipelineState<SubpixelSprite>,
     poly_sprites: PipelineState<PolychromeSprite>,
-    surface_rgba: PipelineState<SurfaceInstance>,
-    surface_nv12: PipelineState<SurfaceInstance>,
-}
-
-#[derive(Clone, Debug)]
-#[repr(C)]
-struct SurfaceInstance {
-    bounds: Bounds<ScaledPixels>,
-    clip_bounds: Bounds<ScaledPixels>,
-    content_mask: Bounds<ScaledPixels>,
-    uv_bounds: Bounds<f32>,
-    corner_radii: Corners<ScaledPixels>,
-    color_rows: [[f32; 4]; 3],
-    opacity: f32,
-    _pad: [f32; 3],
+    surface_rgba: PipelineState<SurfaceParams>,
+    surface_nv12: PipelineState<SurfaceParams>,
 }
 
 struct DirectXSurfacePlane {
@@ -174,8 +137,8 @@ struct CachedSurface {
 }
 
 struct DirectXGlobalElements {
-    global_params_buffer: Option<ID3D11Buffer>,
     effect_global_params_buffer: Option<ID3D11Buffer>,
+    gamma_params_buffer: Option<ID3D11Buffer>,
     sampler: Option<ID3D11SamplerState>,
 }
 
@@ -288,18 +251,6 @@ impl DirectXRenderer {
             .device_context;
         update_buffer(
             device_context,
-            self.globals.global_params_buffer.as_ref().unwrap(),
-            &[GlobalParams {
-                gamma_ratios: self.font_info.gamma_ratios,
-                viewport_size: [resources.viewport.Width, resources.viewport.Height],
-                grayscale_enhanced_contrast: self.font_info.grayscale_enhanced_contrast,
-                subpixel_enhanced_contrast: self.font_info.subpixel_enhanced_contrast,
-                is_bgr: self.font_info.is_bgr as u32,
-                _pad: [0; 3],
-            }],
-        )?;
-        update_buffer(
-            device_context,
             self.globals.effect_global_params_buffer.as_ref().unwrap(),
             &[EffectGlobalParams {
                 viewport_size: [resources.viewport.Width, resources.viewport.Height],
@@ -307,6 +258,17 @@ impl DirectXRenderer {
                 pad: 0,
                 viewport_origin: [0.; 2],
                 origin_pad: [0; 2],
+            }],
+        )?;
+        update_buffer(
+            device_context,
+            self.globals.gamma_params_buffer.as_ref().unwrap(),
+            &[gpui_render::GammaParams {
+                gamma_ratios: self.font_info.gamma_ratios,
+                grayscale_enhanced_contrast: self.font_info.grayscale_enhanced_contrast,
+                subpixel_enhanced_contrast: self.font_info.subpixel_enhanced_contrast,
+                is_bgr: self.font_info.is_bgr as u32,
+                _pad: 0,
             }],
         )?;
         unsafe {
@@ -600,7 +562,7 @@ impl DirectXRenderer {
                     .context("resources missing")?
                     .viewport,
             ),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             4,
             start as u32,
             len as u32,
@@ -622,7 +584,7 @@ impl DirectXRenderer {
                     .context("resources missing")?
                     .viewport,
             ),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             4,
             start as u32,
             len as u32,
@@ -994,12 +956,7 @@ impl DirectXRenderer {
         let mut vertices = Vec::new();
 
         for path in paths {
-            vertices.extend(path.vertices.iter().map(|v| PathRasterizationSprite {
-                xy_position: v.xy_position,
-                st_position: v.st_position,
-                color: path.color,
-                bounds: path.clipped_bounds(),
-            }));
+            vertices.extend(path.rasterization_vertices());
         }
 
         self.pipelines.path_rasterization_pipeline.update_buffer(
@@ -1011,7 +968,7 @@ impl DirectXRenderer {
         self.pipelines.path_rasterization_pipeline.draw(
             &devices.device_context,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             vertices.len() as u32,
             1,
@@ -1075,8 +1032,8 @@ impl DirectXRenderer {
             &devices.device_context,
             slice::from_ref(&resources.path_intermediate_srv),
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
-            slice::from_ref(&self.globals.sampler),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
+            &[],
             sprites.len() as u32,
         )
     }
@@ -1091,7 +1048,7 @@ impl DirectXRenderer {
             &devices.device,
             &devices.device_context,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             4,
             start as u32,
             len as u32,
@@ -1115,7 +1072,10 @@ impl DirectXRenderer {
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &[
+                self.globals.effect_global_params_buffer.clone(),
+                self.globals.gamma_params_buffer.clone(),
+            ],
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -1139,7 +1099,10 @@ impl DirectXRenderer {
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            &[
+                self.globals.effect_global_params_buffer.clone(),
+                self.globals.gamma_params_buffer.clone(),
+            ],
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -1163,7 +1126,7 @@ impl DirectXRenderer {
             &devices.device_context,
             &texture_view,
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
@@ -1225,7 +1188,7 @@ impl DirectXRenderer {
                     slice::from_ref(&texture.view),
                     None,
                     slice::from_ref(&resources.viewport),
-                    slice::from_ref(&self.globals.global_params_buffer),
+                    slice::from_ref(&self.globals.effect_global_params_buffer),
                     slice::from_ref(&self.globals.sampler),
                 )?,
                 DirectXSurfaceTextures::Nv12 { y, uv } => pipeline.draw_surface(
@@ -1233,7 +1196,7 @@ impl DirectXRenderer {
                     slice::from_ref(&y.view),
                     Some(slice::from_ref(&uv.view)),
                     slice::from_ref(&resources.viewport),
-                    slice::from_ref(&self.globals.global_params_buffer),
+                    slice::from_ref(&self.globals.effect_global_params_buffer),
                     slice::from_ref(&self.globals.sampler),
                 )?,
             }
@@ -1294,91 +1257,31 @@ impl DirectXRenderer {
     }
 }
 
-fn surface_instance(surface: &PaintSurface, frame: &SurfaceFrame) -> SurfaceInstance {
-    let coded_size = frame.coded_size();
-    let visible_rect = frame.visible_rect();
-    SurfaceInstance {
-        bounds: surface.bounds,
-        clip_bounds: surface.clip_bounds,
-        content_mask: surface.content_mask.bounds,
-        uv_bounds: Bounds {
-            origin: Point {
-                x: visible_rect.origin.x.0 as f32 / coded_size.width.0 as f32,
-                y: visible_rect.origin.y.0 as f32 / coded_size.height.0 as f32,
-            },
-            size: Size {
-                width: visible_rect.size.width.0 as f32 / coded_size.width.0 as f32,
-                height: visible_rect.size.height.0 as f32 / coded_size.height.0 as f32,
-            },
-        },
-        corner_radii: surface.corner_radii,
-        color_rows: yuv_to_rgb_rows(frame.color()),
+fn surface_instance(surface: &PaintSurface, frame: &SurfaceFrame) -> SurfaceParams {
+    let uv = frame.normalized_visible_rect();
+    let rect = |bounds: Bounds<ScaledPixels>| {
+        [
+            bounds.origin.x.0,
+            bounds.origin.y.0,
+            bounds.size.width.0,
+            bounds.size.height.0,
+        ]
+    };
+    SurfaceParams {
+        bounds: rect(surface.bounds),
+        clip_bounds: rect(surface.clip_bounds),
+        content_mask: rect(surface.content_mask.bounds),
+        uv_bounds: [uv.origin.x, uv.origin.y, uv.size.width, uv.size.height],
+        corner_radii: [
+            surface.corner_radii.top_left.0,
+            surface.corner_radii.top_right.0,
+            surface.corner_radii.bottom_right.0,
+            surface.corner_radii.bottom_left.0,
+        ],
+        color_rows: frame.color().yuv_to_rgb_matrix(),
         opacity: surface.opacity,
         _pad: [0.0; 3],
     }
-}
-
-fn yuv_to_rgb_rows(color: SurfaceColorInfo) -> [[f32; 4]; 3] {
-    let (y_scale, y_offset, chroma_center, r_cr, g_cb, g_cr, b_cb) =
-        match (color.matrix, color.range) {
-            (YuvMatrix::Bt601, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.596_027,
-                -0.391_762,
-                -0.812_968,
-                2.017_232,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Limited) => (
-                255.0 / 219.0,
-                16.0 / 255.0,
-                128.0 / 255.0,
-                1.792_741,
-                -0.213_249,
-                -0.532_909,
-                2.112_402,
-            ),
-            (YuvMatrix::Bt601, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.402,
-                -0.344_136,
-                -0.714_136,
-                1.772,
-            ),
-            (YuvMatrix::Bt709, ColorRange::Full) => (
-                1.0,
-                0.0,
-                128.0 / 255.0,
-                1.5748,
-                -0.187_324,
-                -0.468_124,
-                1.8556,
-            ),
-        };
-
-    [
-        [
-            y_scale,
-            0.0,
-            r_cr,
-            -y_scale * y_offset - r_cr * chroma_center,
-        ],
-        [
-            y_scale,
-            g_cb,
-            g_cr,
-            -y_scale * y_offset - (g_cb + g_cr) * chroma_center,
-        ],
-        [
-            y_scale,
-            b_cb,
-            0.0,
-            -y_scale * y_offset - b_cb * chroma_center,
-        ],
-    ]
 }
 
 fn create_surface_textures(
@@ -1667,9 +1570,9 @@ impl DirectComposition {
 
 impl DirectXGlobalElements {
     pub fn new(device: &ID3D11Device) -> Result<Self> {
-        let global_params_buffer = unsafe {
+        let effect_global_params_buffer = unsafe {
             let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlobalParams>() as u32,
+                ByteWidth: std::mem::size_of::<EffectGlobalParams>() as u32,
                 Usage: D3D11_USAGE_DYNAMIC,
                 BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
                 CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -1679,9 +1582,10 @@ impl DirectXGlobalElements {
             device.CreateBuffer(&desc, None, Some(&mut buffer))?;
             buffer
         };
-        let effect_global_params_buffer = unsafe {
+
+        let gamma_params_buffer = unsafe {
             let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<EffectGlobalParams>() as u32,
+                ByteWidth: std::mem::size_of::<gpui_render::GammaParams>() as u32,
                 Usage: D3D11_USAGE_DYNAMIC,
                 BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
                 CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -1711,161 +1615,14 @@ impl DirectXGlobalElements {
         };
 
         Ok(Self {
-            global_params_buffer,
             effect_global_params_buffer,
+            gamma_params_buffer,
             sampler,
         })
     }
 }
 
-#[derive(Debug, Default)]
-#[repr(C)]
-struct GlobalParams {
-    gamma_ratios: [f32; 4],
-    viewport_size: [f32; 2],
-    grayscale_enhanced_contrast: f32,
-    subpixel_enhanced_contrast: f32,
-    is_bgr: u32,
-    _pad: [u32; 3],
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct EffectGlobalParams {
-    viewport_size: [f32; 2],
-    premultiplied_alpha: u32,
-    pad: u32,
-    viewport_origin: [f32; 2],
-    origin_pad: [u32; 2],
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct EffectInstance {
-    bounds: Bounds<ScaledPixels>,
-    effect_bounds: Bounds<ScaledPixels>,
-    transformation: TransformationMatrix,
-    content_mask: Bounds<ScaledPixels>,
-    corner_radii: [f32; 4],
-    image_bounds: Bounds<ScaledPixels>,
-    second_image_bounds: Bounds<ScaledPixels>,
-    third_image_bounds: Bounds<ScaledPixels>,
-    fourth_image_bounds: Bounds<ScaledPixels>,
-    opacity: f32,
-    time: f32,
-    pad: [f32; 2],
-    alignment_pad: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl From<&EffectQuad> for EffectInstance {
-    fn from(effect: &EffectQuad) -> Self {
-        Self {
-            bounds: effect.bounds,
-            effect_bounds: effect.effect_bounds,
-            transformation: effect.transformation,
-            content_mask: effect.content_mask.bounds,
-            corner_radii: [
-                effect.corner_radii.top_left.0,
-                effect.corner_radii.top_right.0,
-                effect.corner_radii.bottom_right.0,
-                effect.corner_radii.bottom_left.0,
-            ],
-            image_bounds: effect
-                .image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            second_image_bounds: effect
-                .second_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            third_image_bounds: effect
-                .third_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            fourth_image_bounds: effect
-                .fourth_image_tile
-                .map(|tile| tile.bounds.map(|value| ScaledPixels(value.0 as f32)))
-                .unwrap_or_default(),
-            opacity: effect.opacity,
-            time: effect.time,
-            pad: [0.0; 2],
-            alignment_pad: [0.0; 2],
-            uniforms: *effect.uniforms.slots(),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct BackdropInstance {
-    bounds: Bounds<ScaledPixels>,
-    content_mask: Bounds<ScaledPixels>,
-    corner_radii: [f32; 4],
-    blur_radius: f32,
-    opacity: f32,
-    time: f32,
-    pointer_active: f32,
-    direction: [f32; 2],
-    pointer: [f32; 2],
-    uniforms: [[f32; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-}
-
-impl BackdropInstance {
-    fn blur(
-        viewport_size: [f32; 2],
-        render_size: [f32; 2],
-        blur_radius: f32,
-        direction: [f32; 2],
-    ) -> Self {
-        Self {
-            bounds: Bounds {
-                origin: Point::default(),
-                size: Size {
-                    width: ScaledPixels(viewport_size[0]),
-                    height: ScaledPixels(viewport_size[1]),
-                },
-            },
-            content_mask: Bounds {
-                origin: Point::default(),
-                size: Size {
-                    width: ScaledPixels(render_size[0]),
-                    height: ScaledPixels(render_size[1]),
-                },
-            },
-            corner_radii: [0.0; 4],
-            blur_radius,
-            opacity: 1.0,
-            time: 0.0,
-            pointer_active: 0.0,
-            direction,
-            pointer: [0.5; 2],
-            uniforms: [[0.0; 4]; gpui::EFFECT_UNIFORM_SLOTS],
-        }
-    }
-}
-
-impl From<&BackdropBlur> for BackdropInstance {
-    fn from(backdrop: &BackdropBlur) -> Self {
-        Self {
-            bounds: backdrop.bounds,
-            content_mask: backdrop.content_mask.bounds,
-            corner_radii: [
-                backdrop.corner_radii.top_left.0,
-                backdrop.corner_radii.top_right.0,
-                backdrop.corner_radii.bottom_right.0,
-                backdrop.corner_radii.bottom_left.0,
-            ],
-            blur_radius: backdrop.blur_radius.0,
-            opacity: backdrop.opacity,
-            time: backdrop.time,
-            pointer_active: u32::from(backdrop.pointer_active) as f32,
-            direction: [0.0; 2],
-            pointer: [backdrop.pointer.x, backdrop.pointer.y],
-            uniforms: *backdrop.uniforms.slots(),
-        }
-    }
-}
+type EffectGlobalParams = gpui_render::PrimitiveGlobals;
 
 struct EffectPipeline {
     vertex: ID3D11VertexShader,
@@ -1891,6 +1648,7 @@ struct PipelineState<T> {
     fragment: ID3D11PixelShader,
     buffer: ID3D11Buffer,
     buffer_size: usize,
+    raw_instances: bool,
     view: Option<ID3D11ShaderResourceView>,
     blend_state: ID3D11BlendState,
     _marker: std::marker::PhantomData<T>,
@@ -1912,8 +1670,22 @@ impl<T> PipelineState<T> {
             let raw_shader = RawShaderBytes::new(shader_module, ShaderTarget::Fragment)?;
             create_fragment_shader(device, raw_shader.as_bytes())?
         };
-        let buffer = create_buffer(device, std::mem::size_of::<T>(), buffer_size)?;
-        let view = create_buffer_view(device, &buffer)?;
+        let raw_instances = shader_module.uses_raw_instances();
+        let buffer = if raw_instances {
+            create_raw_buffer(device, std::mem::size_of::<T>() * buffer_size)?
+        } else {
+            create_buffer(device, std::mem::size_of::<T>(), buffer_size)?
+        };
+        let view = if raw_instances {
+            create_raw_buffer_view(
+                device,
+                &buffer,
+                0,
+                (std::mem::size_of::<T>() * buffer_size) as u32,
+            )?
+        } else {
+            create_buffer_view(device, &buffer)?
+        };
 
         Ok(PipelineState {
             label,
@@ -1921,6 +1693,7 @@ impl<T> PipelineState<T> {
             fragment,
             buffer,
             buffer_size,
+            raw_instances,
             view,
             blend_state,
             _marker: std::marker::PhantomData,
@@ -1941,8 +1714,21 @@ impl<T> PipelineState<T> {
                 self.buffer_size,
                 new_buffer_size
             );
-            let buffer = create_buffer(device, std::mem::size_of::<T>(), new_buffer_size)?;
-            let view = create_buffer_view(device, &buffer)?;
+            let buffer = if self.raw_instances {
+                create_raw_buffer(device, std::mem::size_of::<T>() * new_buffer_size)?
+            } else {
+                create_buffer(device, std::mem::size_of::<T>(), new_buffer_size)?
+            };
+            let view = if self.raw_instances {
+                create_raw_buffer_view(
+                    device,
+                    &buffer,
+                    0,
+                    (std::mem::size_of::<T>() * new_buffer_size) as u32,
+                )?
+            } else {
+                create_buffer_view(device, &buffer)?
+            };
             self.buffer = buffer;
             self.view = view;
             self.buffer_size = new_buffer_size;
@@ -2044,7 +1830,17 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
-        let view = create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?;
+        let view = if self.raw_instances {
+            let stride = std::mem::size_of::<T>() as u32;
+            create_raw_buffer_view(
+                device,
+                &self.buffer,
+                first_instance * stride,
+                instance_count * stride,
+            )?
+        } else {
+            create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?
+        };
         set_pipeline_state(
             device_context,
             slice::from_ref(&view),
@@ -2072,7 +1868,17 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
-        let view = create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?;
+        let view = if self.raw_instances {
+            let stride = std::mem::size_of::<T>() as u32;
+            create_raw_buffer_view(
+                device,
+                &self.buffer,
+                first_instance * stride,
+                instance_count * stride,
+            )?
+        } else {
+            create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?
+        };
         set_pipeline_state(
             device_context,
             slice::from_ref(&view),
@@ -2204,7 +2010,7 @@ impl BackdropPipeline {
             );
             create_fragment_shader(device, bytes)?
         };
-        let (buffer, view) = create_raw_buffer::<BackdropInstance>(device, 1)?;
+        let (buffer, view) = create_raw_instance_buffer::<BackdropInstance>(device, 1)?;
         Ok(Self {
             vertex,
             fragment,
@@ -2227,7 +2033,8 @@ impl BackdropPipeline {
     ) -> Result<()> {
         if self.buffer_size < data.len() {
             self.buffer_size = data.len().next_power_of_two();
-            let (buffer, view) = create_raw_buffer::<BackdropInstance>(device, self.buffer_size)?;
+            let (buffer, view) =
+                create_raw_instance_buffer::<BackdropInstance>(device, self.buffer_size)?;
             self.buffer = buffer;
             self.view = view;
         }
@@ -2268,104 +2075,19 @@ impl BackdropPipeline {
 }
 
 fn translate_effect_to_hlsl(shader: &EffectShader) -> Result<String> {
-    let source = gpui::compose_effect_shader_wgsl(shader);
-    let module = naga::front::wgsl::parse_str(&source)
-        .map_err(|error| anyhow::anyhow!("WGSL parse error: {error}"))?;
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
+    gpui_render::native::to_hlsl(
+        &gpui::compose_effect_shader_wgsl(shader),
+        gpui_render::native::ShaderKind::Effect {
+            image_count: shader.image_count(),
+        },
     )
-    .validate(&module)
-    .map_err(|error| anyhow::anyhow!("WGSL validation error: {error}"))?;
-    let mut options = naga::back::hlsl::Options {
-        shader_model: naga::back::hlsl::ShaderModel::V5_0,
-        fake_missing_bindings: false,
-        ..Default::default()
-    };
-    options.binding_map.insert(
-        naga::ResourceBinding {
-            group: 0,
-            binding: 0,
-        },
-        naga::back::hlsl::BindTarget {
-            space: 0,
-            register: 0,
-            ..Default::default()
-        },
-    );
-    if shader.uses_image() {
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 1,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 0,
-                ..Default::default()
-            },
-        );
-    }
-    if shader.image_count() >= 2 {
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 3,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 2,
-                ..Default::default()
-            },
-        );
-    }
-    if shader.image_count() >= 4 {
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 4,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 3,
-                ..Default::default()
-            },
-        );
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 5,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 4,
-                ..Default::default()
-            },
-        );
-    }
-    options.binding_map.insert(
-        naga::ResourceBinding {
-            group: 1,
-            binding: 0,
-        },
-        naga::back::hlsl::BindTarget {
-            space: 0,
-            register: 1,
-            ..Default::default()
-        },
-    );
-    let pipeline_options = naga::back::hlsl::PipelineOptions::default();
-    let mut output = String::new();
-    naga::back::hlsl::Writer::new(&mut output, &options, &pipeline_options)
-        .write(&module, &info, None)
-        .map_err(|error| anyhow::anyhow!("HLSL generation error: {error}"))?;
-    Ok(output)
 }
 
 fn create_builtin_backdrop_pipelines(
     device: &ID3D11Device,
 ) -> Result<(BackdropPipeline, BackdropPipeline)> {
-    let blur_source = translate_backdrop_wgsl_to_hlsl(include_str!("backdrop_blur.wgsl"), false)?;
+    let blur_source =
+        translate_backdrop_wgsl_to_hlsl(gpui_render::BACKDROP_BLUR_MANUAL_WGSL, false)?;
     let blur = BackdropPipeline::new(device, &blur_source, "fs_blur", false)?;
 
     let default_shader = BackdropShader::wgsl(DEFAULT_BACKDROP_EFFECT);
@@ -2375,104 +2097,20 @@ fn create_builtin_backdrop_pipelines(
 }
 
 fn translate_backdrop_to_hlsl(shader: &BackdropShader) -> Result<String> {
-    let source = compose_directx_backdrop_shader_wgsl(shader)?;
+    let source =
+        gpui::compose_backdrop_shader_wgsl_with_sampling(shader, gpui::BackdropSampling::Manual);
     translate_backdrop_wgsl_to_hlsl(&source, true)
 }
 
-fn compose_directx_backdrop_shader_wgsl(shader: &BackdropShader) -> Result<String> {
-    const SAMPLER_DECLARATION: &str = "@group(1) @binding(2) var s_backdrop: sampler;\n";
-    const RAW_SAMPLE: &str = r#"textureSample(
-        t_raw_backdrop,
-        s_backdrop,
-        backdrop_sample_uv(input, displacement_pixels),
-    )"#;
-    const BLURRED_SAMPLE: &str = r#"textureSample(
-        t_blurred_backdrop,
-        s_backdrop,
-        backdrop_sample_uv(input, displacement_pixels),
-    )"#;
-
-    let mut source = gpui::compose_backdrop_shader_wgsl(shader).replace("\r\n", "\n");
-    if !source.contains(SAMPLER_DECLARATION)
-        || !source.contains(RAW_SAMPLE)
-        || !source.contains(BLURRED_SAMPLE)
-    {
-        anyhow::bail!("backdrop shader contract changed without updating the DirectX composer");
-    }
-    source = source.replace(SAMPLER_DECLARATION, "");
-    source = source.replacen(
-        "fn backdrop_straight_color",
-        &format!("{DIRECTX_BACKDROP_BILINEAR_SUPPORT}fn backdrop_straight_color"),
-        1,
-    );
-    source = source.replace(
-        RAW_SAMPLE,
-        "backdrop_sample_bilinear(t_raw_backdrop, backdrop_sample_uv(input, displacement_pixels))",
-    );
-    source = source.replace(
-        BLURRED_SAMPLE,
-        "backdrop_sample_bilinear(t_blurred_backdrop, backdrop_sample_uv(input, displacement_pixels))",
-    );
-    Ok(source)
-}
-
 fn translate_backdrop_wgsl_to_hlsl(source: &str, has_blurred_texture: bool) -> Result<String> {
-    let module = naga::front::wgsl::parse_str(source)
-        .map_err(|error| anyhow::anyhow!("WGSL parse error: {error}"))?;
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
+    gpui_render::native::to_hlsl(
+        source,
+        if has_blurred_texture {
+            gpui_render::native::ShaderKind::Backdrop
+        } else {
+            gpui_render::native::ShaderKind::BackdropBlur
+        },
     )
-    .validate(&module)
-    .map_err(|error| anyhow::anyhow!("WGSL validation error: {error}"))?;
-    let mut options = naga::back::hlsl::Options {
-        shader_model: naga::back::hlsl::ShaderModel::V5_0,
-        fake_missing_bindings: false,
-        ..Default::default()
-    };
-    for (binding, register) in [(0, 1), (1, 0)] {
-        options.binding_map.insert(
-            naga::ResourceBinding { group: 1, binding },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register,
-                ..Default::default()
-            },
-        );
-    }
-    options.binding_map.insert(
-        naga::ResourceBinding {
-            group: 0,
-            binding: 0,
-        },
-        naga::back::hlsl::BindTarget {
-            space: 0,
-            register: 0,
-            ..Default::default()
-        },
-    );
-    if has_blurred_texture {
-        options.binding_map.insert(
-            naga::ResourceBinding {
-                group: 1,
-                binding: 3,
-            },
-            naga::back::hlsl::BindTarget {
-                space: 0,
-                register: 2,
-                ..Default::default()
-            },
-        );
-    }
-    let pipeline_options = naga::back::hlsl::PipelineOptions::default();
-    let mut output = String::new();
-    let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline_options)
-        .write(&module, &info, None)
-        .map_err(|error| anyhow::anyhow!("HLSL generation error: {error}"))?;
-    for entry in reflection.entry_point_names {
-        entry.map_err(|error| anyhow::anyhow!("HLSL entry-point generation error: {error}"))?;
-    }
-    Ok(output)
 }
 
 fn compile_hlsl(source: &str, entry: &str, target: &str) -> Result<ID3DBlob> {
@@ -2515,10 +2153,10 @@ fn create_effect_buffer(
     device: &ID3D11Device,
     instance_count: usize,
 ) -> Result<(ID3D11Buffer, Option<ID3D11ShaderResourceView>)> {
-    create_raw_buffer::<EffectInstance>(device, instance_count)
+    create_raw_instance_buffer::<EffectInstance>(device, instance_count)
 }
 
-fn create_raw_buffer<T>(
+fn create_raw_instance_buffer<T>(
     device: &ID3D11Device,
     instance_count: usize,
 ) -> Result<(ID3D11Buffer, Option<ID3D11ShaderResourceView>)> {
@@ -2548,21 +2186,6 @@ fn create_raw_buffer<T>(
     let mut view = None;
     unsafe { device.CreateShaderResourceView(&buffer, Some(&view_desc), Some(&mut view))? };
     Ok((buffer, view))
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct PathRasterizationSprite {
-    xy_position: Point<ScaledPixels>,
-    st_position: Point<f32>,
-    color: Background,
-    bounds: Bounds<ScaledPixels>,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct PathSprite {
-    bounds: Bounds<ScaledPixels>,
 }
 
 impl Drop for DirectXRenderer {
@@ -2957,6 +2580,43 @@ fn create_buffer(
 }
 
 #[inline]
+fn create_raw_buffer(device: &ID3D11Device, bytes: usize) -> Result<ID3D11Buffer> {
+    let desc = D3D11_BUFFER_DESC {
+        ByteWidth: u32::try_from(bytes)?,
+        Usage: D3D11_USAGE_DYNAMIC,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+        MiscFlags: D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS.0 as u32,
+        ..Default::default()
+    };
+    let mut buffer = None;
+    unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }?;
+    Ok(buffer.unwrap())
+}
+
+fn create_raw_buffer_view(
+    device: &ID3D11Device,
+    buffer: &ID3D11Buffer,
+    byte_offset: u32,
+    byte_length: u32,
+) -> Result<Option<ID3D11ShaderResourceView>> {
+    let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+        Format: DXGI_FORMAT_R32_TYPELESS,
+        ViewDimension: D3D11_SRV_DIMENSION_BUFFEREX,
+        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+            BufferEx: D3D11_BUFFEREX_SRV {
+                FirstElement: byte_offset / 4,
+                NumElements: byte_length / 4,
+                Flags: D3D11_BUFFEREX_SRV_FLAG_RAW.0 as u32,
+            },
+        },
+    };
+    let mut view = None;
+    unsafe { device.CreateShaderResourceView(buffer, Some(&desc), Some(&mut view)) }?;
+    Ok(view)
+}
+
+#[inline]
 fn create_buffer_view(
     device: &ID3D11Device,
     buffer: &ID3D11Buffer,
@@ -3043,6 +2703,20 @@ unsafe fn unbind_backdrop_shader_resources(device_context: &ID3D11DeviceContext)
 mod tests {
     use super::*;
 
+    #[::core::prelude::v1::test]
+    fn shared_primitives_compile_for_shader_model_4_1() {
+        use crate::shader_programs::ShaderSource;
+        for module in ShaderModule::ALL {
+            let program = module.program();
+            if let ShaderSource::Inline(source) = program.source {
+                for target in ShaderTarget::ALL {
+                    compile_hlsl(source, program.entry(target), target.profile())
+                        .unwrap_or_else(|error| panic!("{module:?} {target:?}: {error}"));
+                }
+            }
+        }
+    }
+
     fn shader_struct_span(module: &naga::Module, name: &str) -> u32 {
         module
             .types
@@ -3061,7 +2735,7 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn backdrop_blur_shader_matches_windows_instance_layout() {
-        let source = include_str!("backdrop_blur.wgsl");
+        let source = gpui_render::BACKDROP_BLUR_MANUAL_WGSL;
         let module = naga::front::wgsl::parse_str(source).expect("backdrop blur should parse");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
@@ -3118,26 +2792,9 @@ pub(crate) mod shader_resources {
         core::{HSTRING, PCSTR},
     };
 
-    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-    pub(crate) enum ShaderModule {
-        Quad,
-        Shadow,
-        Underline,
-        PathRasterization,
-        PathSprite,
-        MonochromeSprite,
-        SubpixelSprite,
-        PolychromeSprite,
-        SurfaceRgba,
-        SurfaceNv12,
-        EmojiRasterization,
-    }
-
-    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-    pub(crate) enum ShaderTarget {
-        Vertex,
-        Fragment,
-    }
+    #[cfg(debug_assertions)]
+    use crate::shader_programs::ShaderSource;
+    pub(crate) use crate::shader_programs::{ShaderModule, ShaderTarget};
 
     pub(crate) struct RawShaderBytes<'t> {
         inner: &'t [u8],
@@ -3171,81 +2828,28 @@ pub(crate) mod shader_resources {
 
         #[cfg(not(debug_assertions))]
         fn from_bytes(module: ShaderModule, target: ShaderTarget) -> Self {
-            let bytes = match module {
-                ShaderModule::Quad => match target {
-                    ShaderTarget::Vertex => QUAD_VERTEX_BYTES,
-                    ShaderTarget::Fragment => QUAD_FRAGMENT_BYTES,
-                },
-                ShaderModule::Shadow => match target {
-                    ShaderTarget::Vertex => SHADOW_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SHADOW_FRAGMENT_BYTES,
-                },
-                ShaderModule::Underline => match target {
-                    ShaderTarget::Vertex => UNDERLINE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => UNDERLINE_FRAGMENT_BYTES,
-                },
-                ShaderModule::PathRasterization => match target {
-                    ShaderTarget::Vertex => PATH_RASTERIZATION_VERTEX_BYTES,
-                    ShaderTarget::Fragment => PATH_RASTERIZATION_FRAGMENT_BYTES,
-                },
-                ShaderModule::PathSprite => match target {
-                    ShaderTarget::Vertex => PATH_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => PATH_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::MonochromeSprite => match target {
-                    ShaderTarget::Vertex => MONOCHROME_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => MONOCHROME_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::SubpixelSprite => match target {
-                    ShaderTarget::Vertex => SUBPIXEL_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SUBPIXEL_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::PolychromeSprite => match target {
-                    ShaderTarget::Vertex => POLYCHROME_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => POLYCHROME_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::SurfaceRgba => match target {
-                    ShaderTarget::Vertex => SURFACE_RGBA_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SURFACE_RGBA_FRAGMENT_BYTES,
-                },
-                ShaderModule::SurfaceNv12 => match target {
-                    ShaderTarget::Vertex => SURFACE_NV12_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SURFACE_NV12_FRAGMENT_BYTES,
-                },
-                ShaderModule::EmojiRasterization => match target {
-                    ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
-                    ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
-                },
-            };
-            Self { inner: bytes }
+            Self {
+                inner: compiled_shader_bytes(module, target),
+            }
         }
     }
 
     #[cfg(debug_assertions)]
     pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
+        let program = entry.program();
+        let shader_name = match program.source {
+            ShaderSource::Inline(source) => {
+                return super::compile_hlsl(source, program.entry(target), target.profile());
+            }
+            ShaderSource::File(file) => file,
+        };
         unsafe {
             use windows::Win32::Graphics::{
                 Direct3D::ID3DInclude, Hlsl::D3D_COMPILE_STANDARD_FILE_INCLUDE,
             };
 
-            let shader_name = if matches!(entry, ShaderModule::EmojiRasterization) {
-                "color_text_raster.hlsl"
-            } else {
-                "shaders.hlsl"
-            };
-
-            let entry = format!(
-                "{}_{}\0",
-                entry.as_str(),
-                match target {
-                    ShaderTarget::Vertex => "vertex",
-                    ShaderTarget::Fragment => "fragment",
-                }
-            );
-            let target = match target {
-                ShaderTarget::Vertex => "vs_4_1\0",
-                ShaderTarget::Fragment => "ps_4_1\0",
-            };
+            let entry = std::ffi::CString::new(program.entry(target))?;
+            let target = std::ffi::CString::new(target.profile())?;
 
             let mut compile_blob = None;
             let mut error_blob = None;
@@ -3253,8 +2857,8 @@ pub(crate) mod shader_resources {
                 .join(&format!("src/{}", shader_name))
                 .canonicalize()?;
 
-            let entry_point = PCSTR::from_raw(entry.as_ptr());
-            let target_cstr = PCSTR::from_raw(target.as_ptr());
+            let entry_point = PCSTR::from_raw(entry.as_ptr().cast());
+            let target_cstr = PCSTR::from_raw(target.as_ptr().cast());
 
             // really dirty trick because winapi bindings are unhappy otherwise
             let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
@@ -3289,25 +2893,6 @@ pub(crate) mod shader_resources {
 
     #[cfg(not(debug_assertions))]
     include!(concat!(env!("OUT_DIR"), "/shaders_bytes.rs"));
-
-    #[cfg(debug_assertions)]
-    impl ShaderModule {
-        pub fn as_str(self) -> &'static str {
-            match self {
-                ShaderModule::Quad => "quad",
-                ShaderModule::Shadow => "shadow",
-                ShaderModule::Underline => "underline",
-                ShaderModule::PathRasterization => "path_rasterization",
-                ShaderModule::PathSprite => "path_sprite",
-                ShaderModule::MonochromeSprite => "monochrome_sprite",
-                ShaderModule::SubpixelSprite => "subpixel_sprite",
-                ShaderModule::PolychromeSprite => "polychrome_sprite",
-                ShaderModule::SurfaceRgba => "surface_rgba",
-                ShaderModule::SurfaceNv12 => "surface_nv12",
-                ShaderModule::EmojiRasterization => "emoji_rasterization",
-            }
-        }
-    }
 }
 
 mod nvidia {

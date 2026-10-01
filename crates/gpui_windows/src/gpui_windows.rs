@@ -14,6 +14,7 @@ mod keyboard;
 mod platform;
 mod popup;
 mod renderer;
+mod shader_programs;
 mod system_settings;
 mod tray;
 mod util;

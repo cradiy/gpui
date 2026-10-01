@@ -42,6 +42,8 @@ mod path_morph;
 mod path_motion;
 #[path = "../../../gpui_wgpu/tests/support/sdf.rs"]
 mod sdf;
+#[path = "../../../gpui_wgpu/tests/support/shadows.rs"]
+mod shadows;
 #[path = "../../../gpui_wgpu/tests/support/subtree_transition.rs"]
 mod subtree_transition;
 
@@ -105,6 +107,7 @@ native_effect_test!(
     path_morph,
     path_motion,
     sdf,
+    shadows,
     subtree_transition
 );
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<ScaledPixels> {

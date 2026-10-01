@@ -1,6 +1,14 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+#[path = "src/shader_programs.rs"]
+mod shader_programs;
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=GPUI_FXC_PATH");
+    println!("cargo:rerun-if-changed=src/shader_programs.rs");
+    println!("cargo:rerun-if-changed=src/color_text_raster.hlsl");
+    println!("cargo:rerun-if-changed=src/alpha_correction.hlsl");
     #[cfg(target_os = "windows")]
     {
         // Compile HLSL shaders
@@ -11,6 +19,9 @@ fn main() {
 
 #[cfg(all(target_os = "windows", not(debug_assertions)))]
 mod shader_compilation {
+    use crate::shader_programs::{
+        ShaderModule, ShaderSource, ShaderTarget, compiled_shader_dispatch,
+    };
     use std::{
         fs,
         io::Write,
@@ -19,55 +30,54 @@ mod shader_compilation {
     };
 
     pub fn compile_shaders() {
-        let shader_path =
-            PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("src/shaders.hlsl");
         let out_dir = std::env::var("OUT_DIR").unwrap();
-
-        println!("cargo:rerun-if-changed={}", shader_path.display());
 
         // Check if fxc.exe is available
         let fxc_path = find_fxc_compiler();
-
-        // Define all modules
-        let modules = [
-            "quad",
-            "shadow",
-            "path_rasterization",
-            "path_sprite",
-            "underline",
-            "monochrome_sprite",
-            "subpixel_sprite",
-            "polychrome_sprite",
-            "surface_rgba",
-            "surface_nv12",
-        ];
 
         let rust_binding_path = format!("{}/shaders_bytes.rs", out_dir);
         if Path::new(&rust_binding_path).exists() {
             fs::remove_file(&rust_binding_path)
                 .expect("Failed to remove existing Rust binding file");
         }
-        for module in modules {
-            compile_shader_for_module(
-                module,
-                &out_dir,
-                &fxc_path,
-                shader_path.to_str().unwrap(),
-                &rust_binding_path,
-            );
+        for module in ShaderModule::ALL {
+            let program = module.program();
+            let name = program.name;
+            let source = match program.source {
+                ShaderSource::Inline(source) => {
+                    let path = PathBuf::from(&out_dir).join(format!("{name}.hlsl"));
+                    fs::write(&path, source).unwrap();
+                    path
+                }
+                ShaderSource::File(file) => {
+                    PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+                        .join("src")
+                        .join(file)
+                }
+            };
+            for target in ShaderTarget::ALL {
+                let entry = program.entry(target);
+                let profile = target.profile();
+                let suffix = target.suffix();
+                let output = format!("{out_dir}/{name}_{suffix}.h");
+                let constant = format!("{}_{}", name.to_uppercase(), target.constant_suffix());
+                compile_shader_impl(
+                    &fxc_path,
+                    entry,
+                    &output,
+                    &constant,
+                    source.to_str().unwrap(),
+                    profile,
+                );
+                generate_rust_binding(&constant, &output, &rust_binding_path);
+            }
         }
-
-        {
-            let shader_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
-                .join("src/color_text_raster.hlsl");
-            compile_shader_for_module(
-                "emoji_rasterization",
-                &out_dir,
-                &fxc_path,
-                shader_path.to_str().unwrap(),
-                &rust_binding_path,
-            );
-        }
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&rust_binding_path)
+            .unwrap()
+            .write_all(compiled_shader_dispatch().as_bytes())
+            .unwrap();
     }
 
     /// Locate `binary` in the newest installed Windows SDK.
@@ -138,40 +148,6 @@ mod shader_compilation {
         }
 
         panic!("Failed to find fxc.exe");
-    }
-
-    fn compile_shader_for_module(
-        module: &str,
-        out_dir: &str,
-        fxc_path: &str,
-        shader_path: &str,
-        rust_binding_path: &str,
-    ) {
-        // Compile vertex shader
-        let output_file = format!("{}/{}_vs.h", out_dir, module);
-        let const_name = format!("{}_VERTEX_BYTES", module.to_uppercase());
-        compile_shader_impl(
-            fxc_path,
-            &format!("{module}_vertex"),
-            &output_file,
-            &const_name,
-            shader_path,
-            "vs_4_1",
-        );
-        generate_rust_binding(&const_name, &output_file, rust_binding_path);
-
-        // Compile fragment shader
-        let output_file = format!("{}/{}_ps.h", out_dir, module);
-        let const_name = format!("{}_FRAGMENT_BYTES", module.to_uppercase());
-        compile_shader_impl(
-            fxc_path,
-            &format!("{module}_fragment"),
-            &output_file,
-            &const_name,
-            shader_path,
-            "ps_4_1",
-        );
-        generate_rust_binding(&const_name, &output_file, rust_binding_path);
     }
 
     fn compile_shader_impl(

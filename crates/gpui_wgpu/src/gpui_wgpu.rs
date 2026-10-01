@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn main_shader_is_valid_wgsl() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shaders.wgsl"))
+        let module = wgpu::naga::front::wgsl::parse_str(&gpui_render::compose_shader(""))
             .expect("main shader should parse");
         wgpu::naga::valid::Validator::new(
             wgpu::naga::valid::ValidationFlags::all(),
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn backdrop_blur_shader_is_valid_wgsl() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("backdrop_blur.wgsl"))
+        let module = wgpu::naga::front::wgsl::parse_str(gpui_render::BACKDROP_BLUR_WGSL)
             .expect("backdrop blur shader should parse");
         wgpu::naga::valid::Validator::new(
             wgpu::naga::valid::ValidationFlags::all(),
@@ -422,7 +422,7 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
 
     #[test]
     fn shader_struct_layouts_match_rust() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shaders.wgsl"))
+        let module = wgpu::naga::front::wgsl::parse_str(&gpui_render::compose_shader(""))
             .expect("main shader should parse");
 
         assert_eq!(
@@ -473,14 +473,6 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
         assert_eq!(
             shader_struct_span(&module, "Quad") as usize,
             std::mem::size_of::<gpui::Quad>()
-        );
-        assert_eq!(
-            shader_struct_span(&module, "PathRasterizationVertex") as usize,
-            std::mem::size_of::<super::wgpu_renderer::PathRasterizationVertex>()
-        );
-        assert_eq!(
-            shader_struct_span(&module, "SurfaceParams") as usize,
-            std::mem::size_of::<super::wgpu_renderer::SurfaceParams>()
         );
         assert_eq!(
             shader_struct_offsets(&module, "PolychromeSprite"),
@@ -534,42 +526,6 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
     }
 
     #[test]
-    fn limited_range_yuv_maps_reference_black_and_white() {
-        let rows = super::wgpu_renderer::yuv_to_rgb_rows(gpui::SurfaceColorInfo {
-            matrix: gpui::YuvMatrix::Bt709,
-            range: gpui::ColorRange::Limited,
-        });
-        let convert = |y: f32, cb: f32, cr: f32| {
-            rows.map(|row| row[0] * y + row[1] * cb + row[2] * cr + row[3])
-        };
-
-        let black = convert(16.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0);
-        let white = convert(235.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0);
-        for channel in black {
-            assert!(channel.abs() < 1e-5, "black channel was {channel}");
-        }
-        for channel in white {
-            assert!((channel - 1.0).abs() < 1e-5, "white channel was {channel}");
-        }
-    }
-
-    #[test]
-    fn bt601_and_bt709_use_different_chroma_coefficients() {
-        let bt601 = super::wgpu_renderer::yuv_to_rgb_rows(gpui::SurfaceColorInfo {
-            matrix: gpui::YuvMatrix::Bt601,
-            range: gpui::ColorRange::Full,
-        });
-        let bt709 = super::wgpu_renderer::yuv_to_rgb_rows(gpui::SurfaceColorInfo {
-            matrix: gpui::YuvMatrix::Bt709,
-            range: gpui::ColorRange::Full,
-        });
-
-        assert_ne!(bt601, bt709);
-        assert!((bt601[0][2] - 1.402).abs() < 1e-6);
-        assert!((bt709[0][2] - 1.5748).abs() < 1e-6);
-    }
-
-    #[test]
     fn surface_cache_reuses_textures_and_only_uploads_new_sequences() {
         use super::wgpu_renderer::{SurfaceCacheAction, surface_cache_action};
 
@@ -604,30 +560,6 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
                 &first
             ),
             SurfaceCacheAction::Recreate
-        );
-    }
-
-    #[test]
-    fn visible_rect_is_normalized_to_texture_coordinates() {
-        let coded_size = gpui::size(gpui::DevicePixels(8), gpui::DevicePixels(4));
-        let frame = gpui::SurfaceFrame::new(
-            gpui::SurfaceHandle::new(),
-            0,
-            coded_size,
-            gpui::bounds(
-                gpui::point(gpui::DevicePixels(2), gpui::DevicePixels(1)),
-                gpui::size(gpui::DevicePixels(4), gpui::DevicePixels(2)),
-            ),
-            gpui::size(gpui::DevicePixels(4), gpui::DevicePixels(2)),
-            gpui::SurfaceFormat::Rgba8,
-            [gpui::SurfacePlane::new(vec![0; 8 * 4 * 4], 8 * 4)],
-            gpui::SurfaceColorInfo::default(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            super::wgpu_renderer::surface_uv_bounds(&frame),
-            ([0.25, 0.25], [0.5, 0.5])
         );
     }
 }

@@ -14,6 +14,7 @@ mod pasteboard;
 mod metal_atlas;
 pub mod metal_renderer;
 mod metal_scene;
+mod shader_programs;
 
 use metal_renderer as renderer;
 

@@ -5,6 +5,27 @@ use crate::{
 };
 use std::{cell::Cell, ops::Range, rc::Rc};
 
+#[test]
+fn ime_candidate_line_follows_the_head_of_a_reversed_preedit_selection() {
+    let selection = UTF16Selection {
+        range: 2..6,
+        reversed: true,
+    };
+    let bounds = |range: Range<usize>| {
+        Some(Bounds::new(
+            point(
+                px((range.start % 4) as f32 * 10.),
+                px((range.start / 4) as f32 * 20.),
+            ),
+            size(px(1.), px(20.)),
+        ))
+    };
+    let candidate =
+        crate::PlatformInputHandler::compute_ime_candidate_bounds(Some(0..8), &selection, bounds)
+            .unwrap();
+    assert_eq!(candidate.origin, point(px(0.), px(0.)));
+}
+
 #[derive(Clone)]
 struct TextHandler {
     composing: Rc<Cell<bool>>,

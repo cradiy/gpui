@@ -8,6 +8,7 @@ mod frame_callback;
 mod keyboard;
 mod popup;
 mod serial;
+mod text_input;
 mod window;
 
 /// Contains Types for configuring layer_shell surfaces.

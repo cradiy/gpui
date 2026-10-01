@@ -3,8 +3,8 @@ use std::{borrow::Cow, ops::Range, time::Duration};
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, EntityInputHandler,
     FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Render, ScrollHandle, SharedString, Task, UTF16Selection, Window, WrappedLine, div,
-    point, prelude::*, px,
+    Point, PreeditSelection, Render, ScrollHandle, SharedString, Task, UTF16Selection, Window,
+    WrappedLine, div, point, prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -15,6 +15,17 @@ pub(super) struct TextLayout {
     pub(super) lines: Vec<WrappedLine>,
     pub(super) line_starts: Vec<usize>,
     pub(super) line_height: Pixels,
+}
+
+fn preedit_offset_from_utf16(text: &str, offset: usize) -> usize {
+    let mut units = 0;
+    for (byte, ch) in text.char_indices() {
+        if units + ch.len_utf16() > offset {
+            return byte;
+        }
+        units += ch.len_utf16();
+    }
+    text.len()
 }
 
 impl TextLayout {
@@ -104,6 +115,7 @@ pub struct TextInput {
     pub(super) selected_range: Range<usize>,
     pub(super) selection_reversed: bool,
     pub(super) marked_range: Option<Range<usize>>,
+    pub(super) preedit_cursor_hidden: bool,
     pub(super) last_layout: Option<TextLayout>,
     pub(super) last_bounds: Option<Bounds<Pixels>>,
     pub(super) last_viewport_bounds: Option<Bounds<Pixels>>,
@@ -132,6 +144,7 @@ impl TextInput {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
+            preedit_cursor_hidden: false,
             last_layout: None,
             last_bounds: None,
             last_viewport_bounds: None,
@@ -748,6 +761,7 @@ impl EntityInputHandler for TextInput {
         let had_marked_text = self.marked_range.take().is_some();
         if had_marked_text {
             self.emit_committed_change(cx);
+            cx.notify();
         }
     }
 
@@ -773,6 +787,7 @@ impl EntityInputHandler for TextInput {
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
                 .into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        self.selection_reversed = false;
         self.marked_range.take();
         self.preferred_x = None;
         self.scroll_cursor_pending = true;
@@ -791,6 +806,13 @@ impl EntityInputHandler for TextInput {
         if self.disabled {
             return;
         }
+        let selected_offsets = new_selected_range_utf16.map(|range| {
+            let offset = |utf16| {
+                let end = preedit_offset_from_utf16(new_text, utf16);
+                self.normalize_inserted_text(&new_text[..end]).len()
+            };
+            offset(range.start)..offset(range.end)
+        });
         let new_text = self.normalize_inserted_text(new_text);
         let new_text = new_text.as_ref();
         let range = range_utf16
@@ -807,15 +829,35 @@ impl EntityInputHandler for TextInput {
         } else {
             self.marked_range = None;
         }
-        self.selected_range = new_selected_range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.start)
+        self.selected_range = selected_offsets
+            .map(|new_range| {
+                new_range.start.min(new_range.end) + range.start
+                    ..new_range.end.max(new_range.start) + range.start
+            })
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        self.selection_reversed = false;
+        self.preedit_cursor_hidden = false;
         self.preferred_x = None;
         self.scroll_cursor_pending = true;
 
         cx.notify();
+    }
+
+    fn replace_and_mark_text_with_selection(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        selection: PreeditSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.disabled {
+            return;
+        }
+        self.replace_and_mark_text_in_range(range_utf16, new_text, selection.range(), window, cx);
+        self.selection_reversed =
+            matches!(selection, PreeditSelection::Range { anchor, head } if head < anchor);
+        self.preedit_cursor_hidden = selection == PreeditSelection::Hidden;
     }
 
     fn bounds_for_range(
@@ -1492,6 +1534,81 @@ mod tests {
         window
             .update(&mut visual.cx, |view, _, cx| {
                 assert_eq!(view.state.read(cx).value().as_ref(), "first");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn ime_preedit_selection_uses_inserted_text_offsets(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("前😀ab "));
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.state.update(cx, |input, cx| {
+                    input.replace_and_mark_text_in_range(None, "ab😀你", Some(2..4), window, cx);
+                    assert_eq!(input.value().as_ref(), "前😀ab ab😀你");
+                    assert_eq!(input.selected_range, 12..16);
+                    assert_eq!(input.marked_range, Some(10..19));
+                    assert!(!input.selection_reversed);
+                    input.replace_and_mark_text_in_range(None, "a\r\n😀", Some(3..5), window, cx);
+                    assert_eq!(input.value().as_ref(), "前😀ab a 😀");
+                    assert_eq!(input.selected_range, 12..16);
+                });
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual.cx, |view, _, _| {
+                assert!(view.changes.borrow().is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn ime_directed_and_hidden_selection_reaches_the_input(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("前😀ab "));
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                let mut handler =
+                    gpui::ElementInputHandler::new(Bounds::default(), view.state.clone());
+                gpui::InputHandler::replace_and_mark_text_with_selection(
+                    &mut handler,
+                    None,
+                    "ab😀你",
+                    PreeditSelection::Range { anchor: 4, head: 2 },
+                    window,
+                    cx,
+                );
+                let input = view.state.read(cx);
+                assert_eq!(input.selected_range, 12..16);
+                assert_eq!(input.cursor_offset(), 12);
+                assert!(input.selection_reversed);
+                gpui::InputHandler::replace_and_mark_text_with_selection(
+                    &mut handler,
+                    None,
+                    "ab😀你",
+                    PreeditSelection::Hidden,
+                    window,
+                    cx,
+                );
+                let input = view.state.read(cx);
+                assert!(input.preedit_cursor_hidden);
+                assert!(input.selected_range.is_empty());
+                gpui::InputHandler::replace_text_in_range(&mut handler, None, "选", window, cx);
+                let input = view.state.read(cx);
+                assert_eq!(input.value().as_ref(), "前😀ab 选");
+                assert_eq!(input.marked_range, None);
+                assert!(!input.selection_reversed);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual.cx, |view, _, _| {
+                assert_eq!(
+                    view.changes.borrow().as_slice(),
+                    &[SharedString::from("前😀ab 选")]
+                );
             })
             .unwrap();
     }

@@ -1601,6 +1601,25 @@ impl PlatformInputHandler {
             .ok();
     }
 
+    pub fn replace_and_mark_text_with_selection(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text: &str,
+        selection: PreeditSelection,
+    ) {
+        self.cx
+            .update(|window, cx| {
+                self.handler.replace_and_mark_text_with_selection(
+                    range_utf16,
+                    text,
+                    selection,
+                    window,
+                    cx,
+                );
+            })
+            .ok();
+    }
+
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn unmark_text(&mut self) {
         self.cx
@@ -1637,7 +1656,11 @@ impl PlatformInputHandler {
             // Walk backward from the caret looking for a line break. A change in
             // the Y coordinate means we crossed into the previous visual line, so
             // the line start is one position after the break point.
-            let caret = selection.range.end;
+            let caret = if selection.reversed {
+                selection.range.start
+            } else {
+                selection.range.end
+            };
             if let Some(caret_bounds) = bounds_for_range(caret..caret) {
                 for i in (marked_range.start..caret).rev() {
                     if let Some(b) = bounds_for_range(i..i) {
@@ -1747,6 +1770,30 @@ pub struct UTF16Selection {
     pub reversed: bool,
 }
 
+/// Cursor or selection inside IME preedit text, relative to that text in UTF-16 code units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreeditSelection {
+    /// A caret when both offsets are equal, otherwise a selection with its caret at `head`.
+    Range {
+        /// The fixed endpoint of the selection.
+        anchor: usize,
+        /// The moving endpoint of the selection.
+        head: usize,
+    },
+    /// Display the preedit text without a caret or selection highlight.
+    Hidden,
+}
+
+impl PreeditSelection {
+    /// The ordered selected range, or `None` for a hidden cursor.
+    pub fn range(self) -> Option<Range<usize>> {
+        match self {
+            Self::Range { anchor, head } => Some(anchor.min(head)..anchor.max(head)),
+            Self::Hidden => None,
+        }
+    }
+}
+
 /// Zed's interface for handling text input from the platform's IME system
 /// This is currently a 1:1 exposure of the NSTextInputClient API:
 ///
@@ -1798,7 +1845,7 @@ pub trait InputHandler: 'static {
     /// Corresponds to [setMarkedText(_:selectedRange:replacementRange:)](https://developer.apple.com/documentation/appkit/nstextinputclient/1438246-setmarkedtext)
     ///
     /// range_utf16 is in terms of UTF-16 characters
-    /// new_selected_range is in terms of UTF-16 characters
+    /// new_selected_range is relative to new_text, in UTF-16 code units
     fn replace_and_mark_text_in_range(
         &mut self,
         range_utf16: Option<Range<usize>>,
@@ -1807,6 +1854,23 @@ pub trait InputHandler: 'static {
         window: &mut Window,
         cx: &mut App,
     );
+
+    /// Replace and mark text with a directed preedit selection or hidden cursor.
+    /// `range_utf16` is document-relative; `selection` is relative to `new_text`.
+    ///
+    /// The default forwards an ordered range to `replace_and_mark_text_in_range`.
+    /// Hidden cursors use that method's default position. Override to preserve
+    /// selection direction and cursor visibility.
+    fn replace_and_mark_text_with_selection(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        selection: PreeditSelection,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.replace_and_mark_text_in_range(range_utf16, new_text, selection.range(), window, cx);
+    }
 
     /// Remove the IME 'composing' state from the document
     /// Corresponds to [unmarkText()](https://developer.apple.com/documentation/appkit/nstextinputclient/1438239-unmarktext)

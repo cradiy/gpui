@@ -963,6 +963,55 @@ impl WaylandWindow {
 }
 
 impl WaylandWindowStatePtr {
+    pub(super) fn handle_ime_batch(&self, batch: super::text_input::ImeBatch) {
+        if self.is_blocked() {
+            return;
+        }
+        let mut state = self.state.borrow_mut();
+        let handler = state.input_handler.take();
+        drop(state);
+        let was_composing = if let Some(mut handler) = handler {
+            let marked = handler.marked_text_range();
+            let was_composing = marked.is_some();
+            if let Some(marked) = marked {
+                handler.replace_and_mark_text_in_range(Some(marked), "", None);
+            }
+            self.state.borrow_mut().input_handler = Some(handler);
+            was_composing
+        } else {
+            false
+        };
+
+        if let Some(text) = batch.commit {
+            // IBus also forwards ordinary ASCII keys through text-input; keep key bindings working.
+            if text.len() == 1 && !was_composing {
+                self.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
+                    keystroke: gpui::Keystroke {
+                        modifiers: Modifiers::default(),
+                        key: text.clone(),
+                        key_char: Some(text),
+                    },
+                    is_held: false,
+                    prefer_character_input: false,
+                }));
+            } else {
+                self.handle_ime(ImeInput::InsertText(text));
+            }
+        }
+        if let Some(preedit) = batch.preedit.filter(|preedit| !preedit.text.is_empty()) {
+            let mut state = self.state.borrow_mut();
+            if let Some(mut handler) = state.input_handler.take() {
+                drop(state);
+                handler.replace_and_mark_text_with_selection(
+                    None,
+                    &preedit.text,
+                    preedit.selection,
+                );
+                self.state.borrow_mut().input_handler = Some(handler);
+            }
+        }
+    }
+
     pub(crate) fn activate(&self) {
         let state = self.state.borrow();
         let Some(activation) = &state.globals.activation else {

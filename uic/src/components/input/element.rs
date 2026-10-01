@@ -77,6 +77,7 @@ impl Element for TextElement {
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
         let disabled = input.disabled;
+        let preedit_cursor_hidden = input.marked_range.is_some() && input.preedit_cursor_hidden;
         let content = input.content.clone();
         let selected_range = input.selected_range.clone();
         let cursor_offset = input.cursor_offset();
@@ -195,7 +196,7 @@ impl Element for TextElement {
             ),
             size(appearance.caret_width, layout.line_height),
         );
-        let (selection, cursor) = if disabled {
+        let (selection, cursor) = if disabled || preedit_cursor_hidden {
             (Vec::new(), None)
         } else if selected_range.is_empty() {
             (Vec::new(), Some(fill(cursor_bounds, appearance.caret)))

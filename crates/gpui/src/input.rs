@@ -1,4 +1,6 @@
-use crate::{App, Bounds, Context, Entity, InputHandler, Pixels, UTF16Selection, Window};
+use crate::{
+    App, Bounds, Context, Entity, InputHandler, Pixels, PreeditSelection, UTF16Selection, Window,
+};
 use std::ops::Range;
 
 /// Implement this trait to allow views to handle textual input when implementing an editor, field, etc.
@@ -53,6 +55,18 @@ pub trait EntityInputHandler: 'static + Sized {
         window: &mut Window,
         cx: &mut Context<Self>,
     );
+
+    /// See [`InputHandler::replace_and_mark_text_with_selection`] for details.
+    fn replace_and_mark_text_with_selection(
+        &mut self,
+        range: Option<Range<usize>>,
+        new_text: &str,
+        selection: PreeditSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.replace_and_mark_text_in_range(range, new_text, selection.range(), window, cx);
+    }
 
     /// See [`InputHandler::bounds_for_range`] for details
     fn bounds_for_range(
@@ -171,6 +185,19 @@ impl<V: EntityInputHandler> InputHandler for ElementInputHandler<V> {
                 window,
                 cx,
             )
+        });
+    }
+
+    fn replace_and_mark_text_with_selection(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        selection: PreeditSelection,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.view.update(cx, |view, cx| {
+            view.replace_and_mark_text_with_selection(range_utf16, new_text, selection, window, cx)
         });
     }
 

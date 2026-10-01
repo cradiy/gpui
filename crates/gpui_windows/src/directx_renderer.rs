@@ -1823,19 +1823,7 @@ impl<T> PipelineState<T> {
             let raw_shader = RawShaderBytes::new(shader_module, ShaderTarget::Fragment)?;
             create_fragment_shader(device, raw_shader.as_bytes())?
         };
-        let raw_instances = matches!(
-            shader_module,
-            ShaderModule::Quad
-                | ShaderModule::Shadow
-                | ShaderModule::Underline
-                | ShaderModule::PathRasterization
-                | ShaderModule::PathSprite
-                | ShaderModule::PolychromeSprite
-                | ShaderModule::MonochromeSprite
-                | ShaderModule::SubpixelSprite
-                | ShaderModule::SurfaceRgba
-                | ShaderModule::SurfaceNv12
-        );
+        let raw_instances = shader_module.uses_raw_instances();
         let buffer = if raw_instances {
             create_raw_buffer(device, std::mem::size_of::<T>() * buffer_size)?
         } else {
@@ -3038,23 +3026,15 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn shared_primitives_compile_for_shader_model_4_1() {
-        compile_hlsl(gpui_render::SURFACE_HLSL, "vs_surface", "vs_4_1").unwrap();
-        compile_hlsl(gpui_render::SURFACE_HLSL, "fs_surface_rgba", "ps_4_1").unwrap();
-        compile_hlsl(gpui_render::SURFACE_HLSL, "fs_surface_yuv", "ps_4_1").unwrap();
-        for (source, name) in [
-            (gpui_render::QUAD_HLSL, "quad"),
-            (gpui_render::SHADOW_HLSL, "shadow"),
-            (gpui_render::UNDERLINE_HLSL, "underline"),
-            (gpui_render::PATH_RASTERIZATION_HLSL, "path_rasterization"),
-            (gpui_render::PATH_HLSL, "path"),
-            (gpui_render::POLYCHROME_HLSL, "poly_sprite"),
-            (gpui_render::MONOCHROME_HLSL, "mono_sprite"),
-            (gpui_render::SUBPIXEL_HLSL, "subpixel_sprite"),
-        ] {
-            compile_hlsl(source, &format!("vs_{name}"), "vs_4_1")
-                .unwrap_or_else(|error| panic!("{name} vertex shader: {error}"));
-            compile_hlsl(source, &format!("fs_{name}"), "ps_4_1")
-                .unwrap_or_else(|error| panic!("{name} fragment shader: {error}"));
+        use crate::shader_programs::ShaderSource;
+        for module in ShaderModule::ALL {
+            let program = module.program();
+            if let ShaderSource::Inline(source) = program.source {
+                for target in ShaderTarget::ALL {
+                    compile_hlsl(source, program.entry(target), target.profile())
+                        .unwrap_or_else(|error| panic!("{module:?} {target:?}: {error}"));
+                }
+            }
         }
     }
 
@@ -3133,26 +3113,9 @@ pub(crate) mod shader_resources {
         core::{HSTRING, PCSTR},
     };
 
-    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-    pub(crate) enum ShaderModule {
-        Quad,
-        Shadow,
-        Underline,
-        PathRasterization,
-        PathSprite,
-        MonochromeSprite,
-        SubpixelSprite,
-        PolychromeSprite,
-        SurfaceRgba,
-        SurfaceNv12,
-        EmojiRasterization,
-    }
-
-    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-    pub(crate) enum ShaderTarget {
-        Vertex,
-        Fragment,
-    }
+    #[cfg(debug_assertions)]
+    use crate::shader_programs::ShaderSource;
+    pub(crate) use crate::shader_programs::{ShaderModule, ShaderTarget};
 
     pub(crate) struct RawShaderBytes<'t> {
         inner: &'t [u8],
@@ -3186,125 +3149,28 @@ pub(crate) mod shader_resources {
 
         #[cfg(not(debug_assertions))]
         fn from_bytes(module: ShaderModule, target: ShaderTarget) -> Self {
-            let bytes = match module {
-                ShaderModule::Quad => match target {
-                    ShaderTarget::Vertex => QUAD_VERTEX_BYTES,
-                    ShaderTarget::Fragment => QUAD_FRAGMENT_BYTES,
-                },
-                ShaderModule::Shadow => match target {
-                    ShaderTarget::Vertex => SHADOW_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SHADOW_FRAGMENT_BYTES,
-                },
-                ShaderModule::Underline => match target {
-                    ShaderTarget::Vertex => UNDERLINE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => UNDERLINE_FRAGMENT_BYTES,
-                },
-                ShaderModule::PathRasterization => match target {
-                    ShaderTarget::Vertex => PATH_RASTERIZATION_VERTEX_BYTES,
-                    ShaderTarget::Fragment => PATH_RASTERIZATION_FRAGMENT_BYTES,
-                },
-                ShaderModule::PathSprite => match target {
-                    ShaderTarget::Vertex => PATH_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => PATH_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::MonochromeSprite => match target {
-                    ShaderTarget::Vertex => MONOCHROME_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => MONOCHROME_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::SubpixelSprite => match target {
-                    ShaderTarget::Vertex => SUBPIXEL_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SUBPIXEL_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::PolychromeSprite => match target {
-                    ShaderTarget::Vertex => POLYCHROME_SPRITE_VERTEX_BYTES,
-                    ShaderTarget::Fragment => POLYCHROME_SPRITE_FRAGMENT_BYTES,
-                },
-                ShaderModule::SurfaceRgba => match target {
-                    ShaderTarget::Vertex => SURFACE_RGBA_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SURFACE_RGBA_FRAGMENT_BYTES,
-                },
-                ShaderModule::SurfaceNv12 => match target {
-                    ShaderTarget::Vertex => SURFACE_NV12_VERTEX_BYTES,
-                    ShaderTarget::Fragment => SURFACE_NV12_FRAGMENT_BYTES,
-                },
-                ShaderModule::EmojiRasterization => match target {
-                    ShaderTarget::Vertex => EMOJI_RASTERIZATION_VERTEX_BYTES,
-                    ShaderTarget::Fragment => EMOJI_RASTERIZATION_FRAGMENT_BYTES,
-                },
-            };
-            Self { inner: bytes }
+            Self {
+                inner: compiled_shader_bytes(module, target),
+            }
         }
     }
 
     #[cfg(debug_assertions)]
     pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
-        let shared_shader = match entry {
-            ShaderModule::Quad => Some((gpui_render::QUAD_HLSL, "vs_quad", "fs_quad")),
-            ShaderModule::Shadow => Some((gpui_render::SHADOW_HLSL, "vs_shadow", "fs_shadow")),
-            ShaderModule::Underline => {
-                Some((gpui_render::UNDERLINE_HLSL, "vs_underline", "fs_underline"))
+        let program = entry.program();
+        let shader_name = match program.source {
+            ShaderSource::Inline(source) => {
+                return super::compile_hlsl(source, program.entry(target), target.profile());
             }
-            ShaderModule::PathRasterization => Some((
-                gpui_render::PATH_RASTERIZATION_HLSL,
-                "vs_path_rasterization",
-                "fs_path_rasterization",
-            )),
-            ShaderModule::PathSprite => Some((gpui_render::PATH_HLSL, "vs_path", "fs_path")),
-            ShaderModule::PolychromeSprite => Some((
-                gpui_render::POLYCHROME_HLSL,
-                "vs_poly_sprite",
-                "fs_poly_sprite",
-            )),
-            ShaderModule::MonochromeSprite => Some((
-                gpui_render::MONOCHROME_HLSL,
-                "vs_mono_sprite",
-                "fs_mono_sprite",
-            )),
-            ShaderModule::SubpixelSprite => Some((
-                gpui_render::SUBPIXEL_HLSL,
-                "vs_subpixel_sprite",
-                "fs_subpixel_sprite",
-            )),
-            ShaderModule::SurfaceRgba => {
-                Some((gpui_render::SURFACE_HLSL, "vs_surface", "fs_surface_rgba"))
-            }
-            ShaderModule::SurfaceNv12 => {
-                Some((gpui_render::SURFACE_HLSL, "vs_surface", "fs_surface_yuv"))
-            }
-            ShaderModule::EmojiRasterization => None,
+            ShaderSource::File(file) => file,
         };
-        if let Some((source, vertex, fragment)) = shared_shader {
-            return super::compile_hlsl(
-                source,
-                match target {
-                    ShaderTarget::Vertex => vertex,
-                    ShaderTarget::Fragment => fragment,
-                },
-                match target {
-                    ShaderTarget::Vertex => "vs_4_1",
-                    ShaderTarget::Fragment => "ps_4_1",
-                },
-            );
-        }
         unsafe {
             use windows::Win32::Graphics::{
                 Direct3D::ID3DInclude, Hlsl::D3D_COMPILE_STANDARD_FILE_INCLUDE,
             };
 
-            let shader_name = "color_text_raster.hlsl";
-
-            let entry = format!(
-                "{}_{}\0",
-                entry.as_str(),
-                match target {
-                    ShaderTarget::Vertex => "vertex",
-                    ShaderTarget::Fragment => "fragment",
-                }
-            );
-            let target = match target {
-                ShaderTarget::Vertex => "vs_4_1\0",
-                ShaderTarget::Fragment => "ps_4_1\0",
-            };
+            let entry = std::ffi::CString::new(program.entry(target))?;
+            let target = std::ffi::CString::new(target.profile())?;
 
             let mut compile_blob = None;
             let mut error_blob = None;
@@ -3312,8 +3178,8 @@ pub(crate) mod shader_resources {
                 .join(&format!("src/{}", shader_name))
                 .canonicalize()?;
 
-            let entry_point = PCSTR::from_raw(entry.as_ptr());
-            let target_cstr = PCSTR::from_raw(target.as_ptr());
+            let entry_point = PCSTR::from_raw(entry.as_ptr().cast());
+            let target_cstr = PCSTR::from_raw(target.as_ptr().cast());
 
             // really dirty trick because winapi bindings are unhappy otherwise
             let include_handler = &std::mem::transmute::<usize, ID3DInclude>(
@@ -3348,25 +3214,6 @@ pub(crate) mod shader_resources {
 
     #[cfg(not(debug_assertions))]
     include!(concat!(env!("OUT_DIR"), "/shaders_bytes.rs"));
-
-    #[cfg(debug_assertions)]
-    impl ShaderModule {
-        pub fn as_str(self) -> &'static str {
-            match self {
-                ShaderModule::Quad => "quad",
-                ShaderModule::Shadow => "shadow",
-                ShaderModule::Underline => "underline",
-                ShaderModule::PathRasterization => "path_rasterization",
-                ShaderModule::PathSprite => "path_sprite",
-                ShaderModule::MonochromeSprite => "monochrome_sprite",
-                ShaderModule::SubpixelSprite => "subpixel_sprite",
-                ShaderModule::PolychromeSprite => "polychrome_sprite",
-                ShaderModule::SurfaceRgba => "surface_rgba",
-                ShaderModule::SurfaceNv12 => "surface_nv12",
-                ShaderModule::EmojiRasterization => "emoji_rasterization",
-            }
-        }
-    }
 }
 
 mod nvidia {

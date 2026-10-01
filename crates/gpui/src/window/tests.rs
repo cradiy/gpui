@@ -248,6 +248,7 @@ mod affine_cache;
 mod affine_deferred;
 mod affine_ime;
 mod cached_a11y;
+mod prepaint_retry;
 mod raster_capture;
 
 struct RootView {

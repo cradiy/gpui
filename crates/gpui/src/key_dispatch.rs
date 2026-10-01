@@ -320,6 +320,23 @@ impl DispatchTree {
         self.nodes.truncate(index);
     }
 
+    pub(crate) fn return_reused_subtree(
+        &mut self,
+        range: Range<usize>,
+        source: &mut Self,
+        source_range: Range<usize>,
+    ) {
+        debug_assert_eq!(range.len(), source_range.len());
+        for (node, original) in self.nodes[range]
+            .iter_mut()
+            .zip(&mut source.nodes[source_range])
+        {
+            original.key_listeners = mem::take(&mut node.key_listeners);
+            original.action_listeners = mem::take(&mut node.action_listeners);
+            original.modifiers_changed_listeners = mem::take(&mut node.modifiers_changed_listeners);
+        }
+    }
+
     pub fn on_key_event(&mut self, listener: KeyListener) {
         self.active_node().key_listeners.push(listener);
     }

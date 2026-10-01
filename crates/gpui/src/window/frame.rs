@@ -55,6 +55,8 @@ pub(crate) struct Frame {
     pub(crate) deferred_draws: Vec<DeferredDraw>,
     pub(crate) input_handlers: Vec<Option<PlatformInputHandler>>,
     pub(crate) tooltip_requests: Vec<Option<TooltipRequest>>,
+    prepaint_transaction_depth: usize,
+    prepaint_reuses: Vec<PrepaintReuse>,
     pub(crate) cursor_styles: Vec<CursorStyleRequest>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
@@ -67,6 +69,13 @@ pub(crate) struct Frame {
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_stack: Vec<usize>,
     pub(crate) tab_stops: TabStopMap,
+}
+
+struct PrepaintReuse {
+    dispatch: Range<usize>,
+    source_dispatch: Range<usize>,
+    tooltips: Range<usize>,
+    source_tooltips: Range<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -112,6 +121,8 @@ impl Frame {
             deferred_draws: Vec::new(),
             input_handlers: Vec::new(),
             tooltip_requests: Vec::new(),
+            prepaint_transaction_depth: 0,
+            prepaint_reuses: Vec::new(),
             cursor_styles: Vec::new(),
 
             #[cfg(any(test, feature = "test-support"))]
@@ -138,6 +149,8 @@ impl Frame {
         self.scene.clear();
         self.input_handlers.clear();
         self.tooltip_requests.clear();
+        self.prepaint_transaction_depth = 0;
+        self.prepaint_reuses.clear();
         self.cursor_styles.clear();
         self.hitboxes.clear();
         self.window_control_hitboxes.clear();
@@ -820,6 +833,8 @@ impl Window {
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+        let dispatch_start = self.next_frame.dispatch_tree.len();
+        let tooltips_start = self.next_frame.tooltip_requests.len();
         self.a11y
             .reuse_paint(range.start.a11y_actions_index..range.end.a11y_actions_index);
         self.a11y
@@ -849,6 +864,15 @@ impl Window {
             &mut self.rendered_frame.dispatch_tree,
             self.focus,
         );
+
+        if self.next_frame.prepaint_transaction_depth > 0 {
+            self.next_frame.prepaint_reuses.push(PrepaintReuse {
+                dispatch: dispatch_start..self.next_frame.dispatch_tree.len(),
+                source_dispatch: range.start.dispatch_tree_index..range.end.dispatch_tree_index,
+                tooltips: tooltips_start..self.next_frame.tooltip_requests.len(),
+                source_tooltips: range.start.tooltips_index..range.end.tooltips_index,
+            });
+        }
 
         if reused_subtree.contains_focus() {
             self.next_frame.focus = self.focus;
@@ -1072,8 +1096,34 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
         let a11y_checkpoint = self.a11y.prepaint_checkpoint();
+        let focus = self.next_frame.focus;
+        let reuses_start = self.next_frame.prepaint_reuses.len();
+        self.next_frame.prepaint_transaction_depth += 1;
         let result = f(self);
+        self.next_frame.prepaint_transaction_depth -= 1;
         if result.is_err() {
+            self.next_frame.focus = focus;
+            for reused in self.next_frame.prepaint_reuses.drain(reuses_start..).rev() {
+                self.next_frame.dispatch_tree.return_reused_subtree(
+                    reused.dispatch,
+                    &mut self.rendered_frame.dispatch_tree,
+                    reused.source_dispatch,
+                );
+                for (target, source) in reused.tooltips.zip(reused.source_tooltips) {
+                    self.rendered_frame.tooltip_requests[source] =
+                        self.next_frame.tooltip_requests[target].take();
+                }
+            }
+            // Attempted views retain indices into the discarded frame ranges. Rebuild
+            // only these caches on retry, while preserving their ordinary element state.
+            for key in
+                &self.next_frame.accessed_element_states[index.accessed_element_states_index..]
+            {
+                if key.1 == TypeId::of::<crate::view::ViewElementState>() {
+                    self.next_frame.element_states.remove(key);
+                    self.rendered_frame.element_states.remove(key);
+                }
+            }
             if let Some(checkpoint) = a11y_checkpoint {
                 self.a11y.rollback_prepaint(checkpoint);
             }
@@ -1101,6 +1151,9 @@ impl Window {
                 .accessed_element_states
                 .truncate(index.accessed_element_states_index);
             self.text_system.truncate_layouts(index.line_layout_index);
+        }
+        if self.next_frame.prepaint_transaction_depth == 0 {
+            self.next_frame.prepaint_reuses.clear();
         }
         result
     }

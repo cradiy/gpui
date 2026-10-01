@@ -296,7 +296,7 @@ impl<V: View> IntoElement for ViewElement<V> {
     }
 }
 
-struct ViewElementState {
+pub(crate) struct ViewElementState {
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
     cache_key: ViewElementCacheKey,

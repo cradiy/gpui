@@ -723,6 +723,67 @@ impl TextInput {
 }
 
 impl EntityInputHandler for TextInput {
+    fn surrounding_text(
+        &mut self,
+        max_bytes: usize,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<gpui::SurroundingText> {
+        if self.disabled || self.mode == InputMode::Password {
+            return None;
+        }
+        let anchor = if self.selection_reversed {
+            self.selected_range.end
+        } else {
+            self.selected_range.start
+        };
+        gpui::SurroundingText::from_utf8(
+            &self.content,
+            self.cursor_offset(),
+            anchor,
+            self.marked_range.clone(),
+            max_bytes,
+        )
+    }
+
+    fn delete_surrounding_text(
+        &mut self,
+        before_utf16: usize,
+        after_utf16: usize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.disabled || self.mode == InputMode::Password || self.marked_range.is_some() {
+            return false;
+        }
+        let selection = self.range_to_utf16(&self.selected_range);
+        let Some(start) = selection.start.checked_sub(before_utf16) else {
+            return false;
+        };
+        let Some(end) = selection.end.checked_add(after_utf16) else {
+            return false;
+        };
+        let start_byte = self.offset_from_utf16(start);
+        let end_byte = self.offset_from_utf16(end);
+        if self.offset_to_utf16(start_byte) != start || self.offset_to_utf16(end_byte) != end {
+            return false;
+        }
+        let selected_len = self.selected_range.len();
+        self.content = format!(
+            "{}{}{}",
+            &self.content[..start_byte],
+            &self.content[self.selected_range.clone()],
+            &self.content[end_byte..]
+        )
+        .into();
+        self.selected_range = start_byte..start_byte + selected_len;
+        self.preferred_x = None;
+        self.scroll_cursor_pending = true;
+        self.emit_committed_change(cx);
+        cx.notify();
+        true
+    }
+
     fn text_for_range(
         &mut self,
         range_utf16: Range<usize>,
@@ -1534,6 +1595,98 @@ mod tests {
         window
             .update(&mut visual.cx, |view, _, cx| {
                 assert_eq!(view.state.read(cx).value().as_ref(), "first");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn surrounding_deletion_preserves_selected_text_and_direction(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("前😀选中🌍后"));
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.state.update(cx, |input, _| {
+                    input.selected_range = 7..13;
+                    input.selection_reversed = true;
+                });
+                let mut handler =
+                    gpui::ElementInputHandler::new(Bounds::default(), view.state.clone());
+                let snapshot =
+                    gpui::InputHandler::surrounding_text(&mut handler, 4000, window, cx).unwrap();
+                assert_eq!((snapshot.cursor, snapshot.anchor), (7, 13));
+                let (before, after) = snapshot.deletion_utf16(4, 4).unwrap();
+                assert!(gpui::InputHandler::delete_surrounding_text(
+                    &mut handler,
+                    before,
+                    after,
+                    window,
+                    cx
+                ));
+                let input = view.state.read(cx);
+                assert_eq!(input.value().as_ref(), "前选中后");
+                assert_eq!(input.selected_range, 3..9);
+                assert_eq!(input.cursor_offset(), 3);
+                assert!(input.selection_reversed);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn surrounding_delete_commit_and_preedit_keep_the_insertion_point(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("前😀后"));
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.state.update(cx, |input, cx| {
+                    input.selected_range = 7..7;
+                    input.replace_and_mark_text_in_range(None, "ni", Some(1..1), window, cx);
+                    let snapshot = input.surrounding_text(4000, window, cx).unwrap();
+                    assert_eq!(snapshot.text, "前😀后");
+                    assert_eq!(snapshot.cursor, 7);
+                    let deletion = snapshot.deletion_utf16(4, 3).unwrap();
+                    let marked = input.marked_text_range(window, cx).unwrap();
+                    input.replace_and_mark_text_in_range(Some(marked), "", None, window, cx);
+                    assert!(input.delete_surrounding_text(deletion.0, deletion.1, window, cx));
+                    input.replace_text_in_range(None, "你", window, cx);
+                    let committed = input.surrounding_text(4000, window, cx).unwrap();
+                    assert_eq!(committed.text, "前你");
+                    assert_eq!(committed.cursor, 6);
+                    input.replace_and_mark_text_in_range(None, "hao", Some(1..1), window, cx);
+                    assert_eq!(input.value().as_ref(), "前你hao");
+                    assert_eq!(input.cursor_offset(), 7);
+                    assert_eq!(input.surrounding_text(4000, window, cx), Some(committed));
+                });
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn surrounding_rejects_invalid_deletions_and_private_fields(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("前😀"));
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.state.update(cx, |input, cx| {
+                    assert!(!input.delete_surrounding_text(1, 0, window, cx));
+                    assert!(!input.delete_surrounding_text(0, 1, window, cx));
+                    assert!(!input.delete_surrounding_text(4, 0, window, cx));
+                    assert_eq!(input.value().as_ref(), "前😀");
+                    assert_eq!(input.selected_range, 7..7);
+                    input.mode = InputMode::Password;
+                    assert!(input.surrounding_text(4000, window, cx).is_none());
+                    assert!(!input.delete_surrounding_text(2, 0, window, cx));
+                    input.mode = InputMode::Text;
+                    input.disabled = true;
+                    assert!(input.surrounding_text(4000, window, cx).is_none());
+                    assert!(!input.delete_surrounding_text(2, 0, window, cx));
+                    assert_eq!(input.value().as_ref(), "前😀");
+                });
+            })
+            .unwrap();
+        visual.run_until_parked();
+        window
+            .update(&mut visual.cx, |view, _, _| {
+                assert!(view.changes.borrow().is_empty());
             })
             .unwrap();
     }

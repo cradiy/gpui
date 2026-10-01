@@ -1620,6 +1620,26 @@ impl PlatformInputHandler {
             .ok();
     }
 
+    pub fn surrounding_text(&mut self, max_bytes: usize) -> Option<crate::SurroundingText> {
+        self.cx
+            .update(|window, cx| self.handler.surrounding_text(max_bytes, window, cx))
+            .ok()
+            .flatten()
+    }
+
+    pub fn input_focus_id(&mut self) -> Option<crate::FocusId> {
+        self.cx.update(|window, _| window.focus).ok().flatten()
+    }
+
+    pub fn delete_surrounding_text(&mut self, before_utf16: usize, after_utf16: usize) -> bool {
+        self.cx
+            .update(|window, cx| {
+                self.handler
+                    .delete_surrounding_text(before_utf16, after_utf16, window, cx)
+            })
+            .unwrap_or(false)
+    }
+
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn unmark_text(&mut self) {
         self.cx
@@ -1870,6 +1890,32 @@ pub trait InputHandler: 'static {
         cx: &mut App,
     ) {
         self.replace_and_mark_text_in_range(range_utf16, new_text, selection.range(), window, cx);
+    }
+
+    /// Return committed text around the selection, bounded by `max_bytes` UTF-8 bytes.
+    /// Exclude preedit text; retain the complete selection and its direction.
+    /// Return `None` for sensitive fields or when surrounding text is unavailable.
+    /// Handlers providing snapshots should also implement `delete_surrounding_text`.
+    fn surrounding_text(
+        &mut self,
+        _max_bytes: usize,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Option<crate::SurroundingText> {
+        None
+    }
+
+    /// Delete UTF-16 code units before and after the selection, preserving the
+    /// selected text, direction and resulting cursor position. Preedit must have
+    /// been removed first. Return `false` without changes if unsupported or invalid.
+    fn delete_surrounding_text(
+        &mut self,
+        _before_utf16: usize,
+        _after_utf16: usize,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> bool {
+        false
     }
 
     /// Remove the IME 'composing' state from the document

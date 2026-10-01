@@ -3,6 +3,9 @@ use crate::{
 };
 use std::ops::Range;
 
+mod surrounding;
+pub use surrounding::SurroundingText;
+
 /// Implement this trait to allow views to handle textual input when implementing an editor, field, etc.
 ///
 /// Once your view implements this trait, you can use it to construct an [`ElementInputHandler<V>`].
@@ -66,6 +69,27 @@ pub trait EntityInputHandler: 'static + Sized {
         cx: &mut Context<Self>,
     ) {
         self.replace_and_mark_text_in_range(range, new_text, selection.range(), window, cx);
+    }
+
+    /// See [`InputHandler::surrounding_text`] for details.
+    fn surrounding_text(
+        &mut self,
+        _max_bytes: usize,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<SurroundingText> {
+        None
+    }
+
+    /// See [`InputHandler::delete_surrounding_text`] for details.
+    fn delete_surrounding_text(
+        &mut self,
+        _before_utf16: usize,
+        _after_utf16: usize,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> bool {
+        false
     }
 
     /// See [`InputHandler::bounds_for_range`] for details
@@ -199,6 +223,28 @@ impl<V: EntityInputHandler> InputHandler for ElementInputHandler<V> {
         self.view.update(cx, |view, cx| {
             view.replace_and_mark_text_with_selection(range_utf16, new_text, selection, window, cx)
         });
+    }
+
+    fn surrounding_text(
+        &mut self,
+        max_bytes: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<SurroundingText> {
+        self.view
+            .update(cx, |view, cx| view.surrounding_text(max_bytes, window, cx))
+    }
+
+    fn delete_surrounding_text(
+        &mut self,
+        before_utf16: usize,
+        after_utf16: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        self.view.update(cx, |view, cx| {
+            view.delete_surrounding_text(before_utf16, after_utf16, window, cx)
+        })
     }
 
     fn unmark_text(&mut self, window: &mut Window, cx: &mut App) {

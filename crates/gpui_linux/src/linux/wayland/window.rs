@@ -30,8 +30,11 @@ use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::linux::wayland::{
-    display::WaylandDisplay, external_surface::ExternalWaylandSurfaceRoleFactory,
-    frame_callback::PendingFrameCallback, serial::SerialKind,
+    display::WaylandDisplay,
+    external_surface::ExternalWaylandSurfaceRoleFactory,
+    frame_callback::PendingFrameCallback,
+    serial::SerialKind,
+    text_input::{ImeBatch, InputContext, MAX_SURROUNDING_BYTES},
 };
 use crate::linux::{Globals, Output, WaylandClientStatePtr, get_window};
 use gpui::{
@@ -963,10 +966,44 @@ impl WaylandWindow {
 }
 
 impl WaylandWindowStatePtr {
-    pub(super) fn handle_ime_batch(&self, batch: super::text_input::ImeBatch) {
+    pub(super) fn ime_context(&self) -> InputContext {
+        let handler = self.state.borrow_mut().input_handler.take();
+        let Some(mut handler) = handler else {
+            return InputContext::default();
+        };
+        let context = InputContext {
+            focus: handler.input_focus_id(),
+            surrounding: handler.surrounding_text(MAX_SURROUNDING_BYTES),
+        };
+        self.state.borrow_mut().input_handler = Some(handler);
+        context
+    }
+
+    pub(super) fn handle_ime_batch(
+        &self,
+        batch: ImeBatch,
+        expected: Option<&InputContext>,
+    ) -> Option<(InputContext, bool)> {
         if self.is_blocked() {
-            return;
+            return None;
         }
+        let current = self.ime_context();
+        let deletion = batch
+            .delete
+            .filter(|&(before, after)| before != 0 || after != 0);
+        let deletion = if let Some((before, after)) = deletion {
+            if expected != Some(&current) {
+                return None;
+            }
+            Some(
+                current
+                    .surrounding
+                    .as_ref()?
+                    .deletion_utf16(before as usize, after as usize)?,
+            )
+        } else {
+            None
+        };
         let mut state = self.state.borrow_mut();
         let handler = state.input_handler.take();
         drop(state);
@@ -976,7 +1013,12 @@ impl WaylandWindowStatePtr {
             if let Some(marked) = marked {
                 handler.replace_and_mark_text_in_range(Some(marked), "", None);
             }
+            let deleted = deletion
+                .is_none_or(|(before, after)| handler.delete_surrounding_text(before, after));
             self.state.borrow_mut().input_handler = Some(handler);
+            if !deleted {
+                return None;
+            }
             was_composing
         } else {
             false
@@ -984,7 +1026,7 @@ impl WaylandWindowStatePtr {
 
         if let Some(text) = batch.commit {
             // IBus also forwards ordinary ASCII keys through text-input; keep key bindings working.
-            if text.len() == 1 && !was_composing {
+            if text.len() == 1 && !was_composing && deletion.is_none() {
                 self.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
                     keystroke: gpui::Keystroke {
                         modifiers: Modifiers::default(),
@@ -998,6 +1040,12 @@ impl WaylandWindowStatePtr {
                 self.handle_ime(ImeInput::InsertText(text));
             }
         }
+        let context = self.ime_context();
+        // Key bindings may move focus while dispatching the committed character.
+        if context.focus != current.focus {
+            return Some((context, false));
+        }
+        let mut composing = false;
         if let Some(preedit) = batch.preedit.filter(|preedit| !preedit.text.is_empty()) {
             let mut state = self.state.borrow_mut();
             if let Some(mut handler) = state.input_handler.take() {
@@ -1007,9 +1055,11 @@ impl WaylandWindowStatePtr {
                     &preedit.text,
                     preedit.selection,
                 );
+                composing = true;
                 self.state.borrow_mut().input_handler = Some(handler);
             }
         }
+        Some((context, composing))
     }
 
     pub(crate) fn activate(&self) {
@@ -1177,14 +1227,19 @@ impl WaylandWindowStatePtr {
             .map(|input_handler| input_handler.query_accepts_text_input())
             .unwrap_or(true);
         drop(state);
-        if Some(ime_enabled) == client.ime_enabled() {
-            return;
+        if Some(ime_enabled) != client.ime_enabled() {
+            if ime_enabled {
+                client.enable_ime();
+            } else {
+                client.disable_ime();
+            }
         }
-
         if ime_enabled {
-            client.enable_ime();
-        } else {
-            client.disable_ime();
+            client.update_surrounding_text(
+                &self.surface().id(),
+                self.ime_context(),
+                self.get_ime_area(),
+            );
         }
     }
 

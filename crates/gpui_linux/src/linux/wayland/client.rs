@@ -49,7 +49,7 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_source_v1,
 };
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
-    ContentHint, ContentPurpose,
+    ChangeCause, ContentHint, ContentPurpose,
 };
 use wayland_protocols::wp::text_input::zv3::client::{
     zwp_text_input_manager_v3, zwp_text_input_v3,
@@ -79,7 +79,7 @@ use xkbcommon::xkb;
 use super::{
     display::WaylandDisplay,
     keyboard::{load_keymap, translate_key, update_modifiers},
-    text_input::{Preedit, TextInputState},
+    text_input::{InputContext, MAX_SURROUNDING_BYTES, Preedit, TextInputState},
     window::{ImeInput, WaylandDragIcon, WaylandWindowStatePtr},
 };
 
@@ -534,6 +534,45 @@ pub(crate) enum PendingActivation {
 }
 
 impl WaylandClientState {
+    fn publish_surrounding(
+        &mut self,
+        text_input: &zwp_text_input_v3::ZwpTextInputV3,
+        mut context: InputContext,
+        cause: ChangeCause,
+    ) -> bool {
+        context.surrounding = context.surrounding.filter(|text| {
+            text.text.len() <= MAX_SURROUNDING_BYTES
+                && !text.text.contains('\0')
+                && text.text.is_char_boundary(text.cursor)
+                && text.text.is_char_boundary(text.anchor)
+        });
+        if self.ime.context.as_ref() == Some(&context) {
+            return false;
+        }
+        let reset = self.ime.context.as_ref().is_some_and(|old| {
+            old.focus != context.focus || old.surrounding.is_some() != context.surrounding.is_some()
+        });
+        if reset {
+            text_input.disable();
+            text_input.commit();
+            self.ime.committed();
+            text_input.enable();
+            text_input.set_content_type(ContentHint::None, ContentPurpose::Normal);
+            self.ime.reset_context();
+            self.composing = false;
+        }
+        text_input.set_text_change_cause(cause);
+        if let Some(surrounding) = &context.surrounding {
+            text_input.set_surrounding_text(
+                surrounding.text.clone(),
+                surrounding.cursor as i32,
+                surrounding.anchor as i32,
+            );
+        }
+        self.ime.record_context(context);
+        true
+    }
+
     fn consume_startup_activation_token(&mut self, surface: &wl_surface::WlSurface) {
         let Some(startup_activation_token) = self.startup_activation_token.take() else {
             return;
@@ -882,18 +921,24 @@ impl WaylandClientStatePtr {
         let client = self.get_client();
         let mut state = client.borrow_mut();
         state.ime_enabled = Some(true);
-        state.ime.take_pending();
-        state.ime.cursor_rectangle = None;
+        state.ime.reset_context();
         let Some(text_input) = state.text_input.take() else {
             return;
         };
 
         text_input.enable();
         text_input.set_content_type(ContentHint::None, ContentPurpose::Normal);
-        if let Some(window) = state.keyboard_focused_window.clone() {
+        let window = state
+            .text_input_surface
+            .as_ref()
+            .and_then(|surface| state.windows.get(surface))
+            .cloned();
+        if let Some(window) = window {
             drop(state);
             let area = window.get_ime_area();
+            let context = window.ime_context();
             state = client.borrow_mut();
+            state.publish_surrounding(&text_input, context, ChangeCause::Other);
             if let Some([x, y, width, height]) =
                 area.and_then(|area| state.ime.update_cursor_rectangle(area))
             {
@@ -910,7 +955,7 @@ impl WaylandClientStatePtr {
         let mut state = client.borrow_mut();
         state.ime_enabled = Some(false);
         state.composing = false;
-        state.ime.take_pending();
+        state.ime.reset_context();
         if let Some(text_input) = &state.text_input {
             text_input.disable();
             text_input.commit();
@@ -923,10 +968,40 @@ impl WaylandClientStatePtr {
         client.borrow().ime_enabled
     }
 
+    pub(super) fn update_surrounding_text(
+        &self,
+        surface: &ObjectId,
+        context: InputContext,
+        area: Option<Bounds<Pixels>>,
+    ) {
+        let client = self.get_client();
+        let mut state = client.borrow_mut();
+        if state.ime_enabled != Some(true)
+            || state.text_input_surface.as_ref() != Some(surface)
+            || state.ime.defer_publish
+        {
+            return;
+        }
+        let Some(text_input) = state.text_input.clone() else {
+            return;
+        };
+        let mut changed = state.publish_surrounding(&text_input, context, ChangeCause::Other);
+        if let Some([x, y, width, height]) =
+            area.and_then(|area| state.ime.update_cursor_rectangle(area))
+        {
+            text_input.set_cursor_rectangle(x, y, width, height);
+            changed = true;
+        }
+        if changed {
+            text_input.commit();
+            state.ime.committed();
+        }
+    }
+
     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
         let client = self.get_client();
         let mut state = client.borrow_mut();
-        if state.text_input.is_none() || state.pre_edit_text.is_some() {
+        if state.text_input.is_none() || state.pre_edit_text.is_some() || state.ime.defer_publish {
             return;
         }
 
@@ -2443,6 +2518,12 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandClientStatePtr {
             zwp_text_input_v3::Event::CommitString { text } => {
                 state.ime.pending.commit = text;
             }
+            zwp_text_input_v3::Event::DeleteSurroundingText {
+                before_length,
+                after_length,
+            } => {
+                state.ime.pending.delete = Some((before_length, after_length));
+            }
             zwp_text_input_v3::Event::PreeditString {
                 text,
                 cursor_begin,
@@ -2460,21 +2541,33 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandClientStatePtr {
                 {
                     return;
                 }
-                state.composing = batch
-                    .preedit
-                    .as_ref()
-                    .is_some_and(|preedit| !preedit.text.is_empty());
+                let expected = state.ime.deletion_context(serial).cloned();
+                state.ime.defer_publish = !state.ime.can_publish(serial);
                 drop(state);
-                window.handle_ime_batch(batch);
-                if let Some(area) = window.get_ime_area() {
+                let Some((context, composing)) = window.handle_ime_batch(batch, expected.as_ref())
+                else {
+                    return;
+                };
+                let area = window.get_ime_area();
+                {
                     let mut state = client.borrow_mut();
+                    state.composing = composing;
                     if state.ime.can_publish(serial)
                         && state.ime_enabled == Some(true)
                         && state.text_input_surface.as_ref() == Some(&window.surface().id())
                     {
-                        if let Some([x, y, width, height]) = state.ime.update_cursor_rectangle(area)
+                        let mut changed = state.publish_surrounding(
+                            text_input,
+                            context,
+                            ChangeCause::InputMethod,
+                        );
+                        if let Some([x, y, width, height]) =
+                            area.and_then(|area| state.ime.update_cursor_rectangle(area))
                         {
                             text_input.set_cursor_rectangle(x, y, width, height);
+                            changed = true;
+                        }
+                        if changed {
                             text_input.commit();
                             state.ime.committed();
                         }

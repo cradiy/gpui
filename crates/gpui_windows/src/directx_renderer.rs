@@ -1075,8 +1075,8 @@ impl DirectXRenderer {
             &devices.device_context,
             slice::from_ref(&resources.path_intermediate_srv),
             slice::from_ref(&resources.viewport),
-            slice::from_ref(&self.globals.global_params_buffer),
-            slice::from_ref(&self.globals.sampler),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
+            &[],
             sprites.len() as u32,
         )
     }
@@ -1911,6 +1911,7 @@ impl<T> PipelineState<T> {
                 | ShaderModule::Shadow
                 | ShaderModule::Underline
                 | ShaderModule::PathRasterization
+                | ShaderModule::PathSprite
         );
         let buffer = if raw_instances {
             create_raw_buffer(device, std::mem::size_of::<T>() * buffer_size)?
@@ -3151,6 +3152,7 @@ mod tests {
             (gpui_render::SHADOW_HLSL, "shadow"),
             (gpui_render::UNDERLINE_HLSL, "underline"),
             (gpui_render::PATH_RASTERIZATION_HLSL, "path_rasterization"),
+            (gpui_render::PATH_HLSL, "path"),
         ] {
             compile_hlsl(source, &format!("vs_{name}"), "vs_4_1")
                 .unwrap_or_else(|error| panic!("{name} vertex shader: {error}"));
@@ -3350,6 +3352,7 @@ pub(crate) mod shader_resources {
                 "vs_path_rasterization",
                 "fs_path_rasterization",
             )),
+            ShaderModule::PathSprite => Some((gpui_render::PATH_HLSL, "vs_path", "fs_path")),
             _ => None,
         };
         if let Some((source, vertex, fragment)) = shared_shader {

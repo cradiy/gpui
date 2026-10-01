@@ -4,7 +4,79 @@ use gpui::{
     Bounds, ColorSpace, ContentMask, DevicePixels, Path, Scene, linear_color_stop,
     multi_linear_gradient, point, px, rgb, rgba, size,
 };
+use gpui::{EffectQuad, EffectShader, ScaledPixels, SubtreeLayer};
 use gpui_wgpu::WgpuOffscreenRenderer;
+use std::{rc::Rc, sync::Arc};
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn path_composition_preserves_overlap_in_offset_capture() -> anyhow::Result<()> {
+    for scale in [1., 1.5, 2.] {
+        let region = Bounds::new(point(px(20.), px(12.)), size(px(80.), px(72.)));
+        let mut child = Scene::default();
+        for (x, y) in [(32., 24.), (48., 36.)] {
+            let mut path = Path::new(point(px(x), px(y)));
+            path.line_to(point(px(x + 32.), px(y)));
+            path.line_to(point(px(x + 32.), px(y + 32.)));
+            path.line_to(point(px(x), px(y + 32.)));
+            path.color = rgba(0xffffff80).into();
+            path.content_mask = ContentMask { bounds: region };
+            child.insert_primitive(path.scale(scale));
+        }
+        child.finish();
+        let width = (128. * scale) as usize;
+        let mut renderer = WgpuOffscreenRenderer::new(size(
+            DevicePixels(width as i32),
+            DevicePixels((96. * scale) as i32),
+        ))?;
+        let direct = renderer.render_rgba(&child)?;
+        let pixel = |data: &[u8], x: f32, y: f32| {
+            data[((y * scale) as usize * width + (x * scale) as usize) * 4]
+        };
+        assert!(
+            (187..=189).contains(&pixel(&direct, 40., 32.)),
+            "single path alpha"
+        );
+        assert!(
+            (224..=226).contains(&pixel(&direct, 56., 44.)),
+            "overlap must be composited once"
+        );
+        let bounds: Bounds<ScaledPixels> = region.scale(scale);
+        let mut captured = Scene::default();
+        child.raster_scale = Some(1.);
+        captured.insert_primitive(gpui::Primitive::SubtreeLayer(SubtreeLayer {
+            scene3d: None,
+            second_scene: None,
+            intermediate_effects: Arc::default(),
+            composite: EffectQuad {
+                order: 0,
+                bounds,
+                effect_bounds: bounds,
+                transformation: Default::default(),
+                content_mask: ContentMask { bounds },
+                shader: EffectShader::wgsl_image("fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> { return sample_effect_image(input, input.uv); }"),
+                uniforms: Default::default(),
+                time: 0.,
+                corner_radii: Default::default(),
+                opacity: 1.,
+                image_tile: None,
+                second_image_tile: None,
+                third_image_tile: None,
+                fourth_image_tile: None,
+            },
+            scene: Rc::new(child),
+        }));
+        captured.finish();
+        let output = renderer.render_rgba(&captured)?;
+        for (a, b) in direct.iter().zip(&output) {
+            assert!(
+                a.abs_diff(*b) <= 1,
+                "offset capture pixel mismatch at scale {scale}: {a} vs {b}"
+            );
+        }
+    }
+    Ok(())
+}
 
 #[test]
 #[ignore = "requires a GPU adapter"]

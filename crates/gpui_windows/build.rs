@@ -53,14 +53,20 @@ mod shader_compilation {
                 "shadow" => Some(gpui_render::SHADOW_HLSL),
                 "underline" => Some(gpui_render::UNDERLINE_HLSL),
                 "path_rasterization" => Some(gpui_render::PATH_RASTERIZATION_HLSL),
+                "path_sprite" => Some(gpui_render::PATH_HLSL),
                 _ => None,
             };
             if let Some(shared_source) = shared_source {
                 let source = PathBuf::from(&out_dir).join(format!("{module}.hlsl"));
                 fs::write(&source, shared_source).unwrap();
+                let entry_name = if module == "path_sprite" {
+                    "path"
+                } else {
+                    module
+                };
                 for (entry, profile, suffix, stage) in [
-                    (format!("vs_{module}"), "vs_4_1", "vs", "VERTEX"),
-                    (format!("fs_{module}"), "ps_4_1", "ps", "FRAGMENT"),
+                    (format!("vs_{entry_name}"), "vs_4_1", "vs", "VERTEX"),
+                    (format!("fs_{entry_name}"), "ps_4_1", "ps", "FRAGMENT"),
                 ] {
                     let output = format!("{out_dir}/{module}_{suffix}.h");
                     let constant = format!("{}_{stage}_BYTES", module.to_uppercase());

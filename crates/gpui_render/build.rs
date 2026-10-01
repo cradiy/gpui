@@ -2,7 +2,13 @@ use std::{env, fs, path::PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=src/common.wgsl");
-    for primitive in ["quads", "shadows", "underlines", "path_rasterization"] {
+    for primitive in [
+        "quads",
+        "shadows",
+        "underlines",
+        "path_rasterization",
+        "paths",
+    ] {
         println!("cargo:rerun-if-changed=src/{primitive}.wgsl");
         generate(primitive);
     }
@@ -56,18 +62,31 @@ fn generate(primitive: &str) {
         let Some(binding) = variable.binding else {
             continue;
         };
-        let slot = match (binding.group, binding.binding, variable.space) {
-            (0, 0, naga::AddressSpace::Uniform) => 0,
-            (1, 0, naga::AddressSpace::Storage { .. }) => 1,
+        let (slot, target) = match (binding.group, binding.binding, variable.space) {
+            (0, 0, naga::AddressSpace::Uniform) => (
+                0,
+                naga::back::msl::BindTarget {
+                    buffer: Some(0),
+                    ..Default::default()
+                },
+            ),
+            (1, 0, naga::AddressSpace::Storage { .. }) => (
+                1,
+                naga::back::msl::BindTarget {
+                    buffer: Some(1),
+                    ..Default::default()
+                },
+            ),
+            (1, 1, naga::AddressSpace::Handle) => (
+                0,
+                naga::back::msl::BindTarget {
+                    texture: Some(0),
+                    ..Default::default()
+                },
+            ),
             _ => panic!("unexpected {primitive} shader resource: {binding:?}"),
         };
-        resources.resources.insert(
-            binding,
-            naga::back::msl::BindTarget {
-                buffer: Some(slot),
-                ..Default::default()
-            },
-        );
+        resources.resources.insert(binding, target);
         hlsl.binding_map.insert(
             binding,
             naga::back::hlsl::BindTarget {

@@ -104,6 +104,9 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
         ("b_quads", 1, 0),
         ("b_shadows", 1, 0),
         ("b_underlines", 1, 0),
+        ("b_path_vertices", 1, 0),
+        ("b_path_sprites", 1, 0),
+        ("t_sprite", 1, 1),
     ] {
         let (_, variable) = module
             .global_variables

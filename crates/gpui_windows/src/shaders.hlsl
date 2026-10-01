@@ -556,43 +556,6 @@ float4 gradient_color(Background background,
 // velocity around the corner, but that seems overcomplicated.
 /*
 **
-**              Path Sprites
-**
-*/
-
-struct PathSprite {
-    Bounds bounds;
-};
-
-struct PathSpriteVertexOutput {
-    float4 position: SV_Position;
-    float2 texture_coords: TEXCOORD0;
-};
-
-StructuredBuffer<PathSprite> path_sprites: register(t1);
-
-PathSpriteVertexOutput path_sprite_vertex(uint vertex_id: SV_VertexID, uint sprite_id: SV_InstanceID) {
-    float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
-    PathSprite sprite = path_sprites[sprite_id];
-
-    // Don't apply content mask because it was already accounted for when rasterizing the path
-    float4 device_position = to_device_position(unit_vertex, sprite.bounds);
-
-    float2 screen_position = sprite.bounds.origin + unit_vertex * sprite.bounds.size;
-    float2 texture_coords = screen_position / global_viewport_size;
-
-    PathSpriteVertexOutput output;
-    output.position = device_position;
-    output.texture_coords = texture_coords;
-    return output;
-}
-
-float4 path_sprite_fragment(PathSpriteVertexOutput input): SV_Target {
-    return t_sprite.Sample(s_sprite, input.texture_coords);
-}
-
-/*
-**
 **              Monochrome sprites
 **
 */

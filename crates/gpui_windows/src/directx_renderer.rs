@@ -622,7 +622,7 @@ impl DirectXRenderer {
                     .context("resources missing")?
                     .viewport,
             ),
-            slice::from_ref(&self.globals.global_params_buffer),
+            slice::from_ref(&self.globals.effect_global_params_buffer),
             4,
             start as u32,
             len as u32,
@@ -1729,15 +1729,7 @@ struct GlobalParams {
     _pad: [u32; 3],
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct EffectGlobalParams {
-    viewport_size: [f32; 2],
-    premultiplied_alpha: u32,
-    pad: u32,
-    viewport_origin: [f32; 2],
-    origin_pad: [u32; 2],
-}
+type EffectGlobalParams = gpui_render::QuadGlobals;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -1891,6 +1883,7 @@ struct PipelineState<T> {
     fragment: ID3D11PixelShader,
     buffer: ID3D11Buffer,
     buffer_size: usize,
+    raw_instances: bool,
     view: Option<ID3D11ShaderResourceView>,
     blend_state: ID3D11BlendState,
     _marker: std::marker::PhantomData<T>,
@@ -1912,8 +1905,22 @@ impl<T> PipelineState<T> {
             let raw_shader = RawShaderBytes::new(shader_module, ShaderTarget::Fragment)?;
             create_fragment_shader(device, raw_shader.as_bytes())?
         };
-        let buffer = create_buffer(device, std::mem::size_of::<T>(), buffer_size)?;
-        let view = create_buffer_view(device, &buffer)?;
+        let raw_instances = shader_module == ShaderModule::Quad;
+        let buffer = if raw_instances {
+            create_raw_buffer(device, std::mem::size_of::<T>() * buffer_size)?
+        } else {
+            create_buffer(device, std::mem::size_of::<T>(), buffer_size)?
+        };
+        let view = if raw_instances {
+            create_raw_buffer_view(
+                device,
+                &buffer,
+                0,
+                (std::mem::size_of::<T>() * buffer_size) as u32,
+            )?
+        } else {
+            create_buffer_view(device, &buffer)?
+        };
 
         Ok(PipelineState {
             label,
@@ -1921,6 +1928,7 @@ impl<T> PipelineState<T> {
             fragment,
             buffer,
             buffer_size,
+            raw_instances,
             view,
             blend_state,
             _marker: std::marker::PhantomData,
@@ -1941,8 +1949,21 @@ impl<T> PipelineState<T> {
                 self.buffer_size,
                 new_buffer_size
             );
-            let buffer = create_buffer(device, std::mem::size_of::<T>(), new_buffer_size)?;
-            let view = create_buffer_view(device, &buffer)?;
+            let buffer = if self.raw_instances {
+                create_raw_buffer(device, std::mem::size_of::<T>() * new_buffer_size)?
+            } else {
+                create_buffer(device, std::mem::size_of::<T>(), new_buffer_size)?
+            };
+            let view = if self.raw_instances {
+                create_raw_buffer_view(
+                    device,
+                    &buffer,
+                    0,
+                    (std::mem::size_of::<T>() * new_buffer_size) as u32,
+                )?
+            } else {
+                create_buffer_view(device, &buffer)?
+            };
             self.buffer = buffer;
             self.view = view;
             self.buffer_size = new_buffer_size;
@@ -2044,7 +2065,17 @@ impl<T> PipelineState<T> {
         first_instance: u32,
         instance_count: u32,
     ) -> Result<()> {
-        let view = create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?;
+        let view = if self.raw_instances {
+            let stride = std::mem::size_of::<T>() as u32;
+            create_raw_buffer_view(
+                device,
+                &self.buffer,
+                first_instance * stride,
+                instance_count * stride,
+            )?
+        } else {
+            create_buffer_view_range(device, &self.buffer, first_instance, instance_count)?
+        };
         set_pipeline_state(
             device_context,
             slice::from_ref(&view),
@@ -2957,6 +2988,43 @@ fn create_buffer(
 }
 
 #[inline]
+fn create_raw_buffer(device: &ID3D11Device, bytes: usize) -> Result<ID3D11Buffer> {
+    let desc = D3D11_BUFFER_DESC {
+        ByteWidth: u32::try_from(bytes)?,
+        Usage: D3D11_USAGE_DYNAMIC,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+        MiscFlags: D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS.0 as u32,
+        ..Default::default()
+    };
+    let mut buffer = None;
+    unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }?;
+    Ok(buffer.unwrap())
+}
+
+fn create_raw_buffer_view(
+    device: &ID3D11Device,
+    buffer: &ID3D11Buffer,
+    byte_offset: u32,
+    byte_length: u32,
+) -> Result<Option<ID3D11ShaderResourceView>> {
+    let desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
+        Format: DXGI_FORMAT_R32_TYPELESS,
+        ViewDimension: D3D11_SRV_DIMENSION_BUFFEREX,
+        Anonymous: D3D11_SHADER_RESOURCE_VIEW_DESC_0 {
+            BufferEx: D3D11_BUFFEREX_SRV {
+                FirstElement: byte_offset / 4,
+                NumElements: byte_length / 4,
+                Flags: D3D11_BUFFEREX_SRV_FLAG_RAW.0 as u32,
+            },
+        },
+    };
+    let mut view = None;
+    unsafe { device.CreateShaderResourceView(buffer, Some(&desc), Some(&mut view)) }?;
+    Ok(view)
+}
+
+#[inline]
 fn create_buffer_view(
     device: &ID3D11Device,
     buffer: &ID3D11Buffer,
@@ -3042,6 +3110,14 @@ unsafe fn unbind_backdrop_shader_resources(device_context: &ID3D11DeviceContext)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn shared_quads_compile_for_shader_model_4_1() {
+        compile_hlsl(gpui_render::QUAD_HLSL, "vs_quad", "vs_4_1")
+            .expect("shared rectangle vertex shader should compile");
+        compile_hlsl(gpui_render::QUAD_HLSL, "fs_quad", "ps_4_1")
+            .expect("shared rectangle fragment shader should compile");
+    }
 
     fn shader_struct_span(module: &naga::Module, name: &str) -> u32 {
         module
@@ -3223,6 +3299,19 @@ pub(crate) mod shader_resources {
 
     #[cfg(debug_assertions)]
     pub(super) fn build_shader_blob(entry: ShaderModule, target: ShaderTarget) -> Result<ID3DBlob> {
+        if entry == ShaderModule::Quad {
+            return super::compile_hlsl(
+                gpui_render::QUAD_HLSL,
+                match target {
+                    ShaderTarget::Vertex => "vs_quad",
+                    ShaderTarget::Fragment => "fs_quad",
+                },
+                match target {
+                    ShaderTarget::Vertex => "vs_4_1",
+                    ShaderTarget::Fragment => "ps_4_1",
+                },
+            );
+        }
         unsafe {
             use windows::Win32::Graphics::{
                 Direct3D::ID3DInclude, Hlsl::D3D_COMPILE_STANDARD_FILE_INCLUDE,

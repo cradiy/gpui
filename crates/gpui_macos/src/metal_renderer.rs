@@ -474,12 +474,20 @@ impl MetalRenderer {
             "shadow_fragment",
             MTLPixelFormat::BGRA8Unorm,
         );
+        #[cfg(feature = "runtime_shaders")]
+        let quad_library = device
+            .new_library_with_source(gpui_render::QUAD_MSL, &metal::CompileOptions::new())
+            .expect("error building shared quad library");
+        #[cfg(not(feature = "runtime_shaders"))]
+        let quad_library = device
+            .new_library_with_data(include_bytes!(concat!(env!("OUT_DIR"), "/quads.metallib")))
+            .expect("error loading shared quad library");
         let quads_pipeline_state = build_pipeline_state(
             &device,
-            &library,
+            &quad_library,
             "quads",
-            "quad_vertex",
-            "quad_fragment",
+            "vs_quad",
+            "fs_quad",
             MTLPixelFormat::BGRA8Unorm,
         );
         let underlines_pipeline_state = build_pipeline_state(
@@ -1483,28 +1491,46 @@ impl MetalRenderer {
 
         command_encoder.set_render_pipeline_state(&self.quads_pipeline_state);
         command_encoder.set_vertex_buffer(
-            QuadInputIndex::Vertices as u64,
-            Some(&self.unit_vertices),
-            0,
-        );
-        command_encoder.set_vertex_buffer(
-            QuadInputIndex::Quads as u64,
+            gpui_render::METAL_QUADS_SLOT,
             Some(&instance_buffer.metal_buffer),
             *instance_offset as u64,
         );
         command_encoder.set_fragment_buffer(
-            QuadInputIndex::Quads as u64,
+            gpui_render::METAL_QUADS_SLOT,
             Some(&instance_buffer.metal_buffer),
             *instance_offset as u64,
         );
 
-        command_encoder.set_vertex_bytes(
-            QuadInputIndex::ViewportSize as u64,
-            mem::size_of_val(&viewport_size) as u64,
-            &viewport_size as *const Size<DevicePixels> as *const _,
-        );
-
         let quad_bytes_len = mem::size_of_val(quads);
+        let globals = gpui_render::QuadGlobals {
+            viewport_size: [
+                i32::from(viewport_size.width) as f32,
+                i32::from(viewport_size.height) as f32,
+            ],
+            ..Default::default()
+        };
+        let sizes =
+            [u32::try_from(quad_bytes_len).expect("quad buffer exceeds Metal address space")];
+        command_encoder.set_vertex_bytes(
+            gpui_render::METAL_GLOBALS_SLOT,
+            mem::size_of_val(&globals) as u64,
+            &globals as *const _ as _,
+        );
+        command_encoder.set_fragment_bytes(
+            gpui_render::METAL_GLOBALS_SLOT,
+            mem::size_of_val(&globals) as u64,
+            &globals as *const _ as _,
+        );
+        command_encoder.set_vertex_bytes(
+            gpui_render::METAL_SIZES_SLOT,
+            mem::size_of_val(&sizes) as u64,
+            sizes.as_ptr() as _,
+        );
+        command_encoder.set_fragment_bytes(
+            gpui_render::METAL_SIZES_SLOT,
+            mem::size_of_val(&sizes) as u64,
+            sizes.as_ptr() as _,
+        );
         let buffer_contents =
             unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
 
@@ -1518,9 +1544,9 @@ impl MetalRenderer {
         }
 
         command_encoder.draw_primitives_instanced(
-            metal::MTLPrimitiveType::Triangle,
+            metal::MTLPrimitiveType::TriangleStrip,
             0,
-            6,
+            4,
             quads.len() as u64,
         );
         *instance_offset = next_offset;
@@ -3045,13 +3071,6 @@ fn align_offset(offset: &mut usize) {
 enum ShadowInputIndex {
     Vertices = 0,
     Shadows = 1,
-    ViewportSize = 2,
-}
-
-#[repr(C)]
-enum QuadInputIndex {
-    Vertices = 0,
-    Quads = 1,
     ViewportSize = 2,
 }
 

@@ -20,6 +20,7 @@ screen-capture = ["gpui/screen-capture"]
 
 [dependencies]
 gpui.workspace = true
+gpui_render.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit.workspace = true
@@ -64,6 +65,7 @@ strum.workspace = true
 uuid.workspace = true
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
+gpui_render.workspace = true
 cbindgen = { version = "0.28.0", default-features = false }
 gpui.workspace = true
 

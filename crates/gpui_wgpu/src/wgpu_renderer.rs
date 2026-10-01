@@ -71,15 +71,7 @@ struct FeedbackTextures {
     pending: Cell<Option<FeedbackSnapshot>>,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct GlobalParams {
-    viewport_size: [f32; 2],
-    premultiplied_alpha: u32,
-    pad: u32,
-    viewport_origin: [f32; 2],
-    origin_pad: [u32; 2],
-}
+type GlobalParams = gpui_render::QuadGlobals;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -1635,10 +1627,10 @@ impl WgpuRenderer {
         }
         let dual_source_blending = dual_source_blending && device_has_feature;
 
-        let base_shader_source = include_str!("shaders.wgsl");
+        let base_shader_source = gpui_render::compose_shader(include_str!("shaders.wgsl"));
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_shaders"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(base_shader_source)),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(&base_shader_source)),
         });
         let backdrop_shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gpui_backdrop_blur_shader"),

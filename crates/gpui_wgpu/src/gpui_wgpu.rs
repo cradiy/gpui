@@ -80,8 +80,10 @@ mod tests {
 
     #[test]
     fn main_shader_is_valid_wgsl() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shaders.wgsl"))
-            .expect("main shader should parse");
+        let module = wgpu::naga::front::wgsl::parse_str(&gpui_render::compose_shader(
+            include_str!("shaders.wgsl"),
+        ))
+        .expect("main shader should parse");
         wgpu::naga::valid::Validator::new(
             wgpu::naga::valid::ValidationFlags::all(),
             wgpu::naga::valid::Capabilities::all(),
@@ -422,8 +424,10 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
 
     #[test]
     fn shader_struct_layouts_match_rust() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shaders.wgsl"))
-            .expect("main shader should parse");
+        let module = wgpu::naga::front::wgsl::parse_str(&gpui_render::compose_shader(
+            include_str!("shaders.wgsl"),
+        ))
+        .expect("main shader should parse");
 
         assert_eq!(
             shader_struct_span(&module, "Background") as usize,

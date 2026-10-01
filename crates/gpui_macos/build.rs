@@ -21,7 +21,10 @@ mod macos_build {
         #[cfg(feature = "runtime_shaders")]
         emit_stitched_shaders(&header_path);
         #[cfg(not(feature = "runtime_shaders"))]
-        compile_metal_shaders(&header_path);
+        {
+            compile_metal_shaders(&header_path);
+            compile_shared_quads();
+        }
     }
 
     fn generate_shader_bindings() -> PathBuf {
@@ -51,7 +54,6 @@ mod macos_build {
             "PathRasterizationVertex".into(),
             "ShadowInputIndex".into(),
             "Shadow".into(),
-            "QuadInputIndex".into(),
             "Underline".into(),
             "UnderlineInputIndex".into(),
             "Quad".into(),
@@ -119,6 +121,45 @@ mod macos_build {
         let shader_path = PathBuf::from(shader_source_path);
         stitch_header(header_path, &shader_path).unwrap();
         println!("cargo:rerun-if-changed={}", &shader_source_path);
+    }
+
+    #[cfg(not(feature = "runtime_shaders"))]
+    fn compile_shared_quads() {
+        let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+        let source = out.join("quads.metal");
+        let air = out.join("quads.air");
+        std::fs::write(&source, gpui_render::QUAD_MSL).unwrap();
+        let output = std::process::Command::new("xcrun")
+            .args([
+                "-sdk",
+                "macosx",
+                "metal",
+                "-gline-tables-only",
+                "-mmacosx-version-min=10.15.7",
+                "-c",
+            ])
+            .arg(source)
+            .arg("-o")
+            .arg(&air)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = std::process::Command::new("xcrun")
+            .args(["-sdk", "macosx", "metallib"])
+            .arg(air)
+            .arg("-o")
+            .arg(out.join("quads.metallib"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[cfg(not(feature = "runtime_shaders"))]

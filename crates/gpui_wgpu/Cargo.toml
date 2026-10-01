@@ -17,6 +17,7 @@ font-kit = ["dep:font-kit"]
 
 [dependencies]
 gpui.workspace = true
+gpui_render.workspace = true
 anyhow.workspace = true
 bitflags.workspace = true
 bytemuck = "1"

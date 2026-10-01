@@ -2837,6 +2837,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui_effects",
+ "gpui_render",
  "gpui_util",
  "gpui_wgpu",
  "image",
@@ -2939,6 +2940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_render"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "gpui",
+ "naga",
+]
+
+[[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
 dependencies = [
@@ -3019,6 +3029,7 @@ dependencies = [
  "foreign-types",
  "gpui",
  "gpui_effects",
+ "gpui_render",
  "gpui_util",
  "half",
  "itertools 0.14.0",
@@ -3056,6 +3067,7 @@ dependencies = [
  "gpui",
  "gpui-scap",
  "gpui_effects",
+ "gpui_render",
  "gpui_util",
  "gpui_wgpu",
  "image",

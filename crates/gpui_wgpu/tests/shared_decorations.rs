@@ -6,6 +6,17 @@ use gpui::{
 };
 use gpui_wgpu::WgpuOffscreenRenderer;
 
+const OUTPUT_SRGB: bool = true;
+#[path = "support/shadows.rs"]
+mod shadows;
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn normalized_shadows_preserve_empty_holes_and_edge_falloff() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(160), DevicePixels(160)))?;
+    shadows::check(&mut renderer)
+}
+
 fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
     Bounds::new(
         point(ScaledPixels(x), ScaledPixels(y)),

@@ -79,11 +79,22 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
         let step = (end - start) / 4.0;
         var y = start + step * 0.5;
         alpha = 0.0;
+        var sampled_weight = 0.0;
         for (var i = 0; i < 4; i += 1) {
             let blur = blur_along_x(center_to_point.x, center_to_point.y - y,
                 shadow.blur_radius, corner_radius, half_size);
-            alpha +=  blur * gaussian(y, shadow.blur_radius) * step;
+            let weight = gaussian(y, shadow.blur_radius) * step;
+            alpha += blur * weight;
+            sampled_weight += weight;
             y += step;
+        }
+        // Correct the midpoint quadrature's weight using the Gaussian mass of
+        // the rectangle's vertical interval. Normalizing only by sampled_weight
+        // would erase vertical falloff and overfill narrow rectangles.
+        if (sampled_weight > 0.0) {
+            let integral = erf(vec2<f32>(low, high) * (sqrt(0.5) / shadow.blur_radius));
+            let coverage = 0.5 * (integral.y - integral.x);
+            alpha = saturate(alpha * coverage / sampled_weight);
         }
     }
 

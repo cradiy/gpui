@@ -94,8 +94,14 @@ fn shared_quad_pixels_preserve_fills_clipping_and_rounded_borders() -> anyhow::R
     let pixels = renderer.render_rgba(&scene())?;
     let pixel = |x: usize, y: usize| &pixels[(y * 256 + x) * 4..(y * 256 + x) * 4 + 4];
     assert_eq!(pixel(16, 16), &[255, 0, 0, 255]);
-    assert!(pixel(76, 32)[0] > 240 && pixel(76, 32)[2] < 20);
-    assert!(pixel(108, 32)[2] > 240 && pixel(108, 32)[0] < 20);
+    for (x, expected) in [
+        (76, [1., 0., 0.]),
+        (95, [1., 0., 0.]),
+        (96, [0., 0., 1.]),
+        (108, [0., 0., 1.]),
+    ] {
+        assert_gradient_plateau(pixel(x, 32), expected);
+    }
     for index in 0..12 {
         let x = index % 4 * 64;
         let y = index / 4 * 64;
@@ -111,4 +117,26 @@ fn shared_quad_pixels_preserve_fills_clipping_and_rounded_borders() -> anyhow::R
         }
     }
     Ok(())
+}
+
+fn assert_gradient_plateau(pixel: &[u8], linear_rgb: [f32; 3]) {
+    // The shader adds linear RGB and alpha noise before premultiplied blending.
+    // Encode those bounds for the sRGB attachment and allow one readback LSB.
+    let encode = |linear: f32| {
+        let linear = linear.clamp(0., 1.);
+        let srgb = if linear <= 0.0031308 {
+            linear * 12.92
+        } else {
+            1.055 * linear.powf(1. / 2.4) - 0.055
+        };
+        srgb * 255.
+    };
+    for (channel, expected) in linear_rgb.into_iter().enumerate() {
+        let low = encode((expected - 2. / 255.).max(0.) * (1. - 3. / 255.)) - 1.;
+        let high = encode((expected + 2. / 255.) * (1. + 3. / 255.)) + 1.;
+        assert!(
+            (low..=high).contains(&(pixel[channel] as f32)),
+            "gradient plateau {linear_rgb:?}, channel {channel}: {pixel:?}, expected {low}..={high}"
+        );
+    }
 }

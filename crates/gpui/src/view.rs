@@ -279,8 +279,9 @@ impl<V: View> ViewElement<V> {
     ///
     /// Bounds, clipping, density, hover changes, notifications and refreshes still
     /// invalidate the cache.
-    /// Views with deferred overlays, tooltips or nested input scopes redraw on matrix changes,
-    /// as do views inspected through the Inspector or automation system.
+    /// Ordinary deferred elements, tooltips and nested input scopes require redraws
+    /// on matrix changes, as does Inspector or automation inspection.
+    /// [`crate::deferred_overlay`] resolves its contents independently each frame.
     /// This has no effect on views without caching enabled.
     pub fn cache_across_transforms(mut self) -> Self {
         self.cache_across_transforms = true;

@@ -1,20 +1,43 @@
 use crate::{
     AnyElement, App, Bounds, Element, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
-    Pixels, Window,
+    Pixels, Position, Style, Window,
 };
+use std::rc::Rc;
+
+pub(crate) type OverlayRenderer = Rc<dyn Fn(&mut Window, &mut App) -> Option<AnyElement>>;
 
 /// Builds a `Deferred` element, which delays the layout and paint of its child.
 pub fn deferred(child: impl IntoElement) -> Deferred {
     Deferred {
         child: Some(child.into_any_element()),
+        overlay: None,
         priority: 0,
     }
 }
 
-/// An element which delays the painting of its child until after all of
-/// its ancestors, while keeping its layout as part of the current element tree.
+/// Builds a window-space overlay after ordinary elements have prepainted.
+///
+/// The renderer runs on every drawn frame, including when its containing view is
+/// cached. It can query [`crate::ElementBounds`] to position the overlay using
+/// current geometry. Return `None` when the anchor is unavailable. The overlay
+/// does not contribute to its parent's layout and retains its parent's focus and
+/// event ancestry. Its contents receive input in window coordinates.
+pub fn deferred_overlay(
+    render: impl Fn(&mut Window, &mut App) -> Option<AnyElement> + 'static,
+) -> Deferred {
+    Deferred {
+        child: None,
+        overlay: Some(Rc::new(render)),
+        priority: 0,
+    }
+}
+
+/// An element that schedules content after its ancestors.
+/// [`deferred`] includes the child in the parent layout; [`deferred_overlay`]
+/// constructs an independent window-space root during prepaint.
 pub struct Deferred {
     child: Option<AnyElement>,
+    overlay: Option<OverlayRenderer>,
     priority: usize,
 }
 
@@ -47,7 +70,18 @@ impl Element for Deferred {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
-        let layout_id = self.child.as_mut().unwrap().request_layout(window, cx);
+        let layout_id = if let Some(child) = self.child.as_mut() {
+            child.request_layout(window, cx)
+        } else {
+            window.request_layout(
+                Style {
+                    position: Position::Absolute,
+                    ..Default::default()
+                },
+                [],
+                cx,
+            )
+        };
         (layout_id, ())
     }
 
@@ -60,9 +94,13 @@ impl Element for Deferred {
         window: &mut Window,
         _cx: &mut App,
     ) {
-        let child = self.child.take().unwrap();
         let element_offset = window.element_offset();
-        window.defer_draw(child, element_offset, self.priority, None)
+        if let Some(render) = self.overlay.take() {
+            window.defer_overlay(render, self.priority);
+        } else {
+            let child = self.child.take().unwrap();
+            window.defer_draw(child, element_offset, self.priority, None);
+        }
     }
 
     fn paint(

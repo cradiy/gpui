@@ -36,6 +36,7 @@ pub(crate) struct DeferredDraw {
     pub(super) content_mask: Option<ContentMask<Pixels>>,
     pub(super) rem_size: Pixels,
     pub(super) element: Option<AnyElement>,
+    overlay: Option<crate::elements::OverlayRenderer>,
     pub(super) absolute_offset: Point<Pixels>,
     pub(super) anchor_mapping: crate::PointerMapping,
     pub(super) prepaint_range: Range<PrepaintStateIndex>,
@@ -736,10 +737,25 @@ impl Window {
                 let absolute_offset = deferred_draw.absolute_offset;
                 let reused_range = deferred_draw.prepaint_range.clone();
                 let anchor_mapping = deferred_draw.anchor_mapping.clone();
+                let overlay = deferred_draw.overlay.clone();
                 let prepaint_start = self.prepaint_index();
                 let previous_anchor_mapping =
                     mem::replace(&mut self.deferred_anchor_mapping, anchor_mapping);
-                if let Some(element) = element.as_mut() {
+                if let Some(render) = overlay {
+                    element = self.with_rendered_view(current_view, |window| {
+                        window.with_rem_size(Some(rem_size), |window| {
+                            render(window, cx).map(|mut element| {
+                                element.prepaint_as_root(
+                                    Point::default(),
+                                    window.viewport_size().into(),
+                                    window,
+                                    cx,
+                                );
+                                element
+                            })
+                        })
+                    });
+                } else if let Some(element) = element.as_mut() {
                     self.with_rendered_view(current_view, |window| {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
@@ -796,7 +812,7 @@ impl Window {
                         });
                     })
                 })
-            } else {
+            } else if deferred_draw.overlay.is_none() {
                 self.reuse_paint(deferred_draw.paint_range.clone());
             }
             let paint_end = self.paint_index();
@@ -902,6 +918,7 @@ impl Window {
                     element: None,
                     absolute_offset: deferred_draw.absolute_offset,
                     anchor_mapping: deferred_draw.anchor_mapping.clone(),
+                    overlay: deferred_draw.overlay.clone(),
                     prepaint_range: deferred_draw.prepaint_range.clone(),
                     paint_range: deferred_draw.paint_range.clone(),
                 }),
@@ -914,11 +931,14 @@ impl Window {
         paint: &Range<PaintIndex>,
         mapping: &crate::PointerMapping,
     ) -> bool {
-        // Deferred elements keep already-positioned paint ranges. Tooltips may
-        // also retain displayed coordinates. Rebuild these instead of rebasing.
+        // Only overlays with renderers resolve fresh window-space geometry.
+        // Ordinary deferred elements and tooltips retain positioned paint data.
         let previous_position = mapping.hit_position(self.mouse_position);
         let next_position = self.pointer_mapping.hit_position(self.mouse_position);
-        prepaint.start.deferred_draws_index == prepaint.end.deferred_draws_index
+        self.rendered_frame.deferred_draws
+            [prepaint.start.deferred_draws_index..prepaint.end.deferred_draws_index]
+            .iter()
+            .all(|draw| draw.overlay.is_some() && draw.anchor_mapping == *mapping)
             && self.rendered_frame.tracked_bounds.can_remap(
                 prepaint.start.tracked_bounds_index..prepaint.end.tracked_bounds_index,
                 mapping,
@@ -953,6 +973,11 @@ impl Window {
     }
 
     pub(crate) fn remap_reused_prepaint(&mut self, range: &Range<PrepaintStateIndex>) {
+        for draw in &mut self.next_frame.deferred_draws
+            [range.start.deferred_draws_index..range.end.deferred_draws_index]
+        {
+            draw.anchor_mapping = self.pointer_mapping.clone();
+        }
         self.next_frame.tracked_bounds.remap(
             range.start.tracked_bounds_index..range.end.tracked_bounds_index,
             &self.pointer_mapping,
@@ -1082,7 +1107,35 @@ impl Window {
             rem_size: self.rem_size(),
             priority,
             element: Some(element),
+            overlay: None,
             absolute_offset,
+            anchor_mapping: if self.pointer_mapping.is_identity() {
+                self.deferred_anchor_mapping.clone()
+            } else {
+                self.pointer_mapping.clone()
+            },
+            prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
+            paint_range: PaintIndex::default()..PaintIndex::default(),
+        });
+    }
+
+    pub(crate) fn defer_overlay(
+        &mut self,
+        render: crate::elements::OverlayRenderer,
+        priority: usize,
+    ) {
+        self.invalidator.debug_assert_prepaint();
+        self.next_frame.deferred_draws.push(DeferredDraw {
+            current_view: self.current_view(),
+            parent_node: self.next_frame.dispatch_tree.active_node_id().unwrap(),
+            element_id_stack: self.element_id_stack.clone(),
+            text_style_stack: self.text_style_stack.clone(),
+            content_mask: None,
+            rem_size: self.rem_size(),
+            priority,
+            element: None,
+            overlay: Some(render),
+            absolute_offset: Point::default(),
             anchor_mapping: if self.pointer_mapping.is_identity() {
                 self.deferred_anchor_mapping.clone()
             } else {

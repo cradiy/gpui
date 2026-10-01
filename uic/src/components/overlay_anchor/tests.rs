@@ -15,6 +15,7 @@ use gpui_effects::transform_group;
 #[derive(Clone, Copy)]
 enum Kind {
     Dropdown,
+    InlineDropdown,
     Popover,
     Menu,
     Pointer,
@@ -51,24 +52,30 @@ impl Render for Controls {
         let popover_bounds = popup.clone();
         let button = || div().w(px(100.)).h(px(30.));
         let surface = move || {
+            let clicks = clicks.clone();
             div()
                 .relative()
                 .size_full()
                 .on_mouse_down(MouseButton::Left, move |_, _, _| {
                     clicks.set(clicks.get() + 1)
                 })
-                .child(measure(popup))
+                .child(measure(popup.clone()))
         };
         let trigger = match self.kind {
-            Kind::Dropdown => dropdown(&self.dropdown)
-                .min_w(px(0.))
-                .w(px(120.))
-                .h(px(60.))
-                .p_0()
-                .border_0()
-                .trigger(button())
-                .menu(surface())
-                .into_any_element(),
+            Kind::Dropdown | Kind::InlineDropdown => {
+                let dropdown = dropdown(&self.dropdown)
+                    .min_w(px(0.))
+                    .w(px(120.))
+                    .h(px(60.))
+                    .p_0()
+                    .border_0()
+                    .trigger(button());
+                if matches!(self.kind, Kind::InlineDropdown) {
+                    dropdown.menu(surface()).into_any_element()
+                } else {
+                    dropdown.menu_with(move |_, _| surface()).into_any_element()
+                }
+            }
             Kind::Popover => Popover::new(&self.popover)
                 .min_w(px(0.))
                 .w(px(120.))
@@ -102,6 +109,64 @@ impl Render for Controls {
                 .w(px(100.))
                 .child(trigger),
         )
+    }
+}
+
+#[gpui::test]
+fn tracked_dropdown_and_popover_zoom_reuses_trigger_content(cx: &mut TestAppContext) {
+    for kind in [Kind::Dropdown, Kind::Popover] {
+        let (handle, mut visual, _, geometry) = open(cx, kind);
+        let previous_focus = handle
+            .update(&mut visual.cx, |view, window, cx| {
+                let focus = view.outside_focus.clone();
+                focus.focus(window, cx);
+                let controls = view.controls.read(cx);
+                let dropdown = controls.dropdown.clone();
+                let popover = controls.popover.clone();
+                match kind {
+                    Kind::Dropdown => dropdown.update(cx, |state, cx| state.open(window, cx)),
+                    Kind::Popover => popover.update(cx, |state, cx| state.open(window, cx)),
+                    _ => unreachable!(),
+                }
+                focus
+            })
+            .unwrap();
+        visual.simulate_mouse_move(point(px(740.), px(550.)), None, Modifiers::default());
+        draw(&mut visual);
+        let initial_renders = geometry.renders.get();
+        let initial_size = geometry.popup.get().unwrap().size;
+        for step in 0..60 {
+            let scale = 1.2 + step as f32 * 0.01;
+            handle
+                .update(&mut visual.cx, |view, _, cx| {
+                    view.matrix = matrix(scale, 20., 30.);
+                    cx.notify();
+                })
+                .unwrap();
+            draw(&mut visual);
+            let bounds = geometry.popup.get().unwrap();
+            assert!((bounds.left() - px(30. * scale + 20.)).abs() <= px(1.));
+            assert!((bounds.top() - px(70. * scale + 36.)).abs() <= px(1.));
+            assert_eq!(bounds.size, initial_size);
+        }
+        assert_eq!(geometry.renders.get() - initial_renders, 0);
+        visual.simulate_keystrokes("escape");
+        draw(&mut visual);
+        assert!(!is_open(handle, &mut visual));
+        visual.update(|window, _| assert!(previous_focus.is_focused(window)));
+        handle
+            .update(&mut visual.cx, |view, _, cx| {
+                view.matrix = matrix(1.5, 70., 50.);
+                cx.notify();
+            })
+            .unwrap();
+        draw(&mut visual);
+        click(&mut visual, point(px(190.), px(132.5)));
+        assert!(is_open(handle, &mut visual));
+        assert_eq!(
+            geometry.popup.get().unwrap().origin,
+            point(px(115.), px(161.))
+        );
     }
 }
 
@@ -177,6 +242,7 @@ fn menu(geometry: Geometry) -> ContextMenu {
 
 struct Probe {
     controls: Entity<Controls>,
+    outside_focus: gpui::FocusHandle,
     matrix: TransformationMatrix,
 }
 
@@ -184,6 +250,12 @@ impl Render for Probe {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
+            .child(
+                div()
+                    .id("outside-focus")
+                    .track_focus(&self.outside_focus)
+                    .absolute(),
+            )
             .child(transform_group(
                 self.controls
                     .clone()
@@ -217,6 +289,7 @@ fn open(
     let geometry = Geometry::default();
     let geometry_for_view = geometry.clone();
     let handle = cx.open_window(size(px(800.), px(600.)), move |window, cx| Probe {
+        outside_focus: cx.focus_handle(),
         controls: cx.new(|cx| Controls {
             kind,
             dropdown: cx.new(|cx| DropdownState::new(window, cx)),
@@ -237,7 +310,7 @@ fn is_open(handle: gpui::WindowHandle<Probe>, visual: &mut VisualTestContext) ->
         .update(&mut visual.cx, |view, _, cx| {
             let controls = view.controls.read(cx);
             match controls.kind {
-                Kind::Dropdown => controls.dropdown.read(cx).is_open(),
+                Kind::Dropdown | Kind::InlineDropdown => controls.dropdown.read(cx).is_open(),
                 Kind::Popover => controls.popover.read(cx).is_open(),
                 _ => context_menu::is_open(cx),
             }
@@ -257,7 +330,12 @@ fn click(cx: &mut VisualTestContext, point: Point<gpui::Pixels>) {
 fn transformed_overlays_follow_current_frame_and_keep_normal_size_and_hits(
     cx: &mut TestAppContext,
 ) {
-    for kind in [Kind::Dropdown, Kind::Popover, Kind::Menu] {
+    for kind in [
+        Kind::Dropdown,
+        Kind::InlineDropdown,
+        Kind::Popover,
+        Kind::Menu,
+    ] {
         let (handle, mut visual, clicks, geometry) = open(cx, kind);
         click(&mut visual, point(px(180.), px(140.)));
         assert!(is_open(handle, &mut visual));
@@ -343,7 +421,12 @@ fn tracked_context_submenu_follows_its_current_parent_row(cx: &mut TestAppContex
 
 #[gpui::test]
 fn rotated_triggers_anchor_to_displayed_edges_with_unscaled_gap(cx: &mut TestAppContext) {
-    for kind in [Kind::Dropdown, Kind::Popover, Kind::Menu] {
+    for kind in [
+        Kind::Dropdown,
+        Kind::InlineDropdown,
+        Kind::Popover,
+        Kind::Menu,
+    ] {
         let (handle, mut visual, _, geometry) = open(cx, kind);
         click(&mut visual, point(px(180.), px(140.)));
         handle
@@ -365,7 +448,12 @@ fn rotated_triggers_anchor_to_displayed_edges_with_unscaled_gap(cx: &mut TestApp
 
 #[gpui::test]
 fn overlay_collision_fits_after_mapping_to_window(cx: &mut TestAppContext) {
-    for kind in [Kind::Dropdown, Kind::Popover, Kind::Menu] {
+    for kind in [
+        Kind::Dropdown,
+        Kind::InlineDropdown,
+        Kind::Popover,
+        Kind::Menu,
+    ] {
         let (handle, mut visual, clicks, geometry) = open(cx, kind);
         visual.simulate_resize(size(px(400.), px(300.)));
         draw(&mut visual);

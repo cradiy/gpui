@@ -1,18 +1,24 @@
 use gpui::{
     Anchor, AnyElement, App, CursorStyle, Entity, Focusable, IntoElement, MouseButton, Pixels,
-    Refineable as _, RenderOnce, StyleRefinement, Styled, Window, anchored, deferred, div, point,
-    prelude::*, px,
+    Refineable as _, RenderOnce, StyleRefinement, Styled, Window, anchored, deferred,
+    deferred_overlay, div, point, prelude::*, px,
 };
 
 use crate::components::overlay_anchor::{TriggerAnchor, resolve_overlay};
 
 use super::{DropdownPlacement, DropdownState};
+use std::rc::Rc;
+
+enum MenuContent {
+    Element(AnyElement),
+    Renderer(Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>),
+}
 
 #[derive(IntoElement)]
 pub struct Dropdown {
     state: Entity<DropdownState>,
     trigger: Option<AnyElement>,
-    menu: Option<AnyElement>,
+    menu: Option<MenuContent>,
     placement: DropdownPlacement,
     menu_gap: Pixels,
     priority: usize,
@@ -48,8 +54,23 @@ impl Dropdown {
         self
     }
 
+    /// Sets a menu element constructed with the containing view.
+    /// Use [`Self::menu_with`] for an independently rendered menu.
     pub fn menu(mut self, menu: impl IntoElement) -> Self {
-        self.menu = Some(menu.into_any_element());
+        self.menu = Some(MenuContent::Element(menu.into_any_element()));
+        self
+    }
+
+    /// Builds the menu independently of its trigger on each drawn frame while open.
+    /// Use this with cached, transformed views so repositioning the menu does not
+    /// require rebuilding the containing view. Read changing state in the renderer.
+    pub fn menu_with<E: IntoElement>(
+        mut self,
+        render: impl Fn(&mut Window, &mut App) -> E + 'static,
+    ) -> Self {
+        self.menu = Some(MenuContent::Renderer(Rc::new(move |window, cx| {
+            render(window, cx).into_any_element()
+        })));
         self
     }
 
@@ -81,24 +102,24 @@ impl RenderOnce for Dropdown {
         let trigger_bounds = TriggerAnchor::default();
 
         let menu = open.then(|| {
-            let outside_state = self.state.clone();
-            let outside_trigger = trigger_bounds.clone();
-            let mut positioned = div()
-                .id(("dropdown-menu", state_id))
-                .debug_selector(|| "uic-dropdown-menu".to_string())
-                .overflow_y_scroll()
-                .occlude()
-                .on_mouse_down_out(move |event, window, cx| {
-                    if !outside_trigger.contains(event.position, window) {
-                        outside_state.update(cx, |state, cx| state.close(window, cx));
-                    }
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .children(self.menu);
-            positioned.style().refine(&menu_style);
-            let trigger = trigger_bounds.clone();
-            deferred(resolve_overlay(move |window, _| {
-                let bounds = trigger.bounds(window)?;
+            let trigger_bounds = trigger_bounds.clone();
+            let render_menu = move |menu: Option<AnyElement>, window: &mut Window| {
+                let bounds = trigger_bounds.bounds(window)?;
+                let outside_state = self.state.clone();
+                let outside_trigger = trigger_bounds.clone();
+                let mut positioned = div()
+                    .id(("dropdown-menu", state_id))
+                    .debug_selector(|| "uic-dropdown-menu".to_string())
+                    .overflow_y_scroll()
+                    .occlude()
+                    .on_mouse_down_out(move |event, window, cx| {
+                        if !outside_trigger.contains(event.position, window) {
+                            outside_state.update(cx, |state, cx| state.close(window, cx));
+                        }
+                    })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .children(menu);
+                positioned.style().refine(&menu_style);
                 let (position, anchor) = match self.placement {
                     DropdownPlacement::BottomStart => (
                         point(bounds.left(), bounds.bottom() + menu_gap),
@@ -124,7 +145,17 @@ impl RenderOnce for Dropdown {
                         .child(positioned)
                         .into_any_element(),
                 )
-            }))
+            };
+            match self.menu {
+                Some(MenuContent::Renderer(render)) => deferred_overlay(move |window, cx| {
+                    let menu = render(window, cx);
+                    render_menu(Some(menu), window)
+                }),
+                Some(MenuContent::Element(menu)) => deferred(resolve_overlay(move |window, _| {
+                    render_menu(Some(menu), window)
+                })),
+                None => deferred(resolve_overlay(move |window, _| render_menu(None, window))),
+            }
             .with_priority(self.priority)
         });
 

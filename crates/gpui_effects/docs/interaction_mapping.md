@@ -146,9 +146,11 @@ coordinates. Render, layout and paint must not derive content from mapped pointe
 positions or retain coordinate mappings. Notify the entity when its content changes.
 
 Layout bounds, clipping, display or capture density, hover changes and explicit refreshes still
-invalidate the view cache. A changed matrix also redraws views containing deferred
-overlays, tooltips or nested input scopes. Inspector and accessibility rendering bypass
-the view cache. Arbitrary mapping callbacks are not eligible for this option.
+invalidate the view cache. A changed matrix also redraws views containing ordinary
+deferred elements, tooltips or nested input scopes. `gpui::deferred_overlay` resolves
+its window-space contents each frame without invalidating the containing view.
+Inspector and automation inspection bypass the view cache. Arbitrary mapping
+callbacks are not eligible for this option.
 
 Run `cargo run -p gpui_effects --example transform_group` to exercise scaling, rotation,
 panning, clicks and popup anchors.

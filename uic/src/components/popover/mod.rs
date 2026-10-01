@@ -1,11 +1,11 @@
 use std::rc::Rc;
 
-use super::overlay_anchor::{TriggerAnchor, resolve_overlay};
+use super::overlay_anchor::TriggerAnchor;
 
 use gpui::{
     Anchor, AnyElement, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, MouseButton, Pixels, Point, RenderOnce, Role, SharedString, StyleRefinement,
-    Styled, Subscription, Window, anchored, deferred, div, point, prelude::*, px,
+    Styled, Subscription, Window, anchored, deferred_overlay, div, point, prelude::*, px,
 };
 
 type ContentRenderer = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
@@ -186,6 +186,8 @@ impl Popover {
         self
     }
 
+    /// Builds the open surface on each drawn frame, independently of the trigger.
+    /// Read changing content state inside the renderer.
     pub fn content<E>(mut self, render: impl Fn(&mut Window, &mut App) -> E + 'static) -> Self
     where
         E: IntoElement,
@@ -243,7 +245,7 @@ impl Popover {
 }
 
 impl RenderOnce for Popover {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state_id = self.state.entity_id();
         let (open, focus_handle, trigger_bounds) = {
             let state = self.state.read(cx);
@@ -283,18 +285,19 @@ impl RenderOnce for Popover {
         let overlay = if open {
             match self.content {
                 Some(render) => {
-                    let content = render(window, cx);
-                    let mut surface = div()
-                        .id(("uic-popover-surface", state_id))
-                        .debug_selector(|| "uic-popover-surface".to_string())
-                        .occlude()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(content);
-                    surface.style().refine(&self.style);
-
-                    let outside_state = self.state.clone();
-                    let overlay = resolve_overlay(move |window, _| {
+                    let state = self.state.clone();
+                    let overlay = deferred_overlay(move |window, cx| {
                         let bounds = trigger_bounds.bounds(window)?;
+                        let content = render(window, cx);
+                        let mut surface = div()
+                            .id(("uic-popover-surface", state_id))
+                            .debug_selector(|| "uic-popover-surface".to_string())
+                            .occlude()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(content);
+                        surface.style().refine(&self.style);
+
+                        let outside_state = state.clone();
                         let (position, anchor) = placement(bounds, self.placement, self.gap);
                         let positioned =
                             anchored().position(position).anchor(anchor).child(surface);
@@ -329,7 +332,7 @@ impl RenderOnce for Popover {
                         }
                         Some(layer.into_any_element())
                     });
-                    Some(deferred(overlay).with_priority(self.priority))
+                    Some(overlay.with_priority(self.priority))
                 }
                 _ => None,
             }

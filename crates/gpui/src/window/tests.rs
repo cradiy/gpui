@@ -248,6 +248,7 @@ mod affine_cache;
 mod affine_deferred;
 mod affine_ime;
 mod cached_a11y;
+mod deferred_overlay;
 mod element_bounds;
 mod prepaint_retry;
 mod raster_capture;

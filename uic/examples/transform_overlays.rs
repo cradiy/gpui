@@ -16,6 +16,10 @@ use context_menu_style::MenuMaterial;
 
 struct Demo {
     zoom: f32,
+    controls: Entity<Controls>,
+}
+
+struct Controls {
     dropdown: Entity<DropdownState>,
     popover: Entity<PopoverState>,
 }
@@ -44,9 +48,9 @@ fn menu() -> ContextMenu {
         })
 }
 
-impl Render for Demo {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let content = div()
+impl Render for Controls {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
             .relative()
             .w(px(780.))
             .h(px(320.))
@@ -64,7 +68,7 @@ impl Render for Demo {
                         .text_size(px(13.))
                         .text_color(rgb(0xf1f5f9))
                         .trigger(button("Dropdown"))
-                        .menu(
+                        .menu_with(|_, _| {
                             div()
                                 .flex()
                                 .flex_col()
@@ -75,8 +79,8 @@ impl Render for Demo {
                                         .py_2()
                                         .text_color(rgb(0x93a5b8))
                                         .child("Shared with me"),
-                                ),
-                        ),
+                                )
+                        }),
                 ),
             )
             .child(
@@ -111,7 +115,17 @@ impl Render for Demo {
                     .left(px(256.))
                     .top(px(36.))
                     .child(ContextMenuTrigger::new(button("Menu"), |_, _| menu()).id("menu")),
-            );
+            )
+    }
+}
+
+impl Render for Demo {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let content = self
+            .controls
+            .clone()
+            .cached(div().w(px(780.)).h(px(320.)).style().clone())
+            .cache_across_transforms();
         div()
             .size_full()
             .p_6()
@@ -190,8 +204,10 @@ fn main() {
             |window, cx| {
                 cx.new(|cx| Demo {
                     zoom: 1.5,
-                    dropdown: cx.new(|cx| DropdownState::new(window, cx)),
-                    popover: cx.new(|cx| PopoverState::new(window, cx)),
+                    controls: cx.new(|cx| Controls {
+                        dropdown: cx.new(|cx| DropdownState::new(window, cx)),
+                        popover: cx.new(|cx| PopoverState::new(window, cx)),
+                    }),
                 })
             },
         )

@@ -503,7 +503,11 @@ mod tests {
     fn test_device_and_queue() -> anyhow::Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
         block_on(async {
             let instance = crate::wgpu_context::create_instance(wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::all(),
+                backends: if cfg!(target_os = "windows") {
+                    wgpu::Backends::DX12
+                } else {
+                    wgpu::Backends::all()
+                },
                 flags: wgpu::InstanceFlags::default(),
                 backend_options: wgpu::BackendOptions::default(),
                 memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),

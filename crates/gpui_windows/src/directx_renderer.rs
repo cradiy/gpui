@@ -2010,7 +2010,7 @@ impl BackdropPipeline {
             );
             create_fragment_shader(device, bytes)?
         };
-        let (buffer, view) = create_raw_buffer::<BackdropInstance>(device, 1)?;
+        let (buffer, view) = create_raw_instance_buffer::<BackdropInstance>(device, 1)?;
         Ok(Self {
             vertex,
             fragment,
@@ -2033,7 +2033,8 @@ impl BackdropPipeline {
     ) -> Result<()> {
         if self.buffer_size < data.len() {
             self.buffer_size = data.len().next_power_of_two();
-            let (buffer, view) = create_raw_buffer::<BackdropInstance>(device, self.buffer_size)?;
+            let (buffer, view) =
+                create_raw_instance_buffer::<BackdropInstance>(device, self.buffer_size)?;
             self.buffer = buffer;
             self.view = view;
         }
@@ -2152,10 +2153,10 @@ fn create_effect_buffer(
     device: &ID3D11Device,
     instance_count: usize,
 ) -> Result<(ID3D11Buffer, Option<ID3D11ShaderResourceView>)> {
-    create_raw_buffer::<EffectInstance>(device, instance_count)
+    create_raw_instance_buffer::<EffectInstance>(device, instance_count)
 }
 
-fn create_raw_buffer<T>(
+fn create_raw_instance_buffer<T>(
     device: &ID3D11Device,
     instance_count: usize,
 ) -> Result<(ID3D11Buffer, Option<ID3D11ShaderResourceView>)> {

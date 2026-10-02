@@ -265,6 +265,46 @@ impl Render for GradientViewer {
                                 Animation::new(Duration::from_secs(3)).repeat(),
                                 |this, delta| this.border_gradient_phase(delta),
                             ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .rounded_xl()
+                            .border_4()
+                            .border_gradient(
+                                border_gradient([
+                                    border_color_stop(gpui::red(), 0.),
+                                    border_color_stop(gpui::red(), 0.5),
+                                    border_color_stop(gpui::blue(), 0.5),
+                                    border_color_stop(gpui::blue(), 1.),
+                                ])
+                                .color_space(color_space),
+                            )
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child("Hard edge"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .rounded_xl()
+                            .border_4()
+                            .border_gradient(
+                                border_gradient([
+                                    border_color_stop(gpui::red(), 0.),
+                                    border_color_stop(gpui::blue(), 0.5),
+                                ])
+                                .color_space(color_space)
+                                .gradient_midpoint(0, 0.25)
+                                .gradient_midpoint(1, 0.75),
+                            )
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child("Midpoints 25% / 75%"),
                     ),
             )
             .child(

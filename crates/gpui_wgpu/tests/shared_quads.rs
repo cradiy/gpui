@@ -7,6 +7,133 @@ use gpui::{
 };
 use gpui_wgpu::WgpuOffscreenRenderer;
 
+fn border_sample_scene(scene: &mut Scene, gradient: gpui::BorderGradient, position: f32) {
+    scene.clear();
+    scene.insert_primitive(Quad {
+        bounds: bounds(0., 0., 128., 128.),
+        content_mask: ContentMask {
+            bounds: bounds(0., 0., 128., 128.),
+        },
+        border_gradient: gradient.phase(position - 64.5 / 512.),
+        border_widths: Edges::all(ScaledPixels(8.)),
+        ..Default::default()
+    });
+    scene.finish();
+}
+
+fn assert_border_sample(pixels: &[u8], expected: [u8; 3]) {
+    let pixel = &pixels[(2 * 128 + 64) * 4..][..4];
+    for (actual, expected) in pixel[..3].iter().zip(expected) {
+        assert!(
+            actual.abs_diff(expected) <= 3,
+            "sample {pixel:?}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn border_hard_edges_choose_the_last_coincident_stop() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(128)))?;
+    let mut scene = Scene::default();
+    let red = |position| border_color_stop(rgb(0xff0000), position);
+    let blue = |position| border_color_stop(rgb(0x0000ff), position);
+    let epsilon = 1. / 65536.;
+    for (stops, edge) in [
+        (vec![red(0.), red(0.5), blue(0.5), blue(1.)], 0.5),
+        (
+            vec![red(0.5), border_color_stop(rgb(0x00ff00), 0.5), blue(0.5)],
+            0.5,
+        ),
+        (vec![red(0.5), blue(0.5)], 0.5),
+        (vec![red(0.), blue(0.)], 0.),
+        (vec![red(1.), blue(1.)], 0.),
+        (vec![red(0.), blue(0.), blue(0.5), red(0.5), red(1.)], 0.),
+    ] {
+        let gradient = border_gradient(stops).color_space(ColorSpace::Srgb);
+        for (position, expected) in [
+            (edge - epsilon, [255, 0, 0]),
+            (edge, [0, 0, 255]),
+            (edge + epsilon, [0, 0, 255]),
+        ] {
+            border_sample_scene(&mut scene, gradient.clone(), position);
+            assert_border_sample(&renderer.render_rgba(&scene)?, expected);
+        }
+    }
+    // A short but nonzero segment must not be widened by an epsilon clamp.
+    border_sample_scene(
+        &mut scene,
+        border_gradient([red(0.5), blue(0.5 + epsilon)]).color_space(ColorSpace::Srgb),
+        0.5 + epsilon * 0.5,
+    );
+    assert_border_sample(&renderer.render_rgba(&scene)?, [128, 0, 128]);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn border_midpoints_control_regular_and_wraparound_segments() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(128)))?;
+    let mut scene = Scene::default();
+    for color_space in [ColorSpace::Srgb, ColorSpace::Oklab] {
+        for count in [2, 3] {
+            let mut stops = vec![
+                border_color_stop(rgb(0), 0.),
+                border_color_stop(rgb(0xffffff), 0.5),
+            ];
+            if count == 3 {
+                stops.push(stops[1]);
+            }
+            let base = border_gradient(stops).color_space(color_space);
+            let hinted = base
+                .clone()
+                .gradient_midpoint(0, 0.25)
+                .gradient_midpoint(count - 1, 0.75);
+            let expected = if color_space == ColorSpace::Srgb {
+                128
+            } else {
+                99
+            };
+            for position in [0.125, 0.875] {
+                border_sample_scene(&mut scene, hinted.clone(), position);
+                let pixels = renderer.render_rgba(&scene)?;
+                assert_border_sample(&pixels, [expected; 3]);
+                border_sample_scene(&mut scene, base.clone(), position);
+                assert_ne!(pixels, renderer.render_rgba(&scene)?);
+            }
+            if count == 3 {
+                border_sample_scene(&mut scene, hinted.clone().gradient_midpoint(1, 0.1), 0.5);
+                assert_border_sample(&renderer.render_rgba(&scene)?, [255; 3]);
+            }
+        }
+    }
+    let original = border_gradient([
+        border_color_stop(rgb(0), 0.),
+        border_color_stop(rgb(0xffffff), 0.5),
+    ])
+    .color_space(ColorSpace::Srgb)
+    .gradient_midpoint(0, 0.25);
+    let mut edited = original.clone();
+    for frame in 0..8 {
+        let midpoint = if frame % 2 == 0 { 0.25 } else { 0.75 };
+        edited = edited.gradient_midpoint(0, midpoint);
+        border_sample_scene(&mut scene, edited.clone(), 0.125);
+        assert_border_sample(
+            &renderer.render_rgba(&scene)?,
+            [if midpoint == 0.25 { 128 } else { 9 }; 3],
+        );
+        if frame > 0 {
+            assert_eq!(
+                renderer.memory_stats().gradient_upload_bytes,
+                std::mem::size_of::<gpui::GpuGradientStop>() as u64
+            );
+        }
+    }
+    border_sample_scene(&mut scene, original, 0.125);
+    assert_border_sample(&renderer.render_rgba(&scene)?, [128; 3]);
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn long_border_edits_upload_one_stop_and_preserve_phase_and_snapshots() -> anyhow::Result<()> {

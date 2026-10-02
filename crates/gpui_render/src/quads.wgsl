@@ -154,9 +154,20 @@ fn sample_border_gradient(
         sample_position += 1.0;
     }
 
-    let delta = max(0.0001, right_position - left_position);
-    let t = clamp((sample_position - left_position) / delta, 0.0, 1.0);
-    var color = mix(border_stop_color(gradient, colors, left_ix), border_stop_color(gradient, colors, right_ix), t);
+    let delta = right_position - left_position;
+    var t = 1.0;
+    if (delta > 0.0) {
+        t = clamp((sample_position - left_position) / delta, 0.0, 1.0);
+    }
+    var midpoint = 0.5;
+    if (gradient.stop_offset != 0u) {
+        midpoint = gradient_stops[gradient.stop_offset - 1u + left_ix].midpoint;
+    }
+    var weight = t;
+    if (midpoint != 0.5 && t > 0.0 && t < 1.0) {
+        weight = pow(t, log(0.5) / log(midpoint));
+    }
+    var color = mix(border_stop_color(gradient, colors, left_ix), border_stop_color(gradient, colors, right_ix), weight);
     color.a *= gradient.opacity;
     return color;
 }

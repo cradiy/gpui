@@ -832,9 +832,11 @@ impl Default for BorderGradient {
 }
 
 /// Creates a gradient that follows a border's perimeter clockwise.
-/// At least two stops are required, with strictly increasing positions in
-/// `0.0..=1.0`. Two stops are stored inline; longer gradients share immutable
-/// storage when cloned. Total scene storage is limited by the GPU buffer capacity.
+/// At least two stops are required, with nondecreasing positions in `0.0..=1.0`.
+/// Equal positions create a hard color edge; the last stop at that position wins
+/// on the clockwise side. Two-stop gradients start inline; longer gradients or
+/// custom midpoints use immutable storage shared by clones. Total scene storage
+/// is limited by the GPU buffer capacity.
 pub fn border_gradient(stops: impl AsRef<[BorderColorStop]>) -> BorderGradient {
     let stops = stops.as_ref();
     assert!(
@@ -849,8 +851,8 @@ pub fn border_gradient(stops: impl AsRef<[BorderColorStop]>) -> BorderGradient {
     }
     for pair in stops.windows(2) {
         assert!(
-            pair[0].position < pair[1].position,
-            "border gradient stop positions must be strictly increasing"
+            pair[0].position <= pair[1].position,
+            "border gradient stop positions must be ordered"
         );
     }
 

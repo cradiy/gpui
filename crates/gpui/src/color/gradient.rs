@@ -37,6 +37,8 @@ impl ExtendedGradient {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub(super) struct ExtendedBorderGradient {
     stops: Vec<BorderColorStop>,
+    #[serde(default)]
+    midpoints: Vec<f32>,
     #[serde(skip, default = "next_gradient_revision")]
     revision: u64,
     #[serde(skip, default = "next_gradient_revision")]
@@ -45,7 +47,7 @@ pub(super) struct ExtendedBorderGradient {
 
 impl PartialEq for ExtendedBorderGradient {
     fn eq(&self, other: &Self) -> bool {
-        self.stops == other.stops
+        self.stops == other.stops && self.midpoints == other.midpoints
     }
 }
 
@@ -54,6 +56,7 @@ impl ExtendedBorderGradient {
         let revision = next_gradient_revision();
         Self {
             stops: stops.to_vec(),
+            midpoints: vec![0.5; stops.len()],
             revision,
             lineage: revision,
         }
@@ -61,6 +64,46 @@ impl ExtendedBorderGradient {
 }
 
 impl BorderGradient {
+    /// Returns the midpoint of the segment starting at `index`, if it exists.
+    /// The last segment wraps from the final stop to the first stop.
+    pub fn gradient_midpoint_at(&self, index: usize) -> Option<f32> {
+        if index >= self.stop_count as usize {
+            return None;
+        }
+        Some(
+            self.extended
+                .as_ref()
+                .and_then(|data| data.midpoints.get(index).copied())
+                .unwrap_or(0.5),
+        )
+    }
+
+    /// Sets the 50% color-mix position within the segment starting at `index`.
+    /// Values must be strictly between zero and one; 0.5 is linear interpolation.
+    /// The final index controls the wraparound segment. Zero-length segments
+    /// form hard edges and ignore their midpoint. Cloned gradients are unchanged.
+    pub fn gradient_midpoint(mut self, index: usize, midpoint: f32) -> Self {
+        assert!(
+            index < self.stop_count as usize,
+            "gradient segment index out of range"
+        );
+        assert!(
+            midpoint > 0. && midpoint < 1.,
+            "gradient midpoint must be between 0 and 1"
+        );
+        if self.gradient_midpoint_at(index) == Some(midpoint) {
+            return self;
+        }
+        if self.extended.is_none() {
+            self.extended = Some(Arc::new(ExtendedBorderGradient::new(self.gradient_stops())));
+        }
+        let data = Arc::make_mut(self.extended.as_mut().unwrap());
+        data.midpoints.resize(data.stops.len(), 0.5);
+        data.midpoints[index] = midpoint;
+        data.revision = next_gradient_revision();
+        self
+    }
+
     /// Returns the stops in ascending perimeter position order.
     pub fn gradient_stops(&self) -> &[BorderColorStop] {
         self.extended
@@ -71,8 +114,8 @@ impl BorderGradient {
     }
 
     /// Replaces one stop without modifying other gradients cloned from this one.
-    /// Positions must remain strictly increasing. Notify the owning view after
-    /// editing so its cached drawing is refreshed.
+    /// Positions must remain nondecreasing; equal positions form hard edges.
+    /// Notify the owning view after editing so its cached drawing is refreshed.
     pub fn set_gradient_stop(&mut self, index: usize, stop: BorderColorStop) {
         let stops = self.gradient_stops();
         assert!(index < stops.len(), "gradient stop index out of range");
@@ -81,12 +124,12 @@ impl BorderGradient {
             "border gradient stop position out of range"
         );
         assert!(
-            index == 0 || stops[index - 1].position < stop.position,
-            "border gradient stops must be strictly increasing"
+            index == 0 || stops[index - 1].position <= stop.position,
+            "border gradient stops must be ordered"
         );
         assert!(
-            index + 1 == stops.len() || stop.position < stops[index + 1].position,
-            "border gradient stops must be strictly increasing"
+            index + 1 == stops.len() || stop.position <= stops[index + 1].position,
+            "border gradient stops must be ordered"
         );
         if stops[index] == stop {
             return;
@@ -352,7 +395,7 @@ impl GradientBuffer {
                 GpuGradientStop {
                     color: [stop.color.h, stop.color.s, stop.color.l, stop.color.a],
                     position: stop.position,
-                    midpoint: 0.5,
+                    midpoint: data.midpoints.get(index).copied().unwrap_or(0.5),
                 }
             })
         });
@@ -398,6 +441,88 @@ impl GradientBuffer {
 mod tests {
     use super::*;
     use crate::{Bounds, ContentMask, Quad, ScaledPixels, Scene, point, size};
+
+    #[test]
+    fn border_hard_edge_edits_allow_coincident_stops_without_reordering() {
+        let stops = [
+            border_color_stop(rgb(0xff0000), 0.),
+            border_color_stop(rgb(0x00ff00), 0.5),
+            border_color_stop(rgb(0x0000ff), 0.5),
+        ];
+        let original = border_gradient(stops);
+        let mut edited = original.clone();
+        edited.set_gradient_stop(0, border_color_stop(rgb(0xffffff), 0.5));
+        assert_eq!(
+            edited
+                .gradient_stops()
+                .iter()
+                .map(|s| s.position)
+                .collect::<Vec<_>>(),
+            vec![0.5; 3]
+        );
+        assert_eq!(original.gradient_stops(), stops);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                edited.set_gradient_stop(1, border_color_stop(rgb(0), 0.4));
+            }))
+            .is_err()
+        );
+        assert_eq!(edited.gradient_stops()[1], stops[1]);
+    }
+
+    #[test]
+    fn border_midpoints_share_snapshots_and_update_only_the_edited_record() {
+        for count in [2, 32] {
+            let original = border_gradient(
+                (0..count)
+                    .map(|i| border_color_stop(rgb(0xff0000), i as f32 / count as f32))
+                    .collect::<Vec<_>>(),
+            );
+            let mut edited = original.clone().gradient_midpoint(count - 1, 0.25);
+            assert_eq!(original.gradient_midpoint_at(count - 1), Some(0.5));
+            assert_eq!(edited.gradient_midpoint_at(count - 1), Some(0.25));
+            assert_eq!(edited.gradient_midpoint_at(count), None);
+            let mut buffer = GradientBuffer::default();
+            let offset = buffer.border(&edited).stop_offset;
+            buffer.finish();
+            for frame in 0..10 {
+                let old = buffer.stops().to_vec();
+                let midpoint = if frame % 2 == 0 { 0.75 } else { 0.25 };
+                edited = edited.gradient_midpoint(count - 1, midpoint);
+                buffer.clear();
+                assert_eq!(buffer.border(&edited).stop_offset, offset);
+                buffer.finish();
+                assert_eq!(
+                    gradient_changed_range(&old, buffer.stops()),
+                    Some(count - 1..count)
+                );
+                assert_eq!(buffer.stops()[count - 1].midpoint, midpoint);
+                let noop = edited.clone().gradient_midpoint(count - 1, midpoint);
+                assert!(Arc::ptr_eq(
+                    edited.extended.as_ref().unwrap(),
+                    noop.extended.as_ref().unwrap()
+                ));
+            }
+            let restored: BorderGradient =
+                serde_json::from_str(&serde_json::to_string(&edited).unwrap()).unwrap();
+            assert_eq!(restored, edited);
+            let mut replay_buffer = GradientBuffer::default();
+            replay_buffer.border(&restored);
+            assert_eq!(replay_buffer.stops(), buffer.stops());
+        }
+        let inline = border_gradient([
+            border_color_stop(rgb(0), 0.),
+            border_color_stop(rgb(0xffffff), 0.5),
+        ])
+        .gradient_midpoint(0, 0.5);
+        assert_eq!(GradientBuffer::default().border(&inline).stop_offset, 0);
+        for midpoint in [0., 1., -0.1, f32::NAN, f32::INFINITY] {
+            assert!(
+                std::panic::catch_unwind(|| inline.clone().gradient_midpoint(0, midpoint)).is_err()
+            );
+        }
+        assert!(std::panic::catch_unwind(|| inline.clone().gradient_midpoint(2, 0.5)).is_err());
+    }
 
     #[test]
     fn border_stops_share_storage_and_support_unbounded_counts() {
@@ -471,7 +596,8 @@ mod tests {
             (0..32)
                 .map(|i| border_color_stop(rgb(i), i as f32 / 32.))
                 .collect::<Vec<_>>(),
-        );
+        )
+        .gradient_midpoint(31, 0.25);
         let bounds = Bounds::new(
             point(ScaledPixels(0.), ScaledPixels(0.)),
             size(ScaledPixels(100.), ScaledPixels(100.)),
@@ -492,6 +618,7 @@ mod tests {
         assert_eq!(gpu.stop_count, 32);
         let offset = gpu.stop_offset as usize - 1;
         assert_eq!(offset, 20);
+        assert_eq!(replay.gradients.stops()[offset + 31].midpoint, 0.25);
         for (packed, stop) in replay.gradients.stops()[offset..offset + 32]
             .iter()
             .zip(border.gradient_stops())

@@ -1,26 +1,53 @@
 use super::ImageLoadLimits;
 use crate::ImageCacheError;
-use image::{ColorType, DynamicImage};
+use image::{ColorType, DynamicImage, RgbaImage};
 use moxcms::{
     ColorProfile, DataColorSpace, Layout, RenderingIntent, TransformExecutor, TransformOptions,
 };
+use std::sync::Arc;
 
-pub(super) fn to_srgb(
-    image: DynamicImage,
-    icc: &[u8],
-    limits: ImageLoadLimits,
-) -> Result<DynamicImage, ImageCacheError> {
+pub(super) struct RgbaTransform {
+    transform: Arc<dyn TransformExecutor<u8> + Send + Sync>,
+}
+
+impl RgbaTransform {
+    pub(super) fn new(icc: &[u8]) -> Option<Self> {
+        let profile = read_profile(icc, false)?;
+        match profile.create_transform_8bit(
+            Layout::Rgba,
+            &ColorProfile::new_srgb(),
+            Layout::Rgba,
+            options(),
+        ) {
+            Ok(transform) => Some(Self { transform }),
+            Err(error) => {
+                log::warn!("Ignoring unsupported image ICC profile: {error}");
+                None
+            }
+        }
+    }
+
+    pub(super) fn apply(&self, pixels: &mut RgbaImage) -> Result<(), ImageCacheError> {
+        let width = pixels.width() as usize;
+        transform_rows(pixels.as_mut(), width, false, self.transform.as_ref())
+    }
+}
+
+fn options() -> TransformOptions {
+    TransformOptions {
+        rendering_intent: RenderingIntent::RelativeColorimetric,
+        ..Default::default()
+    }
+}
+
+fn read_profile(icc: &[u8], gray: bool) -> Option<ColorProfile> {
     let profile = match ColorProfile::new_from_slice(icc) {
         Ok(profile) => profile,
         Err(error) => {
-            log::warn!("Ignoring invalid PNG ICC profile: {error}");
-            return Ok(image);
+            log::warn!("Ignoring invalid image ICC profile: {error}");
+            return None;
         }
     };
-    let gray = matches!(
-        image.color(),
-        ColorType::L8 | ColorType::La8 | ColorType::L16 | ColorType::La16
-    );
     if profile.color_space
         != if gray {
             DataColorSpace::Gray
@@ -28,19 +55,31 @@ pub(super) fn to_srgb(
             DataColorSpace::Rgb
         }
     {
-        log::warn!("Ignoring PNG ICC profile with incompatible color space");
-        return Ok(image);
+        log::warn!("Ignoring image ICC profile with incompatible color space");
+        return None;
     }
+    Some(profile)
+}
+
+pub(super) fn to_srgb(
+    image: DynamicImage,
+    icc: &[u8],
+    limits: ImageLoadLimits,
+) -> Result<DynamicImage, ImageCacheError> {
+    let gray = matches!(
+        image.color(),
+        ColorType::L8 | ColorType::La8 | ColorType::L16 | ColorType::La16
+    );
+    let Some(profile) = read_profile(icc, gray) else {
+        return Ok(image);
+    };
     let layout = if gray {
         Layout::GrayAlpha
     } else {
         Layout::Rgba
     };
     let destination = ColorProfile::new_srgb();
-    let options = TransformOptions {
-        rendering_intent: RenderingIntent::RelativeColorimetric,
-        ..Default::default()
-    };
+    let options = options();
     // Keep 16-bit samples until after color conversion. Alpha is always straight
     // coverage and must not pass through a color transfer function.
     if matches!(
@@ -51,7 +90,7 @@ pub(super) fn to_srgb(
             match profile.create_transform_16bit(layout, &destination, Layout::Rgba, options) {
                 Ok(transform) => transform,
                 Err(error) => {
-                    log::warn!("Ignoring unsupported PNG ICC profile: {error}");
+                    log::warn!("Ignoring unsupported image ICC profile: {error}");
                     return Ok(image);
                 }
             };
@@ -69,7 +108,7 @@ pub(super) fn to_srgb(
             match profile.create_transform_8bit(layout, &destination, Layout::Rgba, options) {
                 Ok(transform) => transform,
                 Err(error) => {
-                    log::warn!("Ignoring unsupported PNG ICC profile: {error}");
+                    log::warn!("Ignoring unsupported image ICC profile: {error}");
                     return Ok(image);
                 }
             };
@@ -101,7 +140,7 @@ fn transform_rows<T: Copy + Default>(
         }
         transform
             .transform(&source, row)
-            .map_err(|error| anyhow::anyhow!("PNG ICC color conversion failed: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("ICC color conversion failed: {error}"))?;
         for (rgba, input) in row.chunks_exact_mut(4).zip(source.chunks_exact(channels)) {
             rgba[3] = input[channels - 1];
         }

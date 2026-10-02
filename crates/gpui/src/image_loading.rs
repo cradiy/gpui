@@ -151,16 +151,20 @@ pub(crate) fn decode_image(
         ImageFormat::Gif => {
             let mut decoder = GifDecoder::new(Cursor::new(bytes))?;
             limits.prepare_decoder(&mut decoder)?;
-            collect_frames(decoder.into_frames(), limits)?
+            collect_frames(decoder.into_frames(), limits, None)?
         }
         ImageFormat::WebP => {
             let mut decoder = WebPDecoder::new(Cursor::new(bytes))?;
             limits.prepare_decoder(&mut decoder)?;
             if decoder.has_animation() {
+                let transform = decoder
+                    .icc_profile()?
+                    .as_deref()
+                    .and_then(color_profile::RgbaTransform::new);
                 let _ = decoder.set_background_color(image::Rgba([0, 0, 0, 0]));
-                collect_frames(decoder.into_frames(), limits)?
+                collect_frames(decoder.into_frames(), limits, transform.as_ref())?
             } else {
-                single_frame(decoder, false, limits)?
+                single_frame(decoder, true, limits)?
             }
         }
         _ => {
@@ -170,7 +174,11 @@ pub(crate) fn decode_image(
             reader.limits(header_limits);
             let mut decoder = reader.into_decoder()?;
             limits.prepare_decoder(&mut decoder)?;
-            single_frame(decoder, format == ImageFormat::Png, limits)?
+            single_frame(
+                decoder,
+                matches!(format, ImageFormat::Png | ImageFormat::Jpeg),
+                limits,
+            )?
         }
     };
     Ok(Arc::new(RenderImage::new(frames)))
@@ -198,6 +206,7 @@ fn single_frame(
 fn collect_frames(
     frames: image::Frames<'_>,
     limits: ImageLoadLimits,
+    color_transform: Option<&color_profile::RgbaTransform>,
 ) -> Result<SmallVec<[Frame; 1]>, ImageCacheError> {
     let mut result = SmallVec::new();
     let mut decoded_bytes = 0u64;
@@ -211,6 +220,9 @@ fn collect_frames(
         let (width, height) = frame.buffer().dimensions();
         decoded_bytes = decoded_bytes.saturating_add(limits.check_frame(width, height)?);
         ImageLoadLimits::check("decoded bytes", decoded_bytes, limits.max_decoded_bytes)?;
+        if let Some(transform) = color_transform {
+            transform.apply(frame.buffer_mut())?;
+        }
         convert_to_bgra(&mut frame);
         result.push(frame);
     }

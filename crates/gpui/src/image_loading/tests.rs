@@ -34,6 +34,15 @@ fn gif(frame_count: usize) -> Vec<u8> {
 }
 
 fn webp(frame_count: usize) -> Vec<u8> {
+    webp_frames(
+        &(0..frame_count)
+            .map(|_| (frame().into_buffer(), false))
+            .collect::<Vec<_>>(),
+        None,
+    )
+}
+
+fn webp_frames(frames: &[(RgbaImage, bool)], icc: Option<&[u8]>) -> Vec<u8> {
     fn chunk(output: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
         output.extend_from_slice(tag);
         output.extend_from_slice(&(data.len() as u32).to_le_bytes());
@@ -42,15 +51,20 @@ fn webp(frame_count: usize) -> Vec<u8> {
             output.push(0);
         }
     }
-    let mut encoded = Vec::new();
-    WebPEncoder::new_lossless(&mut encoded)
-        .encode(frame().buffer(), 4, 3, image::ExtendedColorType::Rgba8)
-        .unwrap();
     let mut payload = b"WEBP".to_vec();
-    chunk(&mut payload, b"VP8X", &[2, 0, 0, 0, 3, 0, 0, 2, 0, 0]);
+    let flags = 2 | 0x10 | if icc.is_some() { 0x20 } else { 0 };
+    chunk(&mut payload, b"VP8X", &[flags, 0, 0, 0, 3, 0, 0, 2, 0, 0]);
+    if let Some(icc) = icc {
+        chunk(&mut payload, b"ICCP", icc);
+    }
     chunk(&mut payload, b"ANIM", &[0; 6]);
-    for _ in 0..frame_count {
+    for (pixels, blend) in frames {
+        let mut encoded = Vec::new();
+        WebPEncoder::new_lossless(&mut encoded)
+            .encode(pixels, 4, 3, image::ExtendedColorType::Rgba8)
+            .unwrap();
         let mut data = vec![0, 0, 0, 0, 0, 0, 3, 0, 0, 2, 0, 0, 20, 0, 0, 2];
+        data[15] = if *blend { 0 } else { 2 };
         data.extend_from_slice(&encoded[12..]);
         chunk(&mut payload, b"ANMF", &data);
     }
@@ -87,6 +101,206 @@ fn png_with_profile(image: &DynamicImage, icc: Option<Vec<u8>>) -> Vec<u8> {
     }
     image.write_with_encoder(encoder).unwrap();
     bytes
+}
+
+fn encoded_with_profile(
+    image: &DynamicImage,
+    format: ImageFormat,
+    icc: Option<Vec<u8>>,
+) -> Vec<u8> {
+    use image::ImageEncoder;
+    let mut bytes = Vec::new();
+    match format {
+        ImageFormat::Jpeg => {
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 100);
+            if let Some(icc) = icc {
+                encoder.set_icc_profile(icc).unwrap();
+            }
+            image.write_with_encoder(encoder).unwrap();
+        }
+        ImageFormat::WebP => {
+            let mut encoder = WebPEncoder::new_lossless(&mut bytes);
+            if let Some(icc) = icc {
+                encoder.set_icc_profile(icc).unwrap();
+            }
+            image.write_with_encoder(encoder).unwrap();
+        }
+        _ => unreachable!(),
+    }
+    bytes
+}
+
+fn assert_p3_conversion(actual_bgra: &[u8], source_rgba: &[u8]) {
+    // Independent D65 P3 -> sRGB matrix and transfer functions; using decoded
+    // source samples also accounts for JPEG's lossy encoding and WebP blending.
+    fn linear(v: u8) -> f64 {
+        let v = f64::from(v) / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn encode(v: f64) -> u8 {
+        let v = v.clamp(0.0, 1.0);
+        let v = if v <= 0.0031308 {
+            12.92 * v
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        };
+        (v * 255.0).round() as u8
+    }
+    assert_eq!(actual_bgra.len(), source_rgba.len());
+    for (actual, source) in actual_bgra.chunks_exact(4).zip(source_rgba.chunks_exact(4)) {
+        let [r, g, b] = [linear(source[0]), linear(source[1]), linear(source[2])];
+        let expected = [
+            encode(-0.019642 * r - 0.078655 * g + 1.098537 * b),
+            encode(-0.042058 * r + 1.042081 * g),
+            encode(1.224745 * r - 0.224904 * g),
+        ];
+        for channel in 0..3 {
+            assert!(
+                actual[channel].abs_diff(expected[channel]) <= 2,
+                "{actual:?} != {expected:?}"
+            );
+        }
+        assert_eq!(actual[3], source[3]);
+    }
+}
+
+#[test]
+fn jpeg_rgb_and_gray_icc_convert_decoded_samples() {
+    let image =
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([128, 64, 32])));
+    let bytes = encoded_with_profile(
+        &image,
+        ImageFormat::Jpeg,
+        Some(moxcms::ColorProfile::new_display_p3().encode().unwrap()),
+    );
+    let raw = image::load_from_memory(&bytes).unwrap().into_rgba8();
+    let decoded = decode(&bytes, ImageLoadLimits::default()).unwrap();
+    assert_p3_conversion(decoded.as_bytes(0).unwrap(), &raw);
+
+    let image = DynamicImage::ImageLuma8(image::GrayImage::from_pixel(8, 8, image::Luma([128])));
+    let bytes = encoded_with_profile(
+        &image,
+        ImageFormat::Jpeg,
+        Some(
+            moxcms::ColorProfile::new_gray_with_gamma(1.0)
+                .encode()
+                .unwrap(),
+        ),
+    );
+    let decoded = decode(&bytes, ImageLoadLimits::default()).unwrap();
+    for pixel in decoded.as_bytes(0).unwrap().chunks_exact(4) {
+        for value in &pixel[..3] {
+            assert!(value.abs_diff(188) <= 1);
+        }
+        assert_eq!(pixel[3], 255);
+    }
+}
+
+#[test]
+fn static_webp_icc_matches_both_loading_paths_and_preserves_alpha() {
+    let image = DynamicImage::ImageRgba8(
+        RgbaImage::from_raw(
+            2,
+            2,
+            vec![
+                128, 64, 32, 255, 64, 128, 192, 64, 18, 90, 170, 255, 251, 7, 128, 128,
+            ],
+        )
+        .unwrap(),
+    );
+    let bytes = encoded_with_profile(
+        &image,
+        ImageFormat::WebP,
+        Some(moxcms::ColorProfile::new_display_p3().encode().unwrap()),
+    );
+    let eager = decode(&bytes, ImageLoadLimits::default()).unwrap();
+    let poster = load_image(
+        &bytes,
+        Some(ImageFormat::WebP),
+        &renderer(),
+        ImageLoadLimits::default(),
+        ImageAnimationOptions::default(),
+    )
+    .unwrap();
+    assert!(poster.animation().is_none());
+    assert_eq!(poster.as_bytes(0), eager.as_bytes(0));
+    assert_p3_conversion(eager.as_bytes(0).unwrap(), image.as_bytes());
+}
+
+#[test]
+fn jpeg_and_webp_invalid_or_incompatible_profiles_keep_decoded_samples() {
+    let image =
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([128, 64, 32])));
+    for format in [ImageFormat::Jpeg, ImageFormat::WebP] {
+        for profile in [
+            None,
+            Some(b"invalid ICC".to_vec()),
+            Some(
+                moxcms::ColorProfile::new_gray_with_gamma(1.0)
+                    .encode()
+                    .unwrap(),
+            ),
+        ] {
+            let bytes = encoded_with_profile(&image, format, profile);
+            let mut expected = image::load_from_memory(&bytes)
+                .unwrap()
+                .into_rgba8()
+                .into_raw();
+            for pixel in expected.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+            let eager = decode(&bytes, ImageLoadLimits::default()).unwrap();
+            let loaded = load_image(
+                &bytes,
+                Some(format),
+                &renderer(),
+                ImageLoadLimits::default(),
+                ImageAnimationOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(eager.as_bytes(0).unwrap(), expected);
+            assert_eq!(loaded.as_bytes(0).unwrap(), expected);
+        }
+    }
+}
+
+#[crate::test]
+async fn webp_icc_animation_preserves_compositing_cache_hits_and_replay(
+    executor: BackgroundExecutor,
+) {
+    let frames = [
+        (RgbaImage::from_pixel(4, 3, Rgba([128, 64, 32, 128])), false),
+        (RgbaImage::from_pixel(4, 3, Rgba([64, 128, 192, 64])), true),
+        (RgbaImage::from_pixel(4, 3, Rgba([251, 7, 128, 128])), true),
+    ];
+    let profile = moxcms::ColorProfile::new_display_p3().encode().unwrap();
+    let bytes = webp_frames(&frames, Some(&profile));
+    let raw = decode(&webp_frames(&frames, None), ImageLoadLimits::default()).unwrap();
+    let eager = decode(&bytes, ImageLoadLimits::default()).unwrap();
+    let poster = load_image(
+        &bytes,
+        Some(ImageFormat::WebP),
+        &renderer(),
+        ImageLoadLimits::default(),
+        ImageAnimationOptions { cache_frames: 2 },
+    )
+    .unwrap();
+    assert_eq!(poster.as_bytes(0), eager.as_bytes(0));
+    let source = poster.animation().unwrap();
+    for index in [0, 1, 1, 2, 0, 2, 1, 0] {
+        let frame = source.frame(index, &executor).await.unwrap();
+        assert_eq!(frame.as_bytes(0), eager.as_bytes(index));
+        assert_eq!(frame.delay(0), eager.delay(index));
+        let mut rgba = raw.as_bytes(index).unwrap().to_vec();
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        assert_p3_conversion(frame.as_bytes(0).unwrap(), &rgba);
+    }
 }
 
 #[test]

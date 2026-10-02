@@ -49,11 +49,14 @@ The features on `gpui_platform` are platform-specific, so the list above is a sa
 
 ### Image colors
 
-The built-in PNG loader converts embedded RGB and grayscale ICC profiles to SDR
-sRGB, preserving transparency. Images without a profile keep their decoded sample
-values and are treated as sRGB. Invalid or unsupported profiles produce a warning
-and use the same fallback. Output is 8-bit; wide-gamut display output and HDR tone
-mapping are not supported by this conversion.
+The built-in PNG and JPEG loaders convert embedded RGB and grayscale ICC profiles
+to SDR sRGB. WebP uses its RGB profile for both still images and animation frames.
+Transparency is preserved. Images without a profile keep their decoded sample
+values and are treated as sRGB. Invalid, unsupported, or incompatible profiles
+produce a warning and use the same fallback. CMYK/YCCK JPEGs retain the decoder's
+RGB conversion; their CMYK profiles are not applied to those RGB samples.
+Output is 8-bit; wide-gamut display output and HDR tone mapping are not supported
+by this conversion.
 
 ### File clipboard
 

@@ -1,4 +1,4 @@
-use super::{ImageLoadLimits, convert_to_bgra};
+use super::{ImageLoadLimits, color_profile::RgbaTransform, convert_to_bgra};
 use crate::{BackgroundExecutor, Global, ImageCacheError, ImageId, RenderImage, Task};
 use futures::lock::Mutex;
 use image::{Delay, Frame, ImageFormat, RgbaImage};
@@ -35,6 +35,7 @@ pub struct ImageAnimation {
     frame_count: usize,
     capacity: usize,
     ids: Vec<ImageId>,
+    color_transform: Option<RgbaTransform>,
     state: Mutex<AnimationState>,
 }
 
@@ -102,6 +103,9 @@ impl ImageAnimation {
                 .await;
                 continue;
             }
+            if let Some(transform) = &self.color_transform {
+                transform.apply(frame.buffer_mut())?;
+            }
             convert_to_bgra(&mut frame);
             let mut image = RenderImage::new(vec![frame]);
             image.id = self.ids[current];
@@ -124,7 +128,7 @@ pub(super) fn load(
     limits: ImageLoadLimits,
     options: ImageAnimationOptions,
 ) -> Result<Arc<RenderImage>, ImageCacheError> {
-    let (count, frame_bytes) = match format {
+    let (count, frame_bytes, color_transform) = match format {
         ImageFormat::Gif => {
             let mut options = gif_options(limits);
             options.skip_frame_decoding(true);
@@ -138,14 +142,20 @@ pub(super) fn load(
                 count += 1;
                 ImageLoadLimits::check("frame count", count as u64, limits.max_frames.into())?;
             }
-            (count, frame_bytes)
+            (count, frame_bytes, None)
         }
         ImageFormat::WebP => {
-            let decoder =
+            let mut decoder =
                 image_webp::WebPDecoder::new(Cursor::new(bytes.clone())).map_err(codec_error)?;
             let (width, height) = decoder.dimensions();
             let frame_bytes = limits.check_frame(width, height)?;
-            (decoder.num_frames().max(1) as usize, frame_bytes)
+            decoder.set_memory_limit(limits.max_decoded_bytes.min(usize::MAX as u64) as usize);
+            let transform = decoder
+                .icc_profile()
+                .map_err(codec_error)?
+                .as_deref()
+                .and_then(RgbaTransform::new);
+            (decoder.num_frames().max(1) as usize, frame_bytes, transform)
         }
         _ => unreachable!(),
     };
@@ -168,6 +178,9 @@ pub(super) fn load(
     }
     let mut decoder = Decoder::new(bytes.clone(), format, limits)?;
     let mut first = decoder.next()?;
+    if let Some(transform) = &color_transform {
+        transform.apply(first.buffer_mut())?;
+    }
     convert_to_bgra(&mut first);
     let poster = Arc::new(RenderImage::new(vec![first]));
     if count == 1 {
@@ -186,6 +199,7 @@ pub(super) fn load(
         frame_count: count,
         capacity,
         ids,
+        color_transform,
         state: Mutex::new(AnimationState {
             decoder,
             next_index: 1,

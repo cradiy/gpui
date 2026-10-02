@@ -1,8 +1,8 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 
 use gpui::{
-    App, Bounds, Context, FontStyle, FontWeight, StyledText, Window, WindowBounds, WindowOptions,
-    div, prelude::*, px, size,
+    App, Bounds, Context, FontStyle, FontWeight, InteractiveText, StyledText, Window, WindowBounds,
+    WindowOptions, div, prelude::*, px, size,
 };
 use gpui_platform::application;
 
@@ -10,6 +10,8 @@ struct HelloWorld {}
 
 impl Render for HelloWorld {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let selectable = "Selectable text\nDrag across these styled lines, then copy with Ctrl/Cmd+C. 中文与 emoji 😀 remain intact. Click here to open the GPUI repository.";
+        let link_start = selectable.find("Click here").unwrap();
         div()
             .bg(gpui::white())
             .flex()
@@ -17,6 +19,25 @@ impl Render for HelloWorld {
             .gap_2()
             .p_4()
             .size_full()
+            .child(
+                div()
+                    .w(px(420.))
+                    .p_3()
+                    .border_1()
+                    .border_color(gpui::rgb(0xd4dbe5))
+                    .child(
+                        InteractiveText::new(
+                            "selectable-example",
+                            StyledText::new(selectable)
+                                .with_highlights([(0..15, FontWeight::BOLD.into())]),
+                        )
+                        .selectable(gpui::rgba(0x4488ff55))
+                        .on_click(
+                            vec![link_start..link_start + "Click here".len()],
+                            |_, _, cx| cx.open_url("https://github.com/cradiy/gpui-fusion"),
+                        ),
+                    ),
+            )
             .child(div().child("Text left"))
             .child(div().text_center().child("Text center"))
             .child(div().text_right().child("Text right"))

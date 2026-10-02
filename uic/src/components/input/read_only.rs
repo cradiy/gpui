@@ -1,9 +1,9 @@
 use super::{InputAppearance, InputMode};
 use gpui::{
-    AnyElement, CursorStyle, IntoElement, Refineable as _, RenderOnce, SharedString,
-    StyleRefinement, Styled, div, prelude::*,
+    AnyElement, CursorStyle, ElementId, InteractiveText, IntoElement, Refineable as _, RenderOnce,
+    SharedString, StyleRefinement, Styled, StyledText, div, prelude::*,
 };
-/// An input-shaped value display without focus or editing state.
+/// An input-shaped value display, optionally selectable for plain-text copying.
 #[derive(IntoElement)]
 pub struct ReadOnlyInput {
     value: SharedString,
@@ -13,6 +13,7 @@ pub struct ReadOnlyInput {
     appearance: InputAppearance,
     rows: Option<usize>,
     style: StyleRefinement,
+    selection_id: Option<ElementId>,
 }
 
 input_appearance!(ReadOnlyInput);
@@ -27,6 +28,7 @@ impl ReadOnlyInput {
             appearance: InputAppearance::default(),
             rows: None,
             style: StyleRefinement::default(),
+            selection_id: None,
         }
     }
 
@@ -64,6 +66,13 @@ impl ReadOnlyInput {
         self.appearance = appearance;
         self
     }
+
+    /// Allow selecting and copying the displayed text using a stable element ID.
+    /// Password displays remain non-selectable.
+    pub fn selectable(mut self, id: impl Into<ElementId>) -> Self {
+        self.selection_id = Some(id.into());
+        self
+    }
 }
 
 impl RenderOnce for ReadOnlyInput {
@@ -76,6 +85,16 @@ impl RenderOnce for ReadOnlyInput {
         let row_height = self
             .rows
             .map(|rows| super::row_height(&self.style, rows, _window.rem_size()));
+        let content = if let Some(id) = self
+            .selection_id
+            .filter(|_| self.mode != InputMode::Password)
+        {
+            InteractiveText::new(id, StyledText::new(display_value))
+                .selectable(self.appearance.selection)
+                .into_any_element()
+        } else {
+            display_value.into_any_element()
+        };
 
         let mut element = div()
             .flex()
@@ -104,7 +123,7 @@ impl RenderOnce for ReadOnlyInput {
                     .min_w_0()
                     .when(multiline, |this| this.h_full().whitespace_normal())
                     .overflow_hidden()
-                    .child(display_value),
+                    .child(content),
             )
             .children(self.suffix);
         element.style().refine(&self.style);
@@ -123,6 +142,59 @@ mod tests {
     use gpui::px;
 
     use super::*;
+
+    struct SelectableReadOnly {
+        password: bool,
+    }
+
+    impl gpui::Render for SelectableReadOnly {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            ReadOnlyInput::new("Read only 中文😀 text")
+                .mode(if self.password {
+                    InputMode::Password
+                } else {
+                    InputMode::Text
+                })
+                .selectable("value")
+                .w(px(240.))
+        }
+    }
+
+    #[gpui::test]
+    fn selectable_read_only_copies_text_but_not_passwords(cx: &mut gpui::TestAppContext) {
+        for password in [false, true] {
+            let window = cx.open_window(gpui::size(px(300.), px(100.)), move |_, _| {
+                SelectableReadOnly { password }
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            visual.update(|window, cx| {
+                window.draw(cx).clear();
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string("unchanged".into()));
+            });
+            visual.simulate_click(gpui::point(px(50.), px(22.)), Default::default());
+            visual.simulate_keystrokes(if cfg!(target_os = "macos") {
+                "cmd-a cmd-c"
+            } else {
+                "ctrl-a ctrl-c"
+            });
+            visual.update(|_, cx| {
+                assert_eq!(
+                    cx.read_from_clipboard()
+                        .and_then(|item| item.text())
+                        .as_deref(),
+                    Some(if password {
+                        "unchanged"
+                    } else {
+                        "Read only 中文😀 text"
+                    })
+                );
+            });
+        }
+    }
 
     #[test]
     fn rows_are_independent_from_the_semantic_appearance() {

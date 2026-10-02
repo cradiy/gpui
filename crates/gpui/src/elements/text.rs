@@ -18,6 +18,9 @@ use std::{
     sync::Arc,
 };
 
+mod selection;
+use selection::TextSelection;
+
 /// An [`Element`] that renders text.
 ///
 /// In general, [`Text`] objects should be created via the [`text!`](macro@crate::text) macro:
@@ -614,6 +617,7 @@ impl IntoElement for StyledText {
 pub struct TextLayout(Rc<RefCell<Option<TextLayoutInner>>>);
 
 struct TextLayoutInner {
+    text: SharedString,
     len: usize,
     lines: SmallVec<[WrappedLine; 1]>,
     line_height: Pixels,
@@ -718,7 +722,7 @@ impl TextLayout {
                 let Some(lines) = window
                     .text_system()
                     .shape_text(
-                        text,
+                        text.clone(),
                         font_size,
                         &runs,
                         wrap_width,            // Wrap if we know the width.
@@ -727,6 +731,7 @@ impl TextLayout {
                     .log_err()
                 else {
                     element_state.0.borrow_mut().replace(TextLayoutInner {
+                        text: "".into(),
                         lines: Default::default(),
                         len: 0,
                         line_height,
@@ -745,6 +750,7 @@ impl TextLayout {
                 }
 
                 element_state.0.borrow_mut().replace(TextLayoutInner {
+                    text,
                     lines,
                     len,
                     line_height,
@@ -770,6 +776,19 @@ impl TextLayout {
     }
 
     fn paint(&self, text: &str, window: &mut Window, cx: &mut App) {
+        self.paint_with_selection(text, None, window, cx);
+    }
+
+    fn paint_with_selection(
+        &self,
+        text: &str,
+        selection: Option<(Range<usize>, crate::Hsla)>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let quads = selection.map(|(range, color)| {
+            selection::selection_quads(self, range, window.text_style().text_align, color)
+        });
         let element_state = self.0.borrow();
         let element_state = element_state
             .as_ref()
@@ -793,16 +812,36 @@ impl TextLayout {
                 cx,
             )
             .log_err();
-            line.paint(
-                line_origin,
-                line_height,
-                text_style.text_align,
-                Some(bounds),
-                window,
-                cx,
-            )
-            .log_err();
+            if quads.is_none() {
+                line.paint(
+                    line_origin,
+                    line_height,
+                    text_style.text_align,
+                    Some(bounds),
+                    window,
+                    cx,
+                )
+                .log_err();
+            }
             line_origin.y += line.size(line_height).height;
+        }
+        if let Some(quads) = quads {
+            for quad in quads {
+                window.paint_quad(quad);
+            }
+            let mut line_origin = bounds.origin;
+            for line in &element_state.lines {
+                line.paint(
+                    line_origin,
+                    line_height,
+                    text_style.text_align,
+                    Some(bounds),
+                    window,
+                    cx,
+                )
+                .log_err();
+                line_origin.y += line.size(line_height).height;
+            }
         }
     }
 
@@ -967,6 +1006,7 @@ pub struct InteractiveText {
     tooltip_builder: Option<Rc<dyn Fn(usize, &mut Window, &mut App) -> Option<AnyView>>>,
     tooltip_id: Option<TooltipId>,
     clickable_ranges: Vec<Range<usize>>,
+    selection_color: Option<crate::Hsla>,
 }
 
 struct InteractiveTextClickEvent {
@@ -981,6 +1021,7 @@ pub struct InteractiveTextState {
     hovered_index: Rc<Cell<Option<usize>>>,
     active_tooltip: Rc<RefCell<Option<ActiveTooltip>>>,
     tooltip_geometry: Option<crate::ElementBounds>,
+    selection: Option<Rc<RefCell<TextSelection>>>,
 }
 
 /// InteractiveTest is a wrapper around StyledText that adds mouse interactions.
@@ -995,7 +1036,19 @@ impl InteractiveText {
             tooltip_builder: None,
             tooltip_id: None,
             clickable_ranges: Vec::new(),
+            selection_color: None,
         }
+    }
+
+    /// Enable read-only selection within this text block using the given highlight color.
+    /// Drag to select, Shift-click to extend, and use Ctrl/Cmd+A or Ctrl/Cmd+C
+    /// while focused to select all or copy plain text. Styles are inherited from
+    /// the parent and retained while selecting. Selection resets when the displayed
+    /// text changes. Ellipsized text copies its displayed representation; links are
+    /// only activated when layout preserves the original text offsets.
+    pub fn selectable(mut self, selection_color: impl Into<crate::Hsla>) -> Self {
+        self.selection_color = Some(selection_color.into());
+        self
     }
 
     /// on_click is called when the user clicks on one of the given ranges, passing the index of
@@ -1083,6 +1136,19 @@ impl Element for InteractiveText {
                     .map(|interactive_state| interactive_state.unwrap_or_default());
 
                 if let Some(interactive_state) = interactive_state.as_mut() {
+                    if self.selection_color.is_some() {
+                        let selection = interactive_state
+                            .selection
+                            .get_or_insert_with(|| Rc::new(RefCell::new(TextSelection::new(cx))));
+                        let displayed_text =
+                            self.text.layout.0.borrow().as_ref().unwrap().text.clone();
+                        if selection.borrow_mut().sync_text(displayed_text) {
+                            interactive_state.mouse_down_index.set(None);
+                        }
+                        window.set_focus_handle(&selection.borrow().focus, cx);
+                    } else {
+                        interactive_state.selection = None;
+                    }
                     if self.tooltip_builder.is_some() {
                         self.tooltip_id =
                             set_tooltip_on_window(&interactive_state.active_tooltip, window);
@@ -1109,8 +1175,8 @@ impl Element for InteractiveText {
     fn paint(
         &mut self,
         global_id: Option<&GlobalElementId>,
-        inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         hitbox: &mut Hitbox,
         window: &mut Window,
@@ -1122,7 +1188,23 @@ impl Element for InteractiveText {
             global_id.unwrap(),
             |interactive_state, window| {
                 let mut interactive_state = interactive_state.unwrap_or_default();
-                if let Some(click_listener) = self.click_listener.take() {
+                if let Some(selection) = &interactive_state.selection {
+                    let ranges = if text_layout.0.borrow().as_ref().unwrap().text == self.text.text
+                    {
+                        mem::take(&mut self.clickable_ranges)
+                    } else {
+                        Vec::new()
+                    };
+                    selection::register_handlers(
+                        selection.clone(),
+                        text_layout.clone(),
+                        hitbox.clone(),
+                        interactive_state.mouse_down_index.clone(),
+                        self.click_listener.take(),
+                        ranges,
+                        window,
+                    );
+                } else if let Some(click_listener) = self.click_listener.take() {
                     let mouse_position = window.mouse_position();
                     if let Ok(ix) = text_layout.index_for_position(mouse_position)
                         && self
@@ -1250,8 +1332,13 @@ impl Element for InteractiveText {
                     );
                 }
 
+                let selected = interactive_state.selection.as_ref().and_then(|state| {
+                    let state = state.borrow();
+                    self.selection_color.map(|color| (state.range(), color))
+                });
                 self.text
-                    .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+                    .layout
+                    .paint_with_selection(&self.text.text, selected, window, cx);
 
                 ((), interactive_state)
             },

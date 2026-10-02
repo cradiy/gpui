@@ -2,7 +2,7 @@ use gpui::{
     Bounds, Context, Entity, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb,
     size,
 };
-use uic::components::input::{Input, TextInput};
+use uic::components::input::{Input, ReadOnlyInput, TextInput};
 
 struct InputExample {
     title: Entity<TextInput>,
@@ -79,6 +79,11 @@ impl Render for InputExample {
                         Input::new(&self.draft).rows(3).text_color(rgb(0x172033)),
                     ))
                     .child(
+                        ReadOnlyInput::new("Read-only · Select this text and copy it. 中文 😀")
+                            .selectable("read-only-value")
+                            .text_color(rgb(0x172033)),
+                    )
+                    .child(
                         div()
                             .text_sm()
                             .text_color(rgb(0x64748b))
@@ -104,7 +109,7 @@ fn main() {
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
-                    size(px(780.), px(740.)),
+                    size(px(780.), px(820.)),
                     cx,
                 ))),
                 ..Default::default()

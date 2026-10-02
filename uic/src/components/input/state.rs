@@ -121,6 +121,7 @@ pub struct TextInput {
     pub(super) last_viewport_bounds: Option<Bounds<Pixels>>,
     pub(super) is_selecting: bool,
     selection_pointer: Option<Point<Pixels>>,
+    selection_line_anchor: Option<Range<usize>>,
     selection_scroll_task: Option<Task<()>>,
     pub(super) disabled: bool,
     pub(super) mode: InputMode,
@@ -150,6 +151,7 @@ impl TextInput {
             last_viewport_bounds: None,
             is_selecting: false,
             selection_pointer: None,
+            selection_line_anchor: None,
             selection_scroll_task: None,
             disabled: false,
             mode: InputMode::Text,
@@ -233,6 +235,7 @@ impl TextInput {
     }
 
     pub fn set_value(&mut self, value: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.stop_selection();
         self.content = value.into();
         self.committed_content = self.content.clone();
         self.selected_range = self.content.len()..self.content.len();
@@ -401,17 +404,27 @@ impl TextInput {
         self.stop_selection();
         self.is_selecting = true;
 
-        if event.modifiers.shift {
+        let offset = self.index_for_mouse_position(event.position);
+        if event.click_count >= 2 {
+            let range = self.line_range_at(offset);
+            self.selection_line_anchor = Some(range.clone());
             self.preferred_x = None;
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+            self.selected_range = range;
+            self.selection_reversed = false;
+            self.scroll_cursor_pending = true;
+            cx.notify();
+        } else if event.modifiers.shift {
+            self.preferred_x = None;
+            self.select_to(offset, cx);
         } else {
-            self.move_to(self.index_for_mouse_position(event.position), cx)
+            self.move_to(offset, cx)
         }
     }
 
     fn stop_selection(&mut self) {
         self.is_selecting = false;
         self.selection_pointer = None;
+        self.selection_line_anchor = None;
         self.selection_scroll_task = None;
     }
 
@@ -472,7 +485,33 @@ impl TextInput {
         {
             position.x = position.x.clamp(viewport.left(), viewport.right());
         }
-        self.select_to(self.index_for_mouse_position(position), cx);
+        let offset = self.index_for_mouse_position(position);
+        if let Some(anchor) = &self.selection_line_anchor {
+            let range = self.line_range_at(offset);
+            self.selection_reversed = range.start < anchor.start;
+            self.selected_range = range.start.min(anchor.start)..range.end.max(anchor.end);
+            self.scroll_cursor_pending = true;
+            cx.notify();
+        } else {
+            self.select_to(offset, cx);
+        }
+    }
+
+    fn line_range_at(&self, offset: usize) -> Range<usize> {
+        if self.mode != InputMode::Multiline {
+            return 0..self.content.len();
+        }
+        let mut offset = offset.min(self.content.len());
+        while !self.content.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        let start = self.content[..offset]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let end = self.content[offset..]
+            .find('\n')
+            .map_or(self.content.len(), |index| offset + index);
+        start..end
     }
 
     fn selection_scroll_delta(&self) -> Pixels {
@@ -769,6 +808,7 @@ impl EntityInputHandler for TextInput {
             return false;
         }
         let selected_len = self.selected_range.len();
+        self.stop_selection();
         self.content = format!(
             "{}{}{}",
             &self.content[..start_byte],
@@ -836,6 +876,7 @@ impl EntityInputHandler for TextInput {
         if self.disabled {
             return;
         }
+        self.stop_selection();
         let new_text = self.normalize_inserted_text(new_text);
         let new_text = new_text.as_ref();
         let range = range_utf16
@@ -867,6 +908,7 @@ impl EntityInputHandler for TextInput {
         if self.disabled {
             return;
         }
+        self.stop_selection();
         let selected_offsets = new_selected_range_utf16.map(|range| {
             let offset = |utf16| {
                 let end = preedit_offset_from_utf16(new_text, utf16);
@@ -1144,6 +1186,192 @@ mod tests {
             })
             .unwrap();
         visual
+    }
+
+    #[gpui::test]
+    fn double_click_selects_the_complete_scrolled_single_line(cx: &mut TestAppContext) {
+        let value = "前😀 A deliberately long single-line value extending beyond the viewport";
+        let window = open_input(cx, move |cx| TextInput::new(cx).initial_value(value));
+        let mut visual = draw_and_focus(&window, cx);
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        let position = window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert!(input.single_line_scroll_offset < px(0.));
+                input.last_viewport_bounds.unwrap().center()
+            })
+            .unwrap();
+        visual.simulate_event(MouseDownEvent {
+            position,
+            button: MouseButton::Left,
+            click_count: 2,
+            modifiers: Default::default(),
+            first_mouse: false,
+        });
+        visual.simulate_mouse_move(position, MouseButton::Left, Default::default());
+        visual.simulate_mouse_up(position, MouseButton::Left, Default::default());
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert_eq!(input.selected_range, 0..value.len());
+                assert!(!input.is_selecting);
+                assert!(input.selection_line_anchor.is_none());
+            })
+            .unwrap();
+        visual.simulate_keystrokes("x");
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                assert_eq!(view.state.read(cx).value().as_ref(), "x");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn double_click_drag_extends_and_reverses_by_whole_lines(cx: &mut TestAppContext) {
+        let window = open_input_with_rows(cx, 4, |cx| {
+            TextInput::new(cx)
+                .multiline()
+                .initial_value("前😀\n中间\n末尾")
+        });
+        let mut visual = draw_and_focus(&window, cx);
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        let positions = window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                let layout = input.last_layout.as_ref().unwrap();
+                [0, 8, 15].map(|offset| {
+                    input.last_bounds.unwrap().origin
+                        + layout.position_for_offset(offset)
+                        + point(px(1.), layout.line_height / 2.)
+                })
+            })
+            .unwrap();
+        visual.simulate_event(MouseDownEvent {
+            position: positions[1],
+            button: MouseButton::Left,
+            click_count: 2,
+            modifiers: Default::default(),
+            first_mouse: false,
+        });
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                assert_eq!(view.state.read(cx).selected_range, 8..14);
+            })
+            .unwrap();
+        visual.simulate_mouse_move(positions[2], MouseButton::Left, Default::default());
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert_eq!(input.selected_range, 8..21);
+                assert!(!input.selection_reversed);
+            })
+            .unwrap();
+        visual.simulate_mouse_move(positions[0], MouseButton::Left, Default::default());
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert_eq!(input.selected_range, 0..14);
+                assert!(input.selection_reversed);
+            })
+            .unwrap();
+        visual.simulate_mouse_up(positions[0], MouseButton::Left, Default::default());
+        visual.simulate_mouse_down(positions[1], MouseButton::Left, Default::default());
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                assert!(input.selected_range.is_empty());
+                assert!(input.selection_line_anchor.is_none());
+            })
+            .unwrap();
+        visual.simulate_mouse_up(positions[1], MouseButton::Left, Default::default());
+    }
+
+    #[gpui::test]
+    fn double_click_selects_the_logical_line_across_soft_wraps(cx: &mut TestAppContext) {
+        let value = "A long line with 中文 and 😀 that wraps across several visual rows.";
+        let window = open_input_with_rows(cx, 8, move |cx| {
+            TextInput::new(cx)
+                .multiline()
+                .initial_value(format!("{value}\nnext"))
+        });
+        let mut visual = draw_and_focus(&window, cx);
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        let position = window
+            .update(&mut visual.cx, |view, _, cx| {
+                let input = view.state.read(cx);
+                let layout = input.last_layout.as_ref().unwrap();
+                assert!(!layout.lines[0].wrap_boundaries().is_empty());
+                input.last_bounds.unwrap().origin + point(px(10.), layout.line_height * 1.5)
+            })
+            .unwrap();
+        visual.simulate_event(MouseDownEvent {
+            position,
+            button: MouseButton::Left,
+            click_count: 2,
+            modifiers: Default::default(),
+            first_mouse: false,
+        });
+        visual.simulate_mouse_up(position, MouseButton::Left, Default::default());
+        window
+            .update(&mut visual.cx, |view, _, cx| {
+                assert_eq!(view.state.read(cx).selected_range, 0..value.len());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn double_click_drag_stops_when_the_value_changes(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("前😀hello"));
+        let mut visual = draw_and_focus(&window, cx);
+        visual.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        let position = window
+            .update(&mut visual.cx, |view, _, cx| {
+                view.state.read(cx).last_viewport_bounds.unwrap().center()
+            })
+            .unwrap();
+        for external_update in [false, true] {
+            visual.simulate_event(MouseDownEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 2,
+                modifiers: Default::default(),
+                first_mouse: false,
+            });
+            if external_update {
+                window
+                    .update(&mut visual.cx, |view, _, cx| {
+                        view.state.update(cx, |input, cx| input.set_value("短", cx));
+                    })
+                    .unwrap();
+            } else {
+                visual.simulate_keystrokes("x");
+            }
+            visual.simulate_mouse_move(position, MouseButton::Left, Default::default());
+            window
+                .update(&mut visual.cx, |view, _, cx| {
+                    let input = view.state.read(cx);
+                    assert_eq!(
+                        input.value().as_ref(),
+                        if external_update { "短" } else { "x" }
+                    );
+                    assert_eq!(
+                        input.selected_range,
+                        input.content.len()..input.content.len()
+                    );
+                    assert!(!input.is_selecting);
+                    assert!(input.selection_line_anchor.is_none());
+                })
+                .unwrap();
+            visual.simulate_mouse_up(position, MouseButton::Left, Default::default());
+        }
     }
 
     #[gpui::test]

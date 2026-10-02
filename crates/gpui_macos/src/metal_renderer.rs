@@ -14,7 +14,7 @@ use gpui::{
     SurfaceId, Underline, WeakSurfaceHandle, YuvMatrix, point, size,
 };
 use gpui::{BackdropInstance, EffectInstance};
-type Quad = gpui::Quad<gpui::GpuBackground>;
+type Quad = gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>;
 type MonochromeSprite = gpui::MonochromeSprite<gpui::GpuBackground>;
 use gpui_render::SurfaceParams;
 use image::RgbaImage;

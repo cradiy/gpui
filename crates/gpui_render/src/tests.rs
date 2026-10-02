@@ -198,17 +198,17 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
         ),
         (
             "Quad",
-            size_of::<gpui::Quad<gpui::GpuBackground>>(),
+            size_of::<gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>>(),
             vec![
-                offset_of!(gpui::Quad<gpui::GpuBackground>, order),
-                offset_of!(gpui::Quad<gpui::GpuBackground>, border_style),
-                offset_of!(gpui::Quad<gpui::GpuBackground>, bounds),
-                offset_of!(gpui::Quad<gpui::GpuBackground>, content_mask),
-                offset_of!(gpui::Quad<gpui::GpuBackground>, background),
-                offset_of!(gpui::Quad<gpui::GpuBackground>, border_colors),
-                offset_of!(gpui::Quad<gpui::GpuBackground>, border_gradient),
-                offset_of!(gpui::Quad<gpui::GpuBackground>, corner_radii),
-                offset_of!(gpui::Quad<gpui::GpuBackground>, border_widths),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, order),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, border_style),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, bounds),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, content_mask),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, background),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, border_colors),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, border_gradient),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, corner_radii),
+                offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, border_widths),
             ],
         ),
         (
@@ -277,7 +277,7 @@ fn primitive_shaders_match_host_layout_and_resource_contract() {
     }
     for (name, size) in [
         ("Background", size_of::<gpui::GpuBackground>()),
-        ("BorderGradient", size_of::<gpui::BorderGradient>()),
+        ("BorderGradient", size_of::<gpui::GpuBorderGradient>()),
     ] {
         let (_, ty) = module
             .types

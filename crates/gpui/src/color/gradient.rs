@@ -34,6 +34,93 @@ impl ExtendedGradient {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub(super) struct ExtendedBorderGradient {
+    stops: Vec<BorderColorStop>,
+    #[serde(skip, default = "next_gradient_revision")]
+    revision: u64,
+    #[serde(skip, default = "next_gradient_revision")]
+    lineage: u64,
+}
+
+impl PartialEq for ExtendedBorderGradient {
+    fn eq(&self, other: &Self) -> bool {
+        self.stops == other.stops
+    }
+}
+
+impl ExtendedBorderGradient {
+    pub(super) fn new(stops: &[BorderColorStop]) -> Self {
+        let revision = next_gradient_revision();
+        Self {
+            stops: stops.to_vec(),
+            revision,
+            lineage: revision,
+        }
+    }
+}
+
+impl BorderGradient {
+    /// Returns the stops in ascending perimeter position order.
+    pub fn gradient_stops(&self) -> &[BorderColorStop] {
+        self.extended
+            .as_ref()
+            .map_or(&self.stops[..(self.stop_count as usize).min(2)], |data| {
+                &data.stops
+            })
+    }
+
+    /// Replaces one stop without modifying other gradients cloned from this one.
+    /// Positions must remain strictly increasing. Notify the owning view after
+    /// editing so its cached drawing is refreshed.
+    pub fn set_gradient_stop(&mut self, index: usize, stop: BorderColorStop) {
+        let stops = self.gradient_stops();
+        assert!(index < stops.len(), "gradient stop index out of range");
+        assert!(
+            (0.0..=1.0).contains(&stop.position),
+            "border gradient stop position out of range"
+        );
+        assert!(
+            index == 0 || stops[index - 1].position < stop.position,
+            "border gradient stops must be strictly increasing"
+        );
+        assert!(
+            index + 1 == stops.len() || stop.position < stops[index + 1].position,
+            "border gradient stops must be strictly increasing"
+        );
+        if stops[index] == stop {
+            return;
+        }
+        if let Some(data) = &mut self.extended {
+            let data = Arc::make_mut(data);
+            data.stops[index] = stop;
+            data.revision = next_gradient_revision();
+        }
+        if index < 2 {
+            self.stops[index] = stop;
+        }
+    }
+}
+
+/// Fixed-size perimeter gradient parameters consumed by the quad shader.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct GpuBorderGradient {
+    pub(crate) stops: [BorderColorStop; 2],
+    pub(crate) stop_count: u32,
+    pub(crate) color_space: ColorSpace,
+    pub(crate) phase: f32,
+    pub(crate) opacity: f32,
+    pub(crate) stop_offset: u32,
+    pad: u32,
+}
+
+impl Default for GpuBorderGradient {
+    fn default() -> Self {
+        GradientBuffer::default().border(&BorderGradient::default())
+    }
+}
+
 impl Background {
     /// Returns the midpoint of the segment starting at `index`, if it exists.
     pub fn gradient_midpoint_at(&self, index: usize) -> Option<f32> {
@@ -152,7 +239,7 @@ pub fn gradient_changed_range(
 }
 
 /// Scene-owned storage for long gradients. Slots are reused across scene rebuilds;
-/// replay registers each immutable background snapshot in the destination scene.
+/// replay registers each immutable fill or border snapshot in the destination scene.
 #[derive(Default)]
 pub struct GradientBuffer {
     stops: Vec<GpuGradientStop>,
@@ -202,66 +289,95 @@ impl GradientBuffer {
         }
     }
 
-    /// Returns packed stop data for this scene. Inline backgrounds need no entries.
+    /// Returns packed stop data for this scene. Inline gradients need no entries.
     pub fn stops(&self) -> &[GpuGradientStop] {
         &self.stops
     }
 
-    pub(crate) fn background(&mut self, background: &Background) -> GpuBackground {
-        let stop_offset = if let Some(data) = &background.extended {
-            if !self.slots.contains_key(&data.revision)
-                && let Some(key) = self
-                    .slots
-                    .iter()
-                    .filter(|(_, slot)| {
-                        !slot.used
-                            && slot.lineage == data.lineage
-                            && slot.capacity >= data.stops.len()
-                    })
-                    .min_by_key(|(_, slot)| slot.offset)
-                    .map(|(key, _)| *key)
-            {
-                let slot = self.slots.remove(&key).unwrap();
-                self.free.push((slot.offset, slot.capacity));
+    fn register(
+        &mut self,
+        revision: u64,
+        lineage: u64,
+        count: usize,
+        mut stop_at: impl FnMut(usize) -> GpuGradientStop,
+    ) -> u32 {
+        if !self.slots.contains_key(&revision)
+            && let Some(key) = self
+                .slots
+                .iter()
+                .filter(|(_, slot)| !slot.used && slot.lineage == lineage && slot.capacity >= count)
+                .min_by_key(|(_, slot)| slot.offset)
+                .map(|(key, _)| *key)
+        {
+            let slot = self.slots.remove(&key).unwrap();
+            self.free.push((slot.offset, slot.capacity));
+        }
+        let slot = self.slots.entry(revision).or_insert_with(|| {
+            let available = self
+                .free
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, capacity))| *capacity >= count)
+                .min_by_key(|(_, (_, capacity))| *capacity)
+                .map(|(index, _)| index);
+            let (offset, capacity) = available
+                .map(|index| self.free.swap_remove(index))
+                .unwrap_or_else(|| {
+                    let offset = self.stops.len();
+                    let end = offset
+                        .checked_add(count)
+                        .expect("gradient buffer size overflow");
+                    u32::try_from(end).expect("gradient buffer exceeds GPU address space");
+                    self.stops.resize(end, GpuGradientStop::default());
+                    (offset, count)
+                });
+            for index in 0..count {
+                self.stops[offset + index] = stop_at(index);
             }
-            let slot = self.slots.entry(data.revision).or_insert_with(|| {
-                let available = self
-                    .free
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (_, capacity))| *capacity >= data.stops.len())
-                    .min_by_key(|(_, (_, capacity))| *capacity)
-                    .map(|(index, _)| index);
-                let (offset, capacity) = available
-                    .map(|index| self.free.swap_remove(index))
-                    .unwrap_or_else(|| {
-                        let offset = self.stops.len();
-                        let end = offset
-                            .checked_add(data.stops.len())
-                            .expect("gradient buffer size overflow");
-                        u32::try_from(end).expect("gradient buffer exceeds GPU address space");
-                        self.stops.resize(end, GpuGradientStop::default());
-                        (offset, data.stops.len())
-                    });
-                for (index, stop) in data.stops.iter().enumerate() {
-                    self.stops[offset + index] = GpuGradientStop {
-                        color: [stop.color.h, stop.color.s, stop.color.l, stop.color.a],
-                        position: stop.percentage,
-                        midpoint: data.midpoints[index],
-                    };
+            GradientSlot {
+                offset,
+                capacity,
+                lineage,
+                used: false,
+            }
+        });
+        slot.used = true;
+        u32::try_from(slot.offset + 1).expect("gradient buffer exceeds GPU address space")
+    }
+
+    pub(crate) fn border(&mut self, gradient: &BorderGradient) -> GpuBorderGradient {
+        let stop_offset = gradient.extended.as_ref().map_or(0, |data| {
+            self.register(data.revision, data.lineage, data.stops.len(), |index| {
+                let stop = data.stops[index];
+                GpuGradientStop {
+                    color: [stop.color.h, stop.color.s, stop.color.l, stop.color.a],
+                    position: stop.position,
+                    midpoint: 0.5,
                 }
-                GradientSlot {
-                    offset,
-                    capacity,
-                    lineage: data.lineage,
-                    used: false,
+            })
+        });
+        GpuBorderGradient {
+            stops: gradient.stops,
+            stop_count: gradient.stop_count,
+            color_space: gradient.color_space,
+            phase: gradient.phase,
+            opacity: gradient.opacity,
+            stop_offset,
+            pad: 0,
+        }
+    }
+
+    pub(crate) fn background(&mut self, background: &Background) -> GpuBackground {
+        let stop_offset = background.extended.as_ref().map_or(0, |data| {
+            self.register(data.revision, data.lineage, data.stops.len(), |index| {
+                let stop = data.stops[index];
+                GpuGradientStop {
+                    color: [stop.color.h, stop.color.s, stop.color.l, stop.color.a],
+                    position: stop.percentage,
+                    midpoint: data.midpoints[index],
                 }
-            });
-            slot.used = true;
-            u32::try_from(slot.offset + 1).expect("gradient buffer exceeds GPU address space")
-        } else {
-            0
-        };
+            })
+        });
         GpuBackground {
             tag: background.tag,
             color_space: background.color_space,
@@ -282,6 +398,111 @@ impl GradientBuffer {
 mod tests {
     use super::*;
     use crate::{Bounds, ContentMask, Quad, ScaledPixels, Scene, point, size};
+
+    #[test]
+    fn border_stops_share_storage_and_support_unbounded_counts() {
+        for count in [2, 3, 4, 21, 256, 1024] {
+            let stops: Vec<_> = (0..count)
+                .map(|i| border_color_stop(rgb(i), i as f32 / count as f32))
+                .collect();
+            let gradient = border_gradient(&stops);
+            let mut buffer = GradientBuffer::default();
+            let gpu = buffer.border(&gradient);
+            let faded = gradient.opacity(0.25).phase(1.75);
+            let shared = buffer.border(&faded);
+            assert_eq!(gpu.stop_offset, shared.stop_offset);
+            assert_eq!(shared.opacity, 0.25);
+            assert_eq!(shared.phase, 0.75);
+            assert_eq!(gradient.gradient_stops(), stops);
+            assert_eq!(
+                buffer.stops().len(),
+                if count == 2 { 0 } else { count as usize }
+            );
+            for (packed, stop) in buffer.stops().iter().zip(stops) {
+                assert_eq!(
+                    packed.color,
+                    [stop.color.h, stop.color.s, stop.color.l, stop.color.a]
+                );
+                assert_eq!(packed.position, stop.position);
+            }
+            assert!(gradient.opacity(0.).is_transparent());
+            assert!(gradient.opacity(-1.).is_transparent());
+            assert_eq!(buffer.border(&gradient.opacity(2.)).opacity, 1.);
+            assert!(!gradient.is_transparent());
+        }
+    }
+
+    #[test]
+    fn border_edits_preserve_snapshots_and_reuse_slots_alongside_fills() {
+        let original = border_gradient(
+            (0..32)
+                .map(|i| border_color_stop(rgb(0xff0000), i as f32 / 32.))
+                .collect::<Vec<_>>(),
+        );
+        let mut edited = original.clone();
+        let fill = gradient();
+        let mut buffer = GradientBuffer::default();
+        let fill_offset = buffer.background(&fill).stop_offset;
+        let border_offset = buffer.border(&edited).stop_offset;
+        buffer.finish();
+        for frame in 0..100 {
+            let previous = buffer.stops().to_vec();
+            edited.set_gradient_stop(15, border_color_stop(rgb(frame), 15. / 32.));
+            buffer.clear();
+            assert_eq!(buffer.background(&fill).stop_offset, fill_offset);
+            assert_eq!(buffer.border(&edited).stop_offset, border_offset);
+            buffer.finish();
+            let index = border_offset as usize - 1 + 15;
+            assert_eq!(
+                gradient_changed_range(&previous, buffer.stops()),
+                Some(index..index + 1)
+            );
+            assert_eq!(buffer.stops().len(), 52);
+        }
+        assert_eq!(original.gradient_stops()[15].color, rgb(0xff0000).into());
+        buffer.clear();
+        buffer.finish();
+        assert!(buffer.stops().is_empty());
+    }
+
+    #[test]
+    fn replay_registers_border_snapshots_in_the_destination_buffer() {
+        let border = border_gradient(
+            (0..32)
+                .map(|i| border_color_stop(rgb(i), i as f32 / 32.))
+                .collect::<Vec<_>>(),
+        );
+        let bounds = Bounds::new(
+            point(ScaledPixels(0.), ScaledPixels(0.)),
+            size(ScaledPixels(100.), ScaledPixels(100.)),
+        );
+        let mut source = Scene::default();
+        source.insert_primitive(Quad {
+            bounds,
+            content_mask: ContentMask { bounds },
+            border_gradient: border.clone(),
+            ..Default::default()
+        });
+        source.finish();
+        let mut replay = scene(gradient());
+        replay.replay(0..source.len(), &source);
+        replay.finish();
+        drop(source);
+        let gpu = &replay.quads[1].border_gradient;
+        assert_eq!(gpu.stop_count, 32);
+        let offset = gpu.stop_offset as usize - 1;
+        assert_eq!(offset, 20);
+        for (packed, stop) in replay.gradients.stops()[offset..offset + 32]
+            .iter()
+            .zip(border.gradient_stops())
+        {
+            assert_eq!(packed.position, stop.position);
+            assert_eq!(
+                packed.color,
+                [stop.color.h, stop.color.s, stop.color.l, stop.color.a]
+            );
+        }
+    }
 
     fn gradient() -> Background {
         multi_linear_gradient(

@@ -91,7 +91,10 @@ fn instance_buffer_releases_a_past_peak_without_changing_pixels() -> anyhow::Res
         point(gpui::ScaledPixels(0.), gpui::ScaledPixels(0.)),
         size(gpui::ScaledPixels(4.), gpui::ScaledPixels(4.)),
     );
-    for _ in 0..(baseline as usize / std::mem::size_of::<gpui::Quad>() + 100) {
+    for _ in 0..(baseline as usize
+        / std::mem::size_of::<gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>>()
+        + 100)
+    {
         scene.insert_primitive(gpui::Quad {
             bounds,
             content_mask: ContentMask { bounds },

@@ -14,7 +14,7 @@ use gpui::{
     SurfaceFrameBacking, WeakDmaBufHandle,
 };
 use gpui_render::SurfaceParams;
-type Quad = gpui::Quad<gpui::GpuBackground>;
+type Quad = gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>;
 type MonochromeSprite = gpui::MonochromeSprite<gpui::GpuBackground>;
 type SubpixelSprite = gpui::SubpixelSprite<gpui::GpuBackground>;
 use log::warn;

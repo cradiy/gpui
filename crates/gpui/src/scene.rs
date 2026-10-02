@@ -54,7 +54,7 @@ pub struct Scene {
     layer_stack: Vec<DrawOrder>,
     pub backdrop_blurs: Vec<BackdropBlur>,
     pub shadows: Vec<Shadow>,
-    pub quads: Vec<Quad<GpuBackground>>,
+    pub quads: Vec<Quad<GpuBackground, crate::GpuBorderGradient>>,
     pub effects: Vec<EffectQuad>,
     pub particles: Vec<crate::ParticleDraw>,
     pub fluids: Vec<crate::FluidDraw>,
@@ -586,7 +586,7 @@ struct BatchIterator<'a> {
     shadows_start: usize,
     shadows_iter: Peekable<slice::Iter<'a, Shadow>>,
     quads_start: usize,
-    quads_iter: Peekable<slice::Iter<'a, Quad<GpuBackground>>>,
+    quads_iter: Peekable<slice::Iter<'a, Quad<GpuBackground, crate::GpuBorderGradient>>>,
     effects_start: usize,
     effects_iter: Peekable<slice::Iter<'a, EffectQuad>>,
     particles_start: usize,
@@ -920,14 +920,14 @@ impl From<BackdropBlur> for Primitive {
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 #[repr(C)]
 #[expect(missing_docs)]
-pub struct Quad<B = Background> {
+pub struct Quad<B = Background, G = BorderGradient> {
     pub order: DrawOrder,
     pub border_style: BorderStyle,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub background: B,
     pub border_colors: Edges<Hsla>,
-    pub border_gradient: BorderGradient,
+    pub border_gradient: G,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
 }
@@ -1881,7 +1881,10 @@ impl PathVertex<Pixels> {
 }
 
 impl Quad {
-    fn to_gpu(&self, gradients: &mut GradientBuffer) -> Quad<GpuBackground> {
+    fn to_gpu(
+        &self,
+        gradients: &mut GradientBuffer,
+    ) -> Quad<GpuBackground, crate::GpuBorderGradient> {
         Quad {
             order: self.order,
             border_style: self.border_style,
@@ -1889,7 +1892,7 @@ impl Quad {
             content_mask: self.content_mask,
             background: gradients.background(&self.background),
             border_colors: self.border_colors,
-            border_gradient: self.border_gradient,
+            border_gradient: gradients.border(&self.border_gradient),
             corner_radii: self.corner_radii,
             border_widths: self.border_widths,
         }

@@ -9,6 +9,124 @@ use gpui_wgpu::WgpuOffscreenRenderer;
 
 #[test]
 #[ignore = "requires a GPU adapter"]
+fn long_border_edits_upload_one_stop_and_preserve_phase_and_snapshots() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(128), DevicePixels(128)))?;
+    let original = border_gradient(
+        (0..32)
+            .map(|i| border_color_stop(rgb(0xff0000), i as f32 / 32.))
+            .collect::<Vec<_>>(),
+    )
+    .color_space(ColorSpace::Srgb);
+    let fill = multi_linear_gradient(
+        90.,
+        [
+            linear_color_stop(rgb(0x00ff00), 0.),
+            linear_color_stop(rgb(0x00ff00), 0.5),
+            linear_color_stop(rgb(0x00ff00), 1.),
+        ],
+    );
+    let mut border = original.clone();
+    let paint = |scene: &mut Scene, border| {
+        scene.clear();
+        scene.insert_primitive(Quad {
+            bounds: bounds(0., 0., 128., 128.),
+            content_mask: ContentMask {
+                bounds: bounds(0., 0., 128., 128.),
+            },
+            background: fill.clone(),
+            border_gradient: border,
+            border_widths: Edges::all(ScaledPixels(8.)),
+            ..Default::default()
+        });
+        scene.finish();
+    };
+    let mut scene = Scene::default();
+    for frame in 0..8 {
+        let blue = frame % 2 == 0;
+        border.set_gradient_stop(
+            4,
+            border_color_stop(rgb(if blue { 0x0000ff } else { 0xff0000 }), 0.125),
+        );
+        paint(&mut scene, border.clone());
+        let pixels = renderer.render_rgba(&scene)?;
+        let pixel = &pixels[(2 * 128 + 64) * 4..][..4];
+        assert!(pixel[if blue { 2 } else { 0 }] > 230, "{pixel:?}");
+        assert_gradient_plateau(&pixels[(64 * 128 + 64) * 4..][..4], [0., 1., 0.]);
+        if frame > 0 {
+            assert_eq!(
+                renderer.memory_stats().gradient_upload_bytes,
+                std::mem::size_of::<gpui::GpuGradientStop>() as u64
+            );
+        }
+    }
+    border.set_gradient_stop(4, border_color_stop(rgb(0x0000ff), 0.125));
+    paint(&mut scene, border.clone());
+    renderer.render_rgba(&scene)?;
+    paint(&mut scene, border.phase(0.5));
+    let pixels = renderer.render_rgba(&scene)?;
+    assert_eq!(renderer.memory_stats().gradient_upload_bytes, 0);
+    assert!(pixels[(125 * 128 + 63) * 4 + 2] > 230);
+    paint(&mut scene, original);
+    let pixels = renderer.render_rgba(&scene)?;
+    assert_gradient_plateau(&pixels[(2 * 128 + 64) * 4..][..4], [1., 0., 0.]);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn external_border_matches_inline_at_seams_corners_and_alpha() -> anyhow::Result<()> {
+    let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(96), DevicePixels(96)))?;
+    for color_space in [ColorSpace::Srgb, ColorSpace::Oklab] {
+        for phase in [0., 0.15, 0.5, 0.95] {
+            let render = |renderer: &mut WgpuOffscreenRenderer, stops: &[gpui::BorderColorStop]| {
+                let mut scene = Scene::default();
+                scene.insert_primitive(Quad {
+                    bounds: bounds(4., 4., 88., 88.),
+                    content_mask: ContentMask {
+                        bounds: bounds(0., 0., 96., 96.),
+                    },
+                    border_gradient: border_gradient(stops).color_space(color_space).phase(phase),
+                    border_widths: Edges::all(ScaledPixels(8.)),
+                    corner_radii: Corners::all(ScaledPixels(16.)),
+                    ..Default::default()
+                });
+                scene.finish();
+                renderer.render_rgba(&scene)
+            };
+            // Alpha varies linearly in both color spaces, including across the
+            // cyclic seam. The extra stop must preserve the same interpolation.
+            let inline = [
+                border_color_stop(rgba(0xcc336640), 0.2),
+                border_color_stop(rgba(0xcc3366c0), 0.7),
+            ];
+            let external = [
+                inline[0],
+                border_color_stop(rgba(0xcc336680), 0.45),
+                inline[1],
+            ];
+            let a = render(&mut renderer, &inline)?;
+            let b = render(&mut renderer, &external)?;
+            for (a, b) in a.iter().zip(&b) {
+                assert!(a.abs_diff(*b) <= 1);
+            }
+            let visible = a.chunks_exact(4).filter(|p| p[0] > 30).count();
+            assert!(visible > 500, "border must actually be visible");
+            let opaque = inline.map(|mut stop| {
+                stop.color.a = 1.;
+                stop
+            });
+            assert_ne!(
+                a,
+                render(&mut renderer, &opaque)?,
+                "alpha must affect compositing on the opaque target"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires a GPU adapter"]
 fn long_gradient_edits_refresh_pixels_and_preserve_snapshots() -> anyhow::Result<()> {
     let mut renderer = WgpuOffscreenRenderer::new(size(DevicePixels(380), DevicePixels(64)))?;
     let mut background = multi_linear_gradient(

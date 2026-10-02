@@ -143,10 +143,12 @@ struct BorderColorStop {
 }
 
 struct BorderGradient {
-    stops: array<BorderColorStop, 4>,
+    stops: array<BorderColorStop, 2>,
     stop_count: u32,
     color_space: u32,
     phase: f32,
+    opacity: f32,
+    stop_offset: u32,
     pad: u32,
 }
 

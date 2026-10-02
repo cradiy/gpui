@@ -413,7 +413,7 @@ pub fn border_style_methods(input: TokenStream) -> TokenStream {
         /// Offsets the border gradient around the perimeter.
         #visibility fn border_gradient_phase(mut self, phase: f32) -> Self where Self: Sized {
             if let Some(gradient) = &mut self.style().border_gradient {
-                *gradient = gradient.phase(phase);
+                *gradient = gradient.clone().phase(phase);
             }
             self
         }

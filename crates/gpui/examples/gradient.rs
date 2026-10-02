@@ -245,16 +245,21 @@ impl Render for GradientViewer {
                             .h_full()
                             .rounded_xl()
                             .border_4()
-                            .border_gradient(border_gradient([
-                                border_color_stop(gpui::red(), 0.0),
-                                border_color_stop(gpui::blue(), 0.25),
-                                border_color_stop(gpui::green(), 0.5),
-                                border_color_stop(gpui::yellow(), 0.75),
-                            ]))
+                            .border_gradient(border_gradient(
+                                (0..24)
+                                    .map(|index| {
+                                        let position = index as f32 / 24.;
+                                        border_color_stop(
+                                            gpui::hsla(position, 0.85, 0.55, 1.),
+                                            position,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child("Animated perimeter gradient")
+                            .child("24-stop perimeter gradient")
                             .with_animation(
                                 "border-gradient-flow",
                                 Animation::new(Duration::from_secs(3)).repeat(),

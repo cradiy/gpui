@@ -807,35 +807,41 @@ pub fn border_color_stop(color: impl Into<Hsla>, position: f32) -> BorderColorSt
 }
 
 /// A gradient sampled clockwise along a border's perimeter.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct BorderGradient {
-    pub(crate) stops: [BorderColorStop; 4],
+    pub(crate) stops: [BorderColorStop; 2],
     pub(crate) stop_count: u32,
     pub(crate) color_space: ColorSpace,
     pub(crate) phase: f32,
-    pad: u32,
+    opacity: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extended: Option<Arc<gradient::ExtendedBorderGradient>>,
 }
 
 impl Default for BorderGradient {
     fn default() -> Self {
         Self {
-            stops: [BorderColorStop::default(); 4],
+            stops: [BorderColorStop::default(); 2],
             stop_count: 0,
             color_space: ColorSpace::Oklab,
             phase: 0.0,
-            pad: 0,
+            opacity: 1.0,
+            extended: None,
         }
     }
 }
 
 /// Creates a gradient that follows a border's perimeter clockwise.
-pub fn border_gradient<const N: usize>(stops: [BorderColorStop; N]) -> BorderGradient {
+/// At least two stops are required, with strictly increasing positions in
+/// `0.0..=1.0`. Two stops are stored inline; longer gradients share immutable
+/// storage when cloned. Total scene storage is limited by the GPU buffer capacity.
+pub fn border_gradient(stops: impl AsRef<[BorderColorStop]>) -> BorderGradient {
+    let stops = stops.as_ref();
     assert!(
-        (2..=4).contains(&N),
-        "border gradients require 2 to 4 stops"
+        stops.len() >= 2,
+        "border gradients require at least 2 stops"
     );
-    for stop in &stops {
+    for stop in stops {
         assert!(
             (0.0..=1.0).contains(&stop.position),
             "border gradient stop positions must be between 0 and 1"
@@ -848,14 +854,16 @@ pub fn border_gradient<const N: usize>(stops: [BorderColorStop; N]) -> BorderGra
         );
     }
 
-    let mut padded_stops = [BorderColorStop::default(); 4];
+    let mut padded_stops = [BorderColorStop::default(); 2];
     for (target, stop) in padded_stops.iter_mut().zip(stops) {
-        *target = stop;
+        *target = *stop;
     }
 
     BorderGradient {
         stops: padded_stops,
-        stop_count: N as u32,
+        stop_count: u32::try_from(stops.len())
+            .expect("gradient stop count exceeds GPU address space"),
+        extended: (stops.len() > 2).then(|| Arc::new(gradient::ExtendedBorderGradient::new(stops))),
         ..Default::default()
     }
 }
@@ -873,18 +881,18 @@ impl BorderGradient {
         self
     }
 
-    /// Returns true when every gradient stop is fully transparent.
+    /// Returns true when the gradient is fully transparent.
     pub fn is_transparent(&self) -> bool {
-        self.stops[..self.stop_count as usize]
-            .iter()
-            .all(|stop| stop.color.is_transparent())
+        self.opacity == 0.
+            || self
+                .gradient_stops()
+                .iter()
+                .all(|stop| stop.color.is_transparent())
     }
 
     pub(crate) fn opacity(&self, factor: f32) -> Self {
-        let mut gradient = *self;
-        for stop in &mut gradient.stops[..gradient.stop_count as usize] {
-            stop.color = stop.color.opacity(factor);
-        }
+        let mut gradient = self.clone();
+        gradient.opacity *= factor.clamp(0., 1.);
         gradient
     }
 }

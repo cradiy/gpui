@@ -434,45 +434,54 @@ fn effect(input: EffectInput, params: EffectParams) -> vec4<f32> {
             vec![
                 (
                     "order".into(),
-                    std::mem::offset_of!(gpui::Quad, order) as u32
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, order)
+                        as u32
                 ),
                 (
                     "border_style".into(),
-                    std::mem::offset_of!(gpui::Quad, border_style) as u32,
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, border_style)
+                        as u32,
                 ),
                 (
                     "bounds".into(),
-                    std::mem::offset_of!(gpui::Quad, bounds) as u32
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, bounds)
+                        as u32
                 ),
                 (
                     "content_mask".into(),
-                    std::mem::offset_of!(gpui::Quad, content_mask) as u32,
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, content_mask)
+                        as u32,
                 ),
                 (
                     "background".into(),
-                    std::mem::offset_of!(gpui::Quad, background) as u32,
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, background)
+                        as u32,
                 ),
                 (
                     "border_colors".into(),
-                    std::mem::offset_of!(gpui::Quad, border_colors) as u32,
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, border_colors)
+                        as u32,
                 ),
                 (
                     "border_gradient".into(),
-                    std::mem::offset_of!(gpui::Quad, border_gradient) as u32,
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, border_gradient)
+                        as u32,
                 ),
                 (
                     "corner_radii".into(),
-                    std::mem::offset_of!(gpui::Quad, corner_radii) as u32,
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, corner_radii)
+                        as u32,
                 ),
                 (
                     "border_widths".into(),
-                    std::mem::offset_of!(gpui::Quad, border_widths) as u32,
+                    std::mem::offset_of!(gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>, border_widths)
+                        as u32,
                 ),
             ]
         );
         assert_eq!(
             shader_struct_span(&module, "Quad") as usize,
-            std::mem::size_of::<gpui::Quad>()
+            std::mem::size_of::<gpui::Quad<gpui::GpuBackground, gpui::GpuBorderGradient>>()
         );
         assert_eq!(
             shader_struct_offsets(&module, "PolychromeSprite"),

@@ -674,6 +674,7 @@ impl Style {
 
                 if self
                     .border_gradient
+                    .as_ref()
                     .is_some_and(|gradient| !gradient.is_transparent())
                     || self
                         .resolved_border_colors()
@@ -792,8 +793,8 @@ impl Style {
                 border_colors,
                 self.border_style,
             );
-            if let Some(gradient) = self.border_gradient {
-                border_quad = border_quad.border_gradient(gradient);
+            if let Some(gradient) = &self.border_gradient {
+                border_quad = border_quad.border_gradient(gradient.clone());
             }
             window.paint_quad(border_quad);
         }
@@ -807,6 +808,7 @@ impl Style {
     fn is_border_visible(&self) -> bool {
         (self
             .border_gradient
+            .as_ref()
             .is_some_and(|gradient| !gradient.is_transparent())
             || self
                 .resolved_border_colors()

@@ -921,6 +921,9 @@ mod tests {
         ]);
         let mut element = div().border_gradient(gradient).border_gradient_phase(0.75);
 
-        assert_eq!(element.style().border_gradient.unwrap().phase, 0.75);
+        assert_eq!(
+            element.style().border_gradient.as_ref().unwrap().phase,
+            0.75
+        );
     }
 }

@@ -21,8 +21,6 @@ struct QuadVarying {
     @location(3) @interpolate(flat) border_color_left: vec4<f32>,
     @location(4) @interpolate(flat) border_gradient_color0: vec4<f32>,
     @location(5) @interpolate(flat) border_gradient_color1: vec4<f32>,
-    @location(6) @interpolate(flat) border_gradient_color2: vec4<f32>,
-    @location(7) @interpolate(flat) border_gradient_color3: vec4<f32>,
     @location(8) @interpolate(flat) quad_id: u32,
     // TODO: use `clip_distance` once Naga supports it
     @location(9) clip_distances: vec4<f32>,
@@ -47,19 +45,19 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.border_color_right = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.right));
     out.border_color_bottom = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.bottom));
     out.border_color_left = linear_srgb_to_oklab(hsla_to_rgba(quad.border_colors.left));
-    var gradient_colors = array<vec4<f32>, 4>();
-    for (var ix = 0u; ix < 4u; ix += 1u) {
-        let color = hsla_to_rgba(quad.border_gradient.stops[ix].color);
-        gradient_colors[ix] = select(
-            linear_to_srgba(color),
-            linear_srgb_to_oklab(color),
-            quad.border_gradient.color_space == 1u,
-        );
+    var gradient_colors = array<vec4<f32>, 2>();
+    if (quad.border_gradient.stop_offset == 0u && quad.border_gradient.stop_count >= 2u) {
+        for (var ix = 0u; ix < 2u; ix += 1u) {
+            let color = hsla_to_rgba(quad.border_gradient.stops[ix].color);
+            gradient_colors[ix] = select(
+                linear_to_srgba(color),
+                linear_srgb_to_oklab(color),
+                quad.border_gradient.color_space == 1u,
+            );
+        }
     }
     out.border_gradient_color0 = gradient_colors[0];
     out.border_gradient_color1 = gradient_colors[1];
-    out.border_gradient_color2 = gradient_colors[2];
-    out.border_gradient_color3 = gradient_colors[3];
     out.quad_id = instance_id;
     out.clip_distances = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
     return out;
@@ -115,35 +113,52 @@ fn border_perimeter_position(
     return position / perimeter;
 }
 
+fn border_stop_position(gradient: BorderGradient, index: u32) -> f32 {
+    if (gradient.stop_offset == 0u) { return gradient.stops[index].position; }
+    return gradient_stops[gradient.stop_offset - 1u + index].position;
+}
+
+fn border_stop_color(gradient: BorderGradient, colors: array<vec4<f32>, 2>, index: u32) -> vec4<f32> {
+    if (gradient.stop_offset == 0u) { return colors[index]; }
+    let color = hsla_to_rgba(gradient_stops[gradient.stop_offset - 1u + index].color);
+    return select(linear_to_srgba(color), linear_srgb_to_oklab(color), gradient.color_space == 1u);
+}
+
 fn sample_border_gradient(
     gradient: BorderGradient,
     position: f32,
-    colors: array<vec4<f32>, 4>,
+    colors: array<vec4<f32>, 2>,
 ) -> vec4<f32> {
     let count = gradient.stop_count;
     var left_ix = count - 1u;
     var right_ix = 0u;
     var sample_position = position;
-    var left_position = gradient.stops[left_ix].position;
-    var right_position = gradient.stops[0].position + 1.0;
+    var left_position = border_stop_position(gradient, left_ix);
+    var right_position = border_stop_position(gradient, 0u) + 1.0;
 
-    for (var ix = 0u; ix < 3u; ix += 1u) {
-        if (ix + 1u < count
-            && position >= gradient.stops[ix].position
-            && position < gradient.stops[ix + 1u].position) {
-            left_ix = ix;
-            right_ix = ix + 1u;
-            left_position = gradient.stops[left_ix].position;
-            right_position = gradient.stops[right_ix].position;
+    if (position >= border_stop_position(gradient, 0u) && position < left_position) {
+        var low = 0u;
+        var high = count - 1u;
+        loop {
+            if (high - low <= 1u) { break; }
+            let mid = low + (high - low) / 2u;
+            if (position < border_stop_position(gradient, mid)) { high = mid; }
+            else { low = mid; }
         }
+        left_ix = low;
+        right_ix = high;
+        left_position = border_stop_position(gradient, left_ix);
+        right_position = border_stop_position(gradient, right_ix);
     }
-    if (right_ix == 0u && sample_position < gradient.stops[0].position) {
+    if (right_ix == 0u && sample_position < border_stop_position(gradient, 0u)) {
         sample_position += 1.0;
     }
 
     let delta = max(0.0001, right_position - left_position);
     let t = clamp((sample_position - left_position) / delta, 0.0, 1.0);
-    return mix(colors[left_ix], colors[right_ix], t);
+    var color = mix(border_stop_color(gradient, colors, left_ix), border_stop_color(gradient, colors, right_ix), t);
+    color.a *= gradient.opacity;
+    return color;
 }
 
 @fragment
@@ -339,11 +354,9 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             let gradient_color = sample_border_gradient(
                 quad.border_gradient,
                 gradient_position,
-                array<vec4<f32>, 4>(
+                array<vec4<f32>, 2>(
                     input.border_gradient_color0,
                     input.border_gradient_color1,
-                    input.border_gradient_color2,
-                    input.border_gradient_color3,
                 ),
             );
             border_color = select(

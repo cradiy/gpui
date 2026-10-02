@@ -25,7 +25,7 @@ use windows::{
 use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
 use crate::*;
 use gpui::*;
-type Quad = gpui::Quad<GpuBackground>;
+type Quad = gpui::Quad<GpuBackground, gpui::GpuBorderGradient>;
 type MonochromeSprite = gpui::MonochromeSprite<GpuBackground>;
 type SubpixelSprite = gpui::SubpixelSprite<GpuBackground>;
 

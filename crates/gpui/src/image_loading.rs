@@ -8,6 +8,7 @@ use smallvec::SmallVec;
 use std::{io::Cursor, sync::Arc};
 
 mod animation;
+mod color_profile;
 mod playback;
 pub use animation::{ImageAnimation, ImageAnimationOptions};
 pub(crate) use playback::AnimationPlayback;
@@ -159,7 +160,7 @@ pub(crate) fn decode_image(
                 let _ = decoder.set_background_color(image::Rgba([0, 0, 0, 0]));
                 collect_frames(decoder.into_frames(), limits)?
             } else {
-                single_frame(decoder)?
+                single_frame(decoder, false, limits)?
             }
         }
         _ => {
@@ -169,14 +170,27 @@ pub(crate) fn decode_image(
             reader.limits(header_limits);
             let mut decoder = reader.into_decoder()?;
             limits.prepare_decoder(&mut decoder)?;
-            single_frame(decoder)?
+            single_frame(decoder, format == ImageFormat::Png, limits)?
         }
     };
     Ok(Arc::new(RenderImage::new(frames)))
 }
 
-fn single_frame(decoder: impl ImageDecoder) -> Result<SmallVec<[Frame; 1]>, ImageCacheError> {
-    let mut frame = Frame::new(DynamicImage::from_decoder(decoder)?.into_rgba8());
+fn single_frame(
+    mut decoder: impl ImageDecoder,
+    use_icc: bool,
+    limits: ImageLoadLimits,
+) -> Result<SmallVec<[Frame; 1]>, ImageCacheError> {
+    let profile = if use_icc {
+        decoder.icc_profile()?
+    } else {
+        None
+    };
+    let mut image = DynamicImage::from_decoder(decoder)?;
+    if let Some(profile) = profile {
+        image = color_profile::to_srgb(image, &profile, limits)?;
+    }
+    let mut frame = Frame::new(image.into_rgba8());
     convert_to_bgra(&mut frame);
     Ok(SmallVec::from_elem(frame, 1))
 }

@@ -78,6 +78,156 @@ fn assert_limit(result: Result<Arc<RenderImage>, ImageCacheError>, expected: &st
     }
 }
 
+fn png_with_profile(image: &DynamicImage, icc: Option<Vec<u8>>) -> Vec<u8> {
+    use image::ImageEncoder;
+    let mut bytes = Vec::new();
+    let mut encoder = image::codecs::png::PngEncoder::new(&mut bytes);
+    if let Some(icc) = icc {
+        encoder.set_icc_profile(icc).unwrap();
+    }
+    image.write_with_encoder(encoder).unwrap();
+    bytes
+}
+
+#[test]
+fn png_display_p3_converts_to_srgb_and_preserves_straight_alpha() {
+    let samples = [
+        128, 64, 32, 0, 64, 128, 192, 64, 18, 90, 170, 255, 251, 7, 128, 128,
+    ];
+    // D65 Display P3 -> linear sRGB matrix followed by the sRGB transfer curve,
+    // independently evaluated and rounded to 8-bit; out-of-gamut channels clip.
+    let expected = [
+        [21u8, 59, 138, 0],
+        [197, 130, 32, 64],
+        [176, 92, 0, 255],
+        [129, 0, 255, 128],
+    ];
+    for image in [
+        DynamicImage::ImageRgba8(RgbaImage::from_raw(2, 2, samples.to_vec()).unwrap()),
+        DynamicImage::ImageRgba16(
+            image::ImageBuffer::from_raw(2, 2, samples.map(|v| u16::from(v) * 257).to_vec())
+                .unwrap(),
+        ),
+    ] {
+        let profile = moxcms::ColorProfile::new_display_p3().encode().unwrap();
+        let decoded = decode(
+            &png_with_profile(&image, Some(profile)),
+            ImageLoadLimits::default(),
+        )
+        .unwrap();
+        for (actual, expected) in decoded.as_bytes(0).unwrap().chunks_exact(4).zip(expected) {
+            for channel in 0..3 {
+                assert!(
+                    actual[channel].abs_diff(expected[channel]) <= 2,
+                    "{actual:?} != {expected:?}"
+                );
+            }
+            assert_eq!(actual[3], expected[3]);
+        }
+    }
+}
+
+#[test]
+fn png_gray_icc_converts_gamma_and_preserves_alpha() {
+    for image in [
+        DynamicImage::ImageLumaA8(
+            image::ImageBuffer::from_raw(2, 1, vec![128, 73, 64, 0]).unwrap(),
+        ),
+        DynamicImage::ImageLumaA16(
+            image::ImageBuffer::from_raw(2, 1, vec![32768, 73 * 257, 16384, 0]).unwrap(),
+        ),
+    ] {
+        let profile = moxcms::ColorProfile::new_gray_with_gamma(1.0)
+            .encode()
+            .unwrap();
+        let decoded = decode(
+            &png_with_profile(&image, Some(profile)),
+            ImageLoadLimits::default(),
+        )
+        .unwrap();
+        for (pixel, expected) in decoded
+            .as_bytes(0)
+            .unwrap()
+            .chunks_exact(4)
+            .zip([[188u8, 188, 188, 73], [137, 137, 137, 0]])
+        {
+            for channel in 0..3 {
+                assert!(pixel[channel].abs_diff(expected[channel]) <= 1);
+            }
+            assert_eq!(pixel[3], expected[3]);
+        }
+    }
+}
+
+#[test]
+fn png_untagged_srgb_and_invalid_profiles_keep_sample_values() {
+    let image = DynamicImage::ImageRgba8(
+        RgbaImage::from_raw(2, 1, vec![20, 40, 60, 71, 180, 120, 80, 0]).unwrap(),
+    );
+    for profile in [
+        None,
+        Some(moxcms::ColorProfile::new_srgb().encode().unwrap()),
+        Some(b"not an ICC profile".to_vec()),
+        Some(
+            moxcms::ColorProfile::new_gray_with_gamma(1.0)
+                .encode()
+                .unwrap(),
+        ),
+    ] {
+        let decoded = decode(
+            &png_with_profile(&image, profile),
+            ImageLoadLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            decoded.as_bytes(0).unwrap(),
+            &[60, 40, 20, 71, 80, 120, 180, 0]
+        );
+    }
+}
+
+#[test]
+fn png_16bit_icc_conversion_precedes_8bit_quantization() {
+    let image = DynamicImage::ImageLuma16(image::ImageBuffer::from_raw(1, 1, vec![128]).unwrap());
+    let bytes = png_with_profile(
+        &image,
+        Some(
+            moxcms::ColorProfile::new_gray_with_gamma(1.0)
+                .encode()
+                .unwrap(),
+        ),
+    );
+    let decoded = decode(&bytes, ImageLoadLimits::default()).unwrap();
+    // sRGB's linear segment: 128 / 65535 * 12.92 * 255 rounds to 6.
+    // Quantizing the source first would discard this near-black sample.
+    assert_eq!(decoded.as_bytes(0).unwrap(), &[6, 6, 6, 255]);
+}
+
+#[test]
+fn png_icc_conversion_obeys_decoded_allocation_limit() {
+    let image = DynamicImage::ImageRgb16(
+        image::ImageBuffer::from_raw(1, 1, vec![32768, 16384, 8192]).unwrap(),
+    );
+    let profile = moxcms::ColorProfile::new_display_p3().encode().unwrap();
+    let error = color_profile::to_srgb(
+        image,
+        &profile,
+        ImageLoadLimits {
+            max_decoded_bytes: 6,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ImageCacheError::LimitExceeded {
+            resource: "decoded bytes",
+            actual: 8,
+            limit: 6,
+        }
+    ));
+}
+
 #[test]
 fn static_image_limits_and_bgra_output() {
     let mut bytes = Cursor::new(Vec::new());

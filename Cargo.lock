@@ -2567,6 +2567,7 @@ dependencies = [
  "lyon",
  "mach2",
  "metal",
+ "moxcms",
  "num_cpus",
  "objc",
  "objc2 0.6.3",

@@ -47,6 +47,14 @@ The features on `gpui_platform` are platform-specific, so the list above is a sa
 - [Ownership and data flow](_ownership_and_data_flow)
 - [Accessibility](_accessibility)
 
+### Image colors
+
+The built-in PNG loader converts embedded RGB and grayscale ICC profiles to SDR
+sRGB, preserving transparency. Images without a profile keep their decoded sample
+values and are treated as sRGB. Invalid or unsupported profiles produce a warning
+and use the same fallback. Output is 8-bit; wide-gamut display output and HDR tone
+mapping are not supported by this conversion.
+
 ### File clipboard
 
 Linux applications can exchange local file lists and copy/cut intent with file

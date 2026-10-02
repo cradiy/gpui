@@ -96,36 +96,7 @@ impl SystemFileDrag {
             options.allowed_actions.allows(options.preferred_action),
             "preferred drag action must be allowed"
         );
-        let mut bytes = Vec::new();
-        for path in paths.iter() {
-            anyhow::ensure!(path.is_absolute(), "file drag paths must be absolute");
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStrExt;
-                let path = path.as_os_str().as_bytes();
-                anyhow::ensure!(!path.contains(&0), "file drag paths cannot contain NUL");
-                bytes.extend_from_slice(b"file://");
-                for &byte in path {
-                    if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
-                        bytes.push(byte);
-                    } else {
-                        const HEX: &[u8] = b"0123456789ABCDEF";
-                        bytes.extend_from_slice(&[
-                            b'%',
-                            HEX[(byte >> 4) as usize],
-                            HEX[(byte & 15) as usize],
-                        ]);
-                    }
-                }
-            }
-            #[cfg(target_os = "windows")]
-            {
-                let url = http_client::Url::from_file_path(path)
-                    .map_err(|_| anyhow::anyhow!("invalid file drag path"))?;
-                bytes.extend_from_slice(url.as_str().as_bytes());
-            }
-            bytes.extend_from_slice(b"\r\n");
-        }
+        let bytes = crate::clipboard_files::encode_file_uri_list(&paths)?;
         Ok(Self {
             uri_list: bytes.into(),
             options,

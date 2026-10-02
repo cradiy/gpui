@@ -2501,7 +2501,7 @@ pub struct ClipboardItem {
     pub entries: Vec<ClipboardEntry>,
 }
 
-/// Either a ClipboardString or a ClipboardImage
+/// Text, image, or file clipboard data.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClipboardEntry {
     /// A string entry
@@ -2510,6 +2510,8 @@ pub enum ClipboardEntry {
     Image(Image),
     /// A file entry
     ExternalPaths(crate::ExternalPaths),
+    /// Local files with copy or cut intent.
+    Files(crate::ClipboardFiles),
 }
 
 impl ClipboardItem {
@@ -2547,7 +2549,8 @@ impl ClipboardItem {
     }
 
     /// Concatenates together all the ClipboardString entries in the item.
-    /// Returns None if there were no ClipboardString entries.
+    /// If the result is empty, returns file paths separated by newlines for text consumers.
+    /// Use `files()` to retain exact path bytes and the paste operation.
     pub fn text(&self) -> Option<String> {
         let mut answer = String::new();
 
@@ -2559,11 +2562,17 @@ impl ClipboardItem {
 
         if answer.is_empty() {
             for entry in self.entries.iter() {
-                if let ClipboardEntry::ExternalPaths(paths) = entry {
-                    for path in &paths.0 {
-                        use std::fmt::Write as _;
-                        _ = write!(answer, "{}", path.display());
+                let paths = match entry {
+                    ClipboardEntry::ExternalPaths(paths) => paths.paths(),
+                    ClipboardEntry::Files(files) => files.paths(),
+                    _ => continue,
+                };
+                for path in paths {
+                    use std::fmt::Write as _;
+                    if !answer.is_empty() {
+                        answer.push('\n');
                     }
+                    _ = write!(answer, "{}", path.display());
                 }
             }
         }

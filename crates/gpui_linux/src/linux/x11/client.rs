@@ -1770,8 +1770,8 @@ impl LinuxClient for X11Client {
         let state = self.0.borrow_mut();
         state
             .clipboard
-            .set_text(
-                std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+            .set_item(
+                &item,
                 clipboard::ClipboardKind::Primary,
                 clipboard::WaitConfig::None,
             )
@@ -1781,16 +1781,18 @@ impl LinuxClient for X11Client {
 
     fn write_to_clipboard(&self, item: gpui::ClipboardItem) {
         let mut state = self.0.borrow_mut();
-        state
+        let written = state
             .clipboard
-            .set_text(
-                std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+            .set_item(
+                &item,
                 clipboard::ClipboardKind::Clipboard,
                 clipboard::WaitConfig::None,
             )
             .context("X11: Failed to write to clipboard (clipboard)")
             .log_with_level(log::Level::Debug);
-        state.clipboard_item.replace(item);
+        if written.is_some() {
+            state.clipboard_item.replace(item);
+        }
     }
 
     fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {

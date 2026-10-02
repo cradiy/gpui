@@ -14,6 +14,7 @@ mod asset_cache;
 mod assets;
 mod backdrop;
 mod bounds_tree;
+mod clipboard_files;
 mod color;
 mod color3d;
 /// The default colors used by GPUI.
@@ -107,6 +108,7 @@ pub(crate) use arena::*;
 pub use asset_cache::*;
 pub use assets::*;
 pub use backdrop::*;
+pub use clipboard_files::*;
 pub use color::*;
 pub use color3d::*;
 pub use ctor::ctor;

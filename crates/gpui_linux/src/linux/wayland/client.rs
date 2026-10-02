@@ -89,7 +89,7 @@ use crate::linux::{
     is_within_click_distance, keystroke_underlying_dead_key, open_uri_internal,
     read_fd_with_timeout, reveal_path_internal,
     wayland::{
-        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
+        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE},
         cursor::Cursor,
         external_surface::ExternalWaylandSurfaceRoleFactory,
         serial::{SerialKind, SerialTracker},
@@ -504,9 +504,9 @@ fn file_actions(files: Option<&gpui::SystemFileDrag>) -> DndAction {
     result
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum WaylandDataSourceKind {
-    Clipboard,
+    Clipboard(crate::linux::clipboard::ClipboardSource),
     InternalDrag(DragSessionId),
 }
 
@@ -1710,10 +1710,18 @@ impl LinuxClient for WaylandClient {
             return;
         };
         if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
+            let source = match crate::linux::clipboard::ClipboardSource::new(&item) {
+                Ok(source) => source,
+                Err(error) => {
+                    log::warn!("cannot write file clipboard: {error:#}");
+                    return;
+                }
+            };
             state.clipboard.set_primary(item);
             let serial = state.serial_tracker.get_latest();
-            let data_source = primary_selection_manager.create_source(&state.globals.qh, ());
-            for mime_type in TEXT_MIME_TYPES {
+            let data_source =
+                primary_selection_manager.create_source(&state.globals.qh, source.clone());
+            for (mime_type, _) in &source.0 {
                 data_source.offer(mime_type.to_string());
             }
             data_source.offer(state.clipboard.self_mime());
@@ -1730,11 +1738,20 @@ impl LinuxClient for WaylandClient {
             return;
         };
         if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
+            let source = match crate::linux::clipboard::ClipboardSource::new(&item) {
+                Ok(source) => source,
+                Err(error) => {
+                    log::warn!("cannot write file clipboard: {error:#}");
+                    return;
+                }
+            };
             state.clipboard.set(item);
             let serial = state.serial_tracker.get_latest();
-            let data_source = data_device_manager
-                .create_data_source(&state.globals.qh, WaylandDataSourceKind::Clipboard);
-            for mime_type in TEXT_MIME_TYPES {
+            let data_source = data_device_manager.create_data_source(
+                &state.globals.qh,
+                WaylandDataSourceKind::Clipboard(source.clone()),
+            );
+            for (mime_type, _) in &source.0 {
                 data_source.offer(mime_type.to_string());
             }
             data_source.offer(state.clipboard.self_mime());
@@ -3367,10 +3384,13 @@ impl Dispatch<wl_data_source::WlDataSource, WaylandDataSourceKind> for WaylandCl
         let mut state = client.borrow_mut();
 
         match (kind, event) {
-            (WaylandDataSourceKind::Clipboard, wl_data_source::Event::Send { mime_type, fd }) => {
-                state.clipboard.send(mime_type, fd);
+            (
+                WaylandDataSourceKind::Clipboard(source),
+                wl_data_source::Event::Send { mime_type, fd },
+            ) => {
+                state.clipboard.send(source, &mime_type, fd);
             }
-            (WaylandDataSourceKind::Clipboard, wl_data_source::Event::Cancelled) => {
+            (WaylandDataSourceKind::Clipboard(_), wl_data_source::Event::Cancelled) => {
                 data_source.destroy();
             }
             (
@@ -3586,14 +3606,17 @@ impl Dispatch<zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1, ()>
     }
 }
 
-impl Dispatch<zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1, ()>
-    for WaylandClientStatePtr
+impl
+    Dispatch<
+        zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
+        crate::linux::clipboard::ClipboardSource,
+    > for WaylandClientStatePtr
 {
     fn event(
         this: &mut Self,
         selection_source: &zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
         event: zwp_primary_selection_source_v1::Event,
-        _: &(),
+        source: &crate::linux::clipboard::ClipboardSource,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -3602,7 +3625,7 @@ impl Dispatch<zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1, ()>
 
         match event {
             zwp_primary_selection_source_v1::Event::Send { mime_type, fd } => {
-                state.clipboard.send_primary(mime_type, fd);
+                state.clipboard.send(source, &mime_type, fd);
             }
             zwp_primary_selection_source_v1::Event::Cancelled => {
                 selection_source.destroy();

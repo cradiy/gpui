@@ -19,7 +19,6 @@
 // https://freedesktop.org/wiki/ClipboardManager/
 
 use std::{
-    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, hash_map::Entry},
     sync::{
@@ -34,7 +33,7 @@ use std::{
 use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, NONE,
-    connection::Connection,
+    connection::{Connection, RequestConnection},
     protocol::{
         Event,
         xproto::{
@@ -47,6 +46,7 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
+use crate::linux::clipboard::{ClipboardSource, GNOME_FILES, URI_LIST, decode_files};
 use gpui::{ClipboardItem, Image, ImageFormat, hash};
 use strum::IntoEnumIterator;
 
@@ -78,7 +78,9 @@ x11rb::atom_manager! {
         TEXT_MIME_UNKNOWN: b"text/plain",
 
         // HTML: b"text/html",
-        // URI_LIST: b"text/uri-list",
+        URI_LIST: b"text/uri-list",
+        GNOME_FILES: b"x-special/gnome-copied-files",
+        KDE_CUT: b"application/x-kde-cutselection",
 
         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
         JPEG_MIME: ImageFormat::mime_type(ImageFormat::Jpeg).as_bytes(),
@@ -240,6 +242,9 @@ impl Inner {
         }
 
         let server_win = self.server.win_id;
+        let selection_state = self.selection_of(selection);
+        // Block requests until the new owner and its data have both been published.
+        let mut data_guard = selection_state.data.write();
 
         // ICCCM version 2, section 2.6.1.3 states that we should re-assert ownership whenever data
         // changes.
@@ -251,8 +256,7 @@ impl Inner {
         self.server.conn.flush().map_err(into_unknown)?;
 
         // Just setting the data, and the `serve_requests` will take care of the rest.
-        let selection = self.selection_of(selection);
-        let mut data_guard = selection.data.write();
+        let selection = selection_state;
         *data_guard = Some(data);
 
         // Lock the mutex to both ensure that no wakers of `data_changed` can wake us between
@@ -287,8 +291,8 @@ impl Inner {
         if self.is_owner(selection)? {
             let data = self.selection_of(selection).data.read();
             if let Some(data_list) = &*data {
-                for data in data_list {
-                    for format in formats {
+                for format in formats {
+                    for data in data_list {
                         if *format == data.format {
                             return Ok(data.clone());
                         }
@@ -666,6 +670,15 @@ impl Inner {
     }
 
     fn handle_selection_request(&self, event: SelectionRequestEvent) -> Result<()> {
+        // ICCCM clients may omit the destination property.
+        let event = SelectionRequestEvent {
+            property: if event.property == NONE {
+                event.target
+            } else {
+                event.property
+            },
+            ..event
+        };
         let selection = match self.kind_of(event.selection) {
             Some(kind) => kind,
             None => {
@@ -698,6 +711,8 @@ impl Inner {
                     }
                 }
             }
+            targets.sort_unstable();
+            targets.dedup();
             self.server
                 .conn
                 .change_property32(
@@ -715,18 +730,50 @@ impl Inner {
             log::trace!("Handling request for (probably) the clipboard contents.");
             let data = self.selection_of(selection).data.read();
             if let Some(data_list) = &*data {
-                success = match data_list.iter().find(|d| d.format == event.target) {
+                let requested =
+                    if [self.atoms.UTF8_MIME_0, self.atoms.UTF8_MIME_1].contains(&event.target) {
+                        self.atoms.UTF8_STRING
+                    } else {
+                        event.target
+                    };
+                success = match data_list.iter().find(|d| d.format == requested) {
                     Some(data) => {
-                        self.server
-                            .conn
-                            .change_property8(
-                                PropMode::REPLACE,
-                                event.requestor,
-                                event.property,
-                                event.target,
-                                &data.bytes,
-                            )
-                            .map_err(into_unknown)?;
+                        // A property may be larger than a single X11 request. Publish it
+                        // completely before sending SelectionNotify.
+                        let chunk_size =
+                            (self.server.conn.maximum_request_bytes().saturating_sub(64))
+                                .clamp(1, 65536);
+                        let mut chunks = data.bytes.chunks(chunk_size).peekable();
+                        let mut mode = PropMode::REPLACE;
+                        if chunks.peek().is_none() {
+                            self.server
+                                .conn
+                                .change_property8(
+                                    mode,
+                                    event.requestor,
+                                    event.property,
+                                    event.target,
+                                    &[],
+                                )
+                                .map_err(into_unknown)?
+                                .check()
+                                .map_err(into_unknown)?;
+                        }
+                        for chunk in chunks {
+                            self.server
+                                .conn
+                                .change_property8(
+                                    mode,
+                                    event.requestor,
+                                    event.property,
+                                    event.target,
+                                    chunk,
+                                )
+                                .map_err(into_unknown)?
+                                .check()
+                                .map_err(into_unknown)?;
+                            mode = PropMode::APPEND;
+                        }
                         self.server.conn.flush().map_err(into_unknown)?;
                         true
                     }
@@ -885,9 +932,25 @@ fn serve_requests(context: Arc<Inner>) -> Result<(), Box<dyn std::error::Error>>
                     context.atom_name(event.target),
                 );
                 // Someone is requesting the clipboard content from us.
-                context
-                    .handle_selection_request(event)
-                    .map_err(into_unknown)?;
+                if let Err(error) = context.handle_selection_request(event) {
+                    log::warn!("clipboard request failed: {error}");
+                    let _ = context.server.conn.send_event(
+                        false,
+                        event.requestor,
+                        EventMask::NO_EVENT,
+                        SelectionNotifyEvent {
+                            response_type: SELECTION_NOTIFY_EVENT,
+                            sequence: event.sequence,
+                            time: event.time,
+                            requestor: event.requestor,
+                            selection: event.selection,
+                            target: event.target,
+                            property: NONE,
+                        },
+                    );
+                    let _ = context.server.conn.flush();
+                    continue;
+                }
 
                 // if we are in the progress of saving to the clipboard manager
                 // make sure we save that we have finished writing
@@ -977,16 +1040,32 @@ impl Clipboard {
         Ok(Self { inner: ctx })
     }
 
-    pub(crate) fn set_text(
+    pub(crate) fn set_item(
         &self,
-        message: Cow<'_, str>,
+        item: &ClipboardItem,
         selection: ClipboardKind,
         wait: WaitConfig,
     ) -> Result<()> {
-        let data = vec![ClipboardData {
-            bytes: message.into_owned().into_bytes(),
-            format: self.inner.atoms.UTF8_STRING,
-        }];
+        let source = ClipboardSource::new(item).map_err(|_| Error::ConversionFailure)?;
+        let data = source
+            .0
+            .into_iter()
+            .map(|(mime, bytes)| {
+                let format = self
+                    .inner
+                    .server
+                    .conn
+                    .intern_atom(false, mime.as_bytes())
+                    .map_err(into_unknown)?
+                    .reply()
+                    .map_err(into_unknown)?
+                    .atom;
+                Ok(ClipboardData {
+                    format,
+                    bytes: bytes.to_vec(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         self.inner.write(data, selection, wait)
     }
 
@@ -1004,21 +1083,6 @@ impl Clipboard {
         }
     }
 
-    #[allow(unused)]
-    pub(crate) fn set_image(
-        &self,
-        image: Image,
-        selection: ClipboardKind,
-        wait: WaitConfig,
-    ) -> Result<()> {
-        let format = self.image_format_atom(image.format);
-        let data = vec![ClipboardData {
-            bytes: image.bytes,
-            format: self.inner.atoms.PNG__MIME,
-        }];
-        self.inner.write(data, selection, wait)
-    }
-
     pub(crate) fn get_any(&self, selection: ClipboardKind) -> Result<ClipboardItem> {
         let image_entries = ImageFormat::iter()
             .map(|format| (self.image_format_atom(format), format))
@@ -1033,13 +1097,49 @@ impl Clipboard {
             self.inner.atoms.TEXT_MIME_UNKNOWN,
         ];
 
-        // image formats first, as they are more specific, and read will return the first
-        // format that the contents can be converted to
+        // Prefer files, then images, then text representations of the same selection.
         let mut format_atoms = Vec::with_capacity(image_entries.len() + text_format_atoms.len());
+        format_atoms.extend([self.inner.atoms.GNOME_FILES, self.inner.atoms.URI_LIST]);
         format_atoms.extend(image_entries.iter().map(|(atom, _)| *atom));
         format_atoms.extend_from_slice(text_format_atoms);
 
+        let owner = || -> Result<u32> {
+            Ok(self
+                .inner
+                .server
+                .conn
+                .get_selection_owner(self.inner.atom_of(selection))
+                .map_err(into_unknown)?
+                .reply()
+                .map_err(into_unknown)?
+                .owner)
+        };
+        let initial_owner = owner()?;
         let result = self.inner.read(&format_atoms, selection)?;
+        if result.format == self.inner.atoms.GNOME_FILES {
+            return decode_files(GNOME_FILES, &result.bytes, None)
+                .map_err(|_| Error::ConversionFailure);
+        }
+        if result.format == self.inner.atoms.URI_LIST {
+            let cut = self.inner.read(&[self.inner.atoms.KDE_CUT], selection).ok();
+            if cut.as_ref().is_some_and(|data| data.bytes == b"1") {
+                // An owner can replace its selection without changing its window ID.
+                let current = self.inner.read(&[self.inner.atoms.URI_LIST], selection)?;
+                if current.bytes != result.bytes {
+                    return Err(Error::ContentNotAvailable);
+                }
+            }
+            // Never combine paths with another application's cut marker.
+            if owner()? != initial_owner {
+                return Err(Error::ContentNotAvailable);
+            }
+            return decode_files(
+                URI_LIST,
+                &result.bytes,
+                cut.as_ref().map(|data| data.bytes.as_slice()),
+            )
+            .map_err(|_| Error::ConversionFailure);
+        }
 
         log::trace!(
             "read clipboard as format {:?}",

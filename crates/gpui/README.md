@@ -47,6 +47,36 @@ The features on `gpui_platform` are platform-specific, so the list above is a sa
 - [Ownership and data flow](_ownership_and_data_flow)
 - [Accessibility](_accessibility)
 
+### File clipboard
+
+Linux applications can exchange local file lists and copy/cut intent with file
+managers through the Wayland or X11 clipboard:
+
+```rust,ignore
+let item = ClipboardItem::new_files(paths, ClipboardFileOperation::Cut)?;
+cx.write_to_clipboard(item);
+
+if let Some(files) = cx.read_from_clipboard().and_then(|item| item.files()) {
+    // Use files.paths() and files.operation() to implement the application's paste action.
+}
+```
+
+Provide at least one absolute path. GPUI preserves path spelling,
+including symlinks and non-UTF-8 Unix filenames, without reading or modifying the
+files. `Cut` requests a move when the receiving application pastes; it does not
+signal that a move has completed. A file list without a cut marker uses `Copy`.
+Native file clipboard export on other platforms is not supported.
+
+Run the interactive example with local paths:
+
+```sh
+cargo run -p gpui --example file_clipboard -- /absolute/path /another/path
+```
+
+Use **Copy files** or **Cut files**, then paste into a file manager. To inspect the
+opposite direction, copy or cut files in a file manager and click **Read clipboard**.
+The example's read action displays the paths and operation without modifying files.
+
 ### Dependencies
 
 GPUI has various system dependencies that it needs in order to work.

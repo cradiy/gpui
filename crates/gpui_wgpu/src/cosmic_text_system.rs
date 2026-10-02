@@ -470,21 +470,18 @@ impl CosmicTextSystemState {
     /// `LoadedFont.features`, as it will have an arbitrarily chosen or empty value. The only
     /// current use of this field is for the *input* of `layout_line`, and so it's fine to use
     /// `font_id_for_cosmic_id` when computing the *output* of `layout_line`.
-    fn font_id_for_cosmic_id(&mut self, id: cosmic_text::fontdb::ID) -> Result<FontId> {
+    fn font_id_for_cosmic_id(
+        &mut self,
+        id: cosmic_text::fontdb::ID,
+        weight: cosmic_text::Weight,
+    ) -> Result<FontId> {
         if let Some(ix) = self
             .loaded_fonts
             .iter()
-            .position(|loaded_font| loaded_font.font.id() == id)
+            .position(|loaded_font| loaded_font.font.id() == id && loaded_font.weight == weight)
         {
             Ok(FontId(ix))
         } else {
-            let weight = self
-                .font_system
-                .db()
-                .face(id)
-                .map(|face| face.weight)
-                .unwrap_or(cosmic_text::Weight::NORMAL);
-
             let font = self
                 .font_system
                 .get_font(id, weight)
@@ -622,8 +619,8 @@ impl CosmicTextSystemState {
         for glyph in &layout.glyphs {
             let mut font_id = FontId(glyph.metadata);
             let mut loaded_font = self.loaded_font(font_id);
-            if loaded_font.font.id() != glyph.font_id {
-                match self.font_id_for_cosmic_id(glyph.font_id) {
+            if loaded_font.font.id() != glyph.font_id || loaded_font.weight != glyph.font_weight {
+                match self.font_id_for_cosmic_id(glyph.font_id, glyph.font_weight) {
                     std::result::Result::Ok(resolved_id) => {
                         font_id = resolved_id;
                         loaded_font = self.loaded_font(font_id);
@@ -973,6 +970,37 @@ mod tests {
 
     fn fid(i: usize) -> FontId {
         FontId(i)
+    }
+
+    #[test]
+    fn fallback_font_instances_preserve_requested_weight() {
+        let system = CosmicTextSystem::new_without_system_fonts("Lilex");
+        system
+            .add_fonts(vec![Cow::Borrowed(LILEX_REGULAR)])
+            .unwrap();
+        let regular = system.font_id(&gpui::font("Lilex")).unwrap();
+        let mut state = system.0.write();
+        let face = state.loaded_font(regular).font.id();
+        let medium = state
+            .font_id_for_cosmic_id(face, cosmic_text::Weight(500))
+            .unwrap();
+        let semibold = state
+            .font_id_for_cosmic_id(face, cosmic_text::Weight(600))
+            .unwrap();
+        assert_ne!(medium, regular);
+        assert_ne!(medium, semibold);
+        assert_eq!(state.loaded_font(medium).weight, cosmic_text::Weight(500));
+        assert_eq!(state.loaded_font(semibold).weight, cosmic_text::Weight(600));
+        assert_eq!(
+            state
+                .font_id_for_cosmic_id(face, cosmic_text::Weight(500))
+                .unwrap(),
+            medium
+        );
+        assert_eq!(
+            state.loaded_font(regular).weight,
+            cosmic_text::Weight::NORMAL
+        );
     }
 
     fn chain(ids: &[usize]) -> SmallVec<[(FontId, SharedString); 4]> {

@@ -174,7 +174,7 @@ impl Render for TimedTextExample {
                         "timed-text-mixed",
                         MIXED_LINE,
                         MIXED_PIECES,
-                        fill.clone(),
+                        fill,
                     )),
             )
     }

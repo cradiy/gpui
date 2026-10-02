@@ -273,7 +273,12 @@ mod tests {
                 let watcher = start_watcher(registered.clone()).await;
                 let service =
                     smol::future::or(async { registrations.recv().await.unwrap() }, async {
-                        smol::Timer::after(Duration::from_secs(5)).await;
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "real D-Bus integration needs a wall-clock timeout outside the test scheduler"
+                        )]
+                        let timeout = smol::Timer::after(Duration::from_secs(5));
+                        timeout.await;
                         panic!("tray did not register after watcher arrival");
                     })
                     .await;

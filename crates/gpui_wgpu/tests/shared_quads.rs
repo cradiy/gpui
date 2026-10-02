@@ -457,7 +457,7 @@ fn scene() -> Scene {
     let backgrounds: [Background; 12] = [
         rgb(0xff0000).into(),
         gradient,
-        smooth.clone().clone(),
+        smooth.clone(),
         smooth.clone().color_space(ColorSpace::Srgb),
         smooth.clone().gradient_kind(GradientKind::Radial),
         smooth
@@ -465,7 +465,7 @@ fn scene() -> Scene {
             .gradient_kind(GradientKind::Angular)
             .angular_seam_width(0.1),
         smooth.clone().gradient_kind(GradientKind::Diamond),
-        smooth.clone().gradient_midpoint(0, 0.25),
+        smooth.gradient_midpoint(0, 0.25),
         checkerboard(rgb(0x00ff00), 8.),
         pattern_slash(rgb(0xff8000), 4., 8.),
         rgba(0xffffff80).into(),

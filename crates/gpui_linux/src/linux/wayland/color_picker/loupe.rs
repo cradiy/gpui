@@ -191,7 +191,7 @@ fn over(dst: u32, rgb: u32, opacity: f32) -> u32 {
     let premul = a << 24
         | (((rgb >> 16) & 255) * a / 255) << 16
         | (((rgb >> 8) & 255) * a / 255) << 8
-        | (rgb & 255) * a / 255;
+        | ((rgb & 255) * a / 255);
     composite(dst, premul)
 }
 fn composite(dst: u32, src: u32) -> u32 {

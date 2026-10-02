@@ -276,7 +276,9 @@ impl TextLayout {
         let position = line.position_for_caret(TextCaret { index, ..caret }, self.line_height)?;
         let edges = line.visual_carets(self.line_height);
         let cluster = edges
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .filter(|pair| {
                 let left = key(pair[0].1).min(key(pair[1].1));
                 let end = key(pair[0].1).max(key(pair[1].1));
@@ -327,7 +329,9 @@ impl TextLayout {
         // Anchor to a surviving cluster, so deletion at a direction boundary
         // does not move the caret to the other visual representation of an index.
         let anchor = edges
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .filter(|pair| {
                 let cluster = start + pair[0].0.index..start + pair[1].0.index;
                 cluster.end <= range.start || cluster.start >= range.end
@@ -1691,7 +1695,13 @@ mod tests {
             ..Default::default()
         };
         let lines = shaper
-            .shape_text(content.clone(), px(20.), &[run.clone()], None, None)
+            .shape_text(
+                content.clone(),
+                px(20.),
+                std::slice::from_ref(&run),
+                None,
+                None,
+            )
             .unwrap()
             .into_vec();
         let mut layout = TextLayout::new(lines, vec![0], px(24.));

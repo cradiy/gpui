@@ -1526,7 +1526,7 @@ impl Path<ScaledPixels, GpuBackground> {
             .map(move |vertex| PathRasterizationVertex {
                 xy_position: vertex.xy_position,
                 st_position: vertex.st_position,
-                color: self.color.clone(),
+                color: self.color,
                 bounds,
             })
     }

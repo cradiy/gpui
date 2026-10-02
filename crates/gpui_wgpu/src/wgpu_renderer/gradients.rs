@@ -15,7 +15,7 @@ impl GradientUpload {
         let limits = resources.device.limits();
         let limit = limits
             .max_buffer_size
-            .min(limits.max_storage_buffer_binding_size as u64);
+            .min(limits.max_storage_buffer_binding_size);
         anyhow::ensure!(
             required <= limit,
             "gradient stop buffer requires {required} bytes, device limit is {limit} bytes"

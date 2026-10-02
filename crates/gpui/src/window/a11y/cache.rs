@@ -312,7 +312,8 @@ impl A11y {
         // children. Only roots attach to the live parent; inner edges are already stored.
         let mut depth = 0usize;
         let mut skipped = 0usize;
-        for event in self.nodes.previous_events[range].to_vec() {
+        for index in range {
+            let event = self.nodes.previous_events[index].clone();
             if skipped > 0 {
                 match event {
                     PrepaintEvent::Push(..) => skipped += 1,
@@ -387,7 +388,8 @@ impl A11y {
         if !self.is_active() {
             return;
         }
-        for ActionRegistration { id, index, .. } in self.previous_action_order[range].to_vec() {
+        for previous_index in range {
+            let ActionRegistration { id, index, .. } = self.previous_action_order[previous_index];
             if let Some((action, listener)) = self
                 .previous_action_listeners
                 .get_mut(&id)

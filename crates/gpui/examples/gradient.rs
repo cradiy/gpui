@@ -329,7 +329,7 @@ impl Render for GradientViewer {
                 "background-gradient-flow-thin",
                 Animation::new(Duration::from_secs(3)).repeat(),
                 {
-                    let background = flowing_background.clone();
+                    let background = flowing_background;
                     move |this, delta| this.bg(background.clone().phase(delta))
                 },
             ))

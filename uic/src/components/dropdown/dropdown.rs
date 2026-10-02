@@ -9,9 +9,11 @@ use crate::components::overlay_anchor::{TriggerAnchor, resolve_overlay};
 use super::{DropdownPlacement, DropdownState};
 use std::rc::Rc;
 
+type MenuRenderer = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+
 enum MenuContent {
     Element(AnyElement),
-    Renderer(Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>),
+    Renderer(MenuRenderer),
 }
 
 #[derive(IntoElement)]

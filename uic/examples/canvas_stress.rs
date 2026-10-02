@@ -303,7 +303,7 @@ impl Demo {
         if !self.running {
             return;
         }
-        if self.automated && self.step > 0 && self.step % PHASE_FRAMES == 0 {
+        if self.automated && self.step > 0 && self.step.is_multiple_of(PHASE_FRAMES) {
             self.samples.report(PHASES[self.step / PHASE_FRAMES - 1]);
             self.samples.frames.clear();
             if self.step == PHASE_FRAMES * PHASES.len() {
@@ -317,7 +317,7 @@ impl Demo {
             2
         };
         let t = (self.step % PHASE_FRAMES) as f32 / PHASE_FRAMES as f32;
-        if self.automated && self.step % PHASE_FRAMES == 0 {
+        if self.automated && self.step.is_multiple_of(PHASE_FRAMES) {
             self.board.update(cx, |board, cx| {
                 board.nested = phase == 3;
                 board.resize(if phase == 4 { 0 } else { 100 }, window, cx);

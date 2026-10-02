@@ -89,7 +89,8 @@ mod tests {
             )
         };
         let (layouts, opaque) = create(&context, wgpu::CompositeAlphaMode::Opaque);
-        let (same_layouts, same) = create(&context.clone(), wgpu::CompositeAlphaMode::Opaque);
+        let cloned_context = context.clone();
+        let (same_layouts, same) = create(&cloned_context, wgpu::CompositeAlphaMode::Opaque);
         assert!(Arc::ptr_eq(&layouts, &same_layouts));
         assert!(Arc::ptr_eq(&opaque, &same));
         let (_, transparent) = create(&context, wgpu::CompositeAlphaMode::PreMultiplied);

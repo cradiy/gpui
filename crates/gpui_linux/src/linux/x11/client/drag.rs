@@ -125,7 +125,7 @@ impl X11ClientStatePtr {
             state.xcb_connection.clone(),
             state.x_root_index,
             state.gpu_context.clone(),
-            state.compositor_gpu.clone(),
+            state.compositor_gpu,
             size,
             scale,
             hotspot,
@@ -867,7 +867,9 @@ impl X11Client {
                                     )?
                                     .check()?;
                             } else {
-                                if !drag.watches.contains_key(&event.requestor) {
+                                if let std::collections::hash_map::Entry::Vacant(entry) =
+                                    drag.watches.entry(event.requestor)
+                                {
                                     let mask = connection
                                         .get_window_attributes(event.requestor)?
                                         .reply()?
@@ -879,7 +881,7 @@ impl X11Client {
                                                 .event_mask(mask | EventMask::PROPERTY_CHANGE),
                                         )?
                                         .check()?;
-                                    drag.watches.insert(event.requestor, mask);
+                                    entry.insert(mask);
                                 }
                                 anyhow::ensure!(
                                     !drag.transfers.iter().any(|t| t.requestor == event.requestor

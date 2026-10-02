@@ -463,14 +463,16 @@ mod tests {
         let owned = super::MenuItem::action("Choice", gpui::NoAction)
             .checked(false)
             .owned();
-        assert!(matches!(
-            owned.clone(),
-            super::OwnedMenuItem::Action {
-                checked: false,
-                checkable: true,
-                ..
-            }
-        ));
+        for item in [owned.clone(), owned] {
+            assert!(matches!(
+                item,
+                super::OwnedMenuItem::Action {
+                    checked: false,
+                    checkable: true,
+                    ..
+                }
+            ));
+        }
         assert!(matches!(
             super::MenuItem::action("Command", gpui::NoAction).owned(),
             super::OwnedMenuItem::Action {

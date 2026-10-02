@@ -7,6 +7,7 @@ mod external_surface;
 mod frame_callback;
 mod keyboard;
 mod popup;
+mod seat;
 mod serial;
 mod text_input;
 mod window;

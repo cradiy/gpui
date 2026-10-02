@@ -1075,8 +1075,10 @@ impl WaylandWindowStatePtr {
             token.set_app_id(app_id.clone());
         }
         let (serial, requesting_surface) = state.client.activation_context();
-        if serial != 0 {
-            token.set_serial(serial, &state.globals.seat);
+        if serial != 0
+            && let Some(seat) = state.globals.seat.borrow().as_ref()
+        {
+            token.set_serial(serial, seat);
         }
         token.set_surface(requesting_surface.as_ref().unwrap_or(&state.surface));
         token.commit();
@@ -2358,8 +2360,12 @@ impl PlatformWindow for WaylandWindow {
         let state = self.borrow();
         let serial = state.client.get_serial(SerialKind::MousePress);
         if let Some(toplevel) = state.surface_state.toplevel() {
+            let seat = state.globals.seat.borrow();
+            let Some(seat) = seat.as_ref() else {
+                return;
+            };
             toplevel.show_window_menu(
-                &state.globals.seat,
+                seat,
                 serial,
                 f32::from(position.x) as i32,
                 f32::from(position.y) as i32,
@@ -2371,15 +2377,21 @@ impl PlatformWindow for WaylandWindow {
         let state = self.borrow();
         let serial = state.client.get_serial(SerialKind::MousePress);
         if let Some(toplevel) = state.surface_state.toplevel() {
-            toplevel._move(&state.globals.seat, serial);
+            if let Some(seat) = state.globals.seat.borrow().as_ref() {
+                toplevel._move(seat, serial);
+            }
         }
     }
 
     fn start_window_resize(&self, edge: gpui::ResizeEdge) {
         let state = self.borrow();
         if let Some(toplevel) = state.surface_state.toplevel() {
+            let seat = state.globals.seat.borrow();
+            let Some(seat) = seat.as_ref() else {
+                return;
+            };
             toplevel.resize(
-                &state.globals.seat,
+                seat,
                 state.client.get_serial(SerialKind::MousePress),
                 edge.to_xdg(),
             )

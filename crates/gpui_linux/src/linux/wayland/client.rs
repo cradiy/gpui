@@ -92,6 +92,7 @@ use crate::linux::{
         clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE},
         cursor::Cursor,
         external_surface::ExternalWaylandSurfaceRoleFactory,
+        seat::Seats,
         serial::{SerialKind, SerialTracker},
         to_shape,
         window::WaylandWindow,
@@ -137,7 +138,7 @@ pub struct Globals {
         Option<zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1>,
     pub wm_base: xdg_wm_base::XdgWmBase,
     pub shm: wl_shm::WlShm,
-    pub seat: wl_seat::WlSeat,
+    pub seat: Rc<RefCell<Option<wl_seat::WlSeat>>>,
     pub viewporter: Option<wp_viewporter::WpViewporter>,
     pub fractional_scale_manager:
         Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
@@ -157,7 +158,7 @@ impl Globals {
         globals: GlobalList,
         executor: ForegroundExecutor,
         qh: QueueHandle<WaylandClientStatePtr>,
-        seat: wl_seat::WlSeat,
+        seat: Option<wl_seat::WlSeat>,
     ) -> Self {
         let dialog_v = XdgWmDialogV1::interface().version;
         Globals {
@@ -180,7 +181,7 @@ impl Globals {
                 .ok(),
             primary_selection_manager: globals.bind(&qh, 1..=1, ()).ok(),
             shm: globals.bind(&qh, 1..=1, ()).unwrap(),
-            seat,
+            seat: Rc::new(RefCell::new(seat)),
             wm_base: globals.bind(&qh, 1..=5, ()).unwrap(),
             viewporter: globals.bind(&qh, 1..=1, ()).ok(),
             fractional_scale_manager: globals.bind(&qh, 1..=1, ()).ok(),
@@ -355,7 +356,8 @@ pub(crate) struct WaylandClientState {
     external_surface_role: Option<ExternalWaylandSurfaceRoleFactory>,
     pub gpu_context: GpuContext,
     pub compositor_gpu: Option<CompositorGpuHint>,
-    wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
+    seats: Seats,
+    wl_seat: Option<wl_seat::WlSeat>,
     wl_pointer: Option<wl_pointer::WlPointer>,
     pinch_gesture: Option<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1>,
     pinch_scale: f32,
@@ -533,7 +535,165 @@ pub(crate) enum PendingActivation {
     Window(ObjectId),
 }
 
+#[derive(Default)]
+struct SeatCleanup {
+    keyboard: Option<WaylandWindowStatePtr>,
+    pointer: Option<(WaylandWindowStatePtr, MouseExitEvent)>,
+    drag_events: Vec<(WaylandWindowStatePtr, PlatformInput)>,
+}
+
+impl SeatCleanup {
+    // App callbacks can re-enter the client, so run them after releasing its RefMut.
+    fn finish(self) {
+        if let Some(window) = self.keyboard {
+            window.handle_ime(ImeInput::DeleteText);
+            window.set_focused(false);
+        }
+        if let Some((window, event)) = self.pointer {
+            window.handle_input(PlatformInput::MouseExited(event));
+            window.set_hovered(false);
+        }
+        for (window, event) in self.drag_events {
+            window.handle_input(event);
+        }
+    }
+}
+
 impl WaylandClientState {
+    fn bind_selected_seat(
+        &mut self,
+        registry: &wl_registry::WlRegistry,
+        qh: &QueueHandle<WaylandClientStatePtr>,
+    ) {
+        let Some((name, version)) = self.seats.selected() else {
+            return;
+        };
+        let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, wl_seat_version(version), qh, ());
+        self.data_device = self
+            .globals
+            .data_device_manager
+            .as_ref()
+            .map(|manager| manager.get_data_device(&seat, qh, ()));
+        self.primary_selection = self
+            .globals
+            .primary_selection_manager
+            .as_ref()
+            .map(|manager| manager.get_device(&seat, qh, ()));
+        *self.globals.seat.borrow_mut() = Some(seat.clone());
+        self.wl_seat = Some(seat);
+    }
+
+    fn release_keyboard(&mut self) -> Option<WaylandWindowStatePtr> {
+        if let Some(keyboard) = self.wl_keyboard.take() {
+            keyboard.release();
+        }
+        if let Some(text_input) = self.text_input.take() {
+            text_input.destroy();
+        }
+        self.repeat.current_id = self.repeat.current_id.wrapping_add(1);
+        self.repeat.current_keycode = None;
+        self.repeat.characters_per_second = 16;
+        self.repeat.delay = Duration::from_millis(500);
+        self.keymap_state = None;
+        self.compose_state = None;
+        self.modifiers = Modifiers::default();
+        self.capslock = Capslock { on: false };
+        self.enter_token = None;
+        self.ime = TextInputState::default();
+        self.ime_enabled = None;
+        self.text_input_surface = None;
+        self.pre_edit_text = None;
+        self.composing = false;
+        self.restore_cursor_after_hide();
+        self.keyboard_focused_window.take()
+    }
+
+    fn release_pointer(&mut self) -> Option<(WaylandWindowStatePtr, MouseExitEvent)> {
+        if let Some(gesture) = self.pinch_gesture.take() {
+            gesture.destroy();
+        }
+        if let Some(shape) = self.cursor_shape_device.take() {
+            shape.destroy();
+        }
+        if let Some(pointer) = self.wl_pointer.take() {
+            pointer.release();
+        }
+        let exited = self.mouse_focused_window.take().map(|window| {
+            (
+                window,
+                MouseExitEvent {
+                    position: self.mouse_location.unwrap_or_default(),
+                    pressed_button: self.button_pressed,
+                    modifiers: self.modifiers,
+                },
+            )
+        });
+        self.mouse_location = None;
+        self.button_pressed = None;
+        self.cursor_hidden_window = None;
+        self.continuous_scroll_delta = None;
+        self.discrete_scroll_delta = None;
+        self.scroll_event_received = false;
+        self.axis_source = AxisSource::Wheel;
+        self.vertical_modifier = -1.0;
+        self.horizontal_modifier = -1.0;
+        self.pinch_scale = 1.0;
+        self.click.last_mouse_button = None;
+        self.click.current_count = 0;
+        exited
+    }
+
+    fn release_seat(&mut self) -> SeatCleanup {
+        let mut cleanup = SeatCleanup {
+            pointer: self.release_pointer(),
+            keyboard: self.release_keyboard(),
+            ..Default::default()
+        };
+        if let Some(source) = self.native_drag_source.take() {
+            source.data_source.destroy();
+            cleanup.drag_events.push((
+                source.window.clone(),
+                PlatformInput::InternalDrag(InternalDragEvent::SourceCancelled {
+                    session_id: source.session_id,
+                }),
+            ));
+        }
+        self.pending_drag_icons.clear();
+        if let Some(offer) = self.drag.data_offer.take() {
+            offer.destroy();
+        }
+        if let Some(window) = self.drag.window.take() {
+            let event = match self.drag.kind {
+                Some(DragOfferKind::Internal(session_id)) => {
+                    PlatformInput::InternalDrag(InternalDragEvent::Left { session_id })
+                }
+                _ => PlatformInput::FileDrop(FileDropEvent::Exited),
+            };
+            cleanup.drag_events.push((window, event));
+        }
+        self.drag.kind = None;
+        self.clipboard.set_offer(None);
+        self.clipboard.set_primary_offer(None);
+        for offer in self.data_offers.drain(..) {
+            offer.inner.destroy();
+        }
+        if let Some(offer) = self.primary_data_offer.take() {
+            offer.inner.destroy();
+        }
+        if let Some(device) = self.data_device.take() {
+            device.release();
+        }
+        if let Some(device) = self.primary_selection.take() {
+            device.destroy();
+        }
+        self.serial_tracker = SerialTracker::new();
+        *self.globals.seat.borrow_mut() = None;
+        if let Some(seat) = self.wl_seat.take() {
+            seat.release();
+        }
+        cleanup
+    }
+
     fn publish_surrounding(
         &mut self,
         text_input: &zwp_text_input_v3::ZwpTextInputV3,
@@ -1226,7 +1386,7 @@ impl WaylandClient {
             registry_queue_init::<WaylandClientStatePtr>(&conn).unwrap();
         let qh = event_queue.handle();
 
-        let mut seat: Option<wl_seat::WlSeat> = None;
+        let mut seats = Seats::default();
         #[allow(clippy::mutable_key_type)]
         let mut in_progress_outputs = HashMap::default();
         #[allow(clippy::mutable_key_type)]
@@ -1236,12 +1396,7 @@ impl WaylandClient {
             for global in list {
                 match &global.interface[..] {
                     "wl_seat" => {
-                        seat = Some(globals.registry().bind::<wl_seat::WlSeat, _, _>(
-                            global.name,
-                            wl_seat_version(global.version),
-                            &qh,
-                            (),
-                        ));
+                        seats.add(global.name, global.version);
                     }
                     "wl_output" => {
                         let output = globals.registry().bind::<wl_output::WlOutput, _, _>(
@@ -1307,7 +1462,14 @@ impl WaylandClient {
         let compositor_gpu = detect_compositor_gpu();
         let gpu_context = Rc::new(RefCell::new(None));
 
-        let seat = seat.unwrap();
+        let seat = seats.selected().map(|(name, version)| {
+            globals.registry().bind::<wl_seat::WlSeat, _, _>(
+                name,
+                wl_seat_version(version),
+                &qh,
+                (),
+            )
+        });
         let globals = Globals::new(
             globals,
             common.foreground_executor.clone(),
@@ -1325,15 +1487,18 @@ impl WaylandClient {
             }
         }
 
-        let data_device = globals
-            .data_device_manager
-            .as_ref()
-            .map(|data_device_manager| data_device_manager.get_data_device(&seat, &qh, ()));
+        let data_device =
+            globals.data_device_manager.as_ref().zip(seat.as_ref()).map(
+                |(data_device_manager, seat)| data_device_manager.get_data_device(seat, &qh, ()),
+            );
 
         let primary_selection = globals
             .primary_selection_manager
             .as_ref()
-            .map(|primary_selection_manager| primary_selection_manager.get_device(&seat, &qh, ()));
+            .zip(seat.as_ref())
+            .map(|(primary_selection_manager, seat)| {
+                primary_selection_manager.get_device(seat, &qh, ())
+            });
 
         let cursor = Cursor::new(&conn, &globals, 24);
 
@@ -1387,6 +1552,7 @@ impl WaylandClient {
             gpu_context,
             compositor_gpu,
             wl_seat: seat,
+            seats,
             wl_pointer: None,
             wl_keyboard: None,
             pinch_gesture: None,
@@ -1553,7 +1719,11 @@ impl LinuxClient for WaylandClient {
                         .serial_tracker
                         .get(SerialKind::MousePress)
                         .max(state.serial_tracker.get(SerialKind::KeyPress));
-                    (serial != 0).then(|| (serial, state.wl_seat.clone()))
+                    state
+                        .wl_seat
+                        .clone()
+                        .filter(|_| serial != 0)
+                        .map(|seat| (serial, seat))
                 });
                 (Some(parent), popup_grab.flatten())
             }
@@ -1653,7 +1823,9 @@ impl LinuxClient for WaylandClient {
             let token = activation
                 .get_activation_token(&state.globals.qh, PendingActivation::Uri(uri.to_string()));
             let serial = state.serial_tracker.get(SerialKind::MousePress);
-            token.set_serial(serial, &state.wl_seat);
+            if let Some(seat) = &state.wl_seat {
+                token.set_serial(serial, seat);
+            }
             token.set_surface(&window.surface());
             token.commit();
         } else {
@@ -1671,7 +1843,9 @@ impl LinuxClient for WaylandClient {
             let token =
                 activation.get_activation_token(&state.globals.qh, PendingActivation::Path(path));
             let serial = state.serial_tracker.get(SerialKind::MousePress);
-            token.set_serial(serial, &state.wl_seat);
+            if let Some(seat) = &state.wl_seat {
+                token.set_serial(serial, seat);
+            }
             token.set_surface(&window.surface());
             token.commit();
         } else {
@@ -1895,19 +2069,9 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                 version,
             } => match &interface[..] {
                 "wl_seat" => {
-                    if let Some(wl_pointer) = state.wl_pointer.take() {
-                        wl_pointer.release();
+                    if state.seats.add(name, version) {
+                        state.bind_selected_seat(registry, qh);
                     }
-                    if let Some(wl_keyboard) = state.wl_keyboard.take() {
-                        wl_keyboard.release();
-                    }
-                    state.wl_seat.release();
-                    state.wl_seat = registry.bind::<wl_seat::WlSeat, _, _>(
-                        name,
-                        wl_seat_version(version),
-                        qh,
-                        (),
-                    );
                 }
                 "wl_output" => {
                     let output = registry.bind::<wl_output::WlOutput, _, _>(
@@ -1930,6 +2094,14 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                 _ => {}
             },
             wl_registry::Event::GlobalRemove { name } => {
+                if state.seats.remove(name) {
+                    let cleanup = state.release_seat();
+                    state.bind_selected_seat(registry, qh);
+                    drop(state);
+                    cleanup.finish();
+                    this.handle_keyboard_layout_change();
+                    return;
+                }
                 let Some(id) = state.output_globals.remove(&name) else {
                     return;
                 };
@@ -2220,7 +2392,7 @@ impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, PendingActivation>
 
 impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
     fn event(
-        state: &mut Self,
+        this: &mut Self,
         seat: &wl_seat::WlSeat,
         event: wl_seat::Event,
         _: &(),
@@ -2231,9 +2403,21 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
             capabilities: WEnum::Value(capabilities),
         } = event
         {
-            let client = state.get_client();
+            let client = this.get_client();
             let mut state = client.borrow_mut();
-            if capabilities.contains(wl_seat::Capability::Keyboard) {
+            if state.wl_seat.as_ref() != Some(seat) {
+                return;
+            }
+            let mut cleanup = SeatCleanup::default();
+            let lost_keyboard = !capabilities.contains(wl_seat::Capability::Keyboard)
+                && state.wl_keyboard.is_some();
+            if lost_keyboard {
+                cleanup.keyboard = state.release_keyboard();
+            }
+            if !capabilities.contains(wl_seat::Capability::Pointer) && state.wl_pointer.is_some() {
+                cleanup.pointer = state.release_pointer();
+            }
+            if capabilities.contains(wl_seat::Capability::Keyboard) && state.wl_keyboard.is_none() {
                 let keyboard = seat.get_keyboard(qh, ());
 
                 if let Some(text_input) = state.text_input.take() {
@@ -2249,13 +2433,9 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                     .as_ref()
                     .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
 
-                if let Some(wl_keyboard) = &state.wl_keyboard {
-                    wl_keyboard.release();
-                }
-
                 state.wl_keyboard = Some(keyboard);
             }
-            if capabilities.contains(wl_seat::Capability::Pointer) {
+            if capabilities.contains(wl_seat::Capability::Pointer) && state.wl_pointer.is_none() {
                 let pointer = seat.get_pointer(qh, ());
 
                 if let Some(cursor_shape_device) = state.cursor_shape_device.take() {
@@ -2274,11 +2454,12 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                     },
                 );
 
-                if let Some(wl_pointer) = &state.wl_pointer {
-                    wl_pointer.release();
-                }
-
                 state.wl_pointer = Some(pointer);
+            }
+            drop(state);
+            cleanup.finish();
+            if lost_keyboard {
+                this.handle_keyboard_layout_change();
             }
         }
     }
@@ -2287,7 +2468,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
 impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
     fn event(
         this: &mut Self,
-        _: &wl_keyboard::WlKeyboard,
+        keyboard: &wl_keyboard::WlKeyboard,
         event: wl_keyboard::Event,
         _: &(),
         _: &Connection,
@@ -2295,6 +2476,10 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
     ) {
         let client = this.get_client();
         let mut state = client.borrow_mut();
+
+        if state.wl_keyboard.as_ref() != Some(keyboard) {
+            return;
+        }
         match event {
             wl_keyboard::Event::RepeatInfo { rate, delay } => {
                 state.repeat.characters_per_second = rate as u32;
@@ -2627,6 +2812,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
     ) {
         let client = this.get_client();
         let mut state = client.borrow_mut();
+
+        if state.wl_pointer.as_ref() != Some(wl_pointer) {
+            return;
+        }
 
         match event {
             wl_pointer::Event::Enter {
@@ -2977,7 +3166,7 @@ impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
 {
     fn event(
         this: &mut Self,
-        _: &zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1,
+        gesture: &zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1,
         event: <zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1 as Proxy>::Event,
         _: &(),
         _: &Connection,
@@ -2987,6 +3176,10 @@ impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
 
         let client = this.get_client();
         let mut state = client.borrow_mut();
+
+        if state.pinch_gesture.as_ref() != Some(gesture) {
+            return;
+        }
 
         let Some(window) = state.mouse_focused_window.clone() else {
             return;
@@ -3090,7 +3283,7 @@ impl Dispatch<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1, ObjectId>
 impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
     fn event(
         this: &mut Self,
-        _: &wl_data_device::WlDataDevice,
+        device: &wl_data_device::WlDataDevice,
         event: wl_data_device::Event,
         _: &(),
         _: &Connection,
@@ -3098,6 +3291,13 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
     ) {
         let client = this.get_client();
         let mut state = client.borrow_mut();
+
+        if state.data_device.as_ref() != Some(device) {
+            if let wl_data_device::Event::DataOffer { id } = event {
+                id.destroy();
+            }
+            return;
+        }
 
         match event {
             // Clipboard
@@ -3202,6 +3402,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                     });
 
                     let this = this.clone();
+                    let device = device.clone();
                     state
                         .common
                         .foreground_executor
@@ -3210,6 +3411,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                                 Ok(list) => list,
                                 Err(err) => {
                                     log::error!("error reading drag and drop pipe: {err:?}");
+                                    data_offer.destroy();
                                     return;
                                 }
                             };
@@ -3238,6 +3440,10 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
 
                             let client = this.get_client();
                             let mut state = client.borrow_mut();
+                            if state.data_device.as_ref() != Some(&device) {
+                                data_offer.destroy();
+                                return;
+                            }
                             state.drag.data_offer = Some(data_offer);
                             state.drag.kind = Some(DragOfferKind::ExternalFiles);
                             state.drag.window = Some(drag_window.clone());
@@ -3551,7 +3757,7 @@ impl Dispatch<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1, ()>
 {
     fn event(
         this: &mut Self,
-        _: &zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1,
+        device: &zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1,
         event: zwp_primary_selection_device_v1::Event,
         _: &(),
         _: &Connection,
@@ -3559,6 +3765,13 @@ impl Dispatch<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1, ()>
     ) {
         let client = this.get_client();
         let mut state = client.borrow_mut();
+
+        if state.primary_selection.as_ref() != Some(device) {
+            if let zwp_primary_selection_device_v1::Event::DataOffer { offer } = event {
+                offer.destroy();
+            }
+            return;
+        }
 
         match event {
             zwp_primary_selection_device_v1::Event::DataOffer { offer } => {

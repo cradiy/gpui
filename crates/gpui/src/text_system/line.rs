@@ -1,7 +1,7 @@
 use crate::{
     App, Bounds, DevicePixels, Half, Hsla, LineLayout, Pixels, Point, RenderGlyphParams, Result,
-    ShapedGlyph, ShapedRun, SharedString, StrikethroughStyle, TextAlign, Transformation,
-    UnderlineStyle, Window, WrapBoundary, WrappedLineLayout, black, fill, point, px, size,
+    ShapedRun, SharedString, StrikethroughStyle, TextAlign, Transformation, UnderlineStyle, Window,
+    WrapBoundary, WrappedLineLayout, black, fill, point, px, size,
 };
 use derive_more::{Deref, DerefMut};
 use smallvec::SmallVec;
@@ -94,12 +94,18 @@ impl ShapedLine {
     /// as text b (e.g. rendering invisibles).
     pub fn with_len(mut self, len: usize) -> Self {
         let layout = self.layout.as_ref();
+        let mut runs = layout.runs.clone();
+        for glyph in runs.iter_mut().flat_map(|run| &mut run.glyphs) {
+            if glyph.cluster_end == layout.len {
+                glyph.cluster_end = len;
+            }
+        }
         self.layout = Arc::new(LineLayout {
             font_size: layout.font_size,
             width: layout.width,
             ascent: layout.ascent,
             descent: layout.descent,
-            runs: layout.runs.clone(),
+            runs,
             len,
         });
         self
@@ -218,43 +224,58 @@ impl ShapedLine {
 
     /// Split this shaped line at a byte index, returning `(prefix, suffix)`.
     ///
-    /// - `prefix` contains glyphs for bytes `[0, byte_index)` with original positions.
-    ///   Its width equals the x-advance up to the split point.
-    /// - `suffix` contains glyphs for bytes `[byte_index, len)` with positions
-    ///   shifted left so the first glyph starts at x=0, and byte indices rebased to 0.
-    /// - Decoration runs are partitioned at the boundary; a run that straddles it is
-    ///   split into two with adjusted lengths.
-    /// - `font_size`, `ascent`, and `descent` are copied to both halves.
+    /// Each half retains the original shaping and visual gaps, translated to its
+    /// own visual origin. Text and decoration indices are rebased. Splitting
+    /// does not reshape ligatures or reorder a new bidirectional paragraph.
     pub fn split_at(&self, byte_index: usize) -> (ShapedLine, ShapedLine) {
-        let x_offset = self.layout.x_for_index(byte_index);
-
-        // Partition glyph runs. A single run may contribute glyphs to both halves.
+        let left_ranges = self.layout.selection_ranges(0..byte_index);
+        let right_ranges = self.layout.selection_ranges(byte_index..self.len());
+        let left_origin = left_ranges.first().map_or(px(0.), |range| range.start);
+        let right_origin = right_ranges
+            .first()
+            .map_or(self.width(), |range| range.start);
+        let left_width = left_ranges
+            .last()
+            .map_or(px(0.), |range| range.end - left_origin);
+        let right_width = right_ranges
+            .last()
+            .map_or(px(0.), |range| range.end - right_origin);
         let mut left_runs = Vec::new();
         let mut right_runs = Vec::new();
-
         for run in &self.layout.runs {
-            let split_pos = run.glyphs.partition_point(|g| g.index < byte_index);
-
-            if split_pos > 0 {
+            let left: Vec<_> = run
+                .glyphs
+                .iter()
+                .filter(|glyph| glyph.index < byte_index)
+                .cloned()
+                .map(|mut glyph| {
+                    glyph.position.x -= left_origin;
+                    glyph.cluster_end = glyph.cluster_end.min(byte_index);
+                    glyph
+                })
+                .collect();
+            let right: Vec<_> = run
+                .glyphs
+                .iter()
+                .filter(|glyph| glyph.index >= byte_index)
+                .cloned()
+                .map(|mut glyph| {
+                    glyph.position.x -= right_origin;
+                    glyph.index -= byte_index;
+                    glyph.cluster_end = glyph.cluster_end.saturating_sub(byte_index);
+                    glyph
+                })
+                .collect();
+            if !left.is_empty() {
                 left_runs.push(ShapedRun {
                     font_id: run.font_id,
-                    glyphs: run.glyphs[..split_pos].to_vec(),
+                    glyphs: left,
                 });
             }
-
-            if split_pos < run.glyphs.len() {
-                let right_glyphs = run.glyphs[split_pos..]
-                    .iter()
-                    .map(|g| ShapedGlyph {
-                        id: g.id,
-                        position: point(g.position.x - x_offset, g.position.y),
-                        index: g.index - byte_index,
-                        is_emoji: g.is_emoji,
-                    })
-                    .collect();
+            if !right.is_empty() {
                 right_runs.push(ShapedRun {
                     font_id: run.font_id,
-                    glyphs: right_glyphs,
+                    glyphs: right,
                 });
             }
         }
@@ -305,9 +326,6 @@ impl ShapedLine {
         } else {
             SharedString::new(&self.text[byte_index..])
         };
-
-        let left_width = x_offset;
-        let right_width = self.layout.width - left_width;
 
         let left = ShapedLine {
             layout: Arc::new(LineLayout {
@@ -443,8 +461,10 @@ fn paint_line(
     window.paint_layer(line_bounds, |window| {
         let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
         let baseline_offset = point(px(0.), padding_top + layout.ascent);
-        let mut decoration_runs = decoration_runs.iter();
+        let source_decoration_runs = decoration_runs;
+        let mut decoration_runs = source_decoration_runs.iter();
         let mut wraps = wrap_boundaries.iter().peekable();
+        let mut run_start = 0;
         let mut run_end = 0;
         let mut color = black();
         let mut current_underline: Option<(Point<Pixels>, UnderlineStyle)> = None;
@@ -485,7 +505,7 @@ fn paint_line(
                             glyph_origin.x - underline_origin.x,
                             underline_style,
                         );
-                        if glyph.index < run_end {
+                        if (run_start..run_end).contains(&glyph.index) {
                             underline_origin.x = origin.x;
                             underline_origin.y += line_height;
                         } else {
@@ -503,7 +523,7 @@ fn paint_line(
                             glyph_origin.x - strikethrough_origin.x,
                             strikethrough_style,
                         );
-                        if glyph.index < run_end {
+                        if (run_start..run_end).contains(&glyph.index) {
                             strikethrough_origin.x = origin.x;
                             strikethrough_origin.y += line_height;
                         } else {
@@ -525,6 +545,11 @@ fn paint_line(
 
                 let mut finished_underline: Option<(Point<Pixels>, UnderlineStyle)> = None;
                 let mut finished_strikethrough: Option<(Point<Pixels>, StrikethroughStyle)> = None;
+                if glyph.index < run_start {
+                    decoration_runs = source_decoration_runs.iter();
+                    run_start = 0;
+                    run_end = 0;
+                }
                 if glyph.index >= run_end {
                     let mut style_run = decoration_runs.next();
 
@@ -575,6 +600,7 @@ fn paint_line(
                             ));
                         }
 
+                        run_start = run_end;
                         run_end += style_run.len as usize;
                         color = style_run.color;
                     } else {
@@ -735,8 +761,10 @@ fn paint_line_background(
         ),
     );
     window.paint_layer(line_bounds, |window| {
-        let mut decoration_runs = decoration_runs.iter();
+        let source_decoration_runs = decoration_runs;
+        let mut decoration_runs = source_decoration_runs.iter();
         let mut wraps = wrap_boundaries.iter().peekable();
+        let mut run_start = 0;
         let mut run_end = 0;
         let mut current_background: Option<(Point<Pixels>, Hsla)> = None;
         let text_system = cx.text_system().clone();
@@ -773,7 +801,7 @@ fn paint_line_background(
                             },
                             *background_color,
                         ));
-                        if glyph.index < run_end {
+                        if (run_start..run_end).contains(&glyph.index) {
                             background_origin.x = origin.x;
                             background_origin.y += line_height;
                         } else {
@@ -794,6 +822,11 @@ fn paint_line_background(
                 prev_glyph_position = glyph.position;
 
                 let mut finished_background: Option<(Point<Pixels>, Hsla)> = None;
+                if glyph.index < run_start {
+                    decoration_runs = source_decoration_runs.iter();
+                    run_start = 0;
+                    run_end = 0;
+                }
                 if glyph.index >= run_end {
                     let mut style_run = decoration_runs.next();
 
@@ -818,6 +851,7 @@ fn paint_line_background(
                                 run_background,
                             ));
                         }
+                        run_start = run_end;
                         run_end += style_run.len as usize;
                     } else {
                         run_end = layout.len;
@@ -891,7 +925,7 @@ fn aligned_origin_x(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FontId, GlyphId};
+    use crate::{FontId, GlyphId, ShapedGlyph};
 
     /// Helper: build a ShapedLine from glyph descriptors without the platform text system.
     /// Each glyph is described as (byte_index, x_position).
@@ -907,6 +941,9 @@ mod tests {
                 id: GlyphId(0),
                 position: point(px(x), px(0.0)),
                 index,
+                cluster_end: index + 1,
+                advance: px(10.),
+                is_rtl: false,
                 is_emoji: false,
             })
             .collect();
@@ -926,6 +963,52 @@ mod tests {
             text: SharedString::new(text),
             decoration_runs: SmallVec::from(decorations.to_vec()),
         }
+    }
+
+    #[test]
+    fn replacement_glyph_uses_the_overridden_logical_end() {
+        let mut line = make_shaped_line("→", &[(0, 0.)], 10., &[]);
+        Arc::get_mut(&mut line.layout).unwrap().runs[0].glyphs[0].cluster_end = 3;
+        let line = line.with_len(1);
+        assert_eq!(line.x_for_index(1), px(10.));
+        assert_eq!(line.closest_index_for_x(px(9.)), 1);
+    }
+
+    #[test]
+    fn split_at_bidi_partitions_logical_indices_without_reordering_glyphs() {
+        let mut line = make_shaped_line(
+            "aאב12",
+            &[(0, 0.), (5, 10.), (6, 20.), (3, 30.), (1, 40.)],
+            50.,
+            &[],
+        );
+        for glyph in &mut Arc::get_mut(&mut line.layout).unwrap().runs[0].glyphs {
+            if glyph.index == 1 || glyph.index == 3 {
+                glyph.cluster_end = glyph.index + 2;
+                glyph.is_rtl = true;
+            }
+        }
+        let (left, right) = line.split_at(3);
+        assert_eq!(left.text.as_ref(), "aא");
+        assert_eq!(right.text.as_ref(), "ב12");
+        assert_eq!(
+            left.runs[0]
+                .glyphs
+                .iter()
+                .map(|g| g.index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(
+            right.runs[0]
+                .glyphs
+                .iter()
+                .map(|g| g.index)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 0]
+        );
+        assert_eq!(right.runs[0].glyphs[0].position.x, px(0.));
+        assert_eq!(right.runs[0].glyphs[2].cluster_end, 2);
     }
 
     #[test]
@@ -999,18 +1082,27 @@ mod tests {
                                 id: GlyphId(0),
                                 position: point(px(0.0), px(0.0)),
                                 index: 0,
+                                cluster_end: 1,
+                                advance: px(10.),
+                                is_rtl: false,
                                 is_emoji: false,
                             },
                             ShapedGlyph {
                                 id: GlyphId(0),
                                 position: point(px(10.0), px(0.0)),
                                 index: 1,
+                                cluster_end: 2,
+                                advance: px(10.),
+                                is_rtl: false,
                                 is_emoji: false,
                             },
                             ShapedGlyph {
                                 id: GlyphId(0),
                                 position: point(px(20.0), px(0.0)),
                                 index: 2,
+                                cluster_end: 3,
+                                advance: px(10.),
+                                is_rtl: false,
                                 is_emoji: false,
                             },
                         ],
@@ -1022,18 +1114,27 @@ mod tests {
                                 id: GlyphId(0),
                                 position: point(px(30.0), px(0.0)),
                                 index: 3,
+                                cluster_end: 4,
+                                advance: px(10.),
+                                is_rtl: false,
                                 is_emoji: false,
                             },
                             ShapedGlyph {
                                 id: GlyphId(0),
                                 position: point(px(40.0), px(0.0)),
                                 index: 4,
+                                cluster_end: 5,
+                                advance: px(10.),
+                                is_rtl: false,
                                 is_emoji: false,
                             },
                             ShapedGlyph {
                                 id: GlyphId(0),
                                 position: point(px(50.0), px(0.0)),
                                 index: 5,
+                                cluster_end: 6,
+                                advance: px(10.),
+                                is_rtl: false,
                                 is_emoji: false,
                             },
                         ],

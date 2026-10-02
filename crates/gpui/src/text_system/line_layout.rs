@@ -46,83 +46,204 @@ pub struct ShapedGlyph {
     /// The position of this glyph in its containing line.
     pub position: Point<Pixels>,
 
-    /// The index of this glyph in the original text.
+    /// UTF-8 start of the shaping cluster containing this glyph.
     pub index: usize,
+
+    /// Exclusive UTF-8 end of the shaping cluster containing this glyph.
+    pub cluster_end: usize,
+
+    /// Horizontal advance, excluding ink bearings and offsets.
+    pub advance: Pixels,
+
+    /// Whether the shaping cluster runs from right to left.
+    pub is_rtl: bool,
 
     /// Whether this glyph is an emoji
     pub is_emoji: bool,
 }
 
+/// Which adjacent shaping cluster owns a caret at a logical text boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CaretAffinity {
+    /// The trailing edge of the preceding logical cluster.
+    Upstream,
+    /// The leading edge of the following logical cluster.
+    #[default]
+    Downstream,
+}
+
+/// A UTF-8 caret position, including its side at directional and wrap boundaries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextCaret {
+    /// UTF-8 byte offset in the line.
+    pub index: usize,
+    /// Side of a boundary that can have two visual positions.
+    pub affinity: CaretAffinity,
+}
+
+impl From<usize> for TextCaret {
+    fn from(index: usize) -> Self {
+        Self {
+            index,
+            affinity: CaretAffinity::Downstream,
+        }
+    }
+}
+
+struct Cluster {
+    range: Range<usize>,
+    left: Pixels,
+    right: Pixels,
+    rtl: bool,
+}
+
+impl Cluster {
+    fn leading(&self) -> Pixels {
+        if self.rtl { self.right } else { self.left }
+    }
+    fn trailing(&self) -> Pixels {
+        if self.rtl { self.left } else { self.right }
+    }
+    fn distance(&self, x: Pixels) -> Pixels {
+        (self.left - x).max(x - self.right).max(px(0.))
+    }
+    fn closest_caret(&self, x: Pixels) -> TextCaret {
+        if (x - self.leading()).abs() <= (x - self.trailing()).abs() {
+            self.range.start.into()
+        } else {
+            TextCaret {
+                index: self.range.end,
+                affinity: CaretAffinity::Upstream,
+            }
+        }
+    }
+}
+
 impl LineLayout {
+    fn clusters(&self) -> impl Iterator<Item = Cluster> + '_ {
+        let mut glyphs = self.runs.iter().flat_map(|run| &run.glyphs).peekable();
+        std::iter::from_fn(move || {
+            let glyph = glyphs.next()?;
+            let mut cluster = Cluster {
+                range: glyph.index..glyph.cluster_end,
+                left: glyph.position.x,
+                right: glyph.position.x + glyph.advance,
+                rtl: glyph.is_rtl,
+            };
+            while glyphs.peek().is_some_and(|next| next.index == glyph.index) {
+                let next = glyphs.next().unwrap();
+                if next.advance > px(0.) {
+                    if cluster.left == cluster.right {
+                        cluster.left = next.position.x;
+                        cluster.right = next.position.x + next.advance;
+                    } else {
+                        cluster.left = cluster.left.min(next.position.x);
+                        cluster.right = cluster.right.max(next.position.x + next.advance);
+                    }
+                }
+                cluster.range.end = cluster.range.end.max(next.cluster_end);
+            }
+            Some(cluster)
+        })
+    }
+
     /// The index for the character at the given x coordinate
     pub fn index_for_x(&self, x: Pixels) -> Option<usize> {
         if x >= self.width {
             None
         } else {
-            for run in self.runs.iter().rev() {
-                for glyph in run.glyphs.iter().rev() {
-                    if glyph.position.x <= x {
-                        return Some(glyph.index);
-                    }
-                }
-            }
-            Some(0)
+            self.clusters()
+                .min_by_key(|cluster| (cluster.distance(x), x >= cluster.right))
+                .map(|cluster| cluster.range.start)
+                .or(Some(0))
         }
     }
 
     /// closest_index_for_x returns the character boundary closest to the given x coordinate
     /// (e.g. to handle aligning up/down arrow keys)
     pub fn closest_index_for_x(&self, x: Pixels) -> usize {
-        let mut prev_index = 0;
-        let mut prev_x = px(0.);
+        self.caret_for_x(x).index
+    }
 
-        for run in self.runs.iter() {
-            for glyph in run.glyphs.iter() {
-                if glyph.position.x >= x {
-                    if glyph.position.x - x < x - prev_x {
-                        return glyph.index;
-                    } else {
-                        return prev_index;
-                    }
-                }
-                prev_index = glyph.index;
-                prev_x = glyph.position.x;
-            }
-        }
-
-        if self.len == 1 {
-            if x > self.width / 2. {
-                return 1;
-            } else {
-                return 0;
-            }
-        }
-
-        self.len
+    /// Closest caret, preserving the side of a directional boundary.
+    pub fn caret_for_x(&self, x: Pixels) -> TextCaret {
+        self.clusters()
+            .min_by_key(|cluster| (cluster.distance(x), x >= cluster.right))
+            .map_or(TextCaret::default(), |cluster| cluster.closest_caret(x))
     }
 
     /// The x position of the character at the given index
     pub fn x_for_index(&self, index: usize) -> Pixels {
-        for run in &self.runs {
-            for glyph in &run.glyphs {
-                if glyph.index >= index {
-                    return glyph.position.x;
-                }
+        self.x_for_caret(index.into())
+    }
+
+    fn cluster_for_caret(&self, caret: TextCaret) -> Option<Cluster> {
+        if caret.affinity == CaretAffinity::Upstream {
+            if let Some(cluster) = self
+                .clusters()
+                .find(|cluster| cluster.range.end == caret.index)
+            {
+                return Some(cluster);
             }
         }
-        self.width
+        self.clusters()
+            .find(|cluster| cluster.range.contains(&caret.index))
+            .or_else(|| {
+                self.clusters()
+                    .filter(|cluster| cluster.range.end <= caret.index)
+                    .max_by_key(|cluster| cluster.range.end)
+            })
+    }
+
+    /// X position of a caret, including its side at a directional boundary.
+    pub fn x_for_caret(&self, caret: TextCaret) -> Pixels {
+        let index = caret.index;
+        self.cluster_for_caret(caret).map_or(px(0.), |cluster| {
+            if index >= cluster.range.end {
+                cluster.trailing()
+            } else {
+                cluster.leading()
+            }
+        })
     }
 
     /// The corresponding Font at the given index
     pub fn font_id_for_index(&self, index: usize) -> Option<FontId> {
         for run in &self.runs {
             for glyph in &run.glyphs {
-                if glyph.index >= index {
+                if glyph.index <= index && index < glyph.cluster_end {
                     return Some(run.font_id);
                 }
             }
         }
         None
+    }
+
+    /// Visual intervals covered by a logical UTF-8 selection. Intersected shaping
+    /// clusters are selected whole; disjoint intervals remain separate.
+    pub fn selection_ranges(&self, selected: Range<usize>) -> Vec<Range<Pixels>> {
+        if selected.is_empty() {
+            return Vec::new();
+        }
+        let mut ranges: Vec<_> = self
+            .clusters()
+            .filter(|cluster| {
+                cluster.range.start < selected.end && selected.start < cluster.range.end
+            })
+            .map(|cluster| cluster.left..cluster.right)
+            .collect();
+        ranges.sort_by_key(|range| range.start);
+        let mut merged: Vec<Range<Pixels>> = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            if let Some(last) = merged.last_mut()
+                && range.start <= last.end
+            {
+                last.end = last.end.max(range.end);
+            } else {
+                merged.push(range);
+            }
+        }
+        merged
     }
 
     fn compute_wrap_boundaries(
@@ -141,6 +262,7 @@ impl LineLayout {
         };
         let mut last_boundary_x = px(0.);
         let mut prev_ch = '\0';
+        let mut previous_cluster = None;
         let mut glyphs = self
             .runs
             .iter()
@@ -154,6 +276,10 @@ impl LineLayout {
                         glyph.position.x,
                     )
                 })
+            })
+            .filter(|(boundary, _, _)| {
+                let index = self.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+                previous_cluster.replace(index) != Some(index)
             })
             .peekable();
 
@@ -301,91 +427,201 @@ impl WrappedLineLayout {
         self._index_for_position(position, line_height, true)
     }
 
+    /// Horizontal extent of a displayed row in the unwrapped coordinate space.
+    pub fn row_extent(&self, row: usize) -> Option<Range<Pixels>> {
+        if row > self.wrap_boundaries.len() {
+            return None;
+        }
+        let boundary_x = |boundary: &WrapBoundary| {
+            self.runs()[boundary.run_ix].glyphs[boundary.glyph_ix]
+                .position
+                .x
+        };
+        let start = if row == 0 {
+            px(0.)
+        } else {
+            boundary_x(&self.wrap_boundaries[row - 1])
+        };
+        let end = self
+            .wrap_boundaries
+            .get(row)
+            .map(boundary_x)
+            .unwrap_or(self.unwrapped_layout.width);
+        Some(start..end)
+    }
+
+    /// Logical envelope of the clusters painted on a displayed row.
+    pub fn row_range(&self, row: usize) -> Option<Range<usize>> {
+        let extent = self.row_extent(row)?;
+        let mut range: Option<Range<usize>> = None;
+        for cluster in self
+            .unwrapped_layout
+            .clusters()
+            .filter(|cluster| cluster.right > extent.start && cluster.left < extent.end)
+        {
+            if let Some(range) = &mut range {
+                range.start = range.start.min(cluster.range.start);
+                range.end = range.end.max(cluster.range.end);
+            } else {
+                range = Some(cluster.range);
+            }
+        }
+        Some(range.unwrap_or(0..0))
+    }
+
+    pub(crate) fn row_text_ranges(&self, row: usize) -> Vec<Range<usize>> {
+        let Some(extent) = self.row_extent(row) else {
+            return Vec::new();
+        };
+        let mut ranges: Vec<_> = self
+            .unwrapped_layout
+            .clusters()
+            .filter(|cluster| cluster.right > extent.start && cluster.left < extent.end)
+            .map(|cluster| cluster.range)
+            .collect();
+        ranges.sort_by_key(|range| range.start);
+        let mut merged: Vec<Range<usize>> = Vec::new();
+        for range in ranges {
+            if let Some(last) = merged.last_mut()
+                && range.start <= last.end
+            {
+                last.end = last.end.max(range.end);
+            } else {
+                merged.push(range);
+            }
+        }
+        merged
+    }
+
     fn _index_for_position(
         &self,
-        mut position: Point<Pixels>,
+        position: Point<Pixels>,
         line_height: Pixels,
         closest: bool,
     ) -> Result<usize, usize> {
-        let wrapped_line_ix = (position.y / line_height) as usize;
-
-        let wrapped_line_start_index;
-        let wrapped_line_start_x;
-        if wrapped_line_ix > 0 {
-            let Some(line_start_boundary) = self.wrap_boundaries.get(wrapped_line_ix - 1) else {
-                return Err(0);
-            };
-            let run = &self.unwrapped_layout.runs[line_start_boundary.run_ix];
-            let glyph = &run.glyphs[line_start_boundary.glyph_ix];
-            wrapped_line_start_index = glyph.index;
-            wrapped_line_start_x = glyph.position.x;
-        } else {
-            wrapped_line_start_index = 0;
-            wrapped_line_start_x = Pixels::ZERO;
+        let row = (position.y / line_height) as usize;
+        let Some(extent) = self.row_extent(row) else {
+            return Err(self.len());
         };
-
-        let wrapped_line_end_index;
-        let wrapped_line_end_x;
-        if wrapped_line_ix < self.wrap_boundaries.len() {
-            let next_wrap_boundary_ix = wrapped_line_ix;
-            let next_wrap_boundary = self.wrap_boundaries[next_wrap_boundary_ix];
-            let run = &self.unwrapped_layout.runs[next_wrap_boundary.run_ix];
-            let glyph = &run.glyphs[next_wrap_boundary.glyph_ix];
-            wrapped_line_end_index = glyph.index;
-            wrapped_line_end_x = glyph.position.x;
-        } else {
-            wrapped_line_end_index = self.unwrapped_layout.len;
-            wrapped_line_end_x = self.unwrapped_layout.width;
-        };
-
-        let mut position_in_unwrapped_line = position;
-        position_in_unwrapped_line.x += wrapped_line_start_x;
-        if position_in_unwrapped_line.x < wrapped_line_start_x {
-            Err(wrapped_line_start_index)
-        } else if position_in_unwrapped_line.x >= wrapped_line_end_x {
-            Err(wrapped_line_end_index)
-        } else {
-            if closest {
-                Ok(self
-                    .unwrapped_layout
-                    .closest_index_for_x(position_in_unwrapped_line.x))
+        let x = position.x + extent.start;
+        let cluster = self
+            .unwrapped_layout
+            .clusters()
+            .filter(|cluster| cluster.right > extent.start && cluster.left < extent.end)
+            .min_by_key(|cluster| (cluster.distance(x), x >= cluster.right));
+        let index = cluster.map_or(0, |cluster| {
+            if closest || x < extent.start || x >= extent.end {
+                cluster.closest_caret(x).index
             } else {
-                Ok(self
-                    .unwrapped_layout
-                    .index_for_x(position_in_unwrapped_line.x)
-                    .unwrap())
+                cluster.range.start
             }
+        });
+        if position.y < px(0.) || x < extent.start || x >= extent.end {
+            Err(index)
+        } else {
+            Ok(index)
         }
     }
 
-    /// Returns the pixel position for the given byte index.
+    /// Closest caret in displayed coordinates, preserving boundary affinity.
+    pub fn closest_caret_for_position(
+        &self,
+        position: Point<Pixels>,
+        line_height: Pixels,
+    ) -> TextCaret {
+        let row = ((position.y / line_height).max(0.) as usize).min(self.wrap_boundaries.len());
+        let extent = self.row_extent(row).unwrap();
+        let x = position.x + extent.start;
+        self.unwrapped_layout
+            .clusters()
+            .filter(|cluster| cluster.right > extent.start && cluster.left < extent.end)
+            .min_by_key(|cluster| (cluster.distance(x), x >= cluster.right))
+            .map_or(TextCaret::default(), |cluster| cluster.closest_caret(x))
+    }
+
+    /// Pixel position of a logical UTF-8 index, on the following cluster's side.
     pub fn position_for_index(&self, index: usize, line_height: Pixels) -> Option<Point<Pixels>> {
-        let mut line_start_ix = 0;
-        let mut line_end_indices = self
-            .wrap_boundaries
-            .iter()
-            .map(|wrap_boundary| {
-                let run = &self.unwrapped_layout.runs[wrap_boundary.run_ix];
-                let glyph = &run.glyphs[wrap_boundary.glyph_ix];
-                glyph.index
-            })
-            .chain([self.len()])
-            .enumerate();
-        for (ix, line_end_ix) in line_end_indices {
-            let line_y = ix as f32 * line_height;
-            if index < line_start_ix {
-                break;
-            } else if index > line_end_ix {
-                line_start_ix = line_end_ix;
-                continue;
-            } else {
-                let line_start_x = self.unwrapped_layout.x_for_index(line_start_ix);
-                let x = self.unwrapped_layout.x_for_index(index) - line_start_x;
-                return Some(point(x, line_y));
+        self.position_for_caret(index.into(), line_height)
+    }
+
+    /// Pixel position of a caret, preserving directional and wrap affinity.
+    pub fn position_for_caret(
+        &self,
+        caret: TextCaret,
+        line_height: Pixels,
+    ) -> Option<Point<Pixels>> {
+        if caret.index > self.len() {
+            return None;
+        }
+        let x = self.unwrapped_layout.x_for_caret(caret);
+        let cluster = self.unwrapped_layout.cluster_for_caret(caret);
+        let probe = cluster.map_or(x, |cluster| (cluster.left + cluster.right) / 2.);
+        let row = self.wrap_boundaries.partition_point(|boundary| {
+            self.runs()[boundary.run_ix].glyphs[boundary.glyph_ix]
+                .position
+                .x
+                <= probe
+        });
+        let extent = self.row_extent(row)?;
+        Some(point(x - extent.start, line_height * row))
+    }
+
+    /// Shaping-cluster caret edges in displayed coordinates. Directional and
+    /// wrap boundaries retain both affinities; coincident edges are not merged.
+    /// Each cluster contributes its leading edge followed by its trailing edge.
+    /// An empty line contributes a single default caret.
+    pub fn visual_carets(&self, line_height: Pixels) -> Vec<(TextCaret, Point<Pixels>)> {
+        let mut carets = Vec::new();
+        for cluster in self.unwrapped_layout.clusters() {
+            let probe = (cluster.left + cluster.right) / 2.;
+            let row = self.wrap_boundaries.partition_point(|boundary| {
+                self.runs()[boundary.run_ix].glyphs[boundary.glyph_ix]
+                    .position
+                    .x
+                    <= probe
+            });
+            let start = self.row_extent(row).unwrap().start;
+            carets.push((
+                cluster.range.start.into(),
+                point(cluster.leading() - start, line_height * row),
+            ));
+            carets.push((
+                TextCaret {
+                    index: cluster.range.end,
+                    affinity: CaretAffinity::Upstream,
+                },
+                point(cluster.trailing() - start, line_height * row),
+            ));
+        }
+        if carets.is_empty() {
+            carets.push((TextCaret::default(), Point::default()));
+        }
+        carets
+    }
+
+    /// Selection rectangles in displayed coordinates, with a separate rectangle
+    /// for each disjoint visual interval and wrapped row.
+    pub fn selection_bounds(
+        &self,
+        selected: Range<usize>,
+        line_height: Pixels,
+    ) -> Vec<crate::Bounds<Pixels>> {
+        let ranges = self.unwrapped_layout.selection_ranges(selected);
+        let mut bounds = Vec::new();
+        for row in 0..=self.wrap_boundaries.len() {
+            let extent = self.row_extent(row).unwrap();
+            for range in &ranges {
+                let left = range.start.max(extent.start);
+                let right = range.end.min(extent.end);
+                if right > left {
+                    bounds.push(crate::Bounds::new(
+                        point(left - extent.start, line_height * row),
+                        crate::size(right - left, line_height),
+                    ));
+                }
             }
         }
-
-        None
+        bounds
     }
 }
 
@@ -801,6 +1037,9 @@ fn apply_force_width_to_layout(layout: &mut LineLayout, force_width: Pixels) {
                 }
                 last_base_shaped_x = shaped_x;
                 last_base_actual_x = glyph.position.x;
+                if glyph.advance > px(0.) {
+                    glyph.advance = force_width;
+                }
                 glyph_pos += 1;
             } else {
                 glyph.position.x = last_base_actual_x + (shaped_x - last_base_shaped_x);
@@ -962,11 +1201,159 @@ mod tests {
     use super::*;
     use crate::GlyphId;
 
+    fn bidi_layout() -> LineLayout {
+        // Logical text: "aאב12". Visual order: a, 1, 2, ב, א.
+        let mut layout = make_layout(
+            [
+                (0, 1, false),
+                (5, 6, false),
+                (6, 7, false),
+                (3, 5, true),
+                (1, 3, true),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(visual, (index, end, rtl))| ShapedGlyph {
+                id: GlyphId(0),
+                position: point(px(visual as f32 * 10.), px(0.)),
+                index,
+                cluster_end: end,
+                advance: px(10.),
+                is_rtl: rtl,
+                is_emoji: false,
+            })
+            .collect(),
+        );
+        layout.len = 7;
+        layout.width = px(50.);
+        layout
+    }
+
+    #[test]
+    fn bidi_caret_uses_logical_cluster_edges() {
+        let layout = bidi_layout();
+        assert_eq!(layout.x_for_index(1), px(50.));
+        assert_eq!(layout.x_for_index(3), px(40.));
+        assert_eq!(layout.x_for_index(5), px(10.));
+        assert_eq!(layout.x_for_index(7), px(30.));
+        assert_eq!(layout.closest_index_for_x(px(48.)), 1);
+        assert_eq!(layout.closest_index_for_x(px(42.)), 3);
+        assert_eq!(layout.closest_index_for_x(px(32.)), 5);
+        assert_eq!(layout.closest_index_for_x(px(60.)), 1);
+    }
+
+    #[test]
+    fn bidi_selection_preserves_disjoint_visual_spans() {
+        let layout = bidi_layout();
+        assert_eq!(
+            layout.selection_ranges(0..3),
+            vec![px(0.)..px(10.), px(40.)..px(50.)]
+        );
+        assert_eq!(layout.selection_ranges(1..5), vec![px(30.)..px(50.)]);
+        assert_eq!(layout.selection_ranges(0..7), vec![px(0.)..px(50.)]);
+        assert!(layout.selection_ranges(3..3).is_empty());
+    }
+
+    #[test]
+    fn bidi_caret_hit_testing_preserves_both_sides_of_a_boundary() {
+        let layout = bidi_layout();
+        let left = layout.caret_for_x(px(9.));
+        let right = layout.caret_for_x(px(49.));
+        assert_eq!(left.index, 1);
+        assert_eq!(right.index, 1);
+        assert_eq!(left.affinity, CaretAffinity::Upstream);
+        assert_eq!(right.affinity, CaretAffinity::Downstream);
+        assert_eq!(layout.x_for_caret(left), px(10.));
+        assert_eq!(layout.x_for_caret(right), px(50.));
+    }
+
+    #[test]
+    fn bidi_wrapped_geometry_matches_displayed_rows() {
+        let wrapped = WrappedLineLayout {
+            unwrapped_layout: Arc::new(bidi_layout()),
+            wrap_boundaries: smallvec::smallvec![WrapBoundary {
+                run_ix: 0,
+                glyph_ix: 3
+            }],
+            wrap_width: Some(px(30.)),
+        };
+        assert_eq!(
+            wrapped.position_for_index(1, px(20.)),
+            Some(point(px(20.), px(20.)))
+        );
+        assert_eq!(
+            wrapped.position_for_index(3, px(20.)),
+            Some(point(px(10.), px(20.)))
+        );
+        assert_eq!(
+            wrapped.closest_index_for_position(point(px(19.), px(25.)), px(20.)),
+            Ok(1)
+        );
+        assert_eq!(
+            wrapped.closest_index_for_position(point(px(-5.), px(25.)), px(20.)),
+            Err(5)
+        );
+        assert_eq!(
+            wrapped.selection_bounds(0..3, px(20.)),
+            vec![
+                crate::Bounds::new(point(px(0.), px(0.)), crate::size(px(10.), px(20.))),
+                crate::Bounds::new(point(px(10.), px(20.)), crate::size(px(10.), px(20.))),
+            ]
+        );
+    }
+
+    #[test]
+    fn rtl_combining_cluster_has_one_hitbox_and_utf8_boundaries() {
+        let mut layout = make_layout(vec![
+            ShapedGlyph {
+                index: 4,
+                cluster_end: 6,
+                advance: px(10.),
+                is_rtl: true,
+                ..glyph_at(0., 4)
+            },
+            ShapedGlyph {
+                index: 0,
+                cluster_end: 4,
+                advance: px(10.),
+                is_rtl: true,
+                ..glyph_at(10., 0)
+            },
+            ShapedGlyph {
+                index: 0,
+                cluster_end: 4,
+                advance: px(0.),
+                is_rtl: true,
+                ..glyph_at(9., 0)
+            },
+        ]);
+        layout.len = 6;
+        layout.width = px(20.);
+        assert_eq!(layout.closest_index_for_x(px(-5.)), 6);
+        assert_eq!(layout.closest_index_for_x(px(25.)), 0);
+        assert_eq!(layout.selection_ranges(0..2), vec![px(10.)..px(20.)]);
+        let wrapped = WrappedLineLayout {
+            unwrapped_layout: Arc::new(layout),
+            ..Default::default()
+        };
+        assert_eq!(
+            wrapped.position_for_index(0, px(20.)),
+            Some(point(px(20.), px(0.)))
+        );
+        assert_eq!(
+            wrapped.position_for_index(6, px(20.)),
+            Some(point(px(0.), px(0.)))
+        );
+    }
+
     fn glyph_at(x: f32, index: usize) -> ShapedGlyph {
         ShapedGlyph {
             id: GlyphId(0),
             position: point(px(x), px(0.)),
             index,
+            cluster_end: index + 1,
+            advance: px(8.),
+            is_rtl: false,
             is_emoji: false,
         }
     }

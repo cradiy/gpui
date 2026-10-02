@@ -623,6 +623,7 @@ impl DirectWriteState {
                 0.0,
             )?;
             let width = px(renderer_context.width);
+            runs.sort_by_key(|run| run.glyphs.first().map(|glyph| glyph.position.x));
 
             Ok(LineLayout {
                 font_size,
@@ -1464,7 +1465,7 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
     fn DrawGlyphRun(
         &self,
         clientdrawingcontext: *const ::core::ffi::c_void,
-        _baselineoriginx: f32,
+        baselineoriginx: f32,
         _baselineoriginy: f32,
         _measuringmode: DWRITE_MEASURING_MODE,
         glyphrun: *const DWRITE_GLYPH_RUN,
@@ -1532,9 +1533,17 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         let mut utf16_idx = desc.textPosition as usize;
         let mut glyph_idx = 0;
         let mut glyphs = Vec::with_capacity(glyph_count);
+        let rtl = glyphrun.bidiLevel % 2 != 0;
+        let mut pen_x = baselineoriginx;
+        if context.index_converter.utf16_ix > utf16_idx {
+            context.index_converter = StringIndexConverter::new(context.index_converter.text);
+        }
         for (cluster_utf16_len, cluster_glyph_count) in cluster_analyzer {
             context.index_converter.advance_to_utf16_ix(utf16_idx);
+            let cluster_start = context.index_converter.utf8_ix;
             utf16_idx += cluster_utf16_len;
+            context.index_converter.advance_to_utf16_ix(utf16_idx);
+            let cluster_end = context.index_converter.utf8_ix;
             for (cluster_glyph_idx, glyph_id) in glyph_ids
                 [glyph_idx..(glyph_idx + cluster_glyph_count)]
                 .iter()
@@ -1544,19 +1553,31 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
                 let is_emoji =
                     color_font && is_color_glyph(font_face, id, &context.components.factory);
                 let this_glyph_idx = glyph_idx + cluster_glyph_idx;
+                let advance = glyph_advances[this_glyph_idx];
+                let offset = glyph_offsets[this_glyph_idx].advanceOffset;
+                let x = if rtl {
+                    pen_x - advance - offset
+                } else {
+                    pen_x + offset
+                };
                 glyphs.push(ShapedGlyph {
                     id,
-                    position: point(
-                        px(context.width + glyph_offsets[this_glyph_idx].advanceOffset),
-                        px(-glyph_offsets[this_glyph_idx].ascenderOffset),
-                    ),
-                    index: context.index_converter.utf8_ix,
+                    position: point(px(x), px(-glyph_offsets[this_glyph_idx].ascenderOffset)),
+                    index: cluster_start,
+                    cluster_end,
+                    advance: px(advance),
+                    is_rtl: rtl,
                     is_emoji,
                 });
-                context.width += glyph_advances[this_glyph_idx];
+                context.width = context
+                    .width
+                    .max(pen_x)
+                    .max(pen_x + if rtl { 0. } else { advance });
+                pen_x += if rtl { -advance } else { advance };
             }
             glyph_idx += cluster_glyph_count;
         }
+        glyphs.sort_by_key(|glyph| glyph.position.x);
         context.runs.push(ShapedRun { font_id, glyphs });
         Ok(())
     }

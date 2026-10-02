@@ -1237,6 +1237,9 @@ impl PlatformTextSystem for NoopTextSystem {
                     id: glyph,
                     position: point(position, px(0.)),
                     index: ix,
+                    cluster_end: ix + c.len_utf8(),
+                    advance: em_width * if glyph.0 == 2 { 2.0 } else { 1.0 },
+                    is_rtl: false,
                     is_emoji: glyph.0 == 2,
                 });
                 if glyph.0 == 2 {

@@ -1,10 +1,10 @@
 use std::{borrow::Cow, ops::Range, time::Duration};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, EntityInputHandler,
-    FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, PreeditSelection, Render, ScrollHandle, SharedString, Task, UTF16Selection, Window,
-    WrappedLine, div, point, prelude::*, px,
+    App, Bounds, CaretAffinity, ClipboardItem, Context, CursorStyle, DispatchPhase,
+    EntityInputHandler, FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, PreeditSelection, Render, ScrollHandle, SharedString, Task,
+    TextCaret, UTF16Selection, Window, WrappedLine, div, point, prelude::*, px,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -15,6 +15,7 @@ pub(super) struct TextLayout {
     pub(super) lines: Vec<WrappedLine>,
     pub(super) line_starts: Vec<usize>,
     pub(super) line_height: Pixels,
+    pub(super) shaping_run: Option<gpui::TextRun>,
 }
 
 fn preedit_offset_from_utf16(text: &str, offset: usize) -> usize {
@@ -38,6 +39,7 @@ impl TextLayout {
             lines,
             line_starts,
             line_height,
+            shaping_run: None,
         }
     }
 
@@ -63,6 +65,14 @@ impl TextLayout {
     }
 
     pub(super) fn position_for_offset(&self, offset: usize) -> Point<Pixels> {
+        self.position_for_caret(offset, CaretAffinity::Downstream)
+    }
+
+    pub(super) fn position_for_caret(
+        &self,
+        offset: usize,
+        affinity: CaretAffinity,
+    ) -> Point<Pixels> {
         let (line_ix, local_offset) = self.line_for_offset(offset);
         let rows_before = self
             .lines
@@ -71,14 +81,24 @@ impl TextLayout {
             .map(|line| line.wrap_boundaries().len() + 1)
             .sum::<usize>();
         let local = self.lines[line_ix]
-            .position_for_index(local_offset, self.line_height)
+            .position_for_caret(
+                TextCaret {
+                    index: local_offset,
+                    affinity,
+                },
+                self.line_height,
+            )
             .unwrap_or_default();
         point(local.x, local.y + self.line_height * rows_before as f32)
     }
 
     pub(super) fn offset_for_position(&self, position: Point<Pixels>) -> usize {
+        self.caret_for_position(position).index
+    }
+
+    fn caret_for_position(&self, position: Point<Pixels>) -> TextCaret {
         if position.y < px(0.) {
-            return 0;
+            return 0.into();
         }
 
         let target_row = (position.y / self.line_height).floor() as usize;
@@ -87,23 +107,250 @@ impl TextLayout {
             let rows = line.wrap_boundaries().len() + 1;
             if target_row < rows_before + rows {
                 let local_y = self.line_height * (target_row - rows_before) as f32;
-                let local = line
-                    .closest_index_for_position(point(position.x, local_y), self.line_height)
-                    .unwrap_or_else(|index| index);
-                return self.line_starts[line_ix] + local;
+                let mut caret =
+                    line.closest_caret_for_position(point(position.x, local_y), self.line_height);
+                caret.index += self.line_starts[line_ix];
+                return caret;
             }
             rows_before += rows;
         }
 
-        self.line_starts.last().copied().unwrap_or(0)
-            + self.lines.last().map_or(0, WrappedLine::len)
+        (self.line_starts.last().copied().unwrap_or(0)
+            + self.lines.last().map_or(0, WrappedLine::len))
+        .into()
     }
 
     fn row_range_for_offset(&self, offset: usize) -> Range<usize> {
-        let position = self.position_for_offset(offset);
-        let start = self.offset_for_position(point(px(-1_000_000.), position.y));
-        let end = self.offset_for_position(point(px(1_000_000.), position.y));
-        start..end.max(start)
+        let (line_ix, local) = self.line_for_offset(offset);
+        let line = &self.lines[line_ix];
+        let position = line
+            .position_for_index(local, self.line_height)
+            .unwrap_or_default();
+        let row = (position.y / self.line_height) as usize;
+        let range = line.row_range(row).unwrap_or(0..0);
+        let start = self.line_starts[line_ix];
+        start + range.start..start + range.end
+    }
+
+    fn matches_content(&self, content: &str) -> bool {
+        self.line_starts.last().copied().unwrap_or(0)
+            + self.lines.last().map_or(0, WrappedLine::len)
+            == content.len()
+            && self
+                .lines
+                .iter()
+                .zip(&self.line_starts)
+                .all(|(line, start)| {
+                    content.get(*start..start + line.len()) == Some(line.text.as_ref())
+                })
+    }
+
+    fn refresh_for_edit(&mut self, content: &SharedString, shaper: &gpui::WindowTextSystem) {
+        if self.matches_content(content) {
+            return;
+        }
+        let Some(mut run) = self.shaping_run.clone() else {
+            return;
+        };
+        let Some(first) = self.lines.first() else {
+            return;
+        };
+        run.len = content.len();
+        if let Ok(lines) = shaper.shape_text(
+            content.clone(),
+            first.font_size(),
+            &[run],
+            first.wrap_width,
+            None,
+        ) {
+            self.lines = lines.into_vec();
+            self.line_starts = std::iter::once(0)
+                .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+                .collect();
+        }
+    }
+
+    fn bidi_horizontal_target(
+        &self,
+        content: &str,
+        caret: TextCaret,
+        right: bool,
+        collapse: Option<Range<usize>>,
+    ) -> Option<TextCaret> {
+        if !self.lines.iter().any(|line| {
+            line.runs()
+                .iter()
+                .any(|run| run.glyphs.iter().any(|glyph| glyph.is_rtl))
+        }) || !self.matches_content(content)
+        {
+            return None;
+        }
+
+        let boundaries: Vec<_> = content
+            .grapheme_indices(true)
+            .map(|(i, _)| i)
+            .chain(std::iter::once(content.len()))
+            .collect();
+        let mut stops = Vec::new();
+        let mut selection_edges = Vec::new();
+        let mut y = px(0.);
+        for (line, start) in self.lines.iter().zip(&self.line_starts) {
+            for (mut stop, mut position) in line.visual_carets(self.line_height) {
+                stop.index += start;
+                position.y += y;
+                if boundaries.binary_search(&stop.index).is_ok() {
+                    stops.push((stop, position));
+                }
+            }
+            if let Some(range) = &collapse {
+                let local = range.start.saturating_sub(*start).min(line.len())
+                    ..range.end.saturating_sub(*start).min(line.len());
+                for bounds in line.selection_bounds(local, self.line_height) {
+                    selection_edges.push(point(
+                        if right { bounds.right() } else { bounds.left() },
+                        bounds.top() + y,
+                    ));
+                }
+            }
+            y += self.line_height * (line.wrap_boundaries().len() + 1);
+        }
+        let key = |position: Point<Pixels>| (position.y, position.x);
+        let current = key(self.position_for_caret(caret.index, caret.affinity));
+        let target_position = if collapse.is_some() && !selection_edges.is_empty() {
+            selection_edges.into_iter().map(key).reduce(
+                |a, b| {
+                    if right { a.max(b) } else { a.min(b) }
+                },
+            )
+        } else {
+            stops
+                .iter()
+                .map(|(_, position)| key(*position))
+                .filter(|position| {
+                    if right {
+                        *position > current
+                    } else {
+                        *position < current
+                    }
+                })
+                .reduce(|a, b| if right { a.min(b) } else { a.max(b) })
+        };
+        Some(
+            target_position
+                .and_then(|position| {
+                    stops
+                        .into_iter()
+                        .filter(|(_, p)| key(*p) == position)
+                        .min_by_key(|(stop, _)| {
+                            (
+                                collapse.as_ref().is_some_and(|range| {
+                                    stop.index < range.start || stop.index > range.end
+                                }),
+                                stop.index.abs_diff(caret.index),
+                            )
+                        })
+                        .map(|(stop, _)| stop)
+                })
+                .unwrap_or(caret),
+        )
+    }
+
+    fn bidi_deletion_target(
+        &self,
+        content: &str,
+        caret: TextCaret,
+        right: bool,
+    ) -> Option<(Range<usize>, TextCaret)> {
+        let (line_ix, index) = self.line_for_offset(caret.index);
+        let line = self.lines.get(line_ix)?;
+        let start = self.line_starts[line_ix];
+        if !self.matches_content(content)
+            || !line
+                .runs()
+                .iter()
+                .any(|run| run.glyphs.iter().any(|glyph| glyph.is_rtl))
+        {
+            return None;
+        }
+        let key = |p: Point<Pixels>| (p.y, p.x);
+        let position = line.position_for_caret(TextCaret { index, ..caret }, self.line_height)?;
+        let edges = line.visual_carets(self.line_height);
+        let cluster = edges
+            .chunks_exact(2)
+            .filter(|pair| {
+                let left = key(pair[0].1).min(key(pair[1].1));
+                let end = key(pair[0].1).max(key(pair[1].1));
+                if right {
+                    end > key(position)
+                } else {
+                    left < key(position)
+                }
+            })
+            .reduce(|a, b| {
+                let edge = |pair: &[(TextCaret, Point<Pixels>)]| {
+                    if right {
+                        key(pair[0].1).min(key(pair[1].1))
+                    } else {
+                        key(pair[0].1).max(key(pair[1].1))
+                    }
+                };
+                if (right && edge(b) < edge(a)) || (!right && edge(b) > edge(a)) {
+                    b
+                } else {
+                    a
+                }
+            });
+        let Some(cluster) = cluster else {
+            // Hard line breaks remain editable at the displayed line edges.
+            let range = if !right && start > 0 && content.as_bytes().get(start - 1) == Some(&b'\n')
+            {
+                start - 1..start
+            } else if right && content.as_bytes().get(start + line.len()) == Some(&b'\n') {
+                start + line.len()..start + line.len() + 1
+            } else {
+                caret.index..caret.index
+            };
+            return Some((range.clone(), range.start.into()));
+        };
+        let rtl = cluster[0].1.x > cluster[1].1.x;
+        let cluster_range = start + cluster[0].0.index..start + cluster[1].0.index;
+        let mut graphemes = content.grapheme_indices(true).filter_map(|(index, text)| {
+            let range = index..index + text.len();
+            (range.start < cluster_range.end && cluster_range.start < range.end).then_some(range)
+        });
+        let range = if right != rtl {
+            graphemes.next()
+        } else {
+            graphemes.next_back()
+        }?;
+
+        // Anchor to a surviving cluster, so deletion at a direction boundary
+        // does not move the caret to the other visual representation of an index.
+        let anchor = edges
+            .chunks_exact(2)
+            .filter(|pair| {
+                let cluster = start + pair[0].0.index..start + pair[1].0.index;
+                cluster.end <= range.start || cluster.start >= range.end
+            })
+            .flat_map(|pair| pair.iter())
+            .min_by_key(|(stop, p)| {
+                (
+                    (p.y - position.y).abs(),
+                    (p.x - position.x).abs(),
+                    *stop != TextCaret { index, ..caret },
+                )
+            })
+            .map(|(stop, _)| TextCaret {
+                index: start + stop.index,
+                ..*stop
+            });
+        let mut anchor = anchor.unwrap_or_else(|| range.start.into());
+        if anchor.index >= range.end {
+            anchor.index -= range.len();
+        } else if anchor.index > range.start {
+            anchor.index = range.start;
+        }
+        Some((range, anchor))
     }
 }
 
@@ -114,6 +361,8 @@ pub struct TextInput {
     pub(super) placeholder: SharedString,
     pub(super) selected_range: Range<usize>,
     pub(super) selection_reversed: bool,
+    pub(super) caret_affinity: CaretAffinity,
+    horizontal_selection_anchor: Option<TextCaret>,
     pub(super) marked_range: Option<Range<usize>>,
     pub(super) preedit_cursor_hidden: bool,
     pub(super) last_layout: Option<TextLayout>,
@@ -144,6 +393,8 @@ impl TextInput {
             placeholder: "".into(),
             selected_range: 0..0,
             selection_reversed: false,
+            caret_affinity: CaretAffinity::Downstream,
+            horizontal_selection_anchor: None,
             marked_range: None,
             preedit_cursor_hidden: false,
             last_layout: None,
@@ -222,6 +473,9 @@ impl TextInput {
         self.content = value.into();
         self.committed_content = self.content.clone();
         self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.horizontal_selection_anchor = None;
         self
     }
 
@@ -239,6 +493,9 @@ impl TextInput {
         self.content = value.into();
         self.committed_content = self.content.clone();
         self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.horizontal_selection_anchor = None;
         self.marked_range = None;
         self.scroll_cursor_pending = true;
         cx.emit(InputEvent::Change(self.content.clone()));
@@ -262,25 +519,11 @@ impl TextInput {
     }
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
-        if self.disabled {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            self.move_to(self.previous_boundary(self.cursor_offset()), cx);
-        } else {
-            self.move_to(self.selected_range.start, cx)
-        }
+        self.move_horizontal(false, false, cx);
     }
 
     fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
-        if self.disabled {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            self.move_to(self.next_boundary(self.selected_range.end), cx);
-        } else {
-            self.move_to(self.selected_range.end, cx)
-        }
+        self.move_horizontal(true, false, cx);
     }
 
     fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
@@ -292,19 +535,11 @@ impl TextInput {
     }
 
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        if self.disabled {
-            return;
-        }
-        self.preferred_x = None;
-        self.select_to(self.previous_boundary(self.cursor_offset()), cx);
+        self.move_horizontal(false, true, cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        if self.disabled {
-            return;
-        }
-        self.preferred_x = None;
-        self.select_to(self.next_boundary(self.cursor_offset()), cx);
+        self.move_horizontal(true, true, cx);
     }
 
     fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
@@ -354,33 +589,63 @@ impl TextInput {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.disabled {
-            return;
-        }
-        if self.selected_range.is_empty() {
-            let prev = self.previous_boundary(self.cursor_offset());
-            if self.cursor_offset() == prev {
-                window.play_system_bell();
-                return;
-            }
-            self.select_to(prev, cx)
-        }
-        self.replace_text_in_range(None, "", window, cx)
+        self.delete_horizontal(false, window, cx);
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        self.delete_horizontal(true, window, cx);
+    }
+
+    fn delete_horizontal(&mut self, right: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.disabled {
             return;
         }
+        let mut anchor = None;
         if self.selected_range.is_empty() {
-            let next = self.next_boundary(self.cursor_offset());
-            if self.cursor_offset() == next {
+            if self.marked_range.is_none()
+                && self.mode != InputMode::Password
+                && let Some(layout) = self.last_layout.as_mut()
+                && layout.lines.iter().any(|line| {
+                    line.runs()
+                        .iter()
+                        .any(|run| run.glyphs.iter().any(|glyph| glyph.is_rtl))
+                })
+            {
+                layout.refresh_for_edit(&self.content, window.text_system());
+            }
+            let caret = TextCaret {
+                index: self.cursor_offset(),
+                affinity: self.caret_affinity,
+            };
+            let visual = self
+                .marked_range
+                .is_none()
+                .then(|| {
+                    self.last_layout
+                        .as_ref()?
+                        .bidi_deletion_target(&self.content, caret, right)
+                })
+                .flatten();
+            let range = if let Some((range, target)) = visual {
+                anchor = Some(target);
+                range
+            } else if right {
+                caret.index..self.next_boundary(caret.index)
+            } else {
+                self.previous_boundary(caret.index)..caret.index
+            };
+            if range.is_empty() {
                 window.play_system_bell();
                 return;
             }
-            self.select_to(next, cx)
+            self.selected_range = range;
+            self.selection_reversed = false;
         }
-        self.replace_text_in_range(None, "", window, cx)
+        self.replace_text_in_range(None, "", window, cx);
+        if let Some(anchor) = anchor {
+            self.selected_range = anchor.index..anchor.index;
+            self.caret_affinity = anchor.affinity;
+        }
     }
 
     fn insert_newline(&mut self, _: &InsertNewline, window: &mut Window, cx: &mut Context<Self>) {
@@ -404,13 +669,16 @@ impl TextInput {
         self.stop_selection();
         self.is_selecting = true;
 
-        let offset = self.index_for_mouse_position(event.position);
+        let caret = self.caret_for_mouse_position(event.position);
+        let offset = caret.index;
         if event.click_count >= 2 {
             let range = self.line_range_at(offset);
             self.selection_line_anchor = Some(range.clone());
             self.preferred_x = None;
             self.selected_range = range;
             self.selection_reversed = false;
+            self.caret_affinity = CaretAffinity::Downstream;
+            self.horizontal_selection_anchor = None;
             self.scroll_cursor_pending = true;
             cx.notify();
         } else if event.modifiers.shift {
@@ -418,6 +686,9 @@ impl TextInput {
             self.select_to(offset, cx);
         } else {
             self.move_to(offset, cx)
+        }
+        if event.click_count < 2 {
+            self.caret_affinity = caret.affinity;
         }
     }
 
@@ -485,7 +756,8 @@ impl TextInput {
         {
             position.x = position.x.clamp(viewport.left(), viewport.right());
         }
-        let offset = self.index_for_mouse_position(position);
+        let caret = self.caret_for_mouse_position(position);
+        let offset = caret.index;
         if let Some(anchor) = &self.selection_line_anchor {
             let range = self.line_range_at(offset);
             self.selection_reversed = range.start < anchor.start;
@@ -494,6 +766,7 @@ impl TextInput {
             cx.notify();
         } else {
             self.select_to(offset, cx);
+            self.caret_affinity = caret.affinity;
         }
     }
 
@@ -599,12 +872,66 @@ impl TextInput {
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
         self.selection_reversed = false;
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.horizontal_selection_anchor = None;
         self.preferred_x = None;
         self.scroll_cursor_pending = true;
         cx.notify()
     }
 
+    fn move_horizontal(&mut self, right: bool, selecting: bool, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
+        let caret = TextCaret {
+            index: self.cursor_offset(),
+            affinity: self.caret_affinity,
+        };
+        let anchor = self.horizontal_selection_anchor.unwrap_or_else(|| {
+            if self.selected_range.is_empty() {
+                caret
+            } else {
+                (if self.selection_reversed {
+                    self.selected_range.end
+                } else {
+                    self.selected_range.start
+                })
+                .into()
+            }
+        });
+        let collapse =
+            (!selecting && !self.selected_range.is_empty()).then(|| self.selected_range.clone());
+        let visual_target = self.last_layout.as_ref().and_then(|layout| {
+            layout.bidi_horizontal_target(&self.content, caret, right, collapse.clone())
+        });
+        let mut target = visual_target.unwrap_or_else(|| {
+            if let Some(range) = collapse {
+                (if right { range.end } else { range.start }).into()
+            } else if right {
+                self.next_boundary(caret.index).into()
+            } else {
+                self.previous_boundary(caret.index).into()
+            }
+        });
+        if selecting {
+            if visual_target.is_some()
+                && let Some(layout) = &self.last_layout
+                && layout.position_for_caret(target.index, target.affinity)
+                    == layout.position_for_caret(anchor.index, anchor.affinity)
+            {
+                target = anchor;
+            }
+            self.select_to(target.index, cx);
+            self.horizontal_selection_anchor = Some(anchor);
+        } else {
+            self.move_to(target.index, cx);
+        }
+        self.caret_affinity = target.affinity;
+        self.preferred_x = None;
+    }
+
     fn move_vertical(&mut self, rows: f32, selecting: bool, cx: &mut Context<Self>) {
+        self.horizontal_selection_anchor = None;
         if self.disabled || self.mode != InputMode::Multiline {
             return;
         }
@@ -612,19 +939,22 @@ impl TextInput {
             return;
         };
         let cursor = self.cursor_offset();
-        let position = layout.position_for_offset(cursor);
+        let position = layout.position_for_caret(cursor, self.caret_affinity);
         let preferred_x = self.preferred_x.unwrap_or(position.x);
         let target =
-            layout.offset_for_position(point(preferred_x, position.y + layout.line_height * rows));
+            layout.caret_for_position(point(preferred_x, position.y + layout.line_height * rows));
         self.preferred_x = Some(preferred_x);
         if selecting {
-            self.select_to(target, cx);
+            self.select_to(target.index, cx);
         } else {
-            self.selected_range = target..target;
+            self.selected_range = target.index..target.index;
             self.selection_reversed = false;
+            self.caret_affinity = CaretAffinity::Downstream;
+            self.horizontal_selection_anchor = None;
             self.scroll_cursor_pending = true;
             cx.notify();
         }
+        self.caret_affinity = target.affinity;
     }
 
     pub(super) fn cursor_offset(&self) -> usize {
@@ -635,28 +965,35 @@ impl TextInput {
         }
     }
 
+    #[cfg(test)]
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        self.caret_for_mouse_position(position).index
+    }
+
+    fn caret_for_mouse_position(&self, position: Point<Pixels>) -> TextCaret {
         if self.content.is_empty() {
-            return 0;
+            return 0.into();
         }
 
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
         else {
-            return 0;
+            return 0.into();
         };
         if self.mode != InputMode::Multiline {
-            return line.offset_for_position(point(position.x - bounds.left(), px(0.)));
+            return line.caret_for_position(point(position.x - bounds.left(), px(0.)));
         }
         if position.y < bounds.top() {
-            return 0;
+            return 0.into();
         }
         if position.y > bounds.bottom() {
-            return self.content.len();
+            return self.content.len().into();
         }
-        line.offset_for_position(point(position.x - bounds.left(), position.y - bounds.top()))
+        line.caret_for_position(point(position.x - bounds.left(), position.y - bounds.top()))
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.horizontal_selection_anchor = None;
         if self.selection_reversed {
             self.selected_range.start = offset
         } else {
@@ -748,6 +1085,8 @@ impl TextInput {
         self.committed_content = "".into();
         self.selected_range = 0..0;
         self.selection_reversed = false;
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.horizontal_selection_anchor = None;
         self.marked_range = None;
         self.last_layout = None;
         self.last_bounds = None;
@@ -890,6 +1229,8 @@ impl EntityInputHandler for TextInput {
                 .into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.selection_reversed = false;
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.horizontal_selection_anchor = None;
         self.marked_range.take();
         self.preferred_x = None;
         self.scroll_cursor_pending = true;
@@ -939,6 +1280,8 @@ impl EntityInputHandler for TextInput {
             })
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
         self.selection_reversed = false;
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.horizontal_selection_anchor = None;
         self.preedit_cursor_hidden = false;
         self.preferred_x = None;
         self.scroll_cursor_pending = true;
@@ -977,25 +1320,36 @@ impl EntityInputHandler for TextInput {
             self.last_bounds.unwrap_or(bounds)
         };
         let range = self.range_from_utf16(&range_utf16);
-        let start = last_layout.position_for_offset(range.start);
-        let end = last_layout.position_for_offset(range.end);
-        let top_left = if start.y == end.y {
-            point(bounds.left() + start.x, bounds.top() + start.y)
-        } else {
-            point(bounds.left(), bounds.top() + start.y)
-        };
-        let bottom_right = if start.y == end.y {
-            point(
-                bounds.left() + end.x,
-                bounds.top() + end.y + last_layout.line_height,
-            )
-        } else {
-            point(
-                bounds.right(),
-                bounds.top() + end.y + last_layout.line_height,
-            )
-        };
-        Some(Bounds::from_corners(top_left, bottom_right))
+        if range.is_empty() {
+            let affinity = if range.start == self.cursor_offset() {
+                self.caret_affinity
+            } else {
+                CaretAffinity::Downstream
+            };
+            let position = last_layout.position_for_caret(range.start, affinity);
+            return Some(Bounds::new(
+                bounds.origin + position,
+                gpui::size(px(0.), last_layout.line_height),
+            ));
+        }
+        let mut selected: Option<Bounds<Pixels>> = None;
+        let mut rows_before = 0;
+        for (ix, line) in last_layout.lines.iter().enumerate() {
+            let start = last_layout.line_starts[ix];
+            let local =
+                range.start.saturating_sub(start)..range.end.saturating_sub(start).min(line.len());
+            for mut rect in line.selection_bounds(local, last_layout.line_height) {
+                rect.origin += bounds.origin + point(px(0.), last_layout.line_height * rows_before);
+                selected = Some(selected.map_or(rect, |old| old.union(&rect)));
+            }
+            rows_before += line.wrap_boundaries().len() + 1;
+        }
+        selected.or_else(|| {
+            Some(Bounds::new(
+                bounds.origin + last_layout.position_for_offset(range.start),
+                gpui::size(px(0.), last_layout.line_height),
+            ))
+        })
     }
 
     fn character_index_for_point(
@@ -1110,6 +1464,488 @@ mod tests {
 
     use super::*;
     use crate::components::input::Input;
+
+    struct BidiText;
+
+    impl gpui::PlatformTextSystem for BidiText {
+        fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> gpui::Result<()> {
+            gpui::NoopTextSystem.add_fonts(fonts)
+        }
+        fn all_font_names(&self) -> Vec<String> {
+            gpui::NoopTextSystem.all_font_names()
+        }
+        fn font_id(&self, font: &gpui::Font) -> gpui::Result<gpui::FontId> {
+            gpui::NoopTextSystem.font_id(font)
+        }
+        fn font_metrics(&self, id: gpui::FontId) -> gpui::FontMetrics {
+            gpui::NoopTextSystem.font_metrics(id)
+        }
+        fn typographic_bounds(
+            &self,
+            font: gpui::FontId,
+            glyph: gpui::GlyphId,
+        ) -> gpui::Result<Bounds<f32>> {
+            gpui::NoopTextSystem.typographic_bounds(font, glyph)
+        }
+        fn advance(
+            &self,
+            font: gpui::FontId,
+            glyph: gpui::GlyphId,
+        ) -> gpui::Result<gpui::Size<f32>> {
+            gpui::NoopTextSystem.advance(font, glyph)
+        }
+        fn glyph_for_char(&self, font: gpui::FontId, ch: char) -> Option<gpui::GlyphId> {
+            gpui::NoopTextSystem.glyph_for_char(font, ch)
+        }
+        fn glyph_raster_bounds(
+            &self,
+            params: &gpui::RenderGlyphParams,
+        ) -> gpui::Result<Bounds<gpui::DevicePixels>> {
+            gpui::NoopTextSystem.glyph_raster_bounds(params)
+        }
+        fn rasterize_glyph(
+            &self,
+            params: &gpui::RenderGlyphParams,
+            bounds: Bounds<gpui::DevicePixels>,
+        ) -> gpui::Result<(gpui::Size<gpui::DevicePixels>, Vec<u8>)> {
+            gpui::NoopTextSystem.rasterize_glyph(params, bounds)
+        }
+        fn recommended_rendering_mode(
+            &self,
+            _: gpui::FontId,
+            _: Pixels,
+        ) -> gpui::TextRenderingMode {
+            gpui::TextRenderingMode::Grayscale
+        }
+        fn layout_line(
+            &self,
+            text: &str,
+            font_size: Pixels,
+            _: &[gpui::FontRun],
+        ) -> gpui::LineLayout {
+            let glyphs: &[(usize, usize, bool)] = match text {
+                "aאב12" => &[
+                    (0, 1, false),
+                    (5, 6, false),
+                    (6, 7, false),
+                    (3, 5, true),
+                    (1, 3, true),
+                ],
+                "אב" => &[(2, 4, true), (0, 2, true)],
+                "ב" => &[(0, 2, true)],
+                "א\u{5b0}ב" => &[(4, 6, true), (0, 4, true)],
+                "אב😀" => &[(4, 8, true), (2, 4, true), (0, 2, true)],
+                "" => &[],
+                _ => panic!("unexpected test text: {text}"),
+            };
+            gpui::LineLayout {
+                font_size,
+                width: px(glyphs.len() as f32 * 10.),
+                ascent: px(12.),
+                descent: px(4.),
+                len: text.len(),
+                runs: vec![gpui::ShapedRun {
+                    font_id: gpui::FontId(0),
+                    glyphs: glyphs
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .map(|(visual, (index, cluster_end, is_rtl))| gpui::ShapedGlyph {
+                            id: gpui::GlyphId(0),
+                            position: point(px(visual as f32 * 10.), px(0.)),
+                            index,
+                            cluster_end,
+                            advance: px(10.),
+                            is_rtl,
+                            is_emoji: false,
+                        })
+                        .collect(),
+                }],
+            }
+        }
+    }
+
+    fn bidi_text_layout(text: &str, wrap_width: Option<Pixels>) -> TextLayout {
+        use std::sync::Arc;
+        let shaper =
+            gpui::WindowTextSystem::new(Arc::new(gpui::TextSystem::new(Arc::new(BidiText))));
+        let lines = shaper
+            .shape_text(
+                text.to_owned().into(),
+                px(16.),
+                &[gpui::TextRun {
+                    len: text.len(),
+                    ..Default::default()
+                }],
+                wrap_width,
+                None,
+            )
+            .unwrap()
+            .into_vec();
+        let starts = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+        TextLayout::new(lines, starts, px(20.))
+    }
+
+    #[gpui::test]
+    fn bidi_deletion_removes_only_the_visual_neighbor(cx: &mut TestAppContext) {
+        let window = open_input(cx, TextInput::new);
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.state.update(cx, |input, cx| {
+                    for (text, index, affinity, right, expected) in [
+                        ("אב", 0, CaretAffinity::Downstream, false, "ב"),
+                        ("אב", 4, CaretAffinity::Upstream, true, "א"),
+                        ("aאב12", 1, CaretAffinity::Downstream, false, "aב12"),
+                        ("aאב12", 1, CaretAffinity::Upstream, true, "aאב2"),
+                        ("aאב12", 7, CaretAffinity::Upstream, false, "aאב1"),
+                        ("aאב12", 5, CaretAffinity::Upstream, true, "aא12"),
+                        ("aאב12", 1, CaretAffinity::Upstream, false, "אב12"),
+                        ("א\u{5b0}ב", 0, CaretAffinity::Downstream, false, "ב"),
+                        ("אב😀", 4, CaretAffinity::Upstream, false, "אב"),
+                    ] {
+                        input.set_value(text, cx);
+                        input.last_layout = Some(bidi_text_layout(text, None));
+                        input.move_to(index, cx);
+                        input.caret_affinity = affinity;
+                        if right {
+                            input.delete(&Delete, window, cx);
+                        } else {
+                            input.backspace(&Backspace, window, cx);
+                        }
+                        assert_eq!(input.content.as_ref(), expected, "{text}, {index}, {right}");
+                        assert!(input.selected_range.is_empty());
+                        assert!(input.content.is_char_boundary(input.cursor_offset()));
+                        if text == "aאב12"
+                            && index == 1
+                            && affinity == CaretAffinity::Upstream
+                            && !right
+                        {
+                            assert_eq!(input.cursor_offset(), 4);
+                            assert_eq!(input.caret_affinity, CaretAffinity::Downstream);
+                        }
+                    }
+                    input.set_value("aאב12", cx);
+                    input.last_layout = Some(bidi_text_layout("aאב12", None));
+                    input.move_to(1, cx);
+                    input.select_to(5, cx);
+                    input.backspace(&Backspace, window, cx);
+                    assert_eq!(input.content.as_ref(), "a12");
+                    for (right, index) in [(false, 0), (true, 1)] {
+                        input.set_value("aאב12", cx);
+                        input.last_layout = Some(bidi_text_layout("aאב12", None));
+                        input.move_to(index, cx);
+                        input.delete_horizontal(right, window, cx);
+                        assert_eq!(input.content.as_ref(), "aאב12");
+                    }
+                    input.disabled = true;
+                    input.move_to(1, cx);
+                    input.backspace(&Backspace, window, cx);
+                    assert_eq!(input.content.as_ref(), "aאב12");
+                });
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn bidi_repeated_backspace_refreshes_changed_text_before_next_frame() {
+        use std::sync::Arc;
+        let shaper =
+            gpui::WindowTextSystem::new(Arc::new(gpui::TextSystem::new(Arc::new(BidiText))));
+        let mut content: SharedString = "אב".into();
+        let mut layout = bidi_text_layout(&content, None);
+        layout.shaping_run = Some(gpui::TextRun {
+            len: content.len(),
+            ..Default::default()
+        });
+        let mut caret = TextCaret::default();
+        for expected in ["ב", ""] {
+            layout.refresh_for_edit(&content, &shaper);
+            let (range, next) = layout.bidi_deletion_target(&content, caret, false).unwrap();
+            let mut text = content.to_string();
+            text.replace_range(range, "");
+            content = text.into();
+            caret = next;
+            assert_eq!(content.as_ref(), expected);
+            assert_eq!(caret.index, 0);
+        }
+    }
+
+    #[test]
+    fn bidi_continuous_backspace_with_real_shaping() {
+        use gpui::PlatformTextSystem;
+        use std::sync::Arc;
+        let system = gpui_wgpu::CosmicTextSystem::new_without_system_fonts("Lilex");
+        system
+            .add_fonts(vec![Cow::Borrowed(include_bytes!(
+                "../../../../assets/fonts/lilex/Lilex-Regular.ttf"
+            ))])
+            .unwrap();
+        let shaper = gpui::WindowTextSystem::new(Arc::new(gpui::TextSystem::new(Arc::new(system))));
+        let mut content: SharedString = "English אבג 123 العربية 中文".into();
+        let run = gpui::TextRun {
+            len: content.len(),
+            font: gpui::font("Lilex"),
+            ..Default::default()
+        };
+        let lines = shaper
+            .shape_text(content.clone(), px(20.), &[run.clone()], None, None)
+            .unwrap()
+            .into_vec();
+        let mut layout = TextLayout::new(lines, vec![0], px(24.));
+        layout.shaping_run = Some(run);
+        let mut caret: TextCaret = content.find("中文").unwrap().into();
+        let mut deleted = String::new();
+        let mut reordered = false;
+        for _ in 0..30 {
+            layout.refresh_for_edit(&content, &shaper);
+            if content.contains("العربية") {
+                let left = |word: &str| {
+                    let start = content.find(word).unwrap();
+                    layout.lines[0]
+                        .selection_bounds(start..start + word.len(), layout.line_height)
+                        .iter()
+                        .map(|bounds| bounds.left())
+                        .min()
+                        .unwrap()
+                };
+                if content.contains(['א', 'ב', 'ג']) {
+                    assert!(left("العربية") < left("123"));
+                } else {
+                    assert!(left("123") < left("العربية"));
+                    reordered = true;
+                }
+            }
+            let (range, next) = layout
+                .bidi_deletion_target(&content, caret, false)
+                .unwrap_or_else(|| {
+                    let prev = content
+                        .grapheme_indices(true)
+                        .rev()
+                        .find_map(|(i, _)| (i < caret.index).then_some(i))
+                        .unwrap_or(0);
+                    (prev..caret.index, prev.into())
+                });
+            if range.is_empty() {
+                break;
+            }
+            assert_eq!(content[range.clone()].graphemes(true).count(), 1);
+            deleted.push_str(&content[range.clone()]);
+            let mut text = content.to_string();
+            text.replace_range(range, "");
+            content = text.into();
+            caret = next;
+            assert_eq!(&content[caret.index..], "中文");
+        }
+        assert!(reordered);
+        assert_eq!(deleted, " אבגالعربية 321  hsilgnE");
+        assert_eq!(content.as_ref(), "中文");
+    }
+
+    #[test]
+    fn bidi_arrows_follow_visual_rows_and_stop_at_edges() {
+        for (text, wrap_width) in [
+            ("אב", None),
+            ("aאב12", None),
+            ("aאב12", Some(px(30.))),
+            ("aאב12\naאב12", None),
+        ] {
+            let layout = bidi_text_layout(text, wrap_width);
+            let mut caret = layout.caret_for_position(Point::default());
+            let mut positions = vec![layout.position_for_caret(caret.index, caret.affinity)];
+            for _ in 0..30 {
+                let next = layout
+                    .bidi_horizontal_target(text, caret, true, None)
+                    .unwrap();
+                if next == caret {
+                    break;
+                }
+                let position = layout.position_for_caret(next.index, next.affinity);
+                let previous = positions.last().unwrap();
+                assert!((position.y, position.x) > (previous.y, previous.x));
+                positions.push(position);
+                caret = next;
+            }
+            assert!(positions.len() >= if text == "אב" { 3 } else { 6 });
+            if wrap_width.is_some() || text.contains('\n') {
+                assert!(positions.last().unwrap().y > px(0.));
+            }
+            assert_eq!(
+                layout.bidi_horizontal_target(text, caret, true, None),
+                Some(caret)
+            );
+            for expected in positions.iter().rev().skip(1) {
+                caret = layout
+                    .bidi_horizontal_target(text, caret, false, None)
+                    .unwrap();
+                assert_eq!(
+                    layout.position_for_caret(caret.index, caret.affinity),
+                    *expected
+                );
+            }
+            assert_eq!(
+                layout.bidi_horizontal_target(text, caret, false, None),
+                Some(caret)
+            );
+            assert!(
+                layout
+                    .bidi_horizontal_target("changed", caret, true, None)
+                    .is_none()
+            );
+            assert!(
+                layout
+                    .bidi_horizontal_target(&format!("{text}z"), caret, true, None)
+                    .is_none()
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn horizontal_arrows_preserve_ltr_grapheme_steps(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("a\u{301}😀中文"));
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.state.update(cx, |input, cx| {
+                    input.move_to(0, cx);
+                    for end in [3, 7, 10, 13, 13] {
+                        input.right(&Right, window, cx);
+                        assert_eq!(input.selected_range, end..end);
+                    }
+                    for start in [10, 7, 3, 0, 0] {
+                        input.select_left(&SelectLeft, window, cx);
+                        assert_eq!(input.selected_range, start..13);
+                    }
+                    for start in [3, 7, 10, 13] {
+                        input.select_right(&SelectRight, window, cx);
+                        assert_eq!(input.selected_range, start..13);
+                    }
+                });
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn bidi_keyboard_selection_preserves_anchor_and_collapses_visually(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("aאב12"));
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.state.update(cx, |input, cx| {
+                    input.last_layout = Some(bidi_text_layout("aאב12", None));
+                    let caret_x = |input: &TextInput| {
+                        input
+                            .last_layout
+                            .as_ref()
+                            .unwrap()
+                            .position_for_caret(input.cursor_offset(), input.caret_affinity)
+                            .x
+                    };
+                    for (start, affinity, xs) in [
+                        (1, CaretAffinity::Downstream, [40., 30., 40., 50.]),
+                        (1, CaretAffinity::Upstream, [0., 0., 10., 20.]),
+                    ] {
+                        input.move_to(start, cx);
+                        input.caret_affinity = affinity;
+                        input.select_left(&SelectLeft, window, cx);
+                        assert_eq!(caret_x(input), px(xs[0]));
+                        input.select_left(&SelectLeft, window, cx);
+                        assert_eq!(caret_x(input), px(xs[1]));
+                        input.select_right(&SelectRight, window, cx);
+                        assert_eq!(caret_x(input), px(xs[2]));
+                        input.select_right(&SelectRight, window, cx);
+                        assert_eq!(caret_x(input), px(xs[3]));
+                    }
+                    // Both visual representations of the same logical anchor must
+                    // survive extending and retracting through a direction boundary.
+                    for affinity in [CaretAffinity::Upstream, CaretAffinity::Downstream] {
+                        input.move_to(1, cx);
+                        input.caret_affinity = affinity;
+                        let right = affinity == CaretAffinity::Upstream;
+                        input.move_horizontal(right, true, cx);
+                        input.move_horizontal(!right, true, cx);
+                        assert_eq!(input.selected_range, 1..1);
+                        assert_eq!(input.caret_affinity, affinity);
+                    }
+                    for right in [false, true] {
+                        input.move_to(1, cx);
+                        input.select_to(5, cx);
+                        input.move_horizontal(right, false, cx);
+                        assert_eq!(caret_x(input), px(if right { 50. } else { 30. }));
+                        assert!(input.selected_range.is_empty());
+                    }
+                    input.move_to(1, cx);
+                    input.left(&Left, window, cx);
+                    assert_eq!(caret_x(input), px(40.));
+                    input.right(&Right, window, cx);
+                    assert_eq!(caret_x(input), px(50.));
+                    input.disabled = true;
+                    input.left(&Left, window, cx);
+                    assert_eq!(caret_x(input), px(50.));
+                });
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn bidi_mouse_caret_selection_and_ime_bounds_agree(cx: &mut TestAppContext) {
+        let window = open_input(cx, |cx| TextInput::new(cx).initial_value("aאב12"));
+        let mut visual = draw_and_focus(&window, cx);
+        window
+            .update(&mut visual.cx, |view, window, cx| {
+                view.state.update(cx, |input, cx| {
+                    input.last_layout = Some(bidi_text_layout("aאב12", None));
+                    let bounds = Bounds::new(point(px(10.), px(10.)), size(px(100.), px(20.)));
+                    input.last_bounds = Some(bounds);
+                    for (x, affinity, caret_x) in [
+                        (9., CaretAffinity::Upstream, 10.),
+                        (49., CaretAffinity::Downstream, 50.),
+                    ] {
+                        input.on_mouse_down(
+                            &MouseDownEvent {
+                                position: bounds.origin + point(px(x), px(5.)),
+                                button: MouseButton::Left,
+                                click_count: 1,
+                                modifiers: Default::default(),
+                                first_mouse: false,
+                            },
+                            window,
+                            cx,
+                        );
+                        assert_eq!(input.selected_range, 1..1);
+                        assert_eq!(input.caret_affinity, affinity);
+                        let rect = input.bounds_for_range(1..1, bounds, window, cx).unwrap();
+                        assert_eq!(rect.origin.x, bounds.left() + px(caret_x));
+                    }
+                    input.select_to(3, cx);
+                    let quads = super::super::element::selection_quads(
+                        input.last_layout.as_ref().unwrap(),
+                        0..3,
+                        bounds,
+                        gpui::black(),
+                    );
+                    assert_eq!(quads.len(), 2);
+                    assert_eq!(quads[0].bounds.origin.x, bounds.left());
+                    assert_eq!(quads[1].bounds.origin.x, bounds.left() + px(40.));
+                    input.on_mouse_down(
+                        &MouseDownEvent {
+                            position: bounds.origin + point(px(45.), px(5.)),
+                            button: MouseButton::Left,
+                            click_count: 2,
+                            modifiers: Default::default(),
+                            first_mouse: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    assert_eq!(input.selected_range, 0..7);
+                    input.stop_selection();
+                });
+            })
+            .unwrap();
+    }
 
     struct TestInput {
         state: Entity<TextInput>,

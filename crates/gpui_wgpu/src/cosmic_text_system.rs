@@ -648,6 +648,9 @@ impl CosmicTextSystemState {
                 id: GlyphId(glyph.glyph_id as u32),
                 position: point(glyph.x.into(), glyph.y.into()),
                 index: glyph.start,
+                cluster_end: glyph.end,
+                advance: glyph.w.into(),
+                is_rtl: glyph.level.is_rtl(),
                 is_emoji,
             };
 
@@ -925,6 +928,48 @@ mod tests {
 
     const LILEX_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
     const LILEX_BOLD: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf");
+
+    #[test]
+    fn bidi_cluster_metadata_survives_shaping() {
+        let system = CosmicTextSystem::new_without_system_fonts("Lilex");
+        system
+            .add_fonts(vec![Cow::Borrowed(LILEX_REGULAR)])
+            .unwrap();
+        let font_id = system.font_id(&gpui::font("Lilex")).unwrap();
+        // Directional override exercises real shaping with the bundled Latin font.
+        // Hebrew and Arabic also exercise cluster byte ranges and bidi metadata.
+        for text in [
+            "a\u{202e}bc\u{202c}12",
+            "abc אבג 123",
+            "abc العربية 123",
+            "a😀e\u{301}",
+        ] {
+            let layout = system.layout_line(
+                text,
+                px(20.),
+                &[FontRun {
+                    font_id,
+                    len: text.len(),
+                }],
+            );
+            let glyphs: Vec<_> = layout.runs.iter().flat_map(|run| &run.glyphs).collect();
+            assert!(!glyphs.is_empty());
+            if !text.contains('😀') {
+                assert!(glyphs.iter().any(|glyph| glyph.is_rtl), "{text}");
+            }
+            for glyph in glyphs {
+                assert!(text.is_char_boundary(glyph.index));
+                assert!(text.is_char_boundary(glyph.cluster_end));
+                assert!(glyph.index < glyph.cluster_end);
+                assert!(glyph.advance >= px(0.));
+            }
+            let ranges = layout.selection_ranges(0..text.len());
+            assert!(!ranges.is_empty());
+            for range in ranges {
+                assert!(range.start <= range.end);
+            }
+        }
+    }
 
     fn fid(i: usize) -> FontId {
         FontId(i)

@@ -977,18 +977,17 @@ impl TextLayout {
         let mut accumulator = String::new();
 
         for wrapped in self.0.borrow().as_ref().unwrap().lines.iter() {
-            let mut seen = 0;
-            for boundary in wrapped.layout.wrap_boundaries.iter() {
-                let index = wrapped.layout.unwrapped_layout.runs[boundary.run_ix].glyphs
-                    [boundary.glyph_ix]
-                    .index;
-
-                accumulator.push_str(&wrapped.text[seen..index]);
+            if wrapped.wrap_boundaries().is_empty() {
+                accumulator.push_str(&wrapped.text);
                 accumulator.push('\n');
-                seen = index;
+                continue;
             }
-            accumulator.push_str(&wrapped.text[seen..]);
-            accumulator.push('\n');
+            for row in 0..=wrapped.wrap_boundaries().len() {
+                for range in wrapped.row_text_ranges(row) {
+                    accumulator.push_str(&wrapped.text[range]);
+                }
+                accumulator.push('\n');
+            }
         }
         // Remove trailing newline
         accumulator.pop();

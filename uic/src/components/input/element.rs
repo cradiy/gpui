@@ -81,6 +81,7 @@ impl Element for TextElement {
         let content = input.content.clone();
         let selected_range = input.selected_range.clone();
         let cursor_offset = input.cursor_offset();
+        let caret_affinity = input.caret_affinity;
         let appearance = input.appearance;
         let multiline = input.mode == InputMode::Multiline;
         let focus_handle = input.focus_handle.clone();
@@ -106,6 +107,7 @@ impl Element for TextElement {
             underline: None,
             strikethrough: None,
         };
+        let shaping_run = run.clone();
         let runs = if !content.is_empty()
             && let Some(marked_range) = input.marked_range.as_ref()
         {
@@ -148,9 +150,10 @@ impl Element for TextElement {
                 .match_indices('\n')
                 .map(|(offset, _)| offset + 1),
         );
-        let layout = TextLayout::new(lines, line_starts, window.line_height());
+        let mut layout = TextLayout::new(lines, line_starts, window.line_height());
+        layout.shaping_run = Some(shaping_run);
 
-        let cursor_position = layout.position_for_offset(cursor_offset);
+        let cursor_position = layout.position_for_caret(cursor_offset, caret_affinity);
         let mut horizontal_offset = px(0.);
         let mut text_bounds = bounds;
         if !multiline {
@@ -322,50 +325,11 @@ pub(super) fn selection_quads(
     let mut rows_before = 0;
     for (line_ix, line) in layout.lines.iter().enumerate() {
         let line_start = layout.line_starts[line_ix];
-        let row_starts = std::iter::once(0)
-            .chain(
-                line.wrap_boundaries()
-                    .iter()
-                    .map(|boundary| line.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index),
-            )
-            .collect::<Vec<_>>();
-        let row_ends = row_starts
-            .iter()
-            .copied()
-            .skip(1)
-            .chain(std::iter::once(line.len()))
-            .collect::<Vec<_>>();
-
-        for (row_ix, (row_start, row_end)) in row_starts.into_iter().zip(row_ends).enumerate() {
-            let start = selected.start.max(line_start + row_start);
-            let end = selected.end.min(line_start + row_end);
-            if start >= end {
-                continue;
-            }
-            let local_start = start - line_start;
-            let local_end = end - line_start;
-            let start_position = line
-                .position_for_index(local_start, layout.line_height)
-                .unwrap_or_default();
-            let end_position = line
-                .position_for_index(local_end, layout.line_height)
-                .unwrap_or_default();
-            let x_start = if local_start == row_start {
-                px(0.)
-            } else {
-                start_position.x
-            };
-            let width = (end_position.x - x_start).max(px(1.));
-            quads.push(fill(
-                Bounds::new(
-                    point(
-                        bounds.left() + x_start,
-                        bounds.top() + layout.line_height * (rows_before + row_ix) as f32,
-                    ),
-                    size(width, layout.line_height),
-                ),
-                color,
-            ));
+        let local = selected.start.saturating_sub(line_start)
+            ..selected.end.saturating_sub(line_start).min(line.len());
+        for mut selection in line.selection_bounds(local, layout.line_height) {
+            selection.origin += bounds.origin + point(px(0.), layout.line_height * rows_before);
+            quads.push(fill(selection, color));
         }
         rows_before += line.wrap_boundaries().len() + 1;
     }

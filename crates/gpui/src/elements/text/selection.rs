@@ -67,32 +67,27 @@ fn rows(layout: &TextLayout, align: TextAlign) -> Vec<Row> {
     let mut line_start = 0;
     let mut y = bounds.top();
     for line in &inner.lines {
-        let starts = std::iter::once(0)
-            .chain(
-                line.wrap_boundaries()
-                    .iter()
-                    .map(|b| line.runs()[b.run_ix].glyphs[b.glyph_ix].index),
-            )
-            .collect::<Vec<_>>();
-        for (index, start) in starts.iter().copied().enumerate() {
-            let end = starts.get(index + 1).copied().unwrap_or(line.len());
+        for index in 0..=line.wrap_boundaries().len() {
+            let range = line.row_range(index).unwrap();
+            let extent = line.row_extent(index).unwrap();
             let unwrapped = &line.layout.unwrapped_layout;
-            let base_x = unwrapped.x_for_index(start);
-            let width = unwrapped.x_for_index(end) - base_x;
+            let base_x = extent.start;
+            let width = extent.end - base_x;
             let offset = match align {
                 TextAlign::Left => px(0.),
                 TextAlign::Center => (bounds.size.width - width) / 2.,
                 TextAlign::Right => bounds.size.width - width,
             };
             result.push(Row {
-                range: line_start + start..line_start + end,
+                range: line_start + range.start..line_start + range.end,
                 line_start,
                 layout: unwrapped.clone(),
                 origin: point(bounds.left() + offset, y),
                 base_x,
                 width,
                 height: inner.line_height,
-                newline: index + 1 == starts.len() && line_start + end < inner.len,
+                newline: index == line.wrap_boundaries().len()
+                    && line_start + line.len() < inner.len,
             });
             y += inner.line_height;
         }
@@ -113,11 +108,15 @@ fn index_at(rows: &[Row], position: Point<Pixels>) -> usize {
             return (row.line_start
                 + row
                     .layout
-                    .closest_index_for_x(position.x - row.origin.x + row.base_x))
+                    .closest_index_for_x((position.x - row.origin.x + row.base_x).clamp(
+                        row.base_x,
+                        (row.base_x + row.width - px(0.001)).max(row.base_x),
+                    )))
             .clamp(row.range.start, row.range.end);
         }
     }
-    rows.last().unwrap().range.end
+    let last = rows.last().unwrap();
+    last.line_start + last.layout.len
 }
 
 fn character_at(rows: &[Row], position: Point<Pixels>) -> Option<usize> {
@@ -141,35 +140,43 @@ pub(super) fn selection_quads(
     if selected.is_empty() {
         return Vec::new();
     }
-    rows(layout, align)
-        .into_iter()
-        .filter_map(|row| {
-            let start = selected.start.max(row.range.start);
-            let end = selected.end.min(row.range.end);
-            let newline =
-                row.newline && selected.start <= row.range.end && selected.end > row.range.end;
-            if start >= end && !newline {
-                return None;
+    let mut quads = Vec::new();
+    for row in rows(layout, align) {
+        let end = row.line_start + row.layout.len;
+        let mut newline = row.newline && selected.start <= end && selected.end > end;
+        let local = selected.start.saturating_sub(row.line_start)
+            ..selected
+                .end
+                .saturating_sub(row.line_start)
+                .min(row.layout.len);
+        for range in row.layout.selection_ranges(local) {
+            let left = range.start.max(row.base_x);
+            let mut right = range.end.min(row.base_x + row.width);
+            if right > left {
+                if newline && right == row.base_x + row.width {
+                    right += px(3.);
+                    newline = false;
+                }
+                quads.push(fill(
+                    Bounds::new(
+                        row.origin + point(left - row.base_x, px(0.)),
+                        size(right - left, row.height),
+                    ),
+                    color,
+                ));
             }
-            let x = if start < end {
-                row.layout.x_for_index(start - row.line_start) - row.base_x
-            } else {
-                row.width
-            };
-            let right = if newline {
-                row.width + px(3.)
-            } else {
-                row.layout.x_for_index(end - row.line_start) - row.base_x
-            };
-            Some(fill(
+        }
+        if newline {
+            quads.push(fill(
                 Bounds::new(
-                    row.origin + point(x, px(0.)),
-                    size((right - x).max(px(1.)), row.height),
+                    row.origin + point(row.width, px(0.)),
+                    size(px(3.), row.height),
                 ),
                 color,
-            ))
-        })
-        .collect()
+            ));
+        }
+    }
+    quads
 }
 
 type ClickListener = Box<dyn Fn(&[Range<usize>], InteractiveTextClickEvent, &mut Window, &mut App)>;
@@ -365,6 +372,77 @@ mod tests {
                     ),
             )
         }
+    }
+
+    #[test]
+    fn bidi_readonly_selection_uses_visual_spans_and_alignment() {
+        use crate::{
+            FontId, GlyphId, LineLayout, ShapedGlyph, ShapedRun, WrappedLine, WrappedLineLayout,
+        };
+        use std::sync::Arc;
+        let text: SharedString = "aאב12".into();
+        let glyphs = [
+            (0, 1, false),
+            (5, 6, false),
+            (6, 7, false),
+            (3, 5, true),
+            (1, 3, true),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(visual, (index, cluster_end, is_rtl))| ShapedGlyph {
+            id: GlyphId(0),
+            position: point(px(visual as f32 * 10.), px(0.)),
+            index,
+            cluster_end,
+            advance: px(10.),
+            is_rtl,
+            is_emoji: false,
+        })
+        .collect();
+        let line = WrappedLine {
+            layout: Arc::new(WrappedLineLayout {
+                unwrapped_layout: Arc::new(LineLayout {
+                    font_size: px(16.),
+                    width: px(50.),
+                    ascent: px(12.),
+                    descent: px(4.),
+                    runs: vec![ShapedRun {
+                        font_id: FontId(0),
+                        glyphs,
+                    }],
+                    len: 7,
+                }),
+                ..Default::default()
+            }),
+            text: text.clone(),
+            decoration_runs: Vec::new(),
+        };
+        let layout = TextLayout(Rc::new(RefCell::new(Some(super::super::TextLayoutInner {
+            text,
+            len: 7,
+            lines: smallvec::smallvec![line],
+            line_height: px(20.),
+            wrap_width: None,
+            size: Some(size(px(200.), px(20.))),
+            bounds: Some(Bounds::new(
+                point(px(100.), px(50.)),
+                size(px(200.), px(20.)),
+            )),
+        }))));
+        let quads = selection_quads(&layout, 0..3, TextAlign::Right, crate::black());
+        assert_eq!(quads.len(), 2);
+        assert_eq!(
+            quads[0].bounds,
+            Bounds::new(point(px(250.), px(50.)), size(px(10.), px(20.)))
+        );
+        assert_eq!(
+            quads[1].bounds,
+            Bounds::new(point(px(290.), px(50.)), size(px(10.), px(20.)))
+        );
+        let rows = rows(&layout, TextAlign::Right);
+        assert_eq!(index_at(&rows, point(px(299.), px(55.))), 1);
+        assert_eq!(character_at(&rows, point(px(285.), px(55.))), Some(3));
     }
 
     fn setup(cx: &mut TestAppContext, align: TextAlign) -> (WindowHandle<Demo>, VisualTestContext) {

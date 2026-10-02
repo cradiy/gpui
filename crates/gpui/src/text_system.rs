@@ -1400,6 +1400,9 @@ mod blurred_glyph_tests {
                     id: self.glyph_for_char(FontId(1), ch).unwrap(),
                     position: point(px(glyph_index as f32 * 10.), px(0.)),
                     index: byte_index,
+                    cluster_end: byte_index + ch.len_utf8(),
+                    advance: px(10.),
+                    is_rtl: false,
                     is_emoji: false,
                 })
                 .collect::<Vec<_>>();

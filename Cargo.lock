@@ -7570,6 +7570,7 @@ dependencies = [
  "gpui",
  "gpui_effects",
  "gpui_platform",
+ "gpui_wgpu",
  "rust-embed",
  "serde",
  "strum",

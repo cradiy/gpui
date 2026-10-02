@@ -8,6 +8,7 @@ struct InputExample {
     title: Entity<TextInput>,
     notes: Entity<TextInput>,
     draft: Entity<TextInput>,
+    mixed: Entity<TextInput>,
 }
 
 impl InputExample {
@@ -29,6 +30,7 @@ impl InputExample {
                     .multiline()
                     .placeholder("Start typing here. Add more than three rows to reveal the thumb.")
             }),
+            mixed: cx.new(|cx| TextInput::new(cx).initial_value("English אבג 123 العربية 中文 😀")),
         }
     }
 }
@@ -78,8 +80,9 @@ impl Render for InputExample {
                         "Empty draft · 3 visible rows",
                         Input::new(&self.draft).rows(3).text_color(rgb(0x172033)),
                     ))
+                    .child(field("Mixed text directions", Input::new(&self.mixed).text_color(rgb(0x172033))))
                     .child(
-                        ReadOnlyInput::new("Read-only · Select this text and copy it. 中文 😀")
+                        ReadOnlyInput::new("Read-only · English אבג 123 العربية 中文 😀")
                             .selectable("read-only-value")
                             .text_color(rgb(0x172033)),
                     )

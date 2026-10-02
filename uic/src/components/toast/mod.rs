@@ -1,7 +1,7 @@
 use std::{f32::consts::TAU, time::Duration};
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Context, Entity, Global, Hsla, Pixels,
+    Animation, AnimationExt as _, AnyElement, App, Context, Entity, Global, Hsla, Length, Pixels,
     Refineable as _, Render, SharedString, StyleRefinement, Styled, Transformation, Window, div,
     prelude::*, px, radians, rgb, svg,
 };
@@ -9,6 +9,9 @@ use gpui::{
 use crate::assets::LucideIcons;
 
 const DEFAULT_DURATION: Duration = Duration::from_secs(3);
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ToastVariant {
@@ -154,12 +157,20 @@ impl ToastManager {
         cx.notify();
     }
 
-    fn render_stack(&self, placement: ToastPlacement) -> gpui::Div {
+    fn render_stack(&self, placement: ToastPlacement, window: &Window) -> gpui::Div {
         let appearance = &self.appearance;
+        let available_width =
+            (window.viewport_size().width - appearance.viewport_margin * 2.).max(px(0.));
+        let max_width = match appearance.style.max_size.width {
+            Some(Length::Definite(width)) => width
+                .to_pixels(available_width.into(), window.rem_size())
+                .min(available_width),
+            _ => available_width,
+        };
         div()
             .absolute()
-            .left_0()
-            .right_0()
+            .left(appearance.viewport_margin)
+            .right(appearance.viewport_margin)
             .when_else(
                 placement == ToastPlacement::Top,
                 |this| this.top(appearance.viewport_margin).flex_col(),
@@ -175,32 +186,46 @@ impl ToastManager {
                     .map(|item| {
                         let mut toast = div()
                             .id(("toast", item.id as usize))
+                            .debug_selector(|| format!("toast-{}", item.id))
                             .flex()
-                            .items_center()
+                            .flex_shrink_0()
+                            .items_start()
                             .gap_2()
-                            .child(status_icon(
-                                item.variant,
-                                appearance.colors.color(item.variant),
-                                item.id,
-                            ))
                             .child(
                                 div()
+                                    .debug_selector(|| format!("toast-icon-{}", item.id))
+                                    .flex_none()
+                                    .h(px(22.))
+                                    .flex()
+                                    .items_center()
+                                    .child(status_icon(
+                                        item.variant,
+                                        appearance.colors.color(item.variant),
+                                        item.id,
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .debug_selector(|| format!("toast-message-{}", item.id))
+                                    .flex_1()
+                                    .min_w_0()
+                                    .whitespace_normal()
                                     .text_sm()
                                     .line_height(px(22.))
                                     .child(item.message.clone()),
                             );
                         toast.style().refine(&appearance.style);
-                        toast
+                        toast.min_w_0().max_w(max_width)
                     }),
             )
     }
 }
 
 impl Render for ToastManager {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div().absolute().inset_0().children([
-            self.render_stack(ToastPlacement::Top),
-            self.render_stack(ToastPlacement::Bottom),
+            self.render_stack(ToastPlacement::Top, window),
+            self.render_stack(ToastPlacement::Bottom, window),
         ])
     }
 }
@@ -327,23 +352,4 @@ pub fn show_at(
     layer(cx).update(cx, |manager, cx| {
         manager.push(message, variant, duration, Some(placement), cx);
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn toast_appearance_uses_styled_for_its_surface() {
-        let appearance = ToastAppearance::default().w(px(360.)).opacity(0.9);
-        assert!(appearance.style.size.width.is_some());
-        assert_eq!(appearance.style.opacity, Some(0.9));
-    }
-
-    #[test]
-    fn variants_have_distinct_status_colors() {
-        let colors = ToastAppearance::default().colors;
-        assert_ne!(colors.success, colors.error);
-        assert_ne!(colors.info, colors.warn);
-    }
 }

@@ -122,6 +122,22 @@ impl Render for FeedbackExample {
                                     }))
                                     .child(self.button("toast-loading", "Loading", |_, _, cx| {
                                         toast::loading("Synchronizing data...", cx);
+                                    }))
+                                    .child(self.button("toast-long-message", "Long message", |_, _, cx| {
+                                        toast::show(
+                                            "The selected files could not be saved. Please check that the destination folder exists and that you have permission to write to it, then try again.",
+                                            ToastVariant::Warn,
+                                            Duration::from_secs(15),
+                                            cx,
+                                        );
+                                    }))
+                                    .child(self.button("toast-long-path", "Long path", |_, _, cx| {
+                                        toast::show(
+                                            format!("/home/user/Documents/{}.svg", "VeryLongFileNameWithoutSpaces".repeat(8)),
+                                            ToastVariant::Error,
+                                            Duration::from_secs(15),
+                                            cx,
+                                        );
                                     })),
                             ),
                     )
